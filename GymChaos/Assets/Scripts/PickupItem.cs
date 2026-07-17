@@ -85,6 +85,7 @@ public class PickupItem : MonoBehaviour
         wasThrown = false;
         transform.rotation = Quaternion.LookRotation(viewForward, Vector3.up);
 
+        body.isKinematic = false;
         body.useGravity = false;
         body.linearDamping = 8f;
         body.angularDamping = 8f;

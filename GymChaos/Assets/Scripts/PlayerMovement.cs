@@ -75,6 +75,16 @@ public class PlayerMovement : MonoBehaviour
     private Transform carryAnchor;
     private PickupItem heldItem;
     private Collider[] playerColliders;
+    private GymExerciseStation nearbyExerciseStation;
+    private GymExerciseStation activeExerciseStation;
+    private GymExerciseStation pendingWeightStation;
+    private Vector3 positionBeforeExercise;
+    private Quaternion rotationBeforeExercise;
+    private Vector3 cameraPositionBeforeExercise;
+    private Quaternion cameraRotationBeforeExercise;
+    private float cameraFieldOfViewBeforeExercise;
+
+    public bool IsExercising => activeExerciseStation != null || pendingWeightStation != null;
 
     private void Start()
     {
@@ -99,7 +109,34 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (pendingWeightStation != null)
+        {
+            HandleWeightSelectionMode();
+            return;
+        }
+
         HandleCursorToggle();
+
+        if (activeExerciseStation != null)
+        {
+            HandleExerciseMode();
+            return;
+        }
+
+        nearbyExerciseStation = GymExerciseStation.FindClosest(transform.position, 3.15f);
+        if (nearbyExerciseStation != null && ReadExerciseStartPressed())
+        {
+            if (nearbyExerciseStation.RequiresWeightSelection)
+            {
+                OpenWeightSelection(nearbyExerciseStation);
+            }
+            else
+            {
+                BeginExercise(nearbyExerciseStation);
+            }
+            return;
+        }
+
         HandleLook();
         HandleMovement();
         HandleCombatAndInteraction();
@@ -109,6 +146,11 @@ public class PlayerMovement : MonoBehaviour
 
     public void ReceiveImpact(Vector3 impulse)
     {
+        if (IsExercising)
+        {
+            return;
+        }
+
         impactVelocity += new Vector3(impulse.x, 0f, impulse.z);
         verticalVelocity = Mathf.Max(verticalVelocity, impulse.y * 0.2f);
     }
@@ -614,6 +656,131 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+    private void BeginExercise(GymExerciseStation station)
+    {
+        if (station == null || activeExerciseStation != null)
+        {
+            return;
+        }
+
+        if (heldItem != null)
+        {
+            DropHeldItem();
+        }
+
+        positionBeforeExercise = transform.position;
+        rotationBeforeExercise = transform.rotation;
+        cameraPositionBeforeExercise = playerCamera.transform.localPosition;
+        cameraRotationBeforeExercise = playerCamera.transform.localRotation;
+        cameraFieldOfViewBeforeExercise = playerCamera.fieldOfView;
+        planarVelocity = Vector3.zero;
+        impactVelocity = Vector3.zero;
+        verticalVelocity = 0f;
+
+        activeExerciseStation = station;
+        characterController.enabled = false;
+        transform.SetPositionAndRotation(station.PlayerPosition, station.PlayerRotation);
+        station.BeginSession(playerCamera.transform);
+        station.GetCameraPose(out Vector3 cameraPosition, out Quaternion cameraRotation);
+        playerCamera.transform.localPosition = cameraPosition;
+        playerCamera.transform.localRotation = cameraRotation;
+        if (handRig != null)
+        {
+            handRig.gameObject.SetActive(false);
+        }
+
+        LockCursor(true);
+    }
+
+    private void OpenWeightSelection(GymExerciseStation station)
+    {
+        if (station == null || !station.RequiresWeightSelection)
+        {
+            return;
+        }
+
+        pendingWeightStation = station;
+        planarVelocity = Vector3.zero;
+        impactVelocity = Vector3.zero;
+        verticalVelocity = 0f;
+        LockCursor(false);
+    }
+
+    private void HandleWeightSelectionMode()
+    {
+        if (pendingWeightStation == null)
+        {
+            return;
+        }
+
+        if (ReadExerciseExitPressed() || ReadPauseToggle())
+        {
+            pendingWeightStation = null;
+            LockCursor(true);
+        }
+    }
+
+    private void SelectWeightAndBegin(int totalWeight)
+    {
+        GymExerciseStation station = pendingWeightStation;
+        if (station == null)
+        {
+            return;
+        }
+
+        station.SelectWeight(totalWeight);
+        pendingWeightStation = null;
+        BeginExercise(station);
+    }
+
+    private void HandleExerciseMode()
+    {
+        if (activeExerciseStation == null)
+        {
+            return;
+        }
+
+        if (ReadExerciseExitPressed())
+        {
+            EndExercise();
+            return;
+        }
+
+        activeExerciseStation.TickSession(
+            Time.deltaTime,
+            ReadExerciseActionPressed(),
+            ReadExerciseIncreasePressed(),
+            ReadExerciseDecreasePressed());
+
+        activeExerciseStation.GetCameraPose(out Vector3 cameraPosition, out Quaternion cameraRotation);
+        playerCamera.transform.localPosition = Vector3.Lerp(playerCamera.transform.localPosition, cameraPosition, 10f * Time.deltaTime);
+        playerCamera.transform.localRotation = Quaternion.Slerp(playerCamera.transform.localRotation, cameraRotation, 10f * Time.deltaTime);
+        playerCamera.fieldOfView = Mathf.Lerp(playerCamera.fieldOfView, activeExerciseStation.GetCameraFieldOfView(cameraFieldOfViewBeforeExercise), 4f * Time.deltaTime);
+    }
+
+    private void EndExercise()
+    {
+        if (activeExerciseStation == null)
+        {
+            return;
+        }
+
+        activeExerciseStation.EndSession();
+        activeExerciseStation = null;
+        transform.SetPositionAndRotation(positionBeforeExercise, rotationBeforeExercise);
+        playerCamera.transform.localPosition = cameraPositionBeforeExercise;
+        playerCamera.transform.localRotation = cameraRotationBeforeExercise;
+        playerCamera.fieldOfView = cameraFieldOfViewBeforeExercise;
+        characterController.enabled = true;
+        if (handRig != null)
+        {
+            handRig.gameObject.SetActive(true);
+            handRig.SetHolding(false);
+        }
+
+        nearbyExerciseStation = null;
+    }
+
     private void LockCursor(bool locked)
     {
         showCursor = !locked;
@@ -624,11 +791,131 @@ public class PlayerMovement : MonoBehaviour
     private void OnGUI()
     {
         GUI.color = Color.white;
+        GUIStyle hudStyle = new GUIStyle(GUI.skin.label);
+        hudStyle.fontSize = 17;
+        hudStyle.normal.textColor = Color.white;
+
+        if (pendingWeightStation != null)
+        {
+            DrawWeightSelection();
+            return;
+        }
+
+        if (activeExerciseStation != null)
+        {
+            GUI.Box(new Rect(14f, 14f, 780f, 82f), string.Empty);
+            GUI.Label(new Rect(27f, 24f, 750f, 65f), activeExerciseStation.GetSessionHud(), hudStyle);
+            return;
+        }
+
         string heldText = heldItem == null ? "Hands free" : $"Holding: {heldItem.DisplayName}";
         string hud = $"Gym Chaos  |  Opponents: {EnemyFighter.ActiveCount}\n" +
-                     $"LMB punch / throw   RMB shove   E pick up / drop   Shift sprint   C crouch   Space jump\n" +
+                     $"LMB punch / throw   RMB shove   E pick up / drop   F exercise   Shift sprint   C crouch   Space jump\n" +
                      $"{heldText}";
-        GUI.Label(new Rect(16f, 16f, 940f, 60f), hud);
+        GUI.Label(new Rect(16f, 16f, 940f, 60f), hud, hudStyle);
+
+        if (nearbyExerciseStation != null)
+        {
+            float width = 440f;
+            Rect promptRect = new Rect((Screen.width - width) * 0.5f, Screen.height - 105f, width, 54f);
+            GUI.Box(promptRect, string.Empty);
+            GUIStyle promptStyle = new GUIStyle(GUI.skin.label);
+            promptStyle.alignment = TextAnchor.MiddleCenter;
+            promptStyle.fontSize = 20;
+            promptStyle.fontStyle = FontStyle.Bold;
+            promptStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
+            GUI.Label(promptRect, nearbyExerciseStation.GetInteractionPrompt(), promptStyle);
+        }
+    }
+
+    private void DrawWeightSelection()
+    {
+        int[] options = pendingWeightStation.WeightOptions;
+        const int columns = 3;
+        const float buttonWidth = 138f;
+        const float buttonHeight = 58f;
+        const float gap = 12f;
+        int rows = Mathf.CeilToInt(options.Length / (float)columns);
+        float panelWidth = columns * buttonWidth + (columns + 1) * gap;
+        float panelHeight = 138f + rows * buttonHeight + (rows + 1) * gap;
+        Rect panel = new Rect((Screen.width - panelWidth) * 0.5f, (Screen.height - panelHeight) * 0.5f, panelWidth, panelHeight);
+        GUI.Box(panel, string.Empty);
+
+        GUIStyle titleStyle = new GUIStyle(GUI.skin.label);
+        titleStyle.alignment = TextAnchor.MiddleCenter;
+        titleStyle.fontSize = 23;
+        titleStyle.fontStyle = FontStyle.Bold;
+        titleStyle.normal.textColor = Color.white;
+        GUI.Label(new Rect(panel.x + 16f, panel.y + 12f, panel.width - 32f, 38f), pendingWeightStation.DisplayName, titleStyle);
+
+        GUIStyle infoStyle = new GUIStyle(titleStyle);
+        infoStyle.fontSize = 16;
+        infoStyle.fontStyle = FontStyle.Normal;
+        infoStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
+        string weightInfo = pendingWeightStation.EmptyBarWeight > 0
+            ? $"Select total weight (empty bar: {pendingWeightStation.EmptyBarWeight} kg)"
+            : "Select weight stack";
+        GUI.Label(new Rect(panel.x + 16f, panel.y + 50f, panel.width - 32f, 52f), $"{weightInfo}\n[Q], [E] or [ESC] to cancel", infoStyle);
+
+        for (int i = 0; i < options.Length; i++)
+        {
+            int row = i / columns;
+            int column = i % columns;
+            Rect button = new Rect(
+                panel.x + gap + column * (buttonWidth + gap),
+                panel.y + 112f + gap + row * (buttonHeight + gap),
+                buttonWidth,
+                buttonHeight);
+            if (GUI.Button(button, $"{options[i]} kg"))
+            {
+                SelectWeightAndBegin(options[i]);
+            }
+        }
+    }
+
+    private bool ReadExerciseActionPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Space);
+#endif
+    }
+
+    private bool ReadExerciseStartPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.fKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.F);
+#endif
+    }
+
+    private bool ReadExerciseIncreasePressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && (Keyboard.current.wKey.wasPressedThisFrame || Keyboard.current.upArrowKey.wasPressedThisFrame);
+#else
+        return Input.GetKeyDown(KeyCode.W) || Input.GetKeyDown(KeyCode.UpArrow);
+#endif
+    }
+
+    private bool ReadExerciseDecreasePressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && (Keyboard.current.sKey.wasPressedThisFrame || Keyboard.current.downArrowKey.wasPressedThisFrame);
+#else
+        return Input.GetKeyDown(KeyCode.S) || Input.GetKeyDown(KeyCode.DownArrow);
+#endif
+    }
+
+    private bool ReadExerciseExitPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && (Keyboard.current.qKey.wasPressedThisFrame || Keyboard.current.eKey.wasPressedThisFrame);
+#else
+        return Input.GetKeyDown(KeyCode.Q) || Input.GetKeyDown(KeyCode.E);
+#endif
     }
 
     private Vector2 ReadMoveInput()

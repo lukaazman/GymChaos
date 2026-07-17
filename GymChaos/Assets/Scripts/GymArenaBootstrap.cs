@@ -3,6 +3,8 @@ using UnityEngine;
 
 public class GymArenaBootstrap : MonoBehaviour
 {
+    private const int EnemySpawnCount = 0;
+
     private static readonly string[] StaticNameBlocks =
     {
         "player",
@@ -16,6 +18,8 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private readonly Dictionary<Transform, WeightType> weightCandidates = new Dictionary<Transform, WeightType>();
     private readonly HashSet<Transform> configuredPickupRoots = new HashSet<Transform>();
+    private readonly HashSet<Transform> stabilizedEquipmentRoots = new HashSet<Transform>();
+    private readonly HashSet<Transform> spatiallyMountedWeightRoots = new HashSet<Transform>();
 
     private PlayerMovement player;
 
@@ -50,6 +54,31 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             processedRenderers.Add(target);
+
+            Transform mountedEquipment = FindMountedEquipmentRoot(target);
+            if (mountedEquipment != null)
+            {
+                Transform mountedWeight = FindNamedWeightRoot(target, mountedEquipment);
+                if (mountedWeight != null)
+                {
+                    WeightType mountedType = TryGetWeightType(mountedWeight.name);
+                    if (IsPlateType(mountedType))
+                    {
+                        if (configuredPickupRoots.Add(mountedWeight))
+                        {
+                            weightCandidates[mountedWeight] = mountedType;
+                            spatiallyMountedWeightRoots.Add(mountedWeight);
+                            EnsurePickupRootGameplay(mountedWeight.gameObject, mountedType);
+                        }
+
+                        continue;
+                    }
+                }
+
+                StabilizeMountedEquipment(mountedEquipment);
+                EnsureStaticCollider(target.gameObject, renderer);
+                continue;
+            }
 
             Transform pickupRoot = FindPickupRoot(target);
             if (pickupRoot != null)
@@ -106,14 +135,24 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             pickup.Configure(body, entry.Value, colliders);
+            if (spatiallyMountedWeightRoots.Contains(entry.Key))
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+                body.useGravity = false;
+                body.isKinematic = true;
+            }
         }
     }
 
     private void Initialize(PlayerMovement targetPlayer)
     {
         player = targetPlayer;
+        GymInteriorBuilder.Build(player);
         EnsureSceneColliders();
+        MarkSpatiallyMountedWeightCandidates();
         EnsureWeightGameplayObjects();
+        GymExerciseStation.CreateForScene();
         SpawnEnemies();
     }
 
@@ -138,6 +177,11 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private Transform FindPickupRoot(Transform target)
     {
+        if (FindMountedEquipmentRoot(target) != null)
+        {
+            return null;
+        }
+
         Transform current = target;
         while (current != null)
         {
@@ -155,6 +199,135 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         return null;
+    }
+
+    private static Transform FindMountedEquipmentRoot(Transform target)
+    {
+        Transform current = target;
+        while (current != null)
+        {
+            string lower = current.name.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+            if (lower.Contains("bench") || lower.Contains("cage") || lower.Contains("smithmachine") ||
+                lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("preacher") ||
+                lower.Contains("dips") || lower.Contains("dipstation") || lower.Contains("treadmill") ||
+                lower.Contains("bike") || lower.Contains("weightstand") || lower == "stand" || lower.StartsWith("stand("))
+            {
+                return current;
+            }
+
+            current = current.parent;
+        }
+
+        return null;
+    }
+
+    private static Transform FindNamedWeightRoot(Transform target, Transform mountedEquipment)
+    {
+        Transform current = target;
+        while (current != null)
+        {
+            if (TryGetWeightType(current.name) != WeightType.None)
+            {
+                return current;
+            }
+
+            if (current == mountedEquipment)
+            {
+                break;
+            }
+
+            current = current.parent;
+        }
+
+        return null;
+    }
+
+    private static bool IsPlateType(WeightType type)
+    {
+        return type == WeightType.Plate || type == WeightType.Plate5 || type == WeightType.Plate10 || type == WeightType.Plate20;
+    }
+
+    private void StabilizeMountedEquipment(Transform equipmentRoot)
+    {
+        if (equipmentRoot == null || !stabilizedEquipmentRoots.Add(equipmentRoot))
+        {
+            return;
+        }
+
+        Rigidbody[] bodies = equipmentRoot.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < bodies.Length; i++)
+        {
+            bodies[i].linearVelocity = Vector3.zero;
+            bodies[i].angularVelocity = Vector3.zero;
+            bodies[i].useGravity = false;
+            bodies[i].isKinematic = true;
+        }
+
+        PickupItem[] pickups = equipmentRoot.GetComponentsInChildren<PickupItem>(true);
+        for (int i = 0; i < pickups.Length; i++)
+        {
+            Destroy(pickups[i]);
+        }
+    }
+
+    private void MarkSpatiallyMountedWeightCandidates()
+    {
+        if (weightCandidates.Count == 0)
+        {
+            return;
+        }
+
+        Transform[] transforms = FindObjectsByType<Transform>(FindObjectsSortMode.None);
+        List<Bounds> equipmentBounds = new List<Bounds>();
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            if (transforms[i] == null || !IsMountedEquipmentName(transforms[i].name))
+            {
+                continue;
+            }
+
+            Renderer[] renderers = transforms[i].GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+            {
+                continue;
+            }
+
+            Bounds bounds = renderers[0].bounds;
+            for (int r = 1; r < renderers.Length; r++)
+            {
+                bounds.Encapsulate(renderers[r].bounds);
+            }
+
+            bounds.Expand(new Vector3(0.5f, 0.7f, 0.5f));
+            equipmentBounds.Add(bounds);
+        }
+
+        foreach (KeyValuePair<Transform, WeightType> entry in weightCandidates)
+        {
+            if (entry.Key == null)
+            {
+                continue;
+            }
+
+            Renderer renderer = entry.Key.GetComponentInChildren<Renderer>(true);
+            Vector3 center = renderer != null ? renderer.bounds.center : entry.Key.position;
+            for (int i = 0; i < equipmentBounds.Count; i++)
+            {
+                if (equipmentBounds[i].Contains(center))
+                {
+                    spatiallyMountedWeightRoots.Add(entry.Key);
+                    break;
+                }
+            }
+        }
+    }
+
+    private static bool IsMountedEquipmentName(string objectName)
+    {
+        string lower = objectName.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+        return lower.Contains("bench") || lower.Contains("cage") || lower.Contains("smithmachine") ||
+               lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("preacher") ||
+               lower.Contains("weightstand") || lower == "stand" || lower.StartsWith("stand(");
     }
 
     private void EnsureStaticCollider(GameObject target, Renderer renderer)
@@ -281,7 +454,7 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void SpawnEnemies()
     {
-        if (FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None).Length > 0 || player == null)
+        if (EnemySpawnCount <= 0 || FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None).Length > 0 || player == null)
         {
             return;
         }
@@ -293,7 +466,7 @@ public class GymArenaBootstrap : MonoBehaviour
             new Vector3(15f, 0f, 4f)
         };
 
-        for (int i = 0; i < offsets.Length; i++)
+        for (int i = 0; i < Mathf.Min(EnemySpawnCount, offsets.Length); i++)
         {
             CreateEnemy(i, player.transform.position + player.transform.right * offsets[i].x + player.transform.forward * offsets[i].z);
         }

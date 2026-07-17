@@ -5712,7 +5712,6 @@ Transform:
   - {fileID: 2082295902}
   - {fileID: 851795950}
   - {fileID: 1566575627}
-  - {fileID: 1070424592}
   - {fileID: 875071554}
   - {fileID: 998423019}
   - {fileID: 769347101}
@@ -5720,6 +5719,7 @@ Transform:
   - {fileID: 1245780272}
   - {fileID: 1533409291}
   - {fileID: 1927671674}
+  - {fileID: 1070424592}
   m_Father: {fileID: 1688167291}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!4 &1742855495 stripped
@@ -6908,6 +6908,39 @@ MonoBehaviour:
   defaultHeight: 2
   crouchHeight: 1
   crouchSpeed: 3
+  groundAcceleration: 70
+  airAcceleration: 28
+  groundFriction: 9
+  airStrafeMultiplier: 1.2
+  maxAirSpeed: 13
+  jumpGraceTime: 0.12
+  punchRange: 2.35
+  punchRadius: 0.3
+  punchForce: 15
+  punchDamage: 22
+  punchStun: 0.28
+  shoveForce: 12
+  shoveStun: 0.18
+  heldBarShoveRange: 4.65
+  heldBarShoveRadius: 0.39
+  heldBarShoveForce: 27
+  heldBarShoveDamage: 30
+  heldBarShoveDuration: 0.3
+  heldBarShoveReach: 1.725
+  heldPlateShoveRange: 2.7
+  heldPlateShoveRadius: 0.32
+  heldPlateShoveForce: 16
+  heldPlateShoveDamage: 14
+  heldPlateShoveDuration: 0.22
+  heldPlateShoveReach: 0.95
+  attackCooldown: 0.28
+  interactRange: 5.5
+  carryDistance: 1.45
+  carrySmoothness: 16
+  throwForce: 34
+  upwardThrowForce: 5
+  collisionRestoreDelay: 0.18
+  pickupLookDotThreshold: 0.35
 --- !u!143 &1982096215
 CharacterController:
   m_ObjectHideFlags: 0

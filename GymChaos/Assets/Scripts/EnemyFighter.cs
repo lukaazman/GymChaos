@@ -51,6 +51,12 @@ public class EnemyFighter : MonoBehaviour
             }
         }
 
+        if (target.IsExercising)
+        {
+            body.linearVelocity = Vector3.Lerp(body.linearVelocity, Vector3.zero, 5f * Time.fixedDeltaTime);
+            return;
+        }
+
         if (isKnockedOut)
         {
             if (Time.time >= knockedUntilTime)
