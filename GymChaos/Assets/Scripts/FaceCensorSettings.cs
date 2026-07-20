@@ -28,6 +28,7 @@ public struct FaceCensorProfile
 public sealed class FaceCensorSettings : MonoBehaviour
 {
     [SerializeField] private FaceCensorProfile profile;
+    private GameObject deathMarkers;
 
     public void Configure(FaceCensorProfile value, Transform head, int textureSeed)
     {
@@ -53,6 +54,88 @@ public sealed class FaceCensorSettings : MonoBehaviour
         renderer.sharedMaterial = material;
         renderer.shadowCastingMode = ShadowCastingMode.Off;
         renderer.receiveShadows = false;
+    }
+
+    public void SetDead(bool dead)
+    {
+        if (!dead)
+        {
+            if (deathMarkers != null)
+            {
+                Destroy(deathMarkers);
+                deathMarkers = null;
+            }
+            return;
+        }
+        if (deathMarkers != null)
+        {
+            return;
+        }
+
+        deathMarkers = new GameObject("Red Death X Markers");
+        deathMarkers.transform.SetParent(transform, false);
+        float eyeOffset = profile.Size.x * 0.22f;
+        CreateDeathX(deathMarkers.transform, "Left Red X", -eyeOffset);
+        CreateDeathX(deathMarkers.transform, "Right Red X", eyeOffset);
+    }
+
+    private void CreateDeathX(Transform parent, string markerName, float horizontalOffset)
+    {
+        GameObject marker = new GameObject(markerName);
+        marker.transform.SetParent(parent, false);
+        marker.transform.localPosition = new Vector3(
+            horizontalOffset, 0f, profile.FaceDepth * 1.08f + 0.006f);
+
+        float length = Mathf.Min(profile.Size.x * 0.21f, profile.Size.y * 1.05f);
+        float thickness = profile.Size.y * 0.23f;
+        CreateDeathSlash(marker.transform, "Slash A", length, thickness, 45f);
+        CreateDeathSlash(marker.transform, "Slash B", length, thickness, -45f);
+    }
+
+    private static void CreateDeathSlash(
+        Transform parent, string slashName, float length, float thickness, float angle)
+    {
+        GameObject slash = new GameObject(slashName);
+        slash.transform.SetParent(parent, false);
+        slash.transform.localRotation = Quaternion.Euler(0f, 0f, angle);
+
+        MeshFilter filter = slash.AddComponent<MeshFilter>();
+        filter.sharedMesh = CreateQuad(length, thickness);
+        MeshRenderer renderer = slash.AddComponent<MeshRenderer>();
+        Shader shader = Shader.Find("GymChaos/FaceCensor");
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Unlit");
+        }
+        Material material = new Material(shader) { name = "Dead Eye X Material" };
+        material.SetTexture("_BaseMap", CreateSolidTexture(Color.red, "Dead Eye X Texture"));
+        material.SetColor("_Tint", Color.red);
+        material.SetColor("_BaseColor", Color.red);
+        material.color = Color.red;
+        material.renderQueue = 3100;
+        renderer.sharedMaterial = material;
+        renderer.sortingOrder = 10;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+    }
+
+    private static Mesh CreateQuad(float width, float height)
+    {
+        float halfWidth = width * 0.5f;
+        float halfHeight = height * 0.5f;
+        Mesh mesh = new Mesh { name = "Death X Slash Mesh" };
+        mesh.vertices = new[]
+        {
+            new Vector3(-halfWidth, -halfHeight, 0f),
+            new Vector3(-halfWidth, halfHeight, 0f),
+            new Vector3(halfWidth, halfHeight, 0f),
+            new Vector3(halfWidth, -halfHeight, 0f)
+        };
+        mesh.uv = new[] { Vector2.zero, Vector2.up, Vector2.one, Vector2.right };
+        mesh.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
     }
 
     private static Mesh CreateCurvedFaceShell(FaceCensorProfile value)
@@ -109,13 +192,18 @@ public sealed class FaceCensorSettings : MonoBehaviour
 
     private static Texture2D CreateBlackTexture()
     {
+        return CreateSolidTexture(Color.black, "Opaque Black Eye Bar");
+    }
+
+    private static Texture2D CreateSolidTexture(Color color, string textureName)
+    {
         Texture2D texture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
         {
-            name = "Opaque Black Eye Bar",
+            name = textureName,
             filterMode = FilterMode.Point,
             wrapMode = TextureWrapMode.Clamp
         };
-        texture.SetPixel(0, 0, Color.black);
+        texture.SetPixel(0, 0, color);
         texture.Apply(false, true);
         return texture;
     }

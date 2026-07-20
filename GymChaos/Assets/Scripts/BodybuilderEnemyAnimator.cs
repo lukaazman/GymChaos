@@ -6,6 +6,7 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
     private BodybuilderIdentity identity;
     private bool moving;
     private bool downed;
+    private float movementSpeed01;
     private float movementBlend;
     private float attackBlend;
     private float walkCycle;
@@ -41,9 +42,10 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
         ApplyMotion(0f, 0f, 0f, 0f);
     }
 
-    public void SetMoving(bool shouldMove)
+    public void SetMoving(bool shouldMove, float normalizedSpeed = 1f)
     {
         moving = shouldMove;
+        movementSpeed01 = shouldMove ? Mathf.Clamp01(normalizedSpeed) : 0f;
     }
 
     public void TriggerAttack()
@@ -67,11 +69,13 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
             return;
         }
 
-        movementBlend = Mathf.MoveTowards(
-            movementBlend, moving && !downed ? 1f : 0f, Time.deltaTime * 4.5f);
+        float targetMovement = moving && !downed ? Mathf.Max(0.2f, movementSpeed01) : 0f;
+        movementBlend = Mathf.MoveTowards(movementBlend, targetMovement, Time.deltaTime * 5.5f);
         attackBlend = Mathf.MoveTowards(attackBlend, 0f, Time.deltaTime * 4f);
         idleCycle += Time.deltaTime * 1.15f;
-        walkCycle += Time.deltaTime * Mathf.Lerp(1.8f, 5.6f, movementBlend);
+        // Match foot cadence to actual chase speed. At full speed this is about
+        // 1.65 stride cycles per second, preventing the old one-step-then-glide look.
+        walkCycle += Time.deltaTime * Mathf.Lerp(4.5f, 10.4f, movementBlend);
         ApplyMotion(movementBlend, walkCycle, idleCycle, attackBlend);
     }
 
@@ -97,6 +101,11 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
                 kneeBend = 25f;
                 hipTurn = 2.1f;
                 break;
+            case BodybuilderIdentity.Ronnie:
+                thighStride = 17f;
+                kneeBend = 23f;
+                hipTurn = 1.4f;
+                break;
             default:
                 thighStride = 16f;
                 kneeBend = 21f;
@@ -107,8 +116,10 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
         kneeBend *= blend;
         float leftKnee = Mathf.Max(0f, -step) * kneeBend;
         float rightKnee = Mathf.Max(0f, -oppositeStep) * kneeBend;
-        float armAmplitude = identity == BodybuilderIdentity.Zyzz ? 1f : 2.4f;
-        float forearmAmplitude = identity == BodybuilderIdentity.Zyzz ? 0.35f : 0.9f;
+        float armAmplitude = identity == BodybuilderIdentity.Ronnie ? 0.45f
+            : identity == BodybuilderIdentity.Zyzz ? 1f : 2.4f;
+        float forearmAmplitude = identity == BodybuilderIdentity.Ronnie ? 0.15f
+            : identity == BodybuilderIdentity.Zyzz ? 0.35f : 0.9f;
         float armSwing = step * armAmplitude * blend;
         float idlePulse = 0.5f + 0.5f * Mathf.Sin(idlePhase);
 
@@ -140,6 +151,14 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
                 rightUpperMotion.z += idlePulse * 0.5f;
                 rightForearmMotion.z -= idlePulse * 1.1f;
                 break;
+            case BodybuilderIdentity.Ronnie:
+                // Ronnie's scan keeps its authored upper-body pose nearly fixed;
+                // pursuit motion is deliberately concentrated in hips and legs.
+                leftUpperMotion *= 0.35f;
+                rightUpperMotion *= 0.35f;
+                leftForearmMotion *= 0.25f;
+                rightForearmMotion *= 0.25f;
+                break;
         }
 
         rig.LeftUpperArm.localRotation = leftUpperBaseRotation * Quaternion.Euler(leftUpperMotion);
@@ -155,7 +174,8 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
         rig.Hips.localPosition = hipsBasePosition + Vector3.up * bob;
         rig.Hips.localRotation = hipsBaseRotation * Quaternion.Euler(
             0f, step * hipTurn * blend, -step * 0.7f * blend);
-        float torsoCounterSwing = identity == BodybuilderIdentity.Zyzz ? 0.45f :
+        float torsoCounterSwing = identity == BodybuilderIdentity.Ronnie ? 0.3f :
+            identity == BodybuilderIdentity.Zyzz ? 0.45f :
             identity == BodybuilderIdentity.Cbum ? 0.9f : 0.7f;
         float idleAmount = 1f - blend * 0.7f;
         Vector3 spineMotion = new Vector3(

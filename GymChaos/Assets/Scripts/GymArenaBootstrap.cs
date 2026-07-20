@@ -7,7 +7,8 @@ public class GymArenaBootstrap : MonoBehaviour
     {
         BodybuilderIdentity.Cbum,
         BodybuilderIdentity.Zyzz,
-        BodybuilderIdentity.Arnold
+        BodybuilderIdentity.Arnold,
+        BodybuilderIdentity.Ronnie
     };
 
     private static readonly string[] StaticNameBlocks =
@@ -159,8 +160,8 @@ public class GymArenaBootstrap : MonoBehaviour
         MarkSpatiallyMountedWeightCandidates();
         EnsureWeightGameplayObjects();
         GymExerciseStation.CreateForScene();
-        SpawnEnemies();
         SpawnNeutralReceptionNpc();
+        SpawnEnemies();
     }
 
     private bool ShouldIgnoreRenderer(Transform target)
@@ -512,6 +513,37 @@ public class GymArenaBootstrap : MonoBehaviour
         collider.height = 2.0475f;
         collider.radius = 0.34f;
         BodybuilderEnemyVisual.BuildNeutralNpc(npc, BodybuilderIdentity.Manwithsuit1);
+
+        PlacePlayerAcrossReceptionDesk(deskBounds, towardWall, floorY, npc.transform);
+    }
+
+    private void PlacePlayerAcrossReceptionDesk(
+        Bounds deskBounds, Vector3 towardWall, float floorY, Transform receptionist)
+    {
+        CharacterController controller = player.GetComponent<CharacterController>();
+        float playerClearance = controller != null ? controller.radius + 0.45f : 0.95f;
+        float deskHalfDepth = Mathf.Abs(towardWall.x) * deskBounds.extents.x
+            + Mathf.Abs(towardWall.z) * deskBounds.extents.z;
+        Vector3 position = deskBounds.center - towardWall * (deskHalfDepth + playerClearance);
+        position.y = controller != null
+            ? floorY + controller.height * 0.5f - controller.center.y
+            : floorY + 1f;
+
+        Vector3 faceReceptionist = Vector3.ProjectOnPlane(receptionist.position - position, Vector3.up);
+        Quaternion rotation = faceReceptionist.sqrMagnitude > 0.01f
+            ? Quaternion.LookRotation(faceReceptionist.normalized, Vector3.up)
+            : player.transform.rotation;
+
+        bool controllerWasEnabled = controller != null && controller.enabled;
+        if (controllerWasEnabled)
+        {
+            controller.enabled = false;
+        }
+        player.transform.SetPositionAndRotation(position, rotation);
+        if (controllerWasEnabled)
+        {
+            controller.enabled = true;
+        }
     }
 
     private void GetEnemyDisplayPose(
@@ -523,6 +555,27 @@ public class GymArenaBootstrap : MonoBehaviour
         if (floor != null && floor.TryGetComponent(out Renderer floorRenderer))
         {
             roomCenter = floorRenderer.bounds.center;
+        }
+
+        if (identity == BodybuilderIdentity.Ronnie && TryGetLockerBounds(out Bounds lockerBounds))
+        {
+            Vector3 awayFromLockers = Vector3.ProjectOnPlane(roomCenter - lockerBounds.center, Vector3.up);
+            if (awayFromLockers.sqrMagnitude < 0.01f)
+            {
+                awayFromLockers = Vector3.left;
+            }
+            awayFromLockers.Normalize();
+
+            float lockerDepth = Mathf.Abs(awayFromLockers.x) * lockerBounds.extents.x
+                + Mathf.Abs(awayFromLockers.z) * lockerBounds.extents.z;
+            Vector3 lockerFront = lockerBounds.center + awayFromLockers * (lockerDepth + 1.15f);
+            position = new Vector3(lockerFront.x, floorY, lockerFront.z);
+
+            Vector3 towardSpawn = Vector3.ProjectOnPlane(player.transform.position - position, Vector3.up);
+            rotation = towardSpawn.sqrMagnitude > 0.01f
+                ? Quaternion.LookRotation(towardSpawn.normalized, Vector3.up)
+                : Quaternion.LookRotation(awayFromLockers, Vector3.up);
+            return;
         }
 
         if (identity == BodybuilderIdentity.Zyzz)
@@ -558,7 +611,8 @@ public class GymArenaBootstrap : MonoBehaviour
         {
             new Vector3(7f, 0f, 3f),
             new Vector3(11f, 0f, -4f),
-            new Vector3(15f, 0f, 4f)
+            new Vector3(15f, 0f, 4f),
+            new Vector3(12f, 0f, 7f)
         };
         Vector3 offset = fallbackOffsets[Mathf.Clamp(fallbackIndex, 0, fallbackOffsets.Length - 1)];
         position = player.transform.position + player.transform.right * offset.x +
@@ -576,6 +630,31 @@ public class GymArenaBootstrap : MonoBehaviour
         for (int i = 0; i < renderers.Length; i++)
         {
             if (renderers[i].name != "Mirror panel")
+            {
+                continue;
+            }
+
+            if (!found)
+            {
+                bounds = renderers[i].bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+        }
+        return found;
+    }
+
+    private static bool TryGetLockerBounds(out Bounds bounds)
+    {
+        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        bool found = false;
+        bounds = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i].name != "Locker")
             {
                 continue;
             }
@@ -619,7 +698,7 @@ public class GymArenaBootstrap : MonoBehaviour
         CapsuleCollider collider = enemy.AddComponent<CapsuleCollider>();
         collider.center = new Vector3(0f, 1.15f, 0f);
         collider.height = 2.3f;
-        collider.radius = identity == BodybuilderIdentity.Cbum ? 0.54f : 0.48f;
+        collider.radius = identity == BodybuilderIdentity.Cbum || identity == BodybuilderIdentity.Ronnie ? 0.54f : 0.48f;
 
         Rigidbody body = enemy.AddComponent<Rigidbody>();
         body.mass = 85f;
@@ -630,6 +709,8 @@ public class GymArenaBootstrap : MonoBehaviour
 
         BodybuilderEnemyVisual.Build(enemy, identity);
         EnemyFighter fighter = enemy.AddComponent<EnemyFighter>();
-        fighter.SetTarget(player);
+        float health = identity == BodybuilderIdentity.Ronnie ? 100f
+            : identity == BodybuilderIdentity.Zyzz ? 45f : 60f;
+        fighter.Configure(identity, player, health, identity == BodybuilderIdentity.Ronnie);
     }
 }

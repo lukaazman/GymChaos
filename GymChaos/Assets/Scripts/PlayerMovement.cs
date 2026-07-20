@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -30,20 +31,17 @@ public class PlayerMovement : MonoBehaviour
     public float punchRange = 2.35f;
     public float punchRadius = 0.3f;
     public float punchForce = 15f;
-    public float punchDamage = 22f;
     public float punchStun = 0.28f;
     public float shoveForce = 12f;
     public float shoveStun = 0.18f;
     public float heldBarShoveRange = 4.65f;
     public float heldBarShoveRadius = 0.39f;
     public float heldBarShoveForce = 27f;
-    public float heldBarShoveDamage = 30f;
     public float heldBarShoveDuration = 0.3f;
     public float heldBarShoveReach = 1.725f;
     public float heldPlateShoveRange = 2.7f;
     public float heldPlateShoveRadius = 0.32f;
     public float heldPlateShoveForce = 16f;
-    public float heldPlateShoveDamage = 14f;
     public float heldPlateShoveDuration = 0.22f;
     public float heldPlateShoveReach = 0.95f;
     public float attackCooldown = 0.28f;
@@ -58,6 +56,7 @@ public class PlayerMovement : MonoBehaviour
     public float pickupLookDotThreshold = 0.35f;
 
     private readonly Collider[] overlapHits = new Collider[64];
+    private readonly Collider[] pickupHits = new Collider[256];
 
     private CharacterController characterController;
     private PlayerHandRig handRig;
@@ -322,7 +321,7 @@ public class PlayerMovement : MonoBehaviour
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (enemy != null)
         {
-            enemy.TakeMeleeHit(impulse, punchDamage, punchStun);
+            enemy.TakeMeleeHit(impulse, 5f, punchStun);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -333,7 +332,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         Rigidbody body = hit.rigidbody;
-        if (body != null)
+        if (body != null && enemy == null)
         {
             body.AddForceAtPosition(impulse, hit.point, ForceMode.Impulse);
         }
@@ -363,6 +362,7 @@ public class PlayerMovement : MonoBehaviour
         Vector3 origin = transform.position + Vector3.up * (characterController.height * 0.45f);
         int hitCount = Physics.OverlapSphereNonAlloc(origin + transform.forward * 1.05f, 1.1f, overlapHits, ~0, QueryTriggerInteraction.Ignore);
         Vector3 impulse = transform.forward * shoveForce + Vector3.up * 0.75f;
+        HashSet<EnemyFighter> damagedFighters = new HashSet<EnemyFighter>();
 
         for (int i = 0; i < hitCount; i++)
         {
@@ -373,9 +373,9 @@ public class PlayerMovement : MonoBehaviour
             }
 
             EnemyFighter enemy = hit.GetComponentInParent<EnemyFighter>();
-            if (enemy != null)
+            if (enemy != null && damagedFighters.Add(enemy))
             {
-                enemy.TakeMeleeHit(impulse, 10f, shoveStun);
+                enemy.TakeMeleeHit(impulse, 2f, shoveStun);
             }
 
             PickupItem pickup = hit.GetComponentInParent<PickupItem>();
@@ -386,7 +386,7 @@ public class PlayerMovement : MonoBehaviour
             }
 
             Rigidbody body = hit.attachedRigidbody;
-            if (body != null)
+            if (body != null && enemy == null)
             {
                 body.AddForce(impulse, ForceMode.Impulse);
             }
@@ -409,7 +409,8 @@ public class PlayerMovement : MonoBehaviour
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (enemy != null)
         {
-            enemy.TakeMeleeHit(impulse, heldBarShoveDamage, shoveStun);
+            float damage = heldItem.ItemType == WeightType.Barbell ? 15f : 5f;
+            enemy.TakeMeleeHit(impulse, damage, shoveStun);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -420,7 +421,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         Rigidbody body = hit.rigidbody;
-        if (body != null)
+        if (body != null && enemy == null)
         {
             body.AddForceAtPosition(impulse, hit.point, ForceMode.Impulse);
         }
@@ -442,7 +443,7 @@ public class PlayerMovement : MonoBehaviour
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (enemy != null)
         {
-            enemy.TakeMeleeHit(impulse, heldPlateShoveDamage, shoveStun);
+            enemy.TakeMeleeHit(impulse, heldItem.BaseMass * 0.75f, shoveStun);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -453,7 +454,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         Rigidbody body = hit.rigidbody;
-        if (body != null)
+        if (body != null && enemy == null)
         {
             body.AddForceAtPosition(impulse, hit.point, ForceMode.Impulse);
         }
@@ -509,7 +510,7 @@ public class PlayerMovement : MonoBehaviour
         Vector3 throwDirection = isPlateThrow ? GetFlatThrowDirection() : (playerCamera.transform.forward + Vector3.up * 0.12f).normalized;
         float scaledThrowForce = throwForce + heldItem.BaseMass * 0.9f;
         Vector3 throwImpulse = isPlateThrow
-            ? throwDirection * (scaledThrowForce + 8f)
+            ? GetPlateThrowImpulse(throwDirection, heldItem.BaseMass)
             : throwDirection * scaledThrowForce + Vector3.up * upwardThrowForce;
 
         heldItem.Throw(throwImpulse, playerColliders, collisionRestoreDelay, allowSpin);
@@ -578,6 +579,17 @@ public class PlayerMovement : MonoBehaviour
                itemType == WeightType.Plate10 || itemType == WeightType.Plate20;
     }
 
+    private Vector3 GetPlateThrowImpulse(Vector3 direction, float plateMass)
+    {
+        // Preserve the previous Plate5 throw exactly, then make heavier plates
+        // travel only slightly less far and begin dropping a little sooner.
+        float mass01 = Mathf.InverseLerp(5f, 20f, plateMass);
+        float distanceScale = Mathf.Lerp(1f, 0.90f, mass01);
+        float downwardSpeed = Mathf.Lerp(0f, 0.65f, mass01);
+        float plate5Speed = throwForce + 5f * 0.9f + 8f;
+        return direction * (plate5Speed * distanceScale) + Vector3.down * downwardSpeed;
+    }
+
     private PickupItem FindBestPickup()
     {
         Vector3 playerCenter = transform.position + Vector3.up * Mathf.Max(characterController.height * 0.45f, 0.9f);
@@ -585,23 +597,24 @@ public class PlayerMovement : MonoBehaviour
         Vector3 viewForward = playerCamera.transform.forward;
         PickupItem bestItem = null;
         float bestScore = float.MinValue;
+        HashSet<PickupItem> inspectedItems = new HashSet<PickupItem>();
 
-        int hitCount = Physics.OverlapSphereNonAlloc(playerCenter, interactRange, overlapHits, ~0, QueryTriggerInteraction.Ignore);
+        int hitCount = Physics.OverlapSphereNonAlloc(playerCenter, interactRange, pickupHits, ~0, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < hitCount; i++)
         {
-            Collider candidateCollider = overlapHits[i];
+            Collider candidateCollider = pickupHits[i];
             if (candidateCollider == null || candidateCollider.transform.IsChildOf(transform))
             {
                 continue;
             }
 
             PickupItem item = candidateCollider.GetComponentInParent<PickupItem>();
-            if (item == null || item.IsHeld || !item.IsThrowableWeapon)
+            if (item == null || item.IsHeld || !item.IsThrowableWeapon || !inspectedItems.Add(item))
             {
                 continue;
             }
 
-            Vector3 closestPoint = candidateCollider.ClosestPoint(playerCenter);
+            Vector3 closestPoint = GetClosestPickupPoint(item, playerCenter);
             Vector3 toItem = closestPoint - playerCenter;
             float distanceSqr = toItem.sqrMagnitude;
             if (distanceSqr > interactRange * interactRange)
@@ -609,19 +622,24 @@ public class PlayerMovement : MonoBehaviour
                 continue;
             }
 
-            Vector3 toViewPoint = candidateCollider.ClosestPoint(viewOrigin) - viewOrigin;
+            Vector3 toViewPoint = GetClosestPickupPoint(item, viewOrigin) - viewOrigin;
             if (toViewPoint.sqrMagnitude <= 0.0001f)
             {
                 toViewPoint = item.transform.position - viewOrigin;
             }
 
             float alignment = Vector3.Dot(viewForward, toViewPoint.normalized);
-            if (alignment < pickupLookDotThreshold)
+            bool weightStandPlate = IsWeightStandPlate(item);
+            float requiredAlignment = weightStandPlate
+                ? Mathf.Min(0.08f, pickupLookDotThreshold)
+                : pickupLookDotThreshold;
+            if (alignment < requiredAlignment)
             {
                 continue;
             }
 
-            float score = alignment * 3f - Mathf.Sqrt(distanceSqr) * 0.4f;
+            float score = alignment * (weightStandPlate ? 2f : 3f) -
+                Mathf.Sqrt(distanceSqr) * (weightStandPlate ? 0.65f : 0.4f);
             if (score > bestScore)
             {
                 bestScore = score;
@@ -630,6 +648,49 @@ public class PlayerMovement : MonoBehaviour
         }
 
         return bestItem;
+    }
+
+    private static bool IsWeightStandPlate(PickupItem item)
+    {
+        if (item == null || !IsPlateType(item.ItemType))
+        {
+            return false;
+        }
+
+        Transform current = item.transform;
+        while (current != null)
+        {
+            string normalized = current.name.ToLowerInvariant()
+                .Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+            if (normalized.Contains("weightstandflat"))
+            {
+                return true;
+            }
+            current = current.parent;
+        }
+        return false;
+    }
+
+    private static Vector3 GetClosestPickupPoint(PickupItem item, Vector3 origin)
+    {
+        Collider[] colliders = item.GetComponentsInChildren<Collider>(true);
+        Vector3 closest = item.transform.position;
+        float closestDistance = (closest - origin).sqrMagnitude;
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] == null || !colliders[i].enabled)
+            {
+                continue;
+            }
+            Vector3 point = colliders[i].ClosestPoint(origin);
+            float distance = (point - origin).sqrMagnitude;
+            if (distance < closestDistance)
+            {
+                closest = point;
+                closestDistance = distance;
+            }
+        }
+        return closest;
     }
 
     private void CreateCarryAnchor()

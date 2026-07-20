@@ -10,6 +10,7 @@ public enum BodybuilderIdentity
     Arnold,
     Cbum,
     Zyzz,
+    Ronnie,
     Manwithsuit1
 }
 
@@ -332,6 +333,13 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                     new Vector2(-0.065f, 0.49f), new Vector2(-0.065f, 0.25f), new Vector2(-0.075f, 0.02f),
                     new Vector2(0.065f, 0.49f), new Vector2(0.065f, 0.25f), new Vector2(0.075f, 0.02f),
                     0.79f, 0.085f, 0.095f, 0.88f);
+            case BodybuilderIdentity.Ronnie:
+                return new RigProfile(
+                    new Vector2(-0.13f, 0.70f), new Vector2(-0.18f, 0.57f), new Vector2(-0.14f, 0.43f),
+                    new Vector2(0.13f, 0.70f), new Vector2(0.18f, 0.57f), new Vector2(0.14f, 0.43f),
+                    new Vector2(-0.055f, 0.49f), new Vector2(-0.055f, 0.25f), new Vector2(-0.06f, 0.02f),
+                    new Vector2(0.055f, 0.49f), new Vector2(0.055f, 0.25f), new Vector2(0.06f, 0.02f),
+                    0.79f, 0.09f, 0.095f, 0.88f);
             case BodybuilderIdentity.Manwithsuit1:
                 return new RigProfile(
                     new Vector2(-0.105f, 0.70f), new Vector2(-0.12f, 0.57f), new Vector2(-0.09f, 0.65f),
@@ -823,6 +831,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             GetFaceCensorProfile(identity, vertices, bounds, rigProfile, visualRoot, head),
             head, identity.GetHashCode() + 31);
 
+        EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
+        if (fighter != null && fighter.IsDead)
+        {
+            censor.SetDead(true);
+        }
+
         CreateNameLabel(visualRoot, bodyRenderer, identity, bodyHeight * 0.13f);
     }
 
@@ -838,7 +852,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 eyeY += height * 0.035f;
                 break;
             case BodybuilderIdentity.Zyzz:
-                eyeY += height * 0.025f;
+                eyeY += height * 0.00575f;
+                break;
+            case BodybuilderIdentity.Ronnie:
+                eyeY += height * 0.035f;
                 break;
             default:
                 eyeY += height * 0.05f;
@@ -874,6 +891,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             case BodybuilderIdentity.Zyzz:
                 return new FaceCensorProfile(localPosition + new Vector3(0.001f, 0f, -height * 0.017f), new Vector3(0f, -1f, 0f),
                     new Vector2(height * 0.135f, height * 0.028f), height * 0.017f, 70f, Color.black);
+            case BodybuilderIdentity.Ronnie:
+                // Ronnie's scanned face center sits about 0.95% of body height
+                // to model-right of the full-mesh bounds center at eye level.
+                return new FaceCensorProfile(localPosition + new Vector3(height * 0.0095f, 0f, -height * 0.02f), Vector3.zero,
+                    new Vector2(height * 0.128f, height * 0.029f), height * 0.02f, 69f, Color.black);
             default:
                 return new FaceCensorProfile(localPosition + new Vector3(-0.001f, 0f, -height * 0.02f), new Vector3(0f, 1f, 0f),
                     new Vector2(height * 0.128f, height * 0.029f), height * 0.02f, 69f, Color.black);

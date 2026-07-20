@@ -6917,20 +6917,17 @@ MonoBehaviour:
   punchRange: 2.35
   punchRadius: 0.3
   punchForce: 15
-  punchDamage: 22
   punchStun: 0.28
   shoveForce: 12
   shoveStun: 0.18
   heldBarShoveRange: 4.65
   heldBarShoveRadius: 0.39
   heldBarShoveForce: 27
-  heldBarShoveDamage: 30
   heldBarShoveDuration: 0.3
   heldBarShoveReach: 1.725
   heldPlateShoveRange: 2.7
   heldPlateShoveRadius: 0.32
   heldPlateShoveForce: 16
-  heldPlateShoveDamage: 14
   heldPlateShoveDuration: 0.22
   heldPlateShoveReach: 0.95
   attackCooldown: 0.28

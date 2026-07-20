@@ -150,9 +150,26 @@ public class PickupItem : MonoBehaviour
         wasThrown = false;
     }
 
+    public bool TryConsumeThrownHit()
+    {
+        if (!wasThrown)
+        {
+            return false;
+        }
+        wasThrown = false;
+        return true;
+    }
+
     public float GetImpactDamage(float impactSpeed)
     {
-        return impactSpeed * impactMultiplier * 2.25f;
+        _ = impactSpeed;
+        bool isPlate = weightType == WeightType.Plate || weightType == WeightType.Plate5 ||
+            weightType == WeightType.Plate10 || weightType == WeightType.Plate20;
+        if (isPlate)
+        {
+            return baseMass * 1.25f;
+        }
+        return weightType == WeightType.Barbell ? 30f : 5f;
     }
 
     private void Release(Collider[] playerColliders, float restoreDelay)
