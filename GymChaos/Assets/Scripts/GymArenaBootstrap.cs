@@ -3,7 +3,12 @@ using UnityEngine;
 
 public class GymArenaBootstrap : MonoBehaviour
 {
-    private const int EnemySpawnCount = 0;
+    private static readonly BodybuilderIdentity[] EnemyRoster =
+    {
+        BodybuilderIdentity.Cbum,
+        BodybuilderIdentity.Zyzz,
+        BodybuilderIdentity.Arnold
+    };
 
     private static readonly string[] StaticNameBlocks =
     {
@@ -11,7 +16,8 @@ public class GymArenaBootstrap : MonoBehaviour
         "main camera",
         "carryanchor",
         "playerhandrig",
-        "gym fighter"
+        "gym fighter",
+        "manwithsuit1"
     };
 
     private static GymArenaBootstrap instance;
@@ -154,6 +160,7 @@ public class GymArenaBootstrap : MonoBehaviour
         EnsureWeightGameplayObjects();
         GymExerciseStation.CreateForScene();
         SpawnEnemies();
+        SpawnNeutralReceptionNpc();
     }
 
     private bool ShouldIgnoreRenderer(Transform target)
@@ -454,30 +461,165 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void SpawnEnemies()
     {
-        if (EnemySpawnCount <= 0 || FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None).Length > 0 || player == null)
+        if (FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None).Length > 0 || player == null)
         {
             return;
         }
 
-        Vector3[] offsets =
+        for (int i = 0; i < EnemyRoster.Length; i++)
+        {
+            GetEnemyDisplayPose(EnemyRoster[i], i, out Vector3 position, out Quaternion rotation);
+            CreateEnemy(EnemyRoster[i], position, rotation);
+        }
+    }
+
+    private void SpawnNeutralReceptionNpc()
+    {
+        if (GameObject.Find("NPC - manwithsuit1") != null || player == null)
+        {
+            return;
+        }
+
+        GameObject desk = GameObject.Find("Reception desk");
+        GameObject floor = GameObject.Find("Rubber Floor");
+        if (desk == null || !TryGetCombinedBounds(desk.transform, out Bounds deskBounds))
+        {
+            return;
+        }
+
+        Vector3 roomCenter = floor != null && floor.TryGetComponent(out Renderer floorRenderer)
+            ? floorRenderer.bounds.center
+            : player.transform.position;
+        Vector3 towardWall = deskBounds.center - roomCenter;
+        towardWall.y = 0f;
+        if (towardWall.sqrMagnitude < 0.01f)
+        {
+            towardWall = Vector3.back;
+        }
+        towardWall.Normalize();
+
+        float floorY = floor != null && floor.TryGetComponent(out Renderer groundRenderer)
+            ? groundRenderer.bounds.max.y
+            : player.transform.position.y - 1.05f;
+        Vector3 position = deskBounds.center + towardWall * (deskBounds.extents.z + 0.58f);
+        position.y = floorY + 0.08f;
+
+        GameObject npc = new GameObject("NPC - manwithsuit1");
+        npc.transform.SetPositionAndRotation(
+            position, Quaternion.LookRotation(-towardWall, Vector3.up));
+        CapsuleCollider collider = npc.AddComponent<CapsuleCollider>();
+        collider.center = new Vector3(0f, 1.02375f, 0f);
+        collider.height = 2.0475f;
+        collider.radius = 0.34f;
+        BodybuilderEnemyVisual.BuildNeutralNpc(npc, BodybuilderIdentity.Manwithsuit1);
+    }
+
+    private void GetEnemyDisplayPose(
+        BodybuilderIdentity identity, int fallbackIndex, out Vector3 position, out Quaternion rotation)
+    {
+        float floorY = player.transform.position.y - 1.05f;
+        Vector3 roomCenter = player.transform.position;
+        GameObject floor = GameObject.Find("Rubber Floor");
+        if (floor != null && floor.TryGetComponent(out Renderer floorRenderer))
+        {
+            roomCenter = floorRenderer.bounds.center;
+        }
+
+        if (identity == BodybuilderIdentity.Zyzz)
+        {
+            GameObject cableMachine = GameObject.Find("CableMachineDual");
+            if (cableMachine != null && TryGetCombinedBounds(cableMachine.transform, out Bounds cableBounds))
+            {
+                position = new Vector3(cableBounds.center.x, floorY, cableBounds.center.z);
+                Vector3 faceRoom = Vector3.ProjectOnPlane(roomCenter - position, Vector3.up);
+                rotation = faceRoom.sqrMagnitude > 0.01f
+                    ? Quaternion.LookRotation(faceRoom.normalized, Vector3.up)
+                    : cableMachine.transform.rotation;
+                return;
+            }
+        }
+        else if (TryGetMirrorBounds(out Bounds mirrorBounds))
+        {
+            Vector3 towardRoom = Vector3.ProjectOnPlane(roomCenter - mirrorBounds.center, Vector3.up);
+            if (towardRoom.sqrMagnitude < 0.01f)
+            {
+                towardRoom = Vector3.back;
+            }
+            towardRoom.Normalize();
+            Vector3 side = Vector3.Cross(Vector3.up, towardRoom).normalized;
+            float sideOffset = identity == BodybuilderIdentity.Cbum ? -1.55f : 1.55f;
+            Vector3 mirrorFront = mirrorBounds.center + towardRoom * 2.25f + side * sideOffset;
+            position = new Vector3(mirrorFront.x, floorY, mirrorFront.z);
+            rotation = Quaternion.LookRotation(towardRoom, Vector3.up);
+            return;
+        }
+
+        Vector3[] fallbackOffsets =
         {
             new Vector3(7f, 0f, 3f),
             new Vector3(11f, 0f, -4f),
             new Vector3(15f, 0f, 4f)
         };
-
-        for (int i = 0; i < Mathf.Min(EnemySpawnCount, offsets.Length); i++)
-        {
-            CreateEnemy(i, player.transform.position + player.transform.right * offsets[i].x + player.transform.forward * offsets[i].z);
-        }
+        Vector3 offset = fallbackOffsets[Mathf.Clamp(fallbackIndex, 0, fallbackOffsets.Length - 1)];
+        position = player.transform.position + player.transform.right * offset.x +
+                   player.transform.forward * offset.z;
+        position.y = floorY;
+        rotation = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(roomCenter - position, Vector3.up).normalized, Vector3.up);
     }
 
-    private void CreateEnemy(int index, Vector3 position)
+    private static bool TryGetMirrorBounds(out Bounds bounds)
     {
-        GameObject enemy = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        enemy.name = $"Gym Fighter {index + 1}";
-        enemy.transform.position = position + Vector3.up;
-        enemy.transform.localScale = new Vector3(1.1f, 1.1f, 1.1f);
+        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        bool found = false;
+        bounds = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i].name != "Mirror panel")
+            {
+                continue;
+            }
+
+            if (!found)
+            {
+                bounds = renderers[i].bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+        }
+        return found;
+    }
+
+    private static bool TryGetCombinedBounds(Transform root, out Bounds bounds)
+    {
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            bounds = default;
+            return false;
+        }
+
+        bounds = renderers[0].bounds;
+        for (int i = 1; i < renderers.Length; i++)
+        {
+            bounds.Encapsulate(renderers[i].bounds);
+        }
+        return true;
+    }
+
+    private void CreateEnemy(BodybuilderIdentity identity, Vector3 position, Quaternion rotation)
+    {
+        GameObject enemy = new GameObject($"Enemy - {identity}");
+        enemy.transform.position = position;
+        enemy.transform.rotation = rotation;
+
+        CapsuleCollider collider = enemy.AddComponent<CapsuleCollider>();
+        collider.center = new Vector3(0f, 1.15f, 0f);
+        collider.height = 2.3f;
+        collider.radius = identity == BodybuilderIdentity.Cbum ? 0.54f : 0.48f;
 
         Rigidbody body = enemy.AddComponent<Rigidbody>();
         body.mass = 85f;
@@ -486,13 +628,8 @@ public class GymArenaBootstrap : MonoBehaviour
         body.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         body.interpolation = RigidbodyInterpolation.Interpolate;
 
+        BodybuilderEnemyVisual.Build(enemy, identity);
         EnemyFighter fighter = enemy.AddComponent<EnemyFighter>();
         fighter.SetTarget(player);
-
-        Renderer renderer = enemy.GetComponent<Renderer>();
-        if (renderer != null)
-        {
-            renderer.material.color = index % 2 == 0 ? new Color(0.82f, 0.22f, 0.18f) : new Color(0.92f, 0.82f, 0.24f);
-        }
     }
 }

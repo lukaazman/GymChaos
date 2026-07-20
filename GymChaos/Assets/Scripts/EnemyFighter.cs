@@ -8,6 +8,7 @@ public class EnemyFighter : MonoBehaviour
     [SerializeField] private float maxHealth = 100f;
     [SerializeField] private float moveForce = 11f;
     [SerializeField] private float maxSpeed = 2.75f;
+    [SerializeField] private float detectionRange = 7.5f;
     [SerializeField] private float attackRange = 1.9f;
     [SerializeField] private float attackImpulse = 9f;
     [SerializeField] private float attackCooldown = 1.05f;
@@ -17,6 +18,7 @@ public class EnemyFighter : MonoBehaviour
 
     private PlayerMovement target;
     private Rigidbody body;
+    private BodybuilderEnemyAnimator bodyAnimator;
     private float health;
     private float lastAttackTime = -999f;
     private float stunnedUntilTime;
@@ -31,6 +33,7 @@ public class EnemyFighter : MonoBehaviour
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
+        bodyAnimator = GetComponent<BodybuilderEnemyAnimator>();
         health = maxHealth;
         ActiveCount++;
     }
@@ -54,6 +57,7 @@ public class EnemyFighter : MonoBehaviour
         if (target.IsExercising)
         {
             body.linearVelocity = Vector3.Lerp(body.linearVelocity, Vector3.zero, 5f * Time.fixedDeltaTime);
+            SetAnimatedMovement(false);
             return;
         }
 
@@ -69,12 +73,24 @@ public class EnemyFighter : MonoBehaviour
 
         if (Time.time < stunnedUntilTime)
         {
+            SetAnimatedMovement(false);
             return;
         }
 
         Vector3 toTarget = target.transform.position - transform.position;
         Vector3 planarToTarget = Vector3.ProjectOnPlane(toTarget, Vector3.up);
         float distance = planarToTarget.magnitude;
+
+        if (distance > detectionRange)
+        {
+            Vector3 verticalVelocity = Vector3.Project(body.linearVelocity, Vector3.up);
+            Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+            body.linearVelocity = Vector3.Lerp(planarVelocity, Vector3.zero, 5f * Time.fixedDeltaTime) + verticalVelocity;
+            SetAnimatedMovement(false);
+            return;
+        }
+
+        SetAnimatedMovement(distance > attackRange * 0.8f);
 
         if (distance > 0.15f)
         {
@@ -98,6 +114,7 @@ public class EnemyFighter : MonoBehaviour
 
     private void Attack(Vector3 direction)
     {
+        bodyAnimator?.TriggerAttack();
         body.AddForce(direction * 3.5f + Vector3.up, ForceMode.Impulse);
         target.ReceiveImpact(direction * attackImpulse + Vector3.up * 1.1f);
     }
@@ -133,6 +150,7 @@ public class EnemyFighter : MonoBehaviour
     private void KnockOut(Vector3 impulse)
     {
         isKnockedOut = true;
+        bodyAnimator?.SetDowned(true);
         knockedUntilTime = Time.time + recoveryDuration;
         body.constraints = RigidbodyConstraints.None;
         body.AddForce(impulse * 0.8f + Vector3.up * 2f, ForceMode.Impulse);
@@ -141,6 +159,7 @@ public class EnemyFighter : MonoBehaviour
     private void Recover()
     {
         isKnockedOut = false;
+        bodyAnimator?.SetDowned(false);
         health = Mathf.Max(maxHealth * 0.6f, 45f);
         stunnedUntilTime = Time.time + lightStunDuration;
         body.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
@@ -149,6 +168,16 @@ public class EnemyFighter : MonoBehaviour
         uprightPosition.y = Mathf.Max(1f, uprightPosition.y);
         transform.position = uprightPosition;
         transform.rotation = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
+    }
+
+    private void SetAnimatedMovement(bool isMoving)
+    {
+        if (bodyAnimator == null)
+        {
+            bodyAnimator = GetComponent<BodybuilderEnemyAnimator>();
+        }
+
+        bodyAnimator?.SetMoving(isMoving);
     }
 
     private void OnCollisionEnter(Collision collision)
