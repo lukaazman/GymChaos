@@ -71,6 +71,7 @@ public class PlayerMovement : MonoBehaviour
     private bool showCursor;
     private bool useRightHandNext = true;
     private float crouchAmount;
+    private Vector3 cameraBaseLocalPosition;
 
     private Transform carryAnchor;
     private PickupItem heldItem;
@@ -93,6 +94,16 @@ public class PlayerMovement : MonoBehaviour
         if (playerCamera == null)
         {
             playerCamera = GetComponentInChildren<Camera>();
+        }
+
+        if (playerCamera != null)
+        {
+            cameraBaseLocalPosition = playerCamera.transform.localPosition;
+            // The serialized camera was below the runtime player's eye line.
+            // Raise it to the model's eye level; this also naturally lowers
+            // the first-person arms in the frame.
+            cameraBaseLocalPosition.y = 1.24f;
+            playerCamera.transform.localPosition = cameraBaseLocalPosition;
         }
 
         playerColliders = GetComponentsInChildren<Collider>(true);
@@ -199,6 +210,11 @@ public class PlayerMovement : MonoBehaviour
 
         float desiredHeight = crouchHeld ? crouchHeight : defaultHeight;
         characterController.height = Mathf.Lerp(characterController.height, desiredHeight, 12f * Time.deltaTime);
+
+        Vector3 cameraPosition = playerCamera.transform.localPosition;
+        cameraPosition.y = Mathf.Lerp(
+            cameraPosition.y, cameraBaseLocalPosition.y - crouchAmount * 0.34f, 12f * Time.deltaTime);
+        playerCamera.transform.localPosition = cameraPosition;
 
         Vector3 totalMotion = planarVelocity + impactVelocity;
         totalMotion.y = verticalVelocity;

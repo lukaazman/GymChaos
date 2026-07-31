@@ -728,7 +728,6 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void CreateEnemy(BodybuilderIdentity identity, Vector3 position, Quaternion rotation)
     {
-        position = FindClearEnemySpawn(position);
         GameObject enemy = new GameObject($"Enemy - {identity}");
         enemy.transform.position = position;
         enemy.transform.rotation = rotation;
@@ -752,28 +751,4 @@ public class GymArenaBootstrap : MonoBehaviour
         fighter.Configure(identity, player, health, identity == BodybuilderIdentity.Ronnie);
     }
 
-    private Vector3 FindClearEnemySpawn(Vector3 position)
-    {
-        Vector3 escapeDirection = player != null
-            ? Vector3.ProjectOnPlane(player.transform.position - position, Vector3.up)
-            : Vector3.forward;
-        if (escapeDirection.sqrMagnitude < 0.01f)
-        {
-            escapeDirection = Vector3.forward;
-        }
-        escapeDirection.Normalize();
-
-        const float radius = 0.5f;
-        for (int attempt = 0; attempt < 12; attempt++)
-        {
-            Vector3 bottom = position + Vector3.up * 0.5f;
-            Vector3 top = position + Vector3.up * 1.8f;
-            if (!Physics.CheckCapsule(bottom, top, radius, ~0, QueryTriggerInteraction.Ignore))
-            {
-                return position;
-            }
-            position += escapeDirection * 0.75f;
-        }
-        return position;
-    }
 }

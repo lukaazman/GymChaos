@@ -9,8 +9,8 @@ public class EnemyFighter : MonoBehaviour
     public static int ActiveCount { get; private set; }
 
     [SerializeField] private float maxHealth = 100f;
-    [SerializeField] private float moveForce = 11f;
-    [SerializeField] private float maxSpeed = 2.75f;
+    [SerializeField] private float moveForce = 26f;
+    [SerializeField] private float maxSpeed = 4.8f;
     [SerializeField] private float detectionRange = 7.5f;
     [SerializeField] private float attackRange = 1.9f;
     [SerializeField] private float attackImpulse = 9f;
@@ -462,7 +462,9 @@ public class EnemyFighter : MonoBehaviour
         }
 
         float impactSpeed = collision.relativeVelocity.magnitude;
-        if (impactSpeed < 3f || !item.TryConsumeThrownHit())
+        float minimumImpactSpeed = item.ItemType == WeightType.Barbell || item.ItemType == WeightType.EzBar
+            ? 0.8f : 3f;
+        if (impactSpeed < minimumImpactSpeed || !item.TryConsumeThrownHit())
         {
             return;
         }

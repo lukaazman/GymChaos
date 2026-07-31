@@ -106,11 +106,11 @@ public class GymExerciseStation : MonoBehaviour
 
             Bounds bounds = GetCombinedBounds(renderers);
             if ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress ||
-                 type == GymExerciseType.BarbellSquat) && !HasRequiredBarAtEquipment(candidate, bounds, transforms, "barbell"))
+                 type == GymExerciseType.BarbellSquat) && FindNearestSceneWeight(candidate, bounds, "barbell") == null)
             {
                 continue;
             }
-            if (type == GymExerciseType.PreacherCurl && !HasRequiredBarAtEquipment(candidate, bounds, transforms, "ezbar"))
+            if (type == GymExerciseType.PreacherCurl && FindNearestSceneWeight(candidate, bounds, "ezbar") == null)
             {
                 continue;
             }
@@ -118,7 +118,9 @@ public class GymExerciseStation : MonoBehaviour
             bool duplicate = false;
             for (int j = 0; j < registeredPositions.Count; j++)
             {
-                if (registeredTypes[j] == type && Vector3.Distance(registeredPositions[j], bounds.center) < 2.2f)
+                float duplicateDistance = type == GymExerciseType.Treadmill || type == GymExerciseType.ExerciseBike
+                    ? 0.75f : 2.2f;
+                if (registeredTypes[j] == type && Vector3.Distance(registeredPositions[j], bounds.center) < duplicateDistance)
                 {
                     duplicate = true;
                     break;
@@ -273,7 +275,7 @@ public class GymExerciseStation : MonoBehaviour
                 localRotation = Quaternion.Euler(-58f + motion * 3f, 0f, 0f);
                 break;
             case GymExerciseType.InclineBenchPress:
-                localPosition = new Vector3(0f, 1.03f + motion * 0.02f, -0.18f);
+                localPosition = new Vector3(0.12f, 1.03f + motion * 0.02f, -0.18f);
                 localRotation = Quaternion.Euler(-30f + motion * 3f, 0f, 0f);
                 break;
             case GymExerciseType.BarbellSquat:
@@ -347,7 +349,6 @@ public class GymExerciseStation : MonoBehaviour
         float floorY = bounds.min.y + 0.06f;
         Vector3 offset = GetPlayerOffset(type, forward);
         playerPosition = new Vector3(bounds.center.x + offset.x, floorY, bounds.center.z + offset.z);
-        interactionPoint = playerPosition;
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
@@ -358,6 +359,7 @@ public class GymExerciseStation : MonoBehaviour
             Vector3 seatedCenter = bounds.center - approach * 0.42f;
             playerPosition = new Vector3(seatedCenter.x, floorY, seatedCenter.z);
         }
+        interactionPoint = playerPosition;
         Vector3 lookDirection = Vector3.ProjectOnPlane(bounds.center - playerPosition, Vector3.up);
         if (lookDirection.sqrMagnitude < 0.01f)
         {
@@ -365,19 +367,14 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         playerRotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up) * GetFacingCorrection(type);
-        if (type == GymExerciseType.InclineBenchPress)
+        if (type == GymExerciseType.InclineBenchPress && sceneBar != null)
         {
-            // The incline bench must face the cable-machine side of the room,
-            // not the mirror wall. Use that explicit landmark instead of the
-            // FBX's inconsistent local forward axis.
-            GameObject cableMachine = GameObject.Find("CableMachineDual");
-            if (cableMachine != null)
+            Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
+            Vector3 barCenter = barRenderers.Length > 0 ? GetCombinedBounds(barRenderers).center : sceneBar.position;
+            Vector3 barLook = Vector3.ProjectOnPlane(barCenter - playerPosition, Vector3.up);
+            if (barLook.sqrMagnitude > 0.01f)
             {
-                Vector3 towardCable = Vector3.ProjectOnPlane(cableMachine.transform.position - playerPosition, Vector3.up);
-                if (towardCable.sqrMagnitude > 0.01f)
-                {
-                    playerRotation = Quaternion.LookRotation(towardCable.normalized, Vector3.up);
-                }
+                playerRotation = Quaternion.LookRotation(barLook.normalized, Vector3.up);
             }
         }
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
@@ -938,31 +935,9 @@ public class GymExerciseStation : MonoBehaviour
         return bounds;
     }
 
-    private static bool HasRequiredBarAtEquipment(Transform equipment, Bounds equipmentBounds, Transform[] allTransforms, string prefix)
-    {
-        Transform[] children = equipment.GetComponentsInChildren<Transform>(true);
-        for (int i = 0; i < children.Length; i++)
-        {
-            if (NormalizeWeightName(children[i].name).StartsWith(prefix)) return true;
-        }
-
-        Bounds rackArea = equipmentBounds;
-        rackArea.Expand(new Vector3(1.8f, 1.4f, 1.8f));
-        for (int i = 0; i < allTransforms.Length; i++)
-        {
-            Transform candidate = allTransforms[i];
-            if (candidate != null && NormalizeWeightName(candidate.name).StartsWith(prefix) && rackArea.Contains(candidate.position))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private float GetInteractionRange()
     {
-        return IsCardio ? 1.35f : 2.35f;
+        return IsCardio ? 3.15f : 2.35f;
     }
 
     private static string NormalizeWeightName(string name)
@@ -981,22 +956,28 @@ public class GymExerciseStation : MonoBehaviour
         {
             Transform candidate = transforms[i];
             if (candidate == null || candidate.GetComponentInParent<PlayerMovement>() != null || candidate.name.Contains("Asset Clone")) continue;
-            string normalized = NormalizeWeightName(candidate.name);
-            if (!normalized.StartsWith(prefix)) continue;
-            Renderer renderer = candidate.GetComponentInChildren<Renderer>(true);
+            PickupItem pickup = candidate.GetComponentInParent<PickupItem>();
+            if (pickup == null || !IsExpectedWeightType(pickup.ItemType, prefix)) continue;
+            Transform weightRoot = pickup.transform;
+            Renderer renderer = weightRoot.GetComponentInChildren<Renderer>(true);
             if (renderer == null) continue;
             Vector3 center = renderer.bounds.center;
             if (!searchArea.Contains(center)) continue;
             float distance = (center - equipmentBounds.center).sqrMagnitude;
-            if (candidate.IsChildOf(equipment)) distance *= 0.1f;
+            if (weightRoot.IsChildOf(equipment)) distance *= 0.1f;
             if (distance < bestDistance)
             {
                 bestDistance = distance;
-                best = candidate;
+                best = weightRoot;
             }
         }
 
         return best;
+    }
+
+    private static bool IsExpectedWeightType(WeightType itemType, string prefix)
+    {
+        return prefix == "barbell" ? itemType == WeightType.Barbell : itemType == WeightType.EzBar;
     }
 
     private void ConfigureLatPulldownParts(Transform equipment)
