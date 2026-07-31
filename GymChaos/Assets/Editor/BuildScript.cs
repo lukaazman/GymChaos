@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Build.Reporting;
 
 public static class BuildScript
 {
@@ -24,7 +25,7 @@ public static class BuildScript
         };
 
         var report = BuildPipeline.BuildPlayer(options);
-        if (report.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded)
+        if (report.summary.result != BuildResult.Succeeded)
         {
             throw new BuildFailedException($"WebGL build failed with result: {report.summary.result}");
         }
