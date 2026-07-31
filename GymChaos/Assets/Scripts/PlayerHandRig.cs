@@ -146,33 +146,6 @@ public sealed class PlayerHandRig : MonoBehaviour
         ConfigureRenderers();
     }
 
-    private void LateUpdate()
-    {
-        if (!initialized || modelRoot == null)
-        {
-            return;
-        }
-
-        // Enemy GLBs are loaded asynchronously. Refit the reflected player after
-        // those renderers exist so the mirror uses the same visible model scale,
-        // rather than the fallback scale captured during player initialization.
-        mirrorScaleRefreshTimer -= Time.deltaTime;
-        if (mirrorScaleRefreshTimer > 0f)
-        {
-            return;
-        }
-
-        mirrorScaleRefreshTimer = 0.5f;
-        SkinnedMeshRenderer[] bodyRenderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
-            .Where(renderer => renderer != null && renderer.gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
-            .ToArray();
-        float targetHeight = FindAverageEnemyVisibleHeight();
-        if (targetHeight > 0.01f)
-        {
-            ScaleMirrorBodyToTarget(bodyRenderers, targetHeight);
-        }
-    }
-
     public void SetHolding(bool holding)
     {
         isHolding = holding;
@@ -317,6 +290,34 @@ public sealed class PlayerHandRig : MonoBehaviour
             }
         }
         UpdateBakedRenderers();
+        RefreshMirrorScale();
+    }
+
+    private void RefreshMirrorScale()
+    {
+        if (!initialized || modelRoot == null)
+        {
+            return;
+        }
+
+        // Enemy GLBs are loaded asynchronously. Refit the reflected player after
+        // those renderers exist so the mirror uses the same visible model scale,
+        // rather than the fallback scale captured during player initialization.
+        mirrorScaleRefreshTimer -= Time.deltaTime;
+        if (mirrorScaleRefreshTimer > 0f)
+        {
+            return;
+        }
+
+        mirrorScaleRefreshTimer = 0.5f;
+        SkinnedMeshRenderer[] bodyRenderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
+            .Where(renderer => renderer != null && renderer.gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
+            .ToArray();
+        float targetHeight = FindAverageEnemyVisibleHeight();
+        if (targetHeight > 0.01f)
+        {
+            ScaleMirrorBodyToTarget(bodyRenderers, targetHeight);
+        }
     }
 
     private void LoadAttackClips()
