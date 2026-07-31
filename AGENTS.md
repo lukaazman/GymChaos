@@ -96,6 +96,7 @@ Read it before broad repository scans or implementation work.
 - Play `Assets/Scenes/SampleScene.unity` and exercise the behavior changed. For gameplay work, minimally check movement, cursor toggle, attacks, pickup/drop/throw, collisions, enemy pursuit/hits, and HUD where relevant.
 - Player/mirror changes can also run `GymChaosPlayModeVerifier.Run` through Unity `-executeMethod`; it enters Play Mode, isolates the player in front of the mirrors, samples running and each attack path, validates the full-body and arm-only render paths, and writes the four `.tools/player-*-verification.png` captures.
 - For build-impacting changes, confirm `SampleScene.unity` remains enabled in Build Settings and make an appropriate local build.
+- The GitHub Pages workflow builds the WebGL player through `BuildScript.BuildWebGL`; it also writes `Build/WebGL/gymchaos-runtime.json` and rejects a Pages artifact unless the runtime bootstrap, mirrors, characters, and exercises markers are present.
 - Before handing off, run `git diff --check` and inspect `git status --short`. Use `git -c safe.directory=D:/GitHub/GymChaos ...` in sandboxed environments that reject repository ownership.
 
 ## Current cautions

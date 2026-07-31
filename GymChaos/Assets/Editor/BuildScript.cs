@@ -34,5 +34,8 @@ public static class BuildScript
         {
             throw new BuildFailedException($"WebGL build failed with result: {report.summary.result}");
         }
+
+        File.WriteAllText(Path.Combine(outputPath, "gymchaos-runtime.json"),
+            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\"]}");
     }
 }

@@ -70,6 +70,7 @@ public class PlayerMovement : MonoBehaviour
     private Vector3 heldItemShoveDirection = Vector3.zero;
     private bool showCursor;
     private bool useRightHandNext = true;
+    private float crouchAmount;
 
     private Transform carryAnchor;
     private PickupItem heldItem;
@@ -159,6 +160,7 @@ public class PlayerMovement : MonoBehaviour
         Vector2 moveInput = ReadMoveInput();
         bool sprintHeld = ReadSprintHeld();
         bool crouchHeld = ReadCrouchHeld();
+        crouchAmount = Mathf.MoveTowards(crouchAmount, crouchHeld ? 1f : 0f, 10f * Time.deltaTime);
         bool jumpPressed = ReadJumpPressed();
 
         bool grounded = characterController.isGrounded;
@@ -593,7 +595,7 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 planarVelocity = new Vector3(characterController.velocity.x, 0f, characterController.velocity.z);
         float moveAmount = Mathf.Clamp01(planarVelocity.magnitude / Mathf.Max(runSpeed, 0.01f));
-        handRig.Tick(moveAmount);
+        handRig.Tick(moveAmount, crouchAmount);
         handRig.SetHolding(heldItem != null);
     }
 

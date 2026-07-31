@@ -69,12 +69,14 @@ public class GymArenaBootstrap : MonoBehaviour
                 if (mountedWeight != null)
                 {
                     WeightType mountedType = TryGetWeightType(mountedWeight.name);
-                    if (IsPlateType(mountedType))
+                    if (IsWeightType(mountedType))
                     {
                         if (configuredPickupRoots.Add(mountedWeight))
                         {
                             weightCandidates[mountedWeight] = mountedType;
-                            spatiallyMountedWeightRoots.Add(mountedWeight);
+                        // Mounted bars and plates remain fixed until E picks them
+                        // up, but are still registered as real pickup items.
+                        spatiallyMountedWeightRoots.Add(mountedWeight);
                             EnsurePickupRootGameplay(mountedWeight.gameObject, mountedType);
                         }
 
@@ -426,7 +428,8 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private static WeightType TryGetWeightType(string objectName)
     {
-        string lower = objectName.ToLowerInvariant();
+        string lower = objectName.ToLowerInvariant()
+            .Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
         if (lower.StartsWith("barbell"))
         {
             return WeightType.Barbell;
@@ -458,6 +461,11 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         return WeightType.None;
+    }
+
+    private static bool IsWeightType(WeightType type)
+    {
+        return type == WeightType.Barbell || type == WeightType.EzBar || IsPlateType(type);
     }
 
     private void SpawnEnemies()
@@ -720,6 +728,7 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void CreateEnemy(BodybuilderIdentity identity, Vector3 position, Quaternion rotation)
     {
+        position = FindClearEnemySpawn(position);
         GameObject enemy = new GameObject($"Enemy - {identity}");
         enemy.transform.position = position;
         enemy.transform.rotation = rotation;
@@ -741,5 +750,30 @@ public class GymArenaBootstrap : MonoBehaviour
         float health = identity == BodybuilderIdentity.Ronnie ? 100f
             : identity == BodybuilderIdentity.Zyzz ? 45f : 60f;
         fighter.Configure(identity, player, health, identity == BodybuilderIdentity.Ronnie);
+    }
+
+    private Vector3 FindClearEnemySpawn(Vector3 position)
+    {
+        Vector3 escapeDirection = player != null
+            ? Vector3.ProjectOnPlane(player.transform.position - position, Vector3.up)
+            : Vector3.forward;
+        if (escapeDirection.sqrMagnitude < 0.01f)
+        {
+            escapeDirection = Vector3.forward;
+        }
+        escapeDirection.Normalize();
+
+        const float radius = 0.5f;
+        for (int attempt = 0; attempt < 12; attempt++)
+        {
+            Vector3 bottom = position + Vector3.up * 0.5f;
+            Vector3 top = position + Vector3.up * 1.8f;
+            if (!Physics.CheckCapsule(bottom, top, radius, ~0, QueryTriggerInteraction.Ignore))
+            {
+                return position;
+            }
+            position += escapeDirection * 0.75f;
+        }
+        return position;
     }
 }

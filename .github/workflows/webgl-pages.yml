@@ -44,6 +44,16 @@ jobs:
           buildMethod: BuildScript.BuildWebGL
           customParameters: -buildTarget WebGL
 
+      - name: Verify complete runtime artifact
+        shell: bash
+        run: |
+          test -s GymChaos/Build/WebGL/index.html
+          test -s GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"runtimeBootstrap":true' GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"mirrors"' GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"characters"' GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"exercises"' GymChaos/Build/WebGL/gymchaos-runtime.json
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

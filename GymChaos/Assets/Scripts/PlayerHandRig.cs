@@ -50,6 +50,9 @@ public sealed class PlayerHandRig : MonoBehaviour
     private float leftThrowTimer;
     private float rightThrowTimer;
     private float moveAmount;
+    private float crouchAmount;
+    private Vector3 baseModelLocalPosition;
+    private Vector3 baseModelLocalScale;
     private bool isHolding;
     private bool initialized;
     private bool sampledJabClip;
@@ -203,9 +206,17 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
     }
 
-    public void Tick(float normalizedMoveAmount)
+    public void Tick(float normalizedMoveAmount, float normalizedCrouchAmount = 0f)
     {
         moveAmount = normalizedMoveAmount;
+        crouchAmount = Mathf.Clamp01(normalizedCrouchAmount);
+        if (modelRoot != null)
+        {
+            modelRoot.transform.localPosition = baseModelLocalPosition + Vector3.down * (0.14f * crouchAmount);
+            Vector3 compressedScale = baseModelLocalScale;
+            compressedScale.y *= Mathf.Lerp(1f, 0.84f, crouchAmount);
+            modelRoot.transform.localScale = compressedScale;
+        }
         locomotionElapsed += Time.deltaTime * Mathf.Lerp(0.75f, 1.35f, moveAmount);
         leftPunchTimer = Mathf.Max(0f, leftPunchTimer - Time.deltaTime);
         rightPunchTimer = Mathf.Max(0f, rightPunchTimer - Time.deltaTime);
@@ -591,12 +602,14 @@ public sealed class PlayerHandRig : MonoBehaviour
             bounds.Encapsulate(renderers[i].bounds);
         }
 
-        const float desiredHeight = 2.3f;
+        const float desiredHeight = 2.46f;
         float uniformScale = desiredHeight / Mathf.Max(0.001f, bounds.size.y);
         float localMinimumY = transform.InverseTransformPoint(bounds.min).y;
         modelRoot.transform.localScale = new Vector3(uniformScale * 1.1f, uniformScale, uniformScale * 1.05f);
         float footY = controller != null ? -controller.height * 0.5f : -1f;
         modelRoot.transform.localPosition = new Vector3(0f, footY - localMinimumY * uniformScale, 0f);
+        baseModelLocalPosition = modelRoot.transform.localPosition;
+        baseModelLocalScale = modelRoot.transform.localScale;
     }
 
     private void ConfigureRenderers()

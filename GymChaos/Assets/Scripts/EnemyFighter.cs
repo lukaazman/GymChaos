@@ -165,6 +165,7 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
+        body.WakeUp();
         float planarSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
         bool pursuingOutsideAttackPose = distance > attackRange * 0.8f;
         bool policeStillMovingNearTarget = isPolice && planarSpeed > 0.12f;
@@ -176,10 +177,13 @@ public class EnemyFighter : MonoBehaviour
         {
             Vector3 moveDirection = planarToTarget.normalized;
             Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-            if (planarVelocity.magnitude < maxSpeed)
-            {
-                body.AddForce(moveDirection * moveForce, ForceMode.Acceleration);
-            }
+            Vector3 desiredVelocity = moveDirection * maxSpeed;
+            // Directly steer the planar Rigidbody velocity. The old 11 N force
+            // was negligible against the 85 kg body and made the walking clip
+            // play while the fighter remained effectively stationary.
+            planarVelocity = Vector3.MoveTowards(
+                planarVelocity, desiredVelocity, Mathf.Max(moveForce, 12f) * Time.fixedDeltaTime);
+            body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
 
             Quaternion lookRotation = Quaternion.LookRotation(moveDirection, Vector3.up);
             transform.rotation = Quaternion.Slerp(
@@ -362,6 +366,14 @@ public class EnemyFighter : MonoBehaviour
         body.useGravity = true;
         body.linearDamping = 0.25f;
         body.angularDamping = 0.18f;
+        // The detailed moving hitbox rig intentionally disables the broad
+        // standing capsule. Re-enable it for corpses so the body has a stable
+        // floor contact instead of falling through gaps between limb colliders.
+        CapsuleCollider corpseCollider = GetComponent<CapsuleCollider>();
+        if (corpseCollider != null)
+        {
+            corpseCollider.enabled = true;
+        }
         Vector3 planarImpulse = Vector3.ProjectOnPlane(finalImpulse, Vector3.up);
         Vector3 fallAxis = planarImpulse.sqrMagnitude > 0.01f
             ? Vector3.Cross(Vector3.up, planarImpulse.normalized)
@@ -441,12 +453,13 @@ public class EnemyFighter : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (collision.rigidbody == null)
+        PickupItem item = collision.rigidbody != null
+            ? collision.rigidbody.GetComponent<PickupItem>()
+            : null;
+        if (item == null && collision.otherCollider != null)
         {
-            return;
+            item = collision.otherCollider.GetComponentInParent<PickupItem>();
         }
-
-        PickupItem item = collision.rigidbody.GetComponent<PickupItem>();
         if (item == null || !item.IsThrowableWeapon || !item.WasThrownRecently)
         {
             return;
@@ -463,11 +476,6 @@ public class EnemyFighter : MonoBehaviour
             Mathf.Clamp(impactSpeed * item.ImpactMultiplier, 5f, 28f);
         float stunDuration = impactSpeed > 6f ? heavyStunDuration : lightStunDuration;
         ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
-        if (GetComponent<EnemyMeshHitboxRig>() == null ||
-            (collision.contactCount > 0 && contact.thisCollider != null && contact.thisCollider.transform == transform))
-        {
-            return;
-        }
         Vector3 bloodPoint = collision.contactCount > 0 ? contact.point : transform.position + Vector3.up;
         Vector3 bloodNormal = collision.contactCount > 0 ? contact.normal : -collision.relativeVelocity.normalized;
         BloodSplatter.SpawnOnBody(

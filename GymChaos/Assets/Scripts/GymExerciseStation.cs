@@ -105,7 +105,12 @@ public class GymExerciseStation : MonoBehaviour
             }
 
             Bounds bounds = GetCombinedBounds(renderers);
-            if (type == GymExerciseType.FlatBenchPress && !HasBarbellAtBench(candidate, bounds, transforms))
+            if ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress ||
+                 type == GymExerciseType.BarbellSquat) && !HasRequiredBarAtEquipment(candidate, bounds, transforms, "barbell"))
+            {
+                continue;
+            }
+            if (type == GymExerciseType.PreacherCurl && !HasRequiredBarAtEquipment(candidate, bounds, transforms, "ezbar"))
             {
                 continue;
             }
@@ -152,6 +157,11 @@ public class GymExerciseStation : MonoBehaviour
             Vector3 offset = station.interactionPoint - position;
             offset.y = 0f;
             float candidateDistance = offset.magnitude;
+            float interactionRange = station.GetInteractionRange();
+            if (candidateDistance >= Mathf.Min(bestDistance, interactionRange))
+            {
+                continue;
+            }
             if (candidateDistance < bestDistance)
             {
                 bestDistance = candidateDistance;
@@ -328,8 +338,6 @@ public class GymExerciseStation : MonoBehaviour
         sceneBar = type == GymExerciseType.PreacherCurl ? FindNearestSceneWeight(equipment, bounds, "ezbar") :
                    ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress || type == GymExerciseType.BarbellSquat)
                        ? FindNearestSceneWeight(equipment, bounds, "barbell") : null);
-        interactionPoint = new Vector3(bounds.center.x, bounds.min.y + 1f, bounds.center.z);
-
         Vector3 forward = Vector3.ProjectOnPlane(equipment.forward, Vector3.up).normalized;
         if (forward.sqrMagnitude < 0.01f)
         {
@@ -339,6 +347,7 @@ public class GymExerciseStation : MonoBehaviour
         float floorY = bounds.min.y + 0.06f;
         Vector3 offset = GetPlayerOffset(type, forward);
         playerPosition = new Vector3(bounds.center.x + offset.x, floorY, bounds.center.z + offset.z);
+        interactionPoint = playerPosition;
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
@@ -356,6 +365,21 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         playerRotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up) * GetFacingCorrection(type);
+        if (type == GymExerciseType.InclineBenchPress)
+        {
+            // The incline bench must face the cable-machine side of the room,
+            // not the mirror wall. Use that explicit landmark instead of the
+            // FBX's inconsistent local forward axis.
+            GameObject cableMachine = GameObject.Find("CableMachineDual");
+            if (cableMachine != null)
+            {
+                Vector3 towardCable = Vector3.ProjectOnPlane(cableMachine.transform.position - playerPosition, Vector3.up);
+                if (towardCable.sqrMagnitude > 0.01f)
+                {
+                    playerRotation = Quaternion.LookRotation(towardCable.normalized, Vector3.up);
+                }
+            }
+        }
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
@@ -914,19 +938,20 @@ public class GymExerciseStation : MonoBehaviour
         return bounds;
     }
 
-    private static bool HasBarbellAtBench(Transform bench, Bounds benchBounds, Transform[] allTransforms)
+    private static bool HasRequiredBarAtEquipment(Transform equipment, Bounds equipmentBounds, Transform[] allTransforms, string prefix)
     {
-        Transform[] children = bench.GetComponentsInChildren<Transform>(true);
+        Transform[] children = equipment.GetComponentsInChildren<Transform>(true);
         for (int i = 0; i < children.Length; i++)
         {
-            if (children[i].name.ToLowerInvariant().StartsWith("barbell")) return true;
+            if (NormalizeWeightName(children[i].name).StartsWith(prefix)) return true;
         }
 
-        Bounds rackArea = benchBounds;
-        rackArea.Expand(new Vector3(4f, 3f, 4f));
+        Bounds rackArea = equipmentBounds;
+        rackArea.Expand(new Vector3(1.8f, 1.4f, 1.8f));
         for (int i = 0; i < allTransforms.Length; i++)
         {
-            if (allTransforms[i] != null && allTransforms[i].name.ToLowerInvariant().StartsWith("barbell") && rackArea.Contains(allTransforms[i].position))
+            Transform candidate = allTransforms[i];
+            if (candidate != null && NormalizeWeightName(candidate.name).StartsWith(prefix) && rackArea.Contains(candidate.position))
             {
                 return true;
             }
@@ -935,18 +960,28 @@ public class GymExerciseStation : MonoBehaviour
         return false;
     }
 
+    private float GetInteractionRange()
+    {
+        return IsCardio ? 1.35f : 2.35f;
+    }
+
+    private static string NormalizeWeightName(string name)
+    {
+        return name.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+    }
+
     private static Transform FindNearestSceneWeight(Transform equipment, Bounds equipmentBounds, string prefix)
     {
         Transform best = null;
         float bestDistance = float.MaxValue;
         Transform[] transforms = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
         Bounds searchArea = equipmentBounds;
-        searchArea.Expand(new Vector3(5f, 4f, 5f));
+        searchArea.Expand(new Vector3(1.8f, 1.4f, 1.8f));
         for (int i = 0; i < transforms.Length; i++)
         {
             Transform candidate = transforms[i];
             if (candidate == null || candidate.GetComponentInParent<PlayerMovement>() != null || candidate.name.Contains("Asset Clone")) continue;
-            string normalized = candidate.name.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+            string normalized = NormalizeWeightName(candidate.name);
             if (!normalized.StartsWith(prefix)) continue;
             Renderer renderer = candidate.GetComponentInChildren<Renderer>(true);
             if (renderer == null) continue;
