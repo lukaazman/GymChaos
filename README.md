@@ -1,5 +1,7 @@
 # Gym Chaos
 
+[▶ Play in browser](https://lukaazman.github.io/GymChaos/)
+
 A 3D Unity game built in C#.
 
 ## Assets

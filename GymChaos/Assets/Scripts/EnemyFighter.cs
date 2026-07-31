@@ -33,6 +33,7 @@ public class EnemyFighter : MonoBehaviour
     private float targetLockedUntil;
     private float deathStartedTime;
     private bool isPolice;
+    private bool isPassive;
     private bool isDead;
     private bool deathPoseFrozen;
     private bool activeCounted;
@@ -43,19 +44,30 @@ public class EnemyFighter : MonoBehaviour
     public bool IsDead => isDead;
     public bool IsPolice => isPolice;
     public BodybuilderIdentity Identity => identity;
+    public Color HealthBarColor => identity == BodybuilderIdentity.Ronnie
+        ? new Color(0.035f, 0.12f, 0.32f, 1f)
+        : identity == BodybuilderIdentity.Manwithsuit1
+            ? new Color(0.05f, 0.78f, 0.2f, 1f)
+            : new Color(0.92f, 0.04f, 0.04f, 1f);
 
     public void Configure(
         BodybuilderIdentity fighterIdentity, PlayerMovement player,
-        float configuredHealth, bool police)
+        float configuredHealth, bool police, bool passive = false, bool countAsOpponent = true)
     {
         identity = fighterIdentity;
         playerTarget = player;
         maxHealth = Mathf.Max(1f, configuredHealth);
         health = maxHealth;
         isPolice = police;
+        isPassive = passive;
         currentTarget = police ? null : player != null ? player.transform : null;
         currentFighterTarget = null;
         nextTargetRefreshTime = 0f;
+        if (!countAsOpponent && activeCounted)
+        {
+            ActiveCount = Mathf.Max(0, ActiveCount - 1);
+            activeCounted = false;
+        }
     }
 
     public void SetTarget(PlayerMovement player)
@@ -93,6 +105,12 @@ public class EnemyFighter : MonoBehaviour
         if (isDead)
         {
             UpdatePermanentDeathPose();
+            return;
+        }
+
+        if (isPassive)
+        {
+            StopMoving();
             return;
         }
 
@@ -444,6 +462,20 @@ public class EnemyFighter : MonoBehaviour
         Vector3 impulse = collision.relativeVelocity.normalized *
             Mathf.Clamp(impactSpeed * item.ImpactMultiplier, 5f, 28f);
         float stunDuration = impactSpeed > 6f ? heavyStunDuration : lightStunDuration;
+        ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
+        if (GetComponent<EnemyMeshHitboxRig>() == null ||
+            (collision.contactCount > 0 && contact.thisCollider != null && contact.thisCollider.transform == transform))
+        {
+            return;
+        }
+        Vector3 bloodPoint = collision.contactCount > 0 ? contact.point : transform.position + Vector3.up;
+        Vector3 bloodNormal = collision.contactCount > 0 ? contact.normal : -collision.relativeVelocity.normalized;
+        BloodSplatter.SpawnOnBody(
+            this, bloodPoint, bloodNormal,
+            BloodSplatter.GetThrownScale(item.ItemType, item.BaseMass),
+            collision.contactCount > 0 && contact.thisCollider != null
+                ? contact.thisCollider.transform
+                : transform);
         if (isDead)
         {
             ApplyCorpseImpact(impulse * 0.75f);

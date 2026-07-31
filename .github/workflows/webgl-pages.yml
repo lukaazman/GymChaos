@@ -1,0 +1,62 @@
+name: Build and deploy WebGL game
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - README.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Unity WebGL
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: GymChaos/Library
+          key: ${{ runner.os }}-unity-library-${{ hashFiles('GymChaos/ProjectSettings/ProjectVersion.txt', 'GymChaos/Packages/packages-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-unity-library-
+
+      - name: Build WebGL player
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: GymChaos
+          targetPlatform: WebGL
+          buildMethod: BuildScript.BuildWebGL
+          customParameters: -buildTarget WebGL
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: GymChaos/Build/WebGL
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

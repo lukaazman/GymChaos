@@ -462,13 +462,30 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void SpawnEnemies()
     {
-        if (FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None).Length > 0 || player == null)
+        if (player == null)
         {
             return;
         }
 
+        EnemyFighter[] existingFighters =
+            FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
         for (int i = 0; i < EnemyRoster.Length; i++)
         {
+            bool alreadySpawned = false;
+            for (int existingIndex = 0; existingIndex < existingFighters.Length; existingIndex++)
+            {
+                if (existingFighters[existingIndex] != null &&
+                    existingFighters[existingIndex].Identity == EnemyRoster[i])
+                {
+                    alreadySpawned = true;
+                    break;
+                }
+            }
+            if (alreadySpawned)
+            {
+                continue;
+            }
+
             GetEnemyDisplayPose(EnemyRoster[i], i, out Vector3 position, out Quaternion rotation);
             CreateEnemy(EnemyRoster[i], position, rotation);
         }
@@ -512,7 +529,19 @@ public class GymArenaBootstrap : MonoBehaviour
         collider.center = new Vector3(0f, 1.02375f, 0f);
         collider.height = 2.0475f;
         collider.radius = 0.34f;
+        Rigidbody body = npc.AddComponent<Rigidbody>();
+        body.mass = 78f;
+        body.linearDamping = 1.5f;
+        body.angularDamping = 0.5f;
+        body.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        EnemyFighter fighter = npc.AddComponent<EnemyFighter>();
+        fighter.Configure(
+            BodybuilderIdentity.Manwithsuit1, player, 1f, false,
+            passive: true, countAsOpponent: false);
         BodybuilderEnemyVisual.BuildNeutralNpc(npc, BodybuilderIdentity.Manwithsuit1);
+
+        ReceptionDeathScreen.Create(npc.transform, fighter, floorY);
 
         PlacePlayerAcrossReceptionDesk(deskBounds, towardWall, floorY, npc.transform);
     }

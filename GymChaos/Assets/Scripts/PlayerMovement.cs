@@ -319,9 +319,14 @@ public class PlayerMovement : MonoBehaviour
         Vector3 impulse = direction * punchForce + Vector3.up * 1.2f;
 
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
+        if (!IsTightEnemySurface(enemy, hit.collider))
+        {
+            enemy = null;
+        }
         if (enemy != null)
         {
             enemy.TakeMeleeHit(impulse, 5f, punchStun);
+            BloodSplatter.SpawnOnBody(enemy, hit.point, hit.normal, 0.82f, hit.collider.transform);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -342,22 +347,21 @@ public class PlayerMovement : MonoBehaviour
 
     private void PerformShove()
     {
-        if (handRig != null)
-        {
-            handRig.TriggerShove();
-        }
-
         if (heldItem != null && (heldItem.ItemType == WeightType.Barbell || heldItem.ItemType == WeightType.EzBar))
         {
+            handRig?.TriggerHeldShove(GetHeldShoveVisualReach(), heldBarShoveDuration);
             PerformHeldBarShove();
             return;
         }
 
         if (heldItem != null && IsPlateType(heldItem.ItemType))
         {
+            handRig?.TriggerHeldShove(GetHeldShoveVisualReach(), heldPlateShoveDuration);
             PerformHeldPlateShove();
             return;
         }
+
+        handRig?.TriggerShove();
 
         Vector3 origin = transform.position + Vector3.up * (characterController.height * 0.45f);
         int hitCount = Physics.OverlapSphereNonAlloc(origin + transform.forward * 1.05f, 1.1f, overlapHits, ~0, QueryTriggerInteraction.Ignore);
@@ -373,6 +377,10 @@ public class PlayerMovement : MonoBehaviour
             }
 
             EnemyFighter enemy = hit.GetComponentInParent<EnemyFighter>();
+            if (!IsTightEnemySurface(enemy, hit))
+            {
+                enemy = null;
+            }
             if (enemy != null && damagedFighters.Add(enemy))
             {
                 enemy.TakeMeleeHit(impulse, 2f, shoveStun);
@@ -407,10 +415,18 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 impulse = direction * heldBarShoveForce + Vector3.up * 0.6f;
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
+        if (!IsTightEnemySurface(enemy, hit.collider))
+        {
+            enemy = null;
+        }
         if (enemy != null)
         {
             float damage = heldItem.ItemType == WeightType.Barbell ? 15f : 5f;
             enemy.TakeMeleeHit(impulse, damage, shoveStun);
+            BloodSplatter.SpawnOnBody(
+                enemy, hit.point, hit.normal,
+                BloodSplatter.GetHeldShoveScale(heldItem.ItemType, heldItem.BaseMass),
+                hit.collider.transform);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -441,9 +457,17 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 impulse = direction * heldPlateShoveForce;
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
+        if (!IsTightEnemySurface(enemy, hit.collider))
+        {
+            enemy = null;
+        }
         if (enemy != null)
         {
             enemy.TakeMeleeHit(impulse, heldItem.BaseMass * 0.75f, shoveStun);
+            BloodSplatter.SpawnOnBody(
+                enemy, hit.point, hit.normal,
+                BloodSplatter.GetHeldShoveScale(heldItem.ItemType, heldItem.BaseMass),
+                hit.collider.transform);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -535,18 +559,29 @@ public class PlayerMovement : MonoBehaviour
         if (heldBarShoveTimer > 0f && (heldItem.ItemType == WeightType.Barbell || heldItem.ItemType == WeightType.EzBar))
         {
             float normalized = 1f - (heldBarShoveTimer / heldBarShoveDuration);
-            shoveOffset = Mathf.Sin(normalized * Mathf.PI) * heldBarShoveReach;
+            shoveOffset = Mathf.Sin(normalized * Mathf.PI) * GetHeldShoveVisualReach();
         }
         else if (heldBarShoveTimer > 0f && IsPlateType(heldItem.ItemType))
         {
             float normalized = 1f - (heldBarShoveTimer / heldPlateShoveDuration);
-            shoveOffset = Mathf.Sin(normalized * Mathf.PI) * heldPlateShoveReach;
+            shoveOffset = Mathf.Sin(normalized * Mathf.PI) * GetHeldShoveVisualReach();
             targetRotation = Quaternion.LookRotation(heldItemShoveDirection.sqrMagnitude > 0.001f ? heldItemShoveDirection : GetFlatThrowDirection(), Vector3.up);
         }
 
         Vector3 shoveDirection = heldItemShoveDirection.sqrMagnitude > 0.001f ? heldItemShoveDirection : playerCamera.transform.forward;
         Vector3 targetPosition = carryAnchor.position + shoveDirection * shoveOffset;
         heldItem.FollowCarryAnchor(targetPosition, targetRotation, carrySmoothness);
+    }
+
+    private float GetHeldShoveVisualReach()
+    {
+        if (heldItem == null)
+        {
+            return 0f;
+        }
+        return IsPlateType(heldItem.ItemType)
+            ? Mathf.Min(heldPlateShoveReach, 0.58f)
+            : Mathf.Min(heldBarShoveReach, 0.72f);
     }
 
     private void UpdateHands()
@@ -577,6 +612,15 @@ public class PlayerMovement : MonoBehaviour
     {
         return itemType == WeightType.Plate || itemType == WeightType.Plate5 ||
                itemType == WeightType.Plate10 || itemType == WeightType.Plate20;
+    }
+
+    private static bool IsTightEnemySurface(EnemyFighter enemy, Collider hitCollider)
+    {
+        if (enemy == null || hitCollider == null || enemy.GetComponent<EnemyMeshHitboxRig>() == null)
+        {
+            return false;
+        }
+        return hitCollider.transform != enemy.transform;
     }
 
     private Vector3 GetPlateThrowImpulse(Vector3 direction, float plateMass)

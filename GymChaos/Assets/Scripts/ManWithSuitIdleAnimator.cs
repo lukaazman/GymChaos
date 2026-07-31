@@ -8,10 +8,13 @@ public sealed class ManWithSuitIdleAnimator : MonoBehaviour
     private Quaternion rightForearmBaseRotation;
     private Quaternion rightHandBaseRotation;
     private float cycle;
+    private EnemyFighter fighter;
+    private bool stopped;
 
     public void Configure(BodybuilderEnemyVisual.Rig bodyRig)
     {
         rig = bodyRig;
+        fighter = GetComponent<EnemyFighter>();
         spineBaseRotation = rig.Spine.localRotation;
         rightUpperArmBaseRotation = rig.RightUpperArm.localRotation;
         rightForearmBaseRotation = rig.RightForearm.localRotation;
@@ -21,6 +24,18 @@ public sealed class ManWithSuitIdleAnimator : MonoBehaviour
     private void LateUpdate()
     {
         if (rig == null) return;
+        if (fighter != null && fighter.IsDead)
+        {
+            if (!stopped)
+            {
+                rig.Spine.localRotation = spineBaseRotation;
+                rig.RightUpperArm.localRotation = rightUpperArmBaseRotation;
+                rig.RightForearm.localRotation = rightForearmBaseRotation;
+                rig.RightHand.localRotation = rightHandBaseRotation;
+                stopped = true;
+            }
+            return;
+        }
         cycle += Time.deltaTime * 16f;
         float stroke = Mathf.Sin(cycle);
         float follow = Mathf.Sin(cycle - 0.12f);

@@ -66,11 +66,13 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         }
         if (fighter != null && fighter.HasTakenDamage)
         {
-            DrawHealthBar(screen, fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth));
+            DrawHealthBar(
+                screen, fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth),
+                fighter.HealthBarColor);
         }
     }
 
-    private static void DrawHealthBar(Vector3 screen, float health01)
+    private static void DrawHealthBar(Vector3 screen, float health01, Color fillColor)
     {
         const float barWidth = 86f;
         const float barHeight = 9f;
@@ -90,7 +92,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         GUI.DrawTexture(background, Texture2D.whiteTexture);
         if (fill.width > 0f)
         {
-            GUI.color = new Color(0.92f, 0.04f, 0.04f, 1f);
+            GUI.color = fillColor;
             GUI.DrawTexture(fill, Texture2D.whiteTexture);
         }
         GUI.color = previous;

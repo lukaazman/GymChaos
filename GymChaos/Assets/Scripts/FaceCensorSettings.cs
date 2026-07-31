@@ -30,13 +30,19 @@ public sealed class FaceCensorSettings : MonoBehaviour
     [SerializeField] private FaceCensorProfile profile;
     private GameObject deathMarkers;
 
-    public void Configure(FaceCensorProfile value, Transform head, int textureSeed)
+    public void Configure(
+        FaceCensorProfile value, Transform head, int textureSeed, bool showBlackBar = true)
     {
         profile = value;
         transform.SetParent(head, false);
         transform.localPosition = profile.LocalPosition;
         transform.localRotation = Quaternion.Euler(profile.LocalEulerAngles);
         transform.localScale = Vector3.one;
+
+        if (!showBlackBar)
+        {
+            return;
+        }
 
         MeshFilter filter = gameObject.AddComponent<MeshFilter>();
         filter.sharedMesh = CreateCurvedFaceShell(profile);

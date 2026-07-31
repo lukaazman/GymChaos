@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using UnityEngine;
@@ -265,6 +266,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Rig rig = CreateRig(renderObject.transform, bounds, profile);
         BoneWeight[] boneWeights = CreateBoneWeights(positions, triangles, bounds, profile, identity);
 
+        // Keep imported topology intact. Runtime clustering merged UV seams and
+        // discarded triangles, producing visible holes in the textured scans.
+        Debug.Log(
+            $"GYMCHAOS_MESH_SOURCE {identity} triangles={triangles.Length / 3} vertices={positions.Length}",
+            this);
+
         yield return null;
 
         Mesh mesh = new Mesh
@@ -299,9 +306,13 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         renderer.receiveShadows = false;
         renderer.skinnedMotionVectors = false;
 
+        EnemyMeshHitboxRig.Configure(gameObject, rig, renderer);
+
         if (neutralNpc)
         {
-            CreateNameLabel(renderObject.transform, renderer, identity, bounds.size.y * 0.13f);
+            CreateDeathMarkersAndName(
+                renderObject.transform, positions, bounds, profile,
+                rig.Head, renderer, identity);
             ManWithSuitIdleAnimator animator = gameObject.AddComponent<ManWithSuitIdleAnimator>();
             animator.Configure(rig);
         }
@@ -313,6 +324,104 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             BodybuilderEnemyAnimator animator = gameObject.AddComponent<BodybuilderEnemyAnimator>();
             animator.Configure(identity, rig);
         }
+    }
+
+    private static void SimplifyRuntimeMesh(
+        ref Vector3[] positions, ref Vector3[] normals, ref Vector2[] uvs,
+        ref BoneWeight[] boneWeights, ref int[] triangles, Bounds bounds, int targetTriangleCount)
+    {
+        if (triangles.Length / 3 <= targetTriangleCount || positions.Length == 0)
+        {
+            return;
+        }
+
+        float cellSize = Mathf.Max(0.001f, bounds.size.y / 650f);
+        Vector3[] bestPositions = positions;
+        Vector3[] bestNormals = normals;
+        Vector2[] bestUvs = uvs;
+        BoneWeight[] bestWeights = boneWeights;
+        int[] bestTriangles = triangles;
+
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            ClusterMesh(
+                positions, normals, uvs, boneWeights, triangles,
+                bounds.min, cellSize,
+                out Vector3[] reducedPositions, out Vector3[] reducedNormals,
+                out Vector2[] reducedUvs, out BoneWeight[] reducedWeights,
+                out int[] reducedTriangles);
+
+            bestPositions = reducedPositions;
+            bestNormals = reducedNormals;
+            bestUvs = reducedUvs;
+            bestWeights = reducedWeights;
+            bestTriangles = reducedTriangles;
+            if (reducedTriangles.Length / 3 <= targetTriangleCount)
+            {
+                break;
+            }
+            cellSize *= 1.35f;
+        }
+
+        positions = bestPositions;
+        normals = bestNormals;
+        uvs = bestUvs;
+        boneWeights = bestWeights;
+        triangles = bestTriangles;
+    }
+
+    private static void ClusterMesh(
+        Vector3[] positions, Vector3[] normals, Vector2[] uvs, BoneWeight[] weights,
+        int[] triangles, Vector3 minimum, float cellSize,
+        out Vector3[] reducedPositions, out Vector3[] reducedNormals,
+        out Vector2[] reducedUvs, out BoneWeight[] reducedWeights, out int[] reducedTriangles)
+    {
+        Dictionary<Vector3Int, int> clusters = new Dictionary<Vector3Int, int>(positions.Length / 2);
+        List<Vector3> positionList = new List<Vector3>(positions.Length / 2);
+        List<Vector3> normalList = new List<Vector3>(positions.Length / 2);
+        List<Vector2> uvList = new List<Vector2>(positions.Length / 2);
+        List<BoneWeight> weightList = new List<BoneWeight>(positions.Length / 2);
+        int[] remap = new int[positions.Length];
+
+        for (int i = 0; i < positions.Length; i++)
+        {
+            Vector3 relative = (positions[i] - minimum) / cellSize;
+            Vector3Int key = new Vector3Int(
+                Mathf.FloorToInt(relative.x),
+                Mathf.FloorToInt(relative.y),
+                Mathf.FloorToInt(relative.z));
+            if (!clusters.TryGetValue(key, out int reducedIndex))
+            {
+                reducedIndex = positionList.Count;
+                clusters.Add(key, reducedIndex);
+                positionList.Add(positions[i]);
+                normalList.Add(i < normals.Length ? normals[i] : Vector3.up);
+                uvList.Add(i < uvs.Length ? uvs[i] : Vector2.zero);
+                weightList.Add(i < weights.Length ? weights[i] : default);
+            }
+            remap[i] = reducedIndex;
+        }
+
+        List<int> triangleList = new List<int>(triangles.Length);
+        for (int i = 0; i + 2 < triangles.Length; i += 3)
+        {
+            int a = remap[triangles[i]];
+            int b = remap[triangles[i + 1]];
+            int c = remap[triangles[i + 2]];
+            if (a == b || b == c || c == a)
+            {
+                continue;
+            }
+            triangleList.Add(a);
+            triangleList.Add(b);
+            triangleList.Add(c);
+        }
+
+        reducedPositions = positionList.ToArray();
+        reducedNormals = normalList.ToArray();
+        reducedUvs = uvList.ToArray();
+        reducedWeights = weightList.ToArray();
+        reducedTriangles = triangleList.ToArray();
     }
 
     private static RigProfile GetRigProfile(BodybuilderIdentity identity)
@@ -802,12 +911,42 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 wrapMode = TextureWrapMode.Repeat
             };
             texture.LoadImage(imageBytes);
+            texture = DownscaleTexture(texture, 1024, identity + " Body Texture Low");
             material.SetTexture("_BaseMap", texture);
             material.mainTexture = texture;
         }
 
         material.SetColor("_BaseColor", Color.white);
         return material;
+    }
+
+    private static Texture2D DownscaleTexture(Texture2D source, int maximumSize, string textureName)
+    {
+        if (source.width <= maximumSize && source.height <= maximumSize)
+        {
+            source.Apply(true, true);
+            return source;
+        }
+
+        float scale = maximumSize / (float)Mathf.Max(source.width, source.height);
+        int width = Mathf.Max(4, Mathf.RoundToInt(source.width * scale));
+        int height = Mathf.Max(4, Mathf.RoundToInt(source.height * scale));
+        RenderTexture temporary = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+        Graphics.Blit(source, temporary);
+        RenderTexture previous = RenderTexture.active;
+        RenderTexture.active = temporary;
+        Texture2D reduced = new Texture2D(width, height, TextureFormat.RGBA32, true)
+        {
+            name = textureName,
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Repeat
+        };
+        reduced.ReadPixels(new Rect(0f, 0f, width, height), 0, 0, false);
+        reduced.Apply(true, true);
+        RenderTexture.active = previous;
+        RenderTexture.ReleaseTemporary(temporary);
+        Destroy(source);
+        return reduced;
     }
 
     private static void RemoveCollider(GameObject target)
@@ -838,6 +977,33 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         }
 
         CreateNameLabel(visualRoot, bodyRenderer, identity, bodyHeight * 0.13f);
+    }
+
+    private static void CreateDeathMarkersAndName(
+        Transform visualRoot, Vector3[] vertices, Bounds bounds, RigProfile rigProfile,
+        Transform head, SkinnedMeshRenderer bodyRenderer, BodybuilderIdentity identity)
+    {
+        FaceCensorProfile markerProfile = GetFaceCensorProfile(
+            identity, vertices, bounds, rigProfile, visualRoot, head);
+        if (identity == BodybuilderIdentity.Manwithsuit1)
+        {
+            markerProfile.LocalPosition += new Vector3(
+                0f, -bounds.size.y * 0.025f, markerProfile.FaceDepth);
+            markerProfile.FaceDepth = 0f;
+        }
+
+        GameObject markerAnchor = new GameObject(identity + " Death Eye Marker Anchor");
+        FaceCensorSettings censor = markerAnchor.AddComponent<FaceCensorSettings>();
+        censor.Configure(
+            markerProfile, head, identity.GetHashCode() + 31, false);
+
+        EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
+        if (fighter != null && fighter.IsDead)
+        {
+            censor.SetDead(true);
+        }
+
+        CreateNameLabel(visualRoot, bodyRenderer, identity, bounds.size.y * 0.13f);
     }
 
     private static FaceCensorProfile GetFaceCensorProfile(

@@ -38,7 +38,7 @@ public static class GymInteriorBuilder
 
         CreateWallBand(root.transform, center, width, depth, 1.15f, 0.24f, accent);
         CreateWallBand(root.transform, center, width, depth, 0.18f, 0.18f, trim);
-        CreateMirrors(root.transform, center, width, depth, mirror, trim);
+        CreateMirrors(root.transform, center, width, depth, mirror, trim, player != null ? player.playerCamera : null);
         CreateCeilingGrid(root.transform, center, width, depth, height, trim);
         CreateLighting(root.transform, center, width, depth, height, lightMaterial);
         CreateRoomDetails(root.transform, center, width, depth, accent, trim, wall);
@@ -87,16 +87,23 @@ public static class GymInteriorBuilder
         CreateBox("West wall stripe", parent, center + new Vector3(-width * 0.5f + 0.19f, y, 0f), new Vector3(0.05f, thickness, depth - 0.5f), material, false);
     }
 
-    private static void CreateMirrors(Transform parent, Vector3 center, float width, float depth, Material mirror, Material frame)
+    private static void CreateMirrors(
+        Transform parent, Vector3 center, float width, float depth,
+        Material mirror, Material frame, Camera playerCamera)
     {
         float panelWidth = Mathf.Min(4.5f, (width - 5f) / 6f);
+        Renderer[] mirrorRenderers = new Renderer[5];
         for (int i = -2; i <= 2; i++)
         {
             Vector3 panelCenter = center + new Vector3(i * (panelWidth + 0.18f), 3.05f, depth * 0.5f - 0.2f);
-            CreateBox("Mirror panel", parent, panelCenter, new Vector3(panelWidth, 4.6f, 0.055f), mirror, false);
+            GameObject panel = CreateBox("Mirror panel", parent, panelCenter, new Vector3(panelWidth, 4.6f, 0.055f), mirror, false);
+            mirrorRenderers[i + 2] = panel.GetComponent<Renderer>();
             CreateBox("Mirror top frame", parent, panelCenter + Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
             CreateBox("Mirror bottom frame", parent, panelCenter - Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
         }
+
+        Vector3 mirrorPlanePoint = center + new Vector3(0f, 3.05f, depth * 0.5f - 0.23f);
+        PlanarGymMirror.Create(parent, playerCamera, mirrorRenderers, mirrorPlanePoint, Vector3.back);
 
         ReflectionProbe probe = new GameObject("Gym Reflection Probe").AddComponent<ReflectionProbe>();
         probe.transform.SetParent(parent, false);
