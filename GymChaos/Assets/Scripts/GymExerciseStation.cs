@@ -374,7 +374,10 @@ public class GymExerciseStation : MonoBehaviour
             Vector3 barLook = Vector3.ProjectOnPlane(barCenter - playerPosition, Vector3.up);
             if (barLook.sqrMagnitude > 0.01f)
             {
-                playerRotation = Quaternion.LookRotation(barLook.normalized, Vector3.up);
+                // The player lies with their head away from the rack. Keep the
+                // camera centered on the bar, but face the opposite direction
+                // so the view is not aimed back into the stand/mirrors.
+                playerRotation = Quaternion.LookRotation(-barLook.normalized, Vector3.up);
             }
         }
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)

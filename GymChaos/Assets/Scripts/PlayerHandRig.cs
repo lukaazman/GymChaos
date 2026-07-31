@@ -394,8 +394,8 @@ public sealed class PlayerHandRig : MonoBehaviour
         sampledHeldPlateGrip |= gripReach >= 0.5f && gripReach < 0.7f;
         float normalizedTime = Mathf.Clamp01(elapsed / Mathf.Max(0.01f, duration));
         float reach = Mathf.Sin(normalizedTime * Mathf.PI) * gripReach;
-        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.23f, -0.25f, 0.88f));
-        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.3f, -0.27f, 0.9f));
+        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.23f, -0.17f, 0.88f));
+        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.3f, -0.19f, 0.9f));
         leftTarget += playerCamera.transform.forward * reach;
         rightTarget += playerCamera.transform.forward * reach;
         SolveArm(leftUpperArm, leftForearm, leftHand, leftTarget);
@@ -406,8 +406,8 @@ public sealed class PlayerHandRig : MonoBehaviour
     {
         float normalizedTime = Mathf.Clamp01(activeAttackElapsed / Mathf.Max(0.01f, activeAttackDuration));
         float reach = Mathf.Sin(normalizedTime * Mathf.PI);
-        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -0.34f, 0.8f));
-        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -0.36f, 0.8f));
+        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -0.26f, 0.8f));
+        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -0.28f, 0.8f));
 
         if (activeAttackClip == pushClip)
         {
@@ -449,9 +449,9 @@ public sealed class PlayerHandRig : MonoBehaviour
         float rightThrow = AttackCurve(rightThrowTimer, 0.32f);
 
         Vector3 leftTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(-0.27f, -0.24f + bob, 0.88f) : new Vector3(-0.34f, -0.34f + bob, 0.8f));
+            isHolding ? new Vector3(-0.27f, -0.16f + bob, 0.88f) : new Vector3(-0.34f, -0.26f + bob, 0.8f));
         Vector3 rightTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(0.34f, -0.26f - bob, 0.9f) : new Vector3(0.38f, -0.36f - bob, 0.8f));
+            isHolding ? new Vector3(0.34f, -0.18f - bob, 0.9f) : new Vector3(0.38f, -0.28f - bob, 0.8f));
 
         leftTarget += playerCamera.transform.forward * (leftPunch * 0.82f + shove * 0.46f + leftThrow * 0.62f);
         rightTarget += playerCamera.transform.forward * (rightPunch * 0.82f + shove * 0.46f + rightThrow * 0.62f);
@@ -602,7 +602,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             bounds.Encapsulate(renderers[i].bounds);
         }
 
-        const float desiredHeight = 2.46f;
+        const float desiredHeight = 2.52f;
         float uniformScale = desiredHeight / Mathf.Max(0.001f, bounds.size.y);
         float localMinimumY = transform.InverseTransformPoint(bounds.min).y;
         modelRoot.transform.localScale = new Vector3(uniformScale * 1.1f, uniformScale, uniformScale * 1.05f);

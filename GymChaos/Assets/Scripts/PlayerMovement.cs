@@ -102,7 +102,7 @@ public class PlayerMovement : MonoBehaviour
             // The serialized camera was below the runtime player's eye line.
             // Raise it to the model's eye level; this also naturally lowers
             // the first-person arms in the frame.
-            cameraBaseLocalPosition.y = 1.24f;
+            cameraBaseLocalPosition.y = 1.10f;
             playerCamera.transform.localPosition = cameraBaseLocalPosition;
         }
 
