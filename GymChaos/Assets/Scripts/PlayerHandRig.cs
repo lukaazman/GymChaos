@@ -63,6 +63,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     private bool sampledHeldBarGrip;
     private bool sampledHeldPlateGrip;
     private float mirrorScaleRefreshTimer;
+    private bool mirrorScaleMatched;
     private bool sampledRunClip;
 
     private readonly Dictionary<Transform, Quaternion> lowerBodyRotations = new Dictionary<Transform, Quaternion>();
@@ -309,6 +310,18 @@ public sealed class PlayerHandRig : MonoBehaviour
             return;
         }
 
+        if (mirrorScaleMatched)
+        {
+            return;
+        }
+
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        if (fighters.Length < 6)
+        {
+            mirrorScaleRefreshTimer = 0.5f;
+            return;
+        }
+
         mirrorScaleRefreshTimer = 0.5f;
         SkinnedMeshRenderer[] bodyRenderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
             .Where(renderer => renderer != null && renderer.gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
@@ -317,6 +330,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         if (targetHeight > 0.01f)
         {
             ScaleMirrorBodyToTarget(bodyRenderers, targetHeight);
+            mirrorScaleMatched = true;
         }
     }
 
@@ -437,8 +451,8 @@ public sealed class PlayerHandRig : MonoBehaviour
     {
         float normalizedTime = Mathf.Clamp01(activeAttackElapsed / Mathf.Max(0.01f, activeAttackDuration));
         float reach = Mathf.Sin(normalizedTime * Mathf.PI);
-        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -1.02f, 0.8f));
-        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -1.04f, 0.8f));
+        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -0.76f, 0.8f));
+        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -0.78f, 0.8f));
 
         if (activeAttackClip == pushClip)
         {
@@ -452,7 +466,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             Vector3 attackOffset = playerCamera.transform.forward *
                 ((activeAttackClip == jabClip ? 0.78f : 0.58f) * reach);
             attackOffset += playerCamera.transform.up *
-                ((activeAttackClip == throwClip ? 0.02f : activeAttackClip == jabClip ? -0.38f : -0.14f) * reach);
+                ((activeAttackClip == throwClip ? 0.05f : activeAttackClip == jabClip ? -0.18f : -0.06f) * reach);
             if (activeAttackUsesRightHand)
             {
                 rightTarget += attackOffset;
@@ -480,9 +494,9 @@ public sealed class PlayerHandRig : MonoBehaviour
         float rightThrow = AttackCurve(rightThrowTimer, 0.32f);
 
         Vector3 leftTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(-0.27f, -0.68f + bob, 0.88f) : new Vector3(-0.34f, -1.02f + bob, 0.8f));
+            isHolding ? new Vector3(-0.27f, -0.52f + bob, 0.88f) : new Vector3(-0.34f, -0.76f + bob, 0.8f));
         Vector3 rightTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(0.34f, -0.70f - bob, 0.9f) : new Vector3(0.38f, -1.04f - bob, 0.8f));
+            isHolding ? new Vector3(0.34f, -0.54f - bob, 0.9f) : new Vector3(0.38f, -0.78f - bob, 0.8f));
 
         leftTarget += playerCamera.transform.forward * (leftPunch * 0.82f + shove * 0.46f + leftThrow * 0.62f);
         rightTarget += playerCamera.transform.forward * (rightPunch * 0.82f + shove * 0.46f + rightThrow * 0.62f);
@@ -716,7 +730,15 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
 
         float floorBefore = visibleBounds.min.y;
-        modelRoot.transform.localScale *= scale;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null)
+            {
+                // Scale only the reflected body renderer. The first-person arms
+                // share the model root and must not inherit this late refit.
+                renderers[i].transform.localScale *= scale;
+            }
+        }
         Physics.SyncTransforms();
 
         Bounds after = default;
@@ -747,9 +769,14 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
         if (foundAfter)
         {
-            modelRoot.transform.position += Vector3.up * (floorBefore - after.min.y);
-            baseModelLocalPosition = modelRoot.transform.localPosition;
-            baseModelLocalScale = modelRoot.transform.localScale;
+            Vector3 floorCorrection = Vector3.up * (floorBefore - after.min.y);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] != null)
+                {
+                    renderers[i].transform.position += floorCorrection;
+                }
+            }
         }
     }
 

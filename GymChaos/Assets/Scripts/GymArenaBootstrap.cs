@@ -617,17 +617,21 @@ public class GymArenaBootstrap : MonoBehaviour
             return;
         }
 
-        if (identity == BodybuilderIdentity.JayCutler && TryGetNamedBounds("treadmill", out Bounds treadmillBounds))
+        if (identity == BodybuilderIdentity.JayCutler &&
+            (TryGetNamedBounds("bike", out Bounds bikeBoundsForJay) ||
+             TryGetNamedBounds("treadmill", out bikeBoundsForJay)))
         {
-            Vector3 towardRoom = Vector3.ProjectOnPlane(roomCenter - treadmillBounds.center, Vector3.up);
+            Vector3 towardRoom = Vector3.ProjectOnPlane(roomCenter - bikeBoundsForJay.center, Vector3.up);
             if (towardRoom.sqrMagnitude < 0.01f)
             {
                 towardRoom = Vector3.forward;
             }
             towardRoom.Normalize();
-            float treadmillDepth = Mathf.Abs(towardRoom.x) * treadmillBounds.extents.x +
-                Mathf.Abs(towardRoom.z) * treadmillBounds.extents.z;
-            position = treadmillBounds.center + towardRoom * (treadmillDepth + 1.15f);
+            float cardioDepth = Mathf.Abs(towardRoom.x) * bikeBoundsForJay.extents.x +
+                Mathf.Abs(towardRoom.z) * bikeBoundsForJay.extents.z;
+            // Put Jay clearly on the mat in front of the cardio row, rather than
+            // inside or between the nearest bike/treadmill footprints.
+            position = bikeBoundsForJay.center + towardRoom * (cardioDepth + 2.25f);
             position.y = floorY;
             rotation = Quaternion.LookRotation(towardRoom, Vector3.up);
             return;

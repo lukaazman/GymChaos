@@ -47,6 +47,7 @@ public class EnemyFighter : MonoBehaviour
 
     private const float GokuFlightHeight = 1.5f;
     private const float GokuFlightTransitionDuration = 0.42f;
+    private const float GokuFlightModelRotation = 90f;
     private GokuFlightState gokuFlightState;
     private float gokuFlightTransition;
     private float standingRootY;
@@ -203,10 +204,8 @@ public class EnemyFighter : MonoBehaviour
             Vector3 moveDirection = planarToTarget.normalized;
             if (IsGoku() && gokuFlightState == GokuFlightState.Flying)
             {
-                Vector3 flightTarget = new Vector3(
-                    currentTarget.position.x, standingRootY + GokuFlightHeight, currentTarget.position.z);
-                body.MovePosition(Vector3.MoveTowards(
-                    transform.position, flightTarget, maxSpeed * Time.fixedDeltaTime));
+                // UpdateGokuFlight already steers toward the current target every
+                // FixedUpdate. Do not apply the grounded velocity path as well.
             }
             else
             {
@@ -528,8 +527,7 @@ public class EnemyFighter : MonoBehaviour
             gokuFlightStartRotation = transform.rotation;
             // The local +Y axis is the model's head direction. Rotating it onto
             // the chase vector makes the head lead the 90-degree horizontal turn.
-            gokuFlightTargetRotation = Quaternion.LookRotation(direction, Vector3.up) *
-                Quaternion.Euler(-90f, 0f, 0f);
+            gokuFlightTargetRotation = GetGokuFlightRotation(direction);
             SetGokuFlightPhysics(true);
         }
         else if (!shouldFly &&
@@ -563,9 +561,15 @@ public class EnemyFighter : MonoBehaviour
 
         if (gokuFlightState == GokuFlightState.Flying)
         {
-            gokuFlightTargetRotation = Quaternion.LookRotation(direction, Vector3.up) *
-                Quaternion.Euler(-90f, 0f, 0f);
-            transform.rotation = Quaternion.Slerp(transform.rotation, gokuFlightTargetRotation, 10f * Time.fixedDeltaTime);
+            gokuFlightTargetRotation = GetGokuFlightRotation(direction);
+            transform.rotation = Quaternion.RotateTowards(
+                transform.rotation, gokuFlightTargetRotation, 1440f * Time.fixedDeltaTime);
+            Vector3 flightTarget = new Vector3(
+                currentTarget != null ? currentTarget.position.x : transform.position.x,
+                standingRootY + GokuFlightHeight,
+                currentTarget != null ? currentTarget.position.z : transform.position.z);
+            body.MovePosition(Vector3.MoveTowards(
+                transform.position, flightTarget, maxSpeed * Time.fixedDeltaTime));
             bodyAnimator?.SetFlying(true);
             return true;
         }
@@ -591,6 +595,15 @@ public class EnemyFighter : MonoBehaviour
         }
 
         return true;
+    }
+
+    private static Quaternion GetGokuFlightRotation(Vector3 direction)
+    {
+        // The imported Goku scan faces the opposite local horizontal direction
+        // from the older player-shaped test mesh. +90 makes the head lead the
+        // horizontal flight vector instead of sending the feet forward.
+        return Quaternion.LookRotation(direction, Vector3.up) *
+            Quaternion.Euler(GokuFlightModelRotation, 0f, 0f);
     }
 
     private void SetGokuFlightPhysics(bool flying)
