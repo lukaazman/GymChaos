@@ -454,12 +454,8 @@ public class EnemyFighter : MonoBehaviour
     private void OnCollisionEnter(Collision collision)
     {
         PickupItem item = collision.rigidbody != null
-            ? collision.rigidbody.GetComponent<PickupItem>()
+            ? collision.rigidbody.GetComponentInParent<PickupItem>()
             : null;
-        if (item == null && collision.otherCollider != null)
-        {
-            item = collision.otherCollider.GetComponentInParent<PickupItem>();
-        }
         if (item == null || !item.IsThrowableWeapon || !item.WasThrownRecently)
         {
             return;
