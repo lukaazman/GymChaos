@@ -8,6 +8,10 @@ public static class BuildScript
 {
     public static void BuildWebGL()
     {
+        // GitHub Pages does not add Content-Encoding: br for Unity's .br files.
+        // Emit uncompressed files so the browser can load the build directly.
+        PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
+
         var outputPath = Environment.GetEnvironmentVariable("UNITY_BUILD_PATH");
         if (string.IsNullOrWhiteSpace(outputPath))
         {
