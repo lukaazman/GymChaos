@@ -1,9 +1,9 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.Rendering;
 
 public enum BodybuilderIdentity
@@ -12,7 +12,9 @@ public enum BodybuilderIdentity
     Cbum,
     Zyzz,
     Ronnie,
-    Manwithsuit1
+    Manwithsuit1,
+    JayCutler,
+    Goku
 }
 
 public sealed class BodybuilderEnemyVisual : MonoBehaviour
@@ -194,15 +196,24 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             yield return null;
         }
 
-        string fileName = identity.ToString().ToLowerInvariant() + ".glb";
-        string path = Path.Combine(Application.streamingAssetsPath, "BodyBuilders", fileName);
-        if (!File.Exists(path))
+        string fileName = GetModelFileName(identity);
+        string path = JoinStreamingAssetsPath("BodyBuilders/" + fileName);
+        byte[] glbBytes;
+        using (UnityWebRequest request = UnityWebRequest.Get(path))
         {
-            Debug.LogError($"Bodybuilder model is missing: {path}", this);
-            yield break;
+            request.downloadHandler = new DownloadHandlerBuffer();
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogError($"Bodybuilder model is missing or could not be loaded: {path}\n{request.error}", this);
+                yield break;
+            }
+
+            glbBytes = request.downloadHandler.data;
         }
 
-        if (!TryReadGlb(File.ReadAllBytes(path), out GltfRoot gltf, out byte[] binary))
+        if (!TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary))
         {
             Debug.LogError($"Could not read bodybuilder model: {fileName}", this);
             yield break;
@@ -324,6 +335,23 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             BodybuilderEnemyAnimator animator = gameObject.AddComponent<BodybuilderEnemyAnimator>();
             animator.Configure(identity, rig);
         }
+    }
+
+    private static string JoinStreamingAssetsPath(string relativePath)
+    {
+        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
+        if (path.Contains("://"))
+        {
+            return path;
+        }
+        return "file:///" + path.Replace('\\', '/').TrimStart('/');
+    }
+
+    private static string GetModelFileName(BodybuilderIdentity identity)
+    {
+        return identity == BodybuilderIdentity.JayCutler
+            ? "jay.glb"
+            : identity.ToString().ToLowerInvariant() + ".glb";
     }
 
     private static void SimplifyRuntimeMesh(
@@ -456,6 +484,20 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                     new Vector2(-0.052f, 0.49f), new Vector2(-0.052f, 0.25f), new Vector2(-0.055f, 0.02f),
                     new Vector2(0.052f, 0.49f), new Vector2(0.052f, 0.25f), new Vector2(0.055f, 0.02f),
                     0.79f, 0.08f, 0.085f, 0.88f, 0.12f, 0.12f);
+            case BodybuilderIdentity.JayCutler:
+                return new RigProfile(
+                    new Vector2(-0.11f, 0.70f), new Vector2(-0.14f, 0.56f), new Vector2(-0.12f, 0.42f),
+                    new Vector2(0.11f, 0.70f), new Vector2(0.14f, 0.56f), new Vector2(0.12f, 0.42f),
+                    new Vector2(-0.05f, 0.49f), new Vector2(-0.05f, 0.25f), new Vector2(-0.04f, 0.02f),
+                    new Vector2(0.05f, 0.49f), new Vector2(0.05f, 0.25f), new Vector2(0.04f, 0.02f),
+                    0.79f, 0.085f, 0.095f, 0.88f);
+            case BodybuilderIdentity.Goku:
+                return new RigProfile(
+                    new Vector2(-0.11f, 0.70f), new Vector2(-0.15f, 0.56f), new Vector2(-0.12f, 0.42f),
+                    new Vector2(0.11f, 0.70f), new Vector2(0.15f, 0.56f), new Vector2(0.12f, 0.42f),
+                    new Vector2(-0.05f, 0.49f), new Vector2(-0.05f, 0.25f), new Vector2(-0.04f, 0.02f),
+                    new Vector2(0.05f, 0.49f), new Vector2(0.05f, 0.25f), new Vector2(0.04f, 0.02f),
+                    0.79f, 0.085f, 0.095f, 0.88f);
             default:
                 return new RigProfile(
                     new Vector2(-0.10f, 0.70f), new Vector2(-0.14f, 0.55f), new Vector2(-0.13f, 0.40f),
@@ -1076,6 +1118,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             ? "CBum"
             : identity == BodybuilderIdentity.Manwithsuit1
                 ? "manwithsuit1"
+                : identity == BodybuilderIdentity.JayCutler
+                    ? "Jay Cutler"
                 : identity.ToString();
         ScreenSpaceCharacterLabel label = visualRoot.gameObject.AddComponent<ScreenSpaceCharacterLabel>();
         label.Configure(bodyRenderer, displayName, heightOffset);

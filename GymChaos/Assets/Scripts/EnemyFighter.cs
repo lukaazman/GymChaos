@@ -37,6 +37,22 @@ public class EnemyFighter : MonoBehaviour
     private bool isDead;
     private bool deathPoseFrozen;
     private bool activeCounted;
+    private enum GokuFlightState
+    {
+        Grounded,
+        TakingOff,
+        Flying,
+        Landing
+    }
+
+    private const float GokuFlightHeight = 1.5f;
+    private const float GokuFlightTransitionDuration = 0.42f;
+    private GokuFlightState gokuFlightState;
+    private float gokuFlightTransition;
+    private float standingRootY;
+    private float gokuFlightStartY;
+    private Quaternion gokuFlightStartRotation;
+    private Quaternion gokuFlightTargetRotation;
 
     public float CurrentHealth => health;
     public float MaxHealth => maxHealth;
@@ -44,6 +60,7 @@ public class EnemyFighter : MonoBehaviour
     public bool IsDead => isDead;
     public bool IsPolice => isPolice;
     public BodybuilderIdentity Identity => identity;
+    public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
     public Color HealthBarColor => identity == BodybuilderIdentity.Ronnie
         ? new Color(0.035f, 0.12f, 0.32f, 1f)
         : identity == BodybuilderIdentity.Manwithsuit1
@@ -60,6 +77,8 @@ public class EnemyFighter : MonoBehaviour
         health = maxHealth;
         isPolice = police;
         isPassive = passive;
+        standingRootY = transform.position.y;
+        gokuFlightState = GokuFlightState.Grounded;
         currentTarget = police ? null : player != null ? player.transform : null;
         currentFighterTarget = null;
         nextTargetRefreshTime = 0f;
@@ -104,6 +123,7 @@ public class EnemyFighter : MonoBehaviour
     {
         if (isDead)
         {
+            RestoreGokuGroundPhysicsForDeath();
             UpdatePermanentDeathPose();
             return;
         }
@@ -165,6 +185,11 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
+        if (IsGoku() && !UpdateGokuFlight(true, planarToTarget))
+        {
+            return;
+        }
+
         body.WakeUp();
         float planarSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
         bool pursuingOutsideAttackPose = distance > attackRange * 0.8f;
@@ -176,18 +201,28 @@ public class EnemyFighter : MonoBehaviour
         if (distance > 0.15f)
         {
             Vector3 moveDirection = planarToTarget.normalized;
-            Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-            Vector3 desiredVelocity = moveDirection * maxSpeed;
-            // Directly steer the planar Rigidbody velocity. The old 11 N force
-            // was negligible against the 85 kg body and made the walking clip
-            // play while the fighter remained effectively stationary.
-            planarVelocity = Vector3.MoveTowards(
-                planarVelocity, desiredVelocity, Mathf.Max(moveForce, 12f) * Time.fixedDeltaTime);
-            body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
+            if (IsGoku() && gokuFlightState == GokuFlightState.Flying)
+            {
+                Vector3 flightTarget = new Vector3(
+                    currentTarget.position.x, standingRootY + GokuFlightHeight, currentTarget.position.z);
+                body.MovePosition(Vector3.MoveTowards(
+                    transform.position, flightTarget, maxSpeed * Time.fixedDeltaTime));
+            }
+            else
+            {
+                Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+                Vector3 desiredVelocity = moveDirection * maxSpeed;
+                // Directly steer the planar Rigidbody velocity. The old 11 N force
+                // was negligible against the 85 kg body and made the walking clip
+                // play while the fighter remained effectively stationary.
+                planarVelocity = Vector3.MoveTowards(
+                    planarVelocity, desiredVelocity, Mathf.Max(moveForce, 12f) * Time.fixedDeltaTime);
+                body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
 
-            Quaternion lookRotation = Quaternion.LookRotation(moveDirection, Vector3.up);
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation, lookRotation, 10f * Time.fixedDeltaTime);
+                Quaternion lookRotation = Quaternion.LookRotation(moveDirection, Vector3.up);
+                transform.rotation = Quaternion.Slerp(
+                    transform.rotation, lookRotation, 10f * Time.fixedDeltaTime);
+            }
         }
 
         if (distance <= attackRange && Time.time >= lastAttackTime + attackCooldown)
@@ -289,6 +324,16 @@ public class EnemyFighter : MonoBehaviour
 
     private void StopMoving()
     {
+        if (IsGoku() && gokuFlightState != GokuFlightState.Grounded)
+        {
+            UpdateGokuFlight(false, transform.forward);
+            SetAnimatedMovement(false);
+            if (gokuFlightState != GokuFlightState.Grounded)
+            {
+                return;
+            }
+        }
+
         Vector3 verticalVelocity = Vector3.Project(body.linearVelocity, Vector3.up);
         Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
         body.linearVelocity = Vector3.Lerp(
@@ -358,6 +403,7 @@ public class EnemyFighter : MonoBehaviour
     private void Die(Vector3 finalImpulse)
     {
         isDead = true;
+        RestoreGokuGroundPhysicsForDeath();
         health = 0f;
         deathStartedTime = Time.time;
         bodyAnimator?.SetDowned(true);
@@ -448,7 +494,139 @@ public class EnemyFighter : MonoBehaviour
         {
             bodyAnimator = GetComponent<BodybuilderEnemyAnimator>();
         }
+        if (IsGoku())
+        {
+            bodyAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
+        }
         bodyAnimator?.SetMoving(moving, normalizedSpeed);
+    }
+
+    private bool IsGoku()
+    {
+        return identity == BodybuilderIdentity.Goku;
+    }
+
+    private bool UpdateGokuFlight(bool shouldFly, Vector3 direction)
+    {
+        if (!IsGoku())
+        {
+            return true;
+        }
+
+        direction = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            direction = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+        }
+        direction.Normalize();
+
+        if (shouldFly && gokuFlightState == GokuFlightState.Grounded)
+        {
+            gokuFlightState = GokuFlightState.TakingOff;
+            gokuFlightTransition = 0f;
+            gokuFlightStartY = transform.position.y;
+            gokuFlightStartRotation = transform.rotation;
+            // The local +Y axis is the model's head direction. Rotating it onto
+            // the chase vector makes the head lead the 90-degree horizontal turn.
+            gokuFlightTargetRotation = Quaternion.LookRotation(direction, Vector3.up) *
+                Quaternion.Euler(-90f, 0f, 0f);
+            SetGokuFlightPhysics(true);
+        }
+        else if (!shouldFly &&
+            (gokuFlightState == GokuFlightState.TakingOff || gokuFlightState == GokuFlightState.Flying))
+        {
+            gokuFlightState = GokuFlightState.Landing;
+            gokuFlightTransition = 0f;
+            gokuFlightStartY = transform.position.y;
+            gokuFlightStartRotation = transform.rotation;
+            gokuFlightTargetRotation = Quaternion.LookRotation(direction, Vector3.up);
+        }
+
+        if (gokuFlightState == GokuFlightState.TakingOff)
+        {
+            gokuFlightTransition = Mathf.Min(
+                1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
+            float eased = SmoothStep(gokuFlightTransition);
+            transform.position = new Vector3(
+                transform.position.x,
+                Mathf.Lerp(standingRootY, standingRootY + GokuFlightHeight, eased),
+                transform.position.z);
+            transform.rotation = Quaternion.Slerp(
+                gokuFlightStartRotation, gokuFlightTargetRotation, eased);
+            bodyAnimator?.SetFlying(true);
+            if (gokuFlightTransition >= 1f)
+            {
+                gokuFlightState = GokuFlightState.Flying;
+            }
+            return false;
+        }
+
+        if (gokuFlightState == GokuFlightState.Flying)
+        {
+            gokuFlightTargetRotation = Quaternion.LookRotation(direction, Vector3.up) *
+                Quaternion.Euler(-90f, 0f, 0f);
+            transform.rotation = Quaternion.Slerp(transform.rotation, gokuFlightTargetRotation, 10f * Time.fixedDeltaTime);
+            bodyAnimator?.SetFlying(true);
+            return true;
+        }
+
+        if (gokuFlightState == GokuFlightState.Landing)
+        {
+            gokuFlightTransition = Mathf.Min(
+                1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
+            float eased = SmoothStep(gokuFlightTransition);
+            transform.position = new Vector3(
+                transform.position.x,
+                Mathf.Lerp(gokuFlightStartY, standingRootY, eased),
+                transform.position.z);
+            transform.rotation = Quaternion.Slerp(
+                gokuFlightStartRotation, gokuFlightTargetRotation, eased);
+            bodyAnimator?.SetFlying(false);
+            if (gokuFlightTransition >= 1f)
+            {
+                gokuFlightState = GokuFlightState.Grounded;
+                SetGokuFlightPhysics(false);
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private void SetGokuFlightPhysics(bool flying)
+    {
+        if (body == null)
+        {
+            return;
+        }
+
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        body.useGravity = !flying;
+        body.isKinematic = flying;
+        body.constraints = flying
+            ? RigidbodyConstraints.FreezeRotation
+            : RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+    }
+
+    private void RestoreGokuGroundPhysicsForDeath()
+    {
+        if (!IsGoku() || body == null || !body.isKinematic)
+        {
+            return;
+        }
+
+        body.isKinematic = false;
+        body.useGravity = true;
+        body.constraints = RigidbodyConstraints.None;
+        gokuFlightState = GokuFlightState.Grounded;
+        bodyAnimator?.SetFlying(false);
+    }
+
+    private static float SmoothStep(float value)
+    {
+        value = Mathf.Clamp01(value);
+        return value * value * (3f - 2f * value);
     }
 
     private void OnCollisionEnter(Collision collision)

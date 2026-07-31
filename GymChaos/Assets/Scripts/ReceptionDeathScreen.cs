@@ -1,4 +1,3 @@
-using System.IO;
 using UnityEngine;
 using UnityEngine.Video;
 
@@ -92,7 +91,7 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         videoPlayer.waitForFirstFrame = true;
         videoPlayer.skipOnDrop = true;
         videoPlayer.source = VideoSource.Url;
-        videoPlayer.url = Path.Combine(Application.streamingAssetsPath, VideoRelativePath);
+        videoPlayer.url = JoinStreamingAssetsPath(VideoRelativePath);
         videoPlayer.renderMode = VideoRenderMode.MaterialOverride;
         videoPlayer.targetMaterialRenderer = screenRenderer;
         videoPlayer.targetMaterialProperty = "_BaseMap";
@@ -134,6 +133,16 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
         return mesh;
+    }
+
+    private static string JoinStreamingAssetsPath(string relativePath)
+    {
+        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
+        if (path.Contains("://"))
+        {
+            return path;
+        }
+        return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
 
     private void OnDestroy()

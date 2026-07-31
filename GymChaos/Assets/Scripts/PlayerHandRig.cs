@@ -12,6 +12,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     }
 
     private const string PlayerModelResource = "Player/player_mia_rigged";
+    private const float MirrorTargetHeight = 2.3f;
 
     private Camera playerCamera;
     private CharacterController controller;
@@ -406,8 +407,8 @@ public sealed class PlayerHandRig : MonoBehaviour
     {
         float normalizedTime = Mathf.Clamp01(activeAttackElapsed / Mathf.Max(0.01f, activeAttackDuration));
         float reach = Mathf.Sin(normalizedTime * Mathf.PI);
-        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -0.26f, 0.8f));
-        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -0.28f, 0.8f));
+        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -0.76f, 0.8f));
+        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -0.78f, 0.8f));
 
         if (activeAttackClip == pushClip)
         {
@@ -421,7 +422,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             Vector3 attackOffset = playerCamera.transform.forward *
                 ((activeAttackClip == jabClip ? 0.78f : 0.58f) * reach);
             attackOffset += playerCamera.transform.up *
-                ((activeAttackClip == throwClip ? 0.2f : 0.03f) * reach);
+                ((activeAttackClip == throwClip ? 0.05f : activeAttackClip == jabClip ? -0.18f : -0.06f) * reach);
             if (activeAttackUsesRightHand)
             {
                 rightTarget += attackOffset;
@@ -449,9 +450,9 @@ public sealed class PlayerHandRig : MonoBehaviour
         float rightThrow = AttackCurve(rightThrowTimer, 0.32f);
 
         Vector3 leftTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(-0.27f, -0.16f + bob, 0.88f) : new Vector3(-0.34f, -0.26f + bob, 0.8f));
+            isHolding ? new Vector3(-0.27f, -0.52f + bob, 0.88f) : new Vector3(-0.34f, -0.76f + bob, 0.8f));
         Vector3 rightTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(0.34f, -0.18f - bob, 0.9f) : new Vector3(0.38f, -0.28f - bob, 0.8f));
+            isHolding ? new Vector3(0.34f, -0.54f - bob, 0.9f) : new Vector3(0.38f, -0.78f - bob, 0.8f));
 
         leftTarget += playerCamera.transform.forward * (leftPunch * 0.82f + shove * 0.46f + leftThrow * 0.62f);
         rightTarget += playerCamera.transform.forward * (rightPunch * 0.82f + shove * 0.46f + rightThrow * 0.62f);
@@ -602,7 +603,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             bounds.Encapsulate(renderers[i].bounds);
         }
 
-        const float desiredHeight = 2.52f;
+        const float desiredHeight = 2.75f;
         float uniformScale = desiredHeight / Mathf.Max(0.001f, bounds.size.y);
         float localMinimumY = transform.InverseTransformPoint(bounds.min).y;
         modelRoot.transform.localScale = new Vector3(uniformScale * 1.1f, uniformScale, uniformScale * 1.05f);
@@ -624,7 +625,11 @@ public sealed class PlayerHandRig : MonoBehaviour
             fullBody.updateWhenOffscreen = true;
             fullBody.shadowCastingMode = ShadowCastingMode.On;
             fullBody.gameObject.layer = PlanarGymMirror.MirrorPlayerLayer;
-            CreateBakedProxy(fullBody, PlanarGymMirror.MirrorPlayerLayer, "Mirror Player Body " + i, true);
+            // Keep the skinned body itself in the mirror. The old baked proxy
+            // used the source mesh bounds and rendered the player at roughly
+            // 1.53 m even though the actual body was about 2.30 m tall.
+            // The mirror camera already has the correct layer mask, so a second
+            // static proxy is unnecessary and introduces a scale mismatch.
             SkinnedMeshRenderer arms = CreateFirstPersonArms(fullBody, i);
             if (arms != null)
             {
@@ -634,7 +639,54 @@ public sealed class PlayerHandRig : MonoBehaviour
                 arms.forceRenderingOff = false;
             }
         }
+        ScaleMirrorBodyToEnemyHeight(renderers);
         SetLayerRecursively(modelRoot.transform, PlanarGymMirror.MirrorPlayerLayer);
+    }
+
+    private static void ScaleMirrorBodyToEnemyHeight(SkinnedMeshRenderer[] renderers)
+    {
+        Bounds visibleBounds = default;
+        bool found = false;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            SkinnedMeshRenderer renderer = renderers[i];
+            if (renderer == null || renderer.sharedMesh == null)
+            {
+                continue;
+            }
+
+            Mesh baked = new Mesh();
+            renderer.BakeMesh(baked);
+            Vector3[] vertices = baked.vertices;
+            for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
+            {
+                Vector3 world = renderer.transform.TransformPoint(vertices[vertexIndex]);
+                if (!found)
+                {
+                    visibleBounds = new Bounds(world, Vector3.zero);
+                    found = true;
+                }
+                else
+                {
+                    visibleBounds.Encapsulate(world);
+                }
+            }
+            UnityEngine.Object.Destroy(baked);
+        }
+
+        if (!found || visibleBounds.size.y < 0.01f)
+        {
+            return;
+        }
+
+        float scale = MirrorTargetHeight / visibleBounds.size.y;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null)
+            {
+                renderers[i].transform.localScale *= scale;
+            }
+        }
     }
 
     private Mesh CreateLowerLodMesh(Mesh source)
@@ -823,7 +875,8 @@ public sealed class PlayerHandRig : MonoBehaviour
         GameObject armObject = new GameObject("First Person Arms " + rendererIndex);
         armObject.layer = PlanarGymMirror.FirstPersonPlayerLayer;
         armObject.transform.SetParent(source.transform.parent, false);
-        armObject.transform.SetLocalPositionAndRotation(source.transform.localPosition, source.transform.localRotation);
+        armObject.transform.SetLocalPositionAndRotation(
+            source.transform.localPosition + Vector3.down * 0.35f, source.transform.localRotation);
         armObject.transform.localScale = source.transform.localScale;
         SkinnedMeshRenderer arms = armObject.AddComponent<SkinnedMeshRenderer>();
         arms.sharedMesh = armMesh;

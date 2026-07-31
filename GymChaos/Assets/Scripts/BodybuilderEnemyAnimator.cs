@@ -11,6 +11,7 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
     private float attackBlend;
     private float walkCycle;
     private float idleCycle;
+    private bool flying;
 
     private Vector3 hipsBasePosition;
     private Quaternion hipsBaseRotation;
@@ -48,6 +49,16 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
         movementSpeed01 = shouldMove ? Mathf.Clamp01(normalizedSpeed) : 0f;
     }
 
+    public void SetFlying(bool shouldFly)
+    {
+        flying = shouldFly;
+        if (flying)
+        {
+            moving = false;
+            movementBlend = 0f;
+        }
+    }
+
     public void TriggerAttack()
     {
         attackBlend = 1f;
@@ -81,6 +92,22 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
 
     private void ApplyMotion(float blend, float walkPhase, float idlePhase, float attack)
     {
+        if (flying)
+        {
+            rig.Hips.localPosition = hipsBasePosition;
+            rig.Hips.localRotation = hipsBaseRotation;
+            rig.Spine.localRotation = spineBaseRotation;
+            rig.LeftUpperArm.localRotation = leftUpperBaseRotation;
+            rig.LeftForearm.localRotation = leftForearmBaseRotation;
+            rig.RightUpperArm.localRotation = rightUpperBaseRotation;
+            rig.RightForearm.localRotation = rightForearmBaseRotation;
+            rig.LeftThigh.localRotation = leftThighBaseRotation;
+            rig.LeftShin.localRotation = leftShinBaseRotation;
+            rig.RightThigh.localRotation = rightThighBaseRotation;
+            rig.RightShin.localRotation = rightShinBaseRotation;
+            return;
+        }
+
         // Every rotation is layered over this scan's authored pose. The three
         // meshes therefore keep their original composition instead of being
         // forced into a shared humanoid rest pose.

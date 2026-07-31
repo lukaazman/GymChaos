@@ -8,7 +8,9 @@ public class GymArenaBootstrap : MonoBehaviour
         BodybuilderIdentity.Cbum,
         BodybuilderIdentity.Zyzz,
         BodybuilderIdentity.Arnold,
-        BodybuilderIdentity.Ronnie
+        BodybuilderIdentity.Ronnie,
+        BodybuilderIdentity.JayCutler,
+        BodybuilderIdentity.Goku
     };
 
     private static readonly string[] StaticNameBlocks =
@@ -615,6 +617,39 @@ public class GymArenaBootstrap : MonoBehaviour
             return;
         }
 
+        if (identity == BodybuilderIdentity.JayCutler && TryGetNamedBounds("treadmill", out Bounds treadmillBounds))
+        {
+            Vector3 towardRoom = Vector3.ProjectOnPlane(roomCenter - treadmillBounds.center, Vector3.up);
+            if (towardRoom.sqrMagnitude < 0.01f)
+            {
+                towardRoom = Vector3.forward;
+            }
+            towardRoom.Normalize();
+            float treadmillDepth = Mathf.Abs(towardRoom.x) * treadmillBounds.extents.x +
+                Mathf.Abs(towardRoom.z) * treadmillBounds.extents.z;
+            position = treadmillBounds.center + towardRoom * (treadmillDepth + 1.15f);
+            position.y = floorY;
+            rotation = Quaternion.LookRotation(towardRoom, Vector3.up);
+            return;
+        }
+
+        if (identity == BodybuilderIdentity.Goku && TryGetNamedBounds("bike", out Bounds bikeBounds))
+        {
+            Vector3 towardWall = GetNearestRoomWallDirection(bikeBounds.center, roomCenter);
+            GameObject receptionist = GameObject.Find("NPC - manwithsuit1");
+            if (receptionist != null)
+            {
+                towardWall = GetNearestRoomWallDirection(receptionist.transform.position, roomCenter);
+            }
+            position = ProjectPointToWall(bikeBounds.center, towardWall, 1.35f);
+            position.y = floorY;
+            Vector3 towardPlayer = Vector3.ProjectOnPlane(player.transform.position - position, Vector3.up);
+            rotation = towardPlayer.sqrMagnitude > 0.01f
+                ? Quaternion.LookRotation(towardPlayer.normalized, Vector3.up)
+                : Quaternion.LookRotation(-towardWall, Vector3.up);
+            return;
+        }
+
         if (identity == BodybuilderIdentity.Zyzz)
         {
             GameObject cableMachine = GameObject.Find("CableMachineDual");
@@ -709,6 +744,88 @@ public class GymArenaBootstrap : MonoBehaviour
         return found;
     }
 
+    private static bool TryGetNamedBounds(string nameFragment, out Bounds bounds)
+    {
+        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        bool found = false;
+        bounds = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] == null || !HasNameInHierarchy(renderers[i].transform, nameFragment))
+            {
+                continue;
+            }
+
+            if (!found)
+            {
+                bounds = renderers[i].bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+        }
+        return found;
+    }
+
+    private static bool HasNameInHierarchy(Transform target, string nameFragment)
+    {
+        string normalizedFragment = nameFragment.ToLowerInvariant();
+        for (Transform current = target; current != null; current = current.parent)
+        {
+            if (current.name.ToLowerInvariant().Contains(normalizedFragment))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Vector3 GetNearestRoomWallDirection(Vector3 point, Vector3 roomCenter)
+    {
+        GameObject floor = GameObject.Find("Rubber Floor");
+        if (floor != null && floor.TryGetComponent(out Renderer floorRenderer))
+        {
+            Bounds floorBounds = floorRenderer.bounds;
+            float west = Mathf.Abs(point.x - floorBounds.min.x);
+            float east = Mathf.Abs(floorBounds.max.x - point.x);
+            float south = Mathf.Abs(point.z - floorBounds.min.z);
+            float north = Mathf.Abs(floorBounds.max.z - point.z);
+            float nearest = Mathf.Min(west, east, south, north);
+            if (nearest == west) return Vector3.left;
+            if (nearest == east) return Vector3.right;
+            if (nearest == south) return Vector3.back;
+            return Vector3.forward;
+        }
+        return Vector3.ProjectOnPlane(roomCenter - point, Vector3.up).normalized;
+    }
+
+    private static Vector3 ProjectPointToWall(Vector3 point, Vector3 towardWall, float wallInset)
+    {
+        GameObject floor = GameObject.Find("Rubber Floor");
+        if (floor == null || !floor.TryGetComponent(out Renderer floorRenderer))
+        {
+            return point + towardWall * wallInset;
+        }
+
+        Bounds floorBounds = floorRenderer.bounds;
+        Vector3 projected = point;
+        if (Mathf.Abs(towardWall.z) > Mathf.Abs(towardWall.x))
+        {
+            projected.z = towardWall.z < 0f
+                ? floorBounds.min.z + wallInset
+                : floorBounds.max.z - wallInset;
+        }
+        else
+        {
+            projected.x = towardWall.x < 0f
+                ? floorBounds.min.x + wallInset
+                : floorBounds.max.x - wallInset;
+        }
+        return projected;
+    }
+
     private static bool TryGetCombinedBounds(Transform root, out Bounds bounds)
     {
         Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
@@ -729,6 +846,7 @@ public class GymArenaBootstrap : MonoBehaviour
     private void CreateEnemy(BodybuilderIdentity identity, Vector3 position, Quaternion rotation)
     {
         GameObject enemy = new GameObject($"Enemy - {identity}");
+        enemy.tag = "Enemies";
         enemy.transform.position = position;
         enemy.transform.rotation = rotation;
 
@@ -746,7 +864,8 @@ public class GymArenaBootstrap : MonoBehaviour
 
         BodybuilderEnemyVisual.Build(enemy, identity);
         EnemyFighter fighter = enemy.AddComponent<EnemyFighter>();
-        float health = identity == BodybuilderIdentity.Ronnie ? 100f
+        float health = identity == BodybuilderIdentity.Goku ? 1000f
+            : identity == BodybuilderIdentity.Ronnie || identity == BodybuilderIdentity.JayCutler ? 100f
             : identity == BodybuilderIdentity.Zyzz ? 45f : 60f;
         fighter.Configure(identity, player, health, identity == BodybuilderIdentity.Ronnie);
     }

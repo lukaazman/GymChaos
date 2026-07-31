@@ -20,6 +20,17 @@ public static class BuildScript
 
         Directory.CreateDirectory(outputPath);
 
+        string streamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets", "BodyBuilders");
+        string[] requiredModels = { "jay.glb", "goku.glb" };
+        for (int i = 0; i < requiredModels.Length; i++)
+        {
+            string modelPath = Path.Combine(streamingAssetsPath, requiredModels[i]);
+            if (!File.Exists(modelPath))
+            {
+                throw new BuildFailedException($"Required runtime model is missing: {modelPath}");
+            }
+        }
+
         var scenes = new[] { "Assets/Scenes/SampleScene.unity" };
         var options = new BuildPlayerOptions
         {
@@ -36,6 +47,6 @@ public static class BuildScript
         }
 
         File.WriteAllText(Path.Combine(outputPath, "gymchaos-runtime.json"),
-            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\"]}");
+            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\",\"jay-cutler\",\"goku-flight\"]}");
     }
 }

@@ -16,6 +16,11 @@ public static class GymChaosPlayModeVerifier
     private static bool punchCaptured;
     private static bool pushCaptured;
     private static bool throwCaptured;
+    private static bool gokuFlightVerificationStarted;
+    private static bool gokuFlightVerified;
+    private static EnemyFighter gokuForVerification;
+    private static double gokuFlightVerificationStartedAt;
+    private static float gokuGroundY;
 
     static GymChaosPlayModeVerifier()
     {
@@ -36,6 +41,11 @@ public static class GymChaosPlayModeVerifier
         punchCaptured = false;
         pushCaptured = false;
         throwCaptured = false;
+        gokuFlightVerificationStarted = false;
+        gokuFlightVerified = false;
+        gokuForVerification = null;
+        gokuFlightVerificationStartedAt = 0d;
+        gokuGroundY = 0f;
         EditorPrefs.SetBool(VerificationRequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -170,10 +180,40 @@ public static class GymChaosPlayModeVerifier
 
             if (attackStage == 5 && elapsed > 8.85d)
             {
-                rig.SetHolding(false);
-                ValidateAndCapture(player, rig);
-                EditorApplication.update -= Tick;
-                EditorApplication.isPlaying = false;
+                if (!gokuFlightVerificationStarted)
+                {
+                    BeginGokuFlightVerification(player);
+                    return;
+                }
+
+                if (!gokuFlightVerified && EditorApplication.timeSinceStartup > gokuFlightVerificationStartedAt + 0.9d)
+                {
+                    if (gokuForVerification == null || !gokuForVerification.IsFlying ||
+                        Mathf.Abs(gokuForVerification.transform.position.y - (gokuGroundY + 1.5f)) > 0.2f)
+                    {
+                        throw new InvalidOperationException(
+                            "Goku did not enter flight at the requested 1.5 m chase height.");
+                    }
+
+                    gokuFlightVerified = true;
+                    MovePlayerForVerification(player, gokuForVerification.transform.position + Vector3.right * 20f);
+                    return;
+                }
+
+                if (gokuFlightVerified && EditorApplication.timeSinceStartup > gokuFlightVerificationStartedAt + 2.0d)
+                {
+                    if (gokuForVerification == null || gokuForVerification.IsFlying ||
+                        Mathf.Abs(gokuForVerification.transform.position.y - gokuGroundY) > 0.2f)
+                    {
+                        throw new InvalidOperationException(
+                            "Goku did not transition back to a grounded standing state after losing the player.");
+                    }
+
+                    rig.SetHolding(false);
+                    ValidateAndCapture(player, rig);
+                    EditorApplication.update -= Tick;
+                    EditorApplication.isPlaying = false;
+                }
             }
         }
         catch (Exception exception)
@@ -238,8 +278,48 @@ public static class GymChaosPlayModeVerifier
         }
     }
 
+    private static void BeginGokuFlightVerification(PlayerMovement player)
+    {
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            if (fighters[i] != null && fighters[i].Identity == BodybuilderIdentity.Goku)
+            {
+                gokuForVerification = fighters[i];
+                break;
+            }
+        }
+        if (gokuForVerification == null)
+        {
+            throw new InvalidOperationException("Goku was not spawned for flight verification.");
+        }
+
+        gokuGroundY = gokuForVerification.transform.position.y;
+        MovePlayerForVerification(
+            player, gokuForVerification.transform.position - gokuForVerification.transform.forward * 4.5f);
+        gokuFlightVerificationStarted = true;
+        gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+    }
+
+    private static void MovePlayerForVerification(PlayerMovement player, Vector3 position)
+    {
+        CharacterController controller = player.GetComponent<CharacterController>();
+        bool wasEnabled = controller != null && controller.enabled;
+        if (wasEnabled)
+        {
+            controller.enabled = false;
+        }
+        position.y = player.transform.position.y;
+        player.transform.position = position;
+        if (wasEnabled)
+        {
+            controller.enabled = true;
+        }
+    }
+
     private static void ValidateAndCapture(PlayerMovement player, PlayerHandRig rig)
     {
+        ValidateRuntimeRoster();
         if (!rig.HasSampledAllMixamoAttackClips)
         {
             throw new InvalidOperationException(
@@ -319,14 +399,18 @@ public static class GymChaosPlayModeVerifier
             if (renderers[i].gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
             {
                 mirrorBodyCount++;
+                if (!TryGetVisibleSkinnedBounds(renderers[i], out Bounds visibleBounds))
+                {
+                    continue;
+                }
                 if (!hasBodyBounds)
                 {
-                    bodyBounds = renderers[i].bounds;
+                    bodyBounds = visibleBounds;
                     hasBodyBounds = true;
                 }
                 else
                 {
-                    bodyBounds.Encapsulate(renderers[i].bounds);
+                    bodyBounds.Encapsulate(visibleBounds);
                 }
                 rendererDebug += $" bodyEnabled={renderers[i].enabled}/{renderers[i].forceRenderingOff}/{renderers[i].shadowCastingMode}/{renderers[i].sharedMaterial?.shader?.name}";
             }
@@ -349,7 +433,7 @@ public static class GymChaosPlayModeVerifier
                 rendererDebug += $" armsEnabled={renderers[i].enabled}/{renderers[i].forceRenderingOff}/{renderers[i].shadowCastingMode}/{renderers[i].sharedMaterial?.shader?.name}";
             }
         }
-        if (mirrorBodyCount == 0 || firstPersonArmCount == 0 || firstPersonTriangleCount == 0)
+        if (mirrorBodyCount == 0 || !hasBodyBounds || firstPersonArmCount == 0 || firstPersonTriangleCount == 0)
         {
             throw new InvalidOperationException(
                 $"Expected mirror body and first-person arms, found body={mirrorBodyCount}, arms={firstPersonArmCount}, armTriangles={firstPersonTriangleCount}.");
@@ -361,9 +445,10 @@ public static class GymChaosPlayModeVerifier
         for (int i = 0; i < fighters.Length; i++)
         {
             SkinnedMeshRenderer enemyRenderer = fighters[i].GetComponentInChildren<SkinnedMeshRenderer>(true);
-            if (enemyRenderer != null && enemyRenderer.bounds.size.y > 0.5f)
+            if (enemyRenderer != null && TryGetVisibleSkinnedBounds(enemyRenderer, out Bounds enemyBounds) &&
+                enemyBounds.size.y > 0.5f)
             {
-                enemyHeightTotal += enemyRenderer.bounds.size.y;
+                enemyHeightTotal += enemyBounds.size.y;
                 enemyHeightCount++;
             }
         }
@@ -381,6 +466,11 @@ public static class GymChaosPlayModeVerifier
         Transform rightHand = FindDescendant(rig.transform, "mixamorig:RightHand");
         Vector3 leftHandCamera = leftHand != null ? camera.transform.InverseTransformPoint(leftHand.position) : Vector3.zero;
         Vector3 rightHandCamera = rightHand != null ? camera.transform.InverseTransformPoint(rightHand.position) : Vector3.zero;
+        if (leftHand == null || rightHand == null || leftHandCamera.y > -0.42f || rightHandCamera.y > -0.42f)
+        {
+            throw new InvalidOperationException(
+                $"Neutral first-person hands are still too high: leftY={leftHandCamera.y:F2}, rightY={rightHandCamera.y:F2}.");
+        }
         Camera mirrorCamera = GameObject.Find("Gym Mirror Camera")?.GetComponent<Camera>();
         MeshRenderer[] proxyRenderers = rig.GetComponentsInChildren<MeshRenderer>(true);
         string proxyDebug = string.Empty;
@@ -403,6 +493,81 @@ public static class GymChaosPlayModeVerifier
             $"averageEnemyHeight={averageEnemyHeight:F2} playerToEnemyHeight={playerToEnemyHeight:F2} " +
             $"cameraMasks={camera.cullingMask}/{mirrorCamera?.cullingMask} renderers={rendererDebug} " +
             $"proxies={proxyDebug} screenshot={outputPath}");
+    }
+
+    private static void ValidateRuntimeRoster()
+    {
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        bool hasJay = false;
+        bool hasGoku = false;
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            EnemyFighter fighter = fighters[i];
+            if (fighter == null)
+            {
+                continue;
+            }
+
+            if (fighter.Identity == BodybuilderIdentity.JayCutler)
+            {
+                hasJay = true;
+                ValidateNamedEnemy(fighter, 100f, "Jay Cutler");
+            }
+            else if (fighter.Identity == BodybuilderIdentity.Goku)
+            {
+                hasGoku = true;
+                ValidateNamedEnemy(fighter, 1000f, "Goku");
+            }
+        }
+
+        if (!hasJay || !hasGoku)
+        {
+            throw new InvalidOperationException(
+                $"Expected Jay Cutler and Goku in runtime roster, found Jay={hasJay}, Goku={hasGoku}.");
+        }
+    }
+
+    private static void ValidateNamedEnemy(EnemyFighter fighter, float expectedHealth, string displayName)
+    {
+        if (!fighter.CompareTag("Enemies"))
+        {
+            throw new InvalidOperationException($"{displayName} is missing the Enemies tag.");
+        }
+        if (Mathf.Abs(fighter.MaxHealth - expectedHealth) > 0.01f)
+        {
+            throw new InvalidOperationException(
+                $"{displayName} has max health {fighter.MaxHealth}, expected {expectedHealth}.");
+        }
+        if (fighter.IsPolice)
+        {
+            throw new InvalidOperationException($"{displayName} must not use the police target behavior.");
+        }
+    }
+
+    private static bool TryGetVisibleSkinnedBounds(SkinnedMeshRenderer renderer, out Bounds bounds)
+    {
+        bounds = default;
+        if (renderer == null || renderer.sharedMesh == null)
+        {
+            return false;
+        }
+
+        Mesh baked = new Mesh { name = "Verification Baked Bounds" };
+        renderer.BakeMesh(baked);
+        Vector3[] vertices = baked.vertices;
+        if (vertices == null || vertices.Length == 0)
+        {
+            UnityEngine.Object.DestroyImmediate(baked);
+            return false;
+        }
+
+        bounds = new Bounds(renderer.transform.TransformPoint(vertices[0]), Vector3.zero);
+        for (int i = 1; i < vertices.Length; i++)
+        {
+            bounds.Encapsulate(renderer.transform.TransformPoint(vertices[i]));
+        }
+        UnityEngine.Object.DestroyImmediate(baked);
+        return true;
     }
 
     private static string CaptureCamera(Camera camera, string fileName)

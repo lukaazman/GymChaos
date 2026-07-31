@@ -53,6 +53,8 @@ jobs:
           grep -q '"mirrors"' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"characters"' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"exercises"' GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"jay-cutler"' GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"goku-flight"' GymChaos/Build/WebGL/gymchaos-runtime.json
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
