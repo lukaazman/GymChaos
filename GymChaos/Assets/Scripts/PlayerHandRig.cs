@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -12,7 +13,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     }
 
     private const string PlayerModelResource = "Player/player_mia_rigged";
-    private const float MirrorTargetHeight = 2.3f;
+    private const float MirrorFallbackTargetHeight = 2.3f;
 
     private Camera playerCamera;
     private CharacterController controller;
@@ -61,6 +62,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     private bool sampledThrowClip;
     private bool sampledHeldBarGrip;
     private bool sampledHeldPlateGrip;
+    private float mirrorScaleRefreshTimer;
     private bool sampledRunClip;
 
     private readonly Dictionary<Transform, Quaternion> lowerBodyRotations = new Dictionary<Transform, Quaternion>();
@@ -142,6 +144,33 @@ public sealed class PlayerHandRig : MonoBehaviour
         CaptureRestRotations();
         LoadAttackClips();
         ConfigureRenderers();
+    }
+
+    private void LateUpdate()
+    {
+        if (!initialized || modelRoot == null)
+        {
+            return;
+        }
+
+        // Enemy GLBs are loaded asynchronously. Refit the reflected player after
+        // those renderers exist so the mirror uses the same visible model scale,
+        // rather than the fallback scale captured during player initialization.
+        mirrorScaleRefreshTimer -= Time.deltaTime;
+        if (mirrorScaleRefreshTimer > 0f)
+        {
+            return;
+        }
+
+        mirrorScaleRefreshTimer = 0.5f;
+        SkinnedMeshRenderer[] bodyRenderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
+            .Where(renderer => renderer != null && renderer.gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
+            .ToArray();
+        float targetHeight = FindAverageEnemyVisibleHeight();
+        if (targetHeight > 0.01f)
+        {
+            ScaleMirrorBodyToTarget(bodyRenderers, targetHeight);
+        }
     }
 
     public void SetHolding(bool holding)
@@ -407,8 +436,8 @@ public sealed class PlayerHandRig : MonoBehaviour
     {
         float normalizedTime = Mathf.Clamp01(activeAttackElapsed / Mathf.Max(0.01f, activeAttackDuration));
         float reach = Mathf.Sin(normalizedTime * Mathf.PI);
-        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -0.76f, 0.8f));
-        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -0.78f, 0.8f));
+        Vector3 leftTarget = playerCamera.transform.TransformPoint(new Vector3(-0.38f, -1.02f, 0.8f));
+        Vector3 rightTarget = playerCamera.transform.TransformPoint(new Vector3(0.42f, -1.04f, 0.8f));
 
         if (activeAttackClip == pushClip)
         {
@@ -422,7 +451,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             Vector3 attackOffset = playerCamera.transform.forward *
                 ((activeAttackClip == jabClip ? 0.78f : 0.58f) * reach);
             attackOffset += playerCamera.transform.up *
-                ((activeAttackClip == throwClip ? 0.05f : activeAttackClip == jabClip ? -0.18f : -0.06f) * reach);
+                ((activeAttackClip == throwClip ? 0.02f : activeAttackClip == jabClip ? -0.38f : -0.14f) * reach);
             if (activeAttackUsesRightHand)
             {
                 rightTarget += attackOffset;
@@ -450,9 +479,9 @@ public sealed class PlayerHandRig : MonoBehaviour
         float rightThrow = AttackCurve(rightThrowTimer, 0.32f);
 
         Vector3 leftTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(-0.27f, -0.52f + bob, 0.88f) : new Vector3(-0.34f, -0.76f + bob, 0.8f));
+            isHolding ? new Vector3(-0.27f, -0.68f + bob, 0.88f) : new Vector3(-0.34f, -1.02f + bob, 0.8f));
         Vector3 rightTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(0.34f, -0.54f - bob, 0.9f) : new Vector3(0.38f, -0.78f - bob, 0.8f));
+            isHolding ? new Vector3(0.34f, -0.70f - bob, 0.9f) : new Vector3(0.38f, -1.04f - bob, 0.8f));
 
         leftTarget += playerCamera.transform.forward * (leftPunch * 0.82f + shove * 0.46f + leftThrow * 0.62f);
         rightTarget += playerCamera.transform.forward * (rightPunch * 0.82f + shove * 0.46f + rightThrow * 0.62f);
@@ -639,11 +668,11 @@ public sealed class PlayerHandRig : MonoBehaviour
                 arms.forceRenderingOff = false;
             }
         }
-        ScaleMirrorBodyToEnemyHeight(renderers);
+        ScaleMirrorBodyToTarget(renderers, MirrorFallbackTargetHeight);
         SetLayerRecursively(modelRoot.transform, PlanarGymMirror.MirrorPlayerLayer);
     }
 
-    private static void ScaleMirrorBodyToEnemyHeight(SkinnedMeshRenderer[] renderers)
+    private void ScaleMirrorBodyToTarget(SkinnedMeshRenderer[] renderers, float targetHeight)
     {
         Bounds visibleBounds = default;
         bool found = false;
@@ -679,14 +708,92 @@ public sealed class PlayerHandRig : MonoBehaviour
             return;
         }
 
-        float scale = MirrorTargetHeight / visibleBounds.size.y;
+        float scale = targetHeight / visibleBounds.size.y;
+        if (Mathf.Abs(scale - 1f) < 0.005f)
+        {
+            return;
+        }
+
+        float floorBefore = visibleBounds.min.y;
+        modelRoot.transform.localScale *= scale;
+        Physics.SyncTransforms();
+
+        Bounds after = default;
+        bool foundAfter = false;
         for (int i = 0; i < renderers.Length; i++)
         {
-            if (renderers[i] != null)
+            if (renderers[i] == null || renderers[i].sharedMesh == null)
             {
-                renderers[i].transform.localScale *= scale;
+                continue;
+            }
+            Mesh baked = new Mesh();
+            renderers[i].BakeMesh(baked);
+            Vector3[] vertices = baked.vertices;
+            for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
+            {
+                Vector3 world = renderers[i].transform.TransformPoint(vertices[vertexIndex]);
+                if (!foundAfter)
+                {
+                    after = new Bounds(world, Vector3.zero);
+                    foundAfter = true;
+                }
+                else
+                {
+                    after.Encapsulate(world);
+                }
+            }
+            UnityEngine.Object.Destroy(baked);
+        }
+        if (foundAfter)
+        {
+            modelRoot.transform.position += Vector3.up * (floorBefore - after.min.y);
+            baseModelLocalPosition = modelRoot.transform.localPosition;
+            baseModelLocalScale = modelRoot.transform.localScale;
+        }
+    }
+
+    private static float FindAverageEnemyVisibleHeight()
+    {
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        float total = 0f;
+        int count = 0;
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            if (fighters[i] == null)
+            {
+                continue;
+            }
+            SkinnedMeshRenderer[] renderers = fighters[i].GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            for (int j = 0; j < renderers.Length; j++)
+            {
+                SkinnedMeshRenderer renderer = renderers[j];
+                if (renderer == null || renderer.sharedMesh == null || !renderer.enabled)
+                {
+                    continue;
+                }
+                Mesh baked = new Mesh();
+                renderer.BakeMesh(baked);
+                Vector3[] vertices = baked.vertices;
+                if (vertices.Length > 0)
+                {
+                    float minY = float.PositiveInfinity;
+                    float maxY = float.NegativeInfinity;
+                    for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
+                    {
+                        float worldY = renderer.transform.TransformPoint(vertices[vertexIndex]).y;
+                        minY = Mathf.Min(minY, worldY);
+                        maxY = Mathf.Max(maxY, worldY);
+                    }
+                    if (maxY > minY)
+                    {
+                        total += maxY - minY;
+                        count++;
+                    }
+                }
+                UnityEngine.Object.Destroy(baked);
             }
         }
+        return count > 0 ? total / count : 0f;
     }
 
     private Mesh CreateLowerLodMesh(Mesh source)
