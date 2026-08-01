@@ -75,6 +75,11 @@ public class PickupItem : MonoBehaviour
             return;
         }
 
+        if (weightType == WeightType.Barbell || weightType == WeightType.EzBar)
+        {
+            DetachMountedPlateChildren();
+        }
+
         if (collisionRestoreRoutine != null)
         {
             StopCoroutine(collisionRestoreRoutine);
@@ -94,6 +99,38 @@ public class PickupItem : MonoBehaviour
 
         IgnorePlayerCollisions(playerColliders, true);
         FollowCarryAnchor(anchor.position, anchor.rotation, 99f);
+    }
+
+    private void DetachMountedPlateChildren()
+    {
+        PickupItem[] children = GetComponentsInChildren<PickupItem>(true);
+        for (int i = 0; i < children.Length; i++)
+        {
+            PickupItem child = children[i];
+            if (child == null || child == this || !IsPlateType(child.weightType) || child.IsHeld)
+            {
+                continue;
+            }
+
+            child.DetachFromMountedParent();
+        }
+    }
+
+    private void DetachFromMountedParent()
+    {
+        transform.SetParent(null, true);
+        if (body == null)
+        {
+            return;
+        }
+
+        body.isKinematic = false;
+        body.useGravity = true;
+        body.linearDamping = 0.35f;
+        body.angularDamping = 0.15f;
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        body.WakeUp();
     }
 
     public void FollowCarryAnchor(Vector3 targetPosition, Quaternion targetRotation, float smoothness)
@@ -246,6 +283,12 @@ public class PickupItem : MonoBehaviour
             default:
                 return 5f;
         }
+    }
+
+    private static bool IsPlateType(WeightType type)
+    {
+        return type == WeightType.Plate || type == WeightType.Plate5 ||
+            type == WeightType.Plate10 || type == WeightType.Plate20;
     }
 
     private static float GetImpactMultiplier(WeightType type)

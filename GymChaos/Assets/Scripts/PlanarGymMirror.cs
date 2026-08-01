@@ -40,8 +40,23 @@ public sealed class PlanarGymMirror : MonoBehaviour
         sourceCamera = playerCamera;
         planePoint = pointOnPlane;
         planeNormal = normal.normalized;
+        int reflectionCullingMask = sourceCamera.cullingMask;
+
+        // Keep the player body out of the gameplay camera even if a platform
+        // strips the custom mirror shader. Without this guard WebGL can fall
+        // through into a camera-inside-the-player view.
+        sourceCamera.cullingMask &= ~(1 << MirrorPlayerLayer);
 
         Shader shader = Shader.Find("GymChaos/PlanarMirror");
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Unlit");
+        }
+        if (shader == null)
+        {
+            Debug.LogError("GymChaos mirror shader is unavailable on this platform.");
+            return;
+        }
         mirrorMaterial = new Material(shader)
         {
             name = "Realtime Gym Mirror",
@@ -67,7 +82,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         reflectionCamera.enabled = true;
         reflectionCamera.targetTexture = reflectionTexture;
         reflectionCamera.depth = sourceCamera.depth - 1f;
-        reflectionCamera.cullingMask = sourceCamera.cullingMask &
+        reflectionCamera.cullingMask = reflectionCullingMask &
             ~(1 << MirrorSurfaceLayer) & ~(1 << FirstPersonPlayerLayer);
         reflectionCamera.clearFlags = sourceCamera.clearFlags;
         reflectionCamera.backgroundColor = sourceCamera.backgroundColor;
@@ -84,7 +99,6 @@ public sealed class PlanarGymMirror : MonoBehaviour
             mirrorRenderers[i].sharedMaterial = mirrorMaterial;
         }
 
-        sourceCamera.cullingMask &= ~(1 << MirrorPlayerLayer);
         RenderPipelineManager.beginCameraRendering += BeginCameraRendering;
         RenderPipelineManager.endCameraRendering += EndCameraRendering;
         UpdateReflectionCamera();

@@ -497,7 +497,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                     new Vector2(0.11f, 0.70f), new Vector2(0.15f, 0.56f), new Vector2(0.12f, 0.42f),
                     new Vector2(-0.05f, 0.49f), new Vector2(-0.05f, 0.25f), new Vector2(-0.04f, 0.02f),
                     new Vector2(0.05f, 0.49f), new Vector2(0.05f, 0.25f), new Vector2(0.04f, 0.02f),
-                    0.79f, 0.085f, 0.095f, 0.88f);
+                    0.79f, 0.085f, 0.095f, 0.78f);
             default:
                 return new RigProfile(
                     new Vector2(-0.10f, 0.70f), new Vector2(-0.14f, 0.55f), new Vector2(-0.13f, 0.40f),
@@ -1010,7 +1010,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         FaceCensorSettings censor = censorObject.AddComponent<FaceCensorSettings>();
         censor.Configure(
             GetFaceCensorProfile(identity, vertices, bounds, rigProfile, visualRoot, head),
-            head, identity.GetHashCode() + 31);
+            head, identity.GetHashCode() + 31, true);
 
         EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
         if (fighter != null && fighter.IsDead)
@@ -1065,6 +1065,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             case BodybuilderIdentity.Ronnie:
                 eyeY += height * 0.035f;
                 break;
+            case BodybuilderIdentity.Goku:
+                // Goku's scan uses a lower eye line than the generic head
+                // profile; do not apply the default forehead offset.
+                break;
             default:
                 eyeY += height * 0.05f;
                 break;
@@ -1104,6 +1108,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 // to model-right of the full-mesh bounds center at eye level.
                 return new FaceCensorProfile(localPosition + new Vector3(height * 0.0095f, 0f, -height * 0.02f), Vector3.zero,
                     new Vector2(height * 0.128f, height * 0.029f), height * 0.02f, 69f, Color.black);
+            case BodybuilderIdentity.Goku:
+                // Goku's scan places the visible eyes lower than the generic
+                // head profile. Make his censor wider/taller and lower it onto
+                // the eye line without changing the other fighters' bars.
+                return new FaceCensorProfile(localPosition + new Vector3(0f, -height * 0.012f, -height * 0.022f), new Vector3(0f, 1f, 0f),
+                    new Vector2(height * 0.165f, height * 0.038f), height * 0.022f, 72f, Color.black);
             default:
                 return new FaceCensorProfile(localPosition + new Vector3(-0.001f, 0f, -height * 0.02f), new Vector3(0f, 1f, 0f),
                     new Vector2(height * 0.128f, height * 0.029f), height * 0.02f, 69f, Color.black);

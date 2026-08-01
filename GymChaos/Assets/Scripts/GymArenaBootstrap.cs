@@ -442,11 +442,6 @@ public class GymArenaBootstrap : MonoBehaviour
             return WeightType.EzBar;
         }
 
-        if (lower == "plate" || lower.StartsWith("plate ("))
-        {
-            return WeightType.Plate;
-        }
-
         if (lower.StartsWith("plate20"))
         {
             return WeightType.Plate20;
@@ -460,6 +455,14 @@ public class GymArenaBootstrap : MonoBehaviour
         if (lower.StartsWith("plate5"))
         {
             return WeightType.Plate5;
+        }
+
+        // Unity names a duplicated plain plate "Plate (1)". Spaces are
+        // normalized above, so accept both "Plate" and "Plate(1)"; otherwise
+        // the second factory plate on the incline bar stays part of the bar.
+        if (lower == "plate" || lower.StartsWith("plate("))
+        {
+            return WeightType.Plate;
         }
 
         return WeightType.None;

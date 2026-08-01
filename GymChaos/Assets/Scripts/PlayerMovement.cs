@@ -99,10 +99,10 @@ public class PlayerMovement : MonoBehaviour
         if (playerCamera != null)
         {
             cameraBaseLocalPosition = playerCamera.transform.localPosition;
-            // The serialized camera was below the runtime player's eye line.
-            // Raise it to the model's eye level; this also naturally lowers
-            // the first-person arms in the frame.
-            cameraBaseLocalPosition.y = 1.10f;
+            // Keep the camera at the model's eye line. The old 1.10 m offset
+            // placed it through the upper torso/neck of the 2.75 m first-person
+            // avatar, which was especially obvious in the WebGL preview.
+            cameraBaseLocalPosition.y = Mathf.Clamp(characterController.height * 0.72f, 1.35f, 1.55f);
             playerCamera.transform.localPosition = cameraBaseLocalPosition;
         }
 

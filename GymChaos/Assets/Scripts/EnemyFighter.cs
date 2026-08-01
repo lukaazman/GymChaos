@@ -45,7 +45,9 @@ public class EnemyFighter : MonoBehaviour
         Landing
     }
 
-    private const float GokuFlightHeight = 1.5f;
+    private const float GokuFlightHeight = 2.35f;
+    private const float GokuFlightGroundClearance = 0.08f;
+    private const float GokuSpeedMultiplier = 1.5f;
     private const float GokuFlightTransitionDuration = 0.42f;
     private const float GokuFlightModelRotation = 90f;
     private GokuFlightState gokuFlightState;
@@ -180,7 +182,8 @@ public class EnemyFighter : MonoBehaviour
             currentTarget.position - transform.position, Vector3.up);
         float distance = planarToTarget.magnitude;
 
-        if (distance > detectionRange)
+        float chaseSpeed = GetChaseSpeed();
+        if (distance > GetDetectionRange())
         {
             StopMoving();
             return;
@@ -197,7 +200,7 @@ public class EnemyFighter : MonoBehaviour
         bool policeStillMovingNearTarget = isPolice && planarSpeed > 0.12f;
         SetAnimatedMovement(
             pursuingOutsideAttackPose || policeStillMovingNearTarget,
-            planarSpeed / Mathf.Max(0.01f, maxSpeed));
+            planarSpeed / Mathf.Max(0.01f, chaseSpeed));
 
         if (distance > 0.15f)
         {
@@ -210,7 +213,7 @@ public class EnemyFighter : MonoBehaviour
             else
             {
                 Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-                Vector3 desiredVelocity = moveDirection * maxSpeed;
+                Vector3 desiredVelocity = moveDirection * chaseSpeed;
                 // Directly steer the planar Rigidbody velocity. The old 11 N force
                 // was negligible against the 85 kg body and made the walking clip
                 // play while the fighter remained effectively stationary.
@@ -505,6 +508,16 @@ public class EnemyFighter : MonoBehaviour
         return identity == BodybuilderIdentity.Goku;
     }
 
+    private float GetChaseSpeed()
+    {
+        return IsGoku() ? maxSpeed * GokuSpeedMultiplier : maxSpeed;
+    }
+
+    private float GetDetectionRange()
+    {
+        return IsGoku() ? detectionRange * GokuSpeedMultiplier : detectionRange;
+    }
+
     private bool UpdateGokuFlight(bool shouldFly, Vector3 direction)
     {
         if (!IsGoku())
@@ -545,12 +558,18 @@ public class EnemyFighter : MonoBehaviour
             gokuFlightTransition = Mathf.Min(
                 1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
             float eased = SmoothStep(gokuFlightTransition);
-            transform.position = new Vector3(
-                transform.position.x,
+            Vector3 horizontalTarget = currentTarget != null
+                ? new Vector3(currentTarget.position.x, body.position.y, currentTarget.position.z)
+                : body.position;
+            Vector3 nextPosition = Vector3.MoveTowards(
+                body.position, horizontalTarget, GetChaseSpeed() * Time.fixedDeltaTime);
+            body.position = new Vector3(
+                nextPosition.x,
                 Mathf.Lerp(standingRootY, standingRootY + GokuFlightHeight, eased),
-                transform.position.z);
-            transform.rotation = Quaternion.Slerp(
+                nextPosition.z);
+            body.rotation = Quaternion.Slerp(
                 gokuFlightStartRotation, gokuFlightTargetRotation, eased);
+            KeepGokuAboveGround();
             bodyAnimator?.SetFlying(true);
             if (gokuFlightTransition >= 1f)
             {
@@ -562,14 +581,16 @@ public class EnemyFighter : MonoBehaviour
         if (gokuFlightState == GokuFlightState.Flying)
         {
             gokuFlightTargetRotation = GetGokuFlightRotation(direction);
-            transform.rotation = Quaternion.RotateTowards(
-                transform.rotation, gokuFlightTargetRotation, 1440f * Time.fixedDeltaTime);
+            body.rotation = Quaternion.RotateTowards(
+                body.rotation, gokuFlightTargetRotation, 1440f * Time.fixedDeltaTime);
             Vector3 flightTarget = new Vector3(
                 currentTarget != null ? currentTarget.position.x : transform.position.x,
                 standingRootY + GokuFlightHeight,
                 currentTarget != null ? currentTarget.position.z : transform.position.z);
-            body.MovePosition(Vector3.MoveTowards(
-                transform.position, flightTarget, maxSpeed * Time.fixedDeltaTime));
+            body.position = Vector3.MoveTowards(
+                body.position, flightTarget, GetChaseSpeed() * Time.fixedDeltaTime);
+            body.linearVelocity = Vector3.zero;
+            KeepGokuAboveGround();
             bodyAnimator?.SetFlying(true);
             return true;
         }
@@ -579,12 +600,13 @@ public class EnemyFighter : MonoBehaviour
             gokuFlightTransition = Mathf.Min(
                 1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
             float eased = SmoothStep(gokuFlightTransition);
-            transform.position = new Vector3(
-                transform.position.x,
+            body.position = new Vector3(
+                body.position.x,
                 Mathf.Lerp(gokuFlightStartY, standingRootY, eased),
-                transform.position.z);
-            transform.rotation = Quaternion.Slerp(
+                body.position.z);
+            body.rotation = Quaternion.Slerp(
                 gokuFlightStartRotation, gokuFlightTargetRotation, eased);
+            KeepGokuAboveGround();
             bodyAnimator?.SetFlying(false);
             if (gokuFlightTransition >= 1f)
             {
@@ -595,6 +617,42 @@ public class EnemyFighter : MonoBehaviour
         }
 
         return true;
+    }
+
+    private void KeepGokuAboveGround()
+    {
+        if (!IsGoku())
+        {
+            return;
+        }
+
+        Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
+        float minimumY = float.PositiveInfinity;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null && renderers[i].enabled)
+            {
+                minimumY = Mathf.Min(minimumY, renderers[i].bounds.min.y);
+            }
+        }
+
+        if (minimumY < float.PositiveInfinity)
+        {
+            float requiredMinimumY = standingRootY + GokuFlightGroundClearance;
+            if (minimumY < requiredMinimumY)
+            {
+                Vector3 correctedPosition = (body != null ? body.position : transform.position) +
+                    Vector3.up * (requiredMinimumY - minimumY);
+                if (body != null && body.isKinematic)
+                {
+                    body.position = correctedPosition;
+                }
+                else
+                {
+                    transform.position = correctedPosition;
+                }
+            }
+        }
     }
 
     private static Quaternion GetGokuFlightRotation(Vector3 direction)

@@ -133,6 +133,15 @@ public sealed class BodybuilderEnemyAnimator : MonoBehaviour
                 kneeBend = 23f;
                 hipTurn = 1.4f;
                 break;
+            case BodybuilderIdentity.JayCutler:
+                // Jay's scan needs a stronger but still bounded leg separation
+                // to read as walking at gameplay distance. The 24/31 degree
+                // limits keep the thigh and shin joints from folding through
+                // the mesh while making the alternating stride visible.
+                thighStride = 24f;
+                kneeBend = 31f;
+                hipTurn = 2.2f;
+                break;
             default:
                 thighStride = 16f;
                 kneeBend = 21f;
