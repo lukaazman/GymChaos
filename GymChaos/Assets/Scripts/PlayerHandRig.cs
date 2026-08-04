@@ -38,6 +38,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     private AnimationClip pushClip;
     private AnimationClip throwClip;
     private AnimationClip runClip;
+    private AnimationClip crouchClip;
     private AnimationClip activeAttackClip;
     private float activeAttackElapsed;
     private float activeAttackDuration;
@@ -66,6 +67,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     private float mirrorScaleRefreshTimer;
     private bool mirrorScaleMatched;
     private bool sampledRunClip;
+    private bool sampledCrouchClip;
 
     private readonly Dictionary<Transform, Quaternion> lowerBodyRotations = new Dictionary<Transform, Quaternion>();
     private readonly Dictionary<Transform, Vector3> lowerBodyPositions = new Dictionary<Transform, Vector3>();
@@ -75,8 +77,10 @@ public sealed class PlayerHandRig : MonoBehaviour
     public bool HasSampledHeldEquipmentGrips => sampledHeldBarGrip && sampledHeldPlateGrip;
     public bool HasMixamoRunClip => runClip != null;
     public bool HasSampledMixamoRunClip => sampledRunClip;
+    public bool HasMixamoCrouchClip => crouchClip != null;
+    public bool HasSampledMixamoCrouchClip => sampledCrouchClip;
     public string MixamoAttackClipSummary =>
-        $"run={runClip?.name ?? "missing"},jab={jabClip?.name ?? "missing"},push={pushClip?.name ?? "missing"},throw={throwClip?.name ?? "missing"}";
+        $"run={runClip?.name ?? "missing"},crouch={crouchClip?.name ?? "missing"},jab={jabClip?.name ?? "missing"},push={pushClip?.name ?? "missing"},throw={throwClip?.name ?? "missing"}";
 
     public static PlayerHandRig Create(Transform cameraTransform)
     {
@@ -217,10 +221,16 @@ public sealed class PlayerHandRig : MonoBehaviour
         crouchAmount = Mathf.Clamp01(normalizedCrouchAmount);
         if (modelRoot != null)
         {
-            modelRoot.transform.localPosition = baseModelLocalPosition + Vector3.down * (0.14f * crouchAmount);
-            Vector3 compressedScale = baseModelLocalScale;
-            compressedScale.y *= Mathf.Lerp(1f, 0.84f, crouchAmount);
-            modelRoot.transform.localScale = compressedScale;
+            // A real Mixamo crouch clip now drives the skeleton. Keep the former
+            // compressed-body pose only as a missing-clip fallback.
+            modelRoot.transform.localPosition = baseModelLocalPosition +
+                Vector3.down * (crouchClip == null ? 0.14f * crouchAmount : 0f);
+            Vector3 modelScale = baseModelLocalScale;
+            if (crouchClip == null)
+            {
+                modelScale.y *= Mathf.Lerp(1f, 0.84f, crouchAmount);
+            }
+            modelRoot.transform.localScale = modelScale;
         }
         locomotionElapsed += Time.deltaTime * Mathf.Lerp(0.75f, 1.35f, moveAmount);
         leftPunchTimer = Mathf.Max(0f, leftPunchTimer - Time.deltaTime);
@@ -256,6 +266,23 @@ public sealed class PlayerHandRig : MonoBehaviour
 
         moveAmount = 1f;
         locomotionElapsed = Mathf.Repeat(normalizedTime, 1f) * Mathf.Max(0.01f, runClip.length - 0.001f);
+        RestoreAnimatedBones();
+        bool sampled = SampleLocomotion();
+        UpdateBakedRenderers();
+        return sampled;
+    }
+
+    public bool SampleCrouchForVerification(float normalizedTime)
+    {
+        if (crouchClip == null || modelRoot == null)
+        {
+            return false;
+        }
+
+        moveAmount = 0f;
+        crouchAmount = 1f;
+        locomotionElapsed = Mathf.Repeat(normalizedTime, 1f) *
+            Mathf.Max(0.01f, crouchClip.length - 0.001f);
         RestoreAnimatedBones();
         bool sampled = SampleLocomotion();
         UpdateBakedRenderers();
@@ -338,6 +365,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     private void LoadAttackClips()
     {
         runClip = LoadAnimationClip("Player/Animations/Run") ?? LoadAnimationClip("Player/Animations/Walk");
+        crouchClip = LoadAnimationClip("Player/Animations/Crouch/Crouch");
         jabClip = LoadAnimationClip("Player/Animations/Jab");
         pushClip = LoadAnimationClip("Player/Animations/Push");
         throwClip = LoadAnimationClip("Player/Animations/Throw");
@@ -385,17 +413,20 @@ public sealed class PlayerHandRig : MonoBehaviour
 
     private bool SampleLocomotion()
     {
-        if (runClip == null || moveAmount <= 0.01f)
+        bool crouching = crouchClip != null && crouchAmount > 0.01f;
+        AnimationClip locomotionClip = crouching ? crouchClip : runClip;
+        if (locomotionClip == null || (!crouching && moveAmount <= 0.01f))
         {
             return false;
         }
 
         Vector3 stablePosition = modelRoot.transform.localPosition;
         Quaternion stableRotation = modelRoot.transform.localRotation;
-        float sampleTime = locomotionElapsed % Mathf.Max(0.01f, runClip.length - 0.001f);
-        runClip.SampleAnimation(modelRoot, sampleTime);
+        float sampleTime = locomotionElapsed % Mathf.Max(0.01f, locomotionClip.length - 0.001f);
+        locomotionClip.SampleAnimation(modelRoot, sampleTime);
         modelRoot.transform.SetLocalPositionAndRotation(stablePosition, stableRotation);
-        sampledRunClip = true;
+        sampledCrouchClip |= crouching;
+        sampledRunClip |= !crouching;
         return true;
     }
 

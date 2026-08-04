@@ -14,28 +14,30 @@ public static class GymInteriorBuilder
 
         Bounds equipmentBounds = FindEquipmentBounds(player);
         float floorY = player != null ? player.transform.position.y - 1.05f : equipmentBounds.min.y;
-        float width = Mathf.Clamp(equipmentBounds.size.x + 14f, 36f, 72f);
-        float depth = Mathf.Clamp(equipmentBounds.size.z + 14f, 34f, 72f);
+        float width = Mathf.Clamp(equipmentBounds.size.x + 10f, 34f, 68f);
+        float depth = Mathf.Clamp(equipmentBounds.size.z + 10f, 32f, 68f);
         float height = 8.5f;
         Vector3 center = new Vector3(equipmentBounds.center.x, floorY, equipmentBounds.center.z);
 
         GameObject root = new GameObject(RootName);
-        Material floor = CreateMaterial("Gym rubber floor", new Color(0.055f, 0.065f, 0.075f), 0.05f, 0.34f);
+        Material floor = CreateMaterial("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f), 0.05f, 0.34f);
         Material wall = CreateMaterial("Warm concrete walls", new Color(0.36f, 0.39f, 0.41f), 0f, 0.25f);
         Material ceiling = CreateMaterial("Ceiling", new Color(0.12f, 0.14f, 0.16f), 0.05f, 0.24f);
         Material accent = CreateMaterial("Gym accent", new Color(0.78f, 0.13f, 0.07f), 0.05f, 0.45f);
         Material trim = CreateMaterial("Dark trim", new Color(0.025f, 0.03f, 0.035f), 0.4f, 0.68f);
         Material mirror = CreateMaterial("Mirror", new Color(0.62f, 0.7f, 0.74f), 1f, 1f);
+        Material glass = CreateTransparentMaterial(
+            "Sunlit window glass", new Color(0.62f, 0.82f, 0.98f, 0.16f), 0.94f);
         Material lightMaterial = CreateMaterial("Ceiling light", new Color(0.92f, 0.96f, 1f), 0f, 0.9f);
         SetEmission(lightMaterial, new Color(3.8f, 4.2f, 4.8f));
 
         CreateBox("Rubber Floor", root.transform, center + Vector3.down * 0.12f, new Vector3(width, 0.24f, depth), floor, true);
         CreateBox("Ceiling", root.transform, center + Vector3.up * height, new Vector3(width, 0.24f, depth), ceiling, true);
-        CreateBox("North Wall", root.transform, center + new Vector3(0f, height * 0.5f, depth * 0.5f), new Vector3(width, height, 0.32f), wall, true);
         CreateBox("South Wall", root.transform, center + new Vector3(0f, height * 0.5f, -depth * 0.5f), new Vector3(width, height, 0.32f), wall, true);
         CreateBox("East Wall", root.transform, center + new Vector3(width * 0.5f, height * 0.5f, 0f), new Vector3(0.32f, height, depth), wall, true);
         CreateBox("West Wall", root.transform, center + new Vector3(-width * 0.5f, height * 0.5f, 0f), new Vector3(0.32f, height, depth), wall, true);
 
+        CreateWindowWall(root.transform, center, width, depth, height, wall, trim, glass);
         CreateWallBand(root.transform, center, width, depth, 1.15f, 0.24f, accent);
         CreateWallBand(root.transform, center, width, depth, 0.18f, 0.18f, trim);
         CreateMirrors(root.transform, center, width, depth, mirror, trim, player != null ? player.playerCamera : null);
@@ -79,6 +81,136 @@ public static class GymInteriorBuilder
         return bounds;
     }
 
+    private static void CreateWindowWall(
+        Transform parent, Vector3 center, float width, float depth, float height,
+        Material wall, Material frame, Material glass)
+    {
+        const float openingBottom = 2.05f;
+        const float openingTop = 7.05f;
+        float openingHeight = openingTop - openingBottom;
+        float openingWidth = Mathf.Min(width - 6f, 28f);
+        float sideWidth = Mathf.Max(1.5f, (width - openingWidth) * 0.5f);
+        float wallZ = center.z + depth * 0.5f;
+
+        CreateBox(
+            "North Wall Lower",
+            parent,
+            new Vector3(center.x, center.y + openingBottom * 0.5f, wallZ),
+            new Vector3(width, openingBottom, 0.32f),
+            wall,
+            true);
+        CreateBox(
+            "North Wall Upper",
+            parent,
+            new Vector3(center.x, center.y + openingTop + (height - openingTop) * 0.5f, wallZ),
+            new Vector3(width, height - openingTop, 0.32f),
+            wall,
+            true);
+        CreateBox(
+            "North Wall West",
+            parent,
+            new Vector3(center.x - openingWidth * 0.5f - sideWidth * 0.5f,
+                center.y + openingBottom + openingHeight * 0.5f, wallZ),
+            new Vector3(sideWidth, openingHeight, 0.32f),
+            wall,
+            true);
+        CreateBox(
+            "North Wall East",
+            parent,
+            new Vector3(center.x + openingWidth * 0.5f + sideWidth * 0.5f,
+                center.y + openingBottom + openingHeight * 0.5f, wallZ),
+            new Vector3(sideWidth, openingHeight, 0.32f),
+            wall,
+            true);
+
+        const int windowCount = 5;
+        float mullionWidth = 0.13f;
+        float panelWidth = (openingWidth - mullionWidth * (windowCount + 1)) / windowCount;
+        float panelCenterY = center.y + openingBottom + openingHeight * 0.5f;
+        for (int i = 0; i < windowCount; i++)
+        {
+            float panelX = center.x - openingWidth * 0.5f + mullionWidth + panelWidth * 0.5f +
+                i * (panelWidth + mullionWidth);
+            CreateBox(
+                "Window glass",
+                parent,
+                new Vector3(panelX, panelCenterY, wallZ),
+                new Vector3(panelWidth, openingHeight - 0.18f, 0.035f),
+                glass,
+                false);
+        }
+
+        CreateBox("Window sill", parent,
+            new Vector3(center.x, center.y + openingBottom, wallZ - 0.03f),
+            new Vector3(openingWidth + 0.3f, 0.15f, 0.42f), frame, true);
+        CreateBox("Window header", parent,
+            new Vector3(center.x, center.y + openingTop, wallZ - 0.03f),
+            new Vector3(openingWidth + 0.3f, 0.15f, 0.42f), frame, false);
+        for (int i = 0; i <= windowCount; i++)
+        {
+            float x = center.x - openingWidth * 0.5f + i * (panelWidth + mullionWidth);
+            CreateBox("Window mullion", parent,
+                new Vector3(x, panelCenterY, wallZ - 0.03f),
+                new Vector3(mullionWidth, openingHeight, 0.38f), frame, false);
+        }
+
+        CreateExteriorView(parent, center, width, depth, openingBottom, openingTop);
+    }
+
+    private static void CreateExteriorView(
+        Transform parent, Vector3 center, float width, float depth, float openingBottom, float openingTop)
+    {
+        float exteriorZ = center.z + depth * 0.5f + 8f;
+        Material sky = CreateMaterial("Exterior blue sky", new Color(0.18f, 0.48f, 0.86f), 0f, 0.08f);
+        SetEmission(sky, new Color(0.22f, 0.58f, 1.1f));
+        Material ground = CreateMaterial("Exterior landscape", new Color(0.075f, 0.2f, 0.07f), 0f, 0.12f);
+        Material sunMaterial = CreateMaterial("Visible sun", new Color(1f, 0.74f, 0.24f), 0f, 0.2f);
+        SetEmission(sunMaterial, new Color(8f, 5.5f, 1.4f));
+
+        CreateBox(
+            "Exterior sky backdrop",
+            parent,
+            new Vector3(center.x, center.y + (openingBottom + openingTop) * 0.5f + 1.2f, exteriorZ),
+            new Vector3(width * 1.35f, openingTop - openingBottom + 4f, 0.2f),
+            sky,
+            false);
+        CreateBox(
+            "Exterior green horizon",
+            parent,
+            new Vector3(center.x, center.y + openingBottom - 0.55f, center.z + depth * 0.5f + 4.5f),
+            new Vector3(width * 1.2f, 1.1f, 8f),
+            ground,
+            false);
+
+        GameObject sun = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        sun.name = "Exterior visible sun";
+        sun.transform.SetParent(parent, true);
+        sun.transform.position = new Vector3(
+            center.x + Mathf.Min(width * 0.28f, 9f), center.y + openingTop - 0.65f, exteriorZ - 0.4f);
+        sun.transform.localScale = Vector3.one * 1.35f;
+        sun.GetComponent<Renderer>().sharedMaterial = sunMaterial;
+        Object.Destroy(sun.GetComponent<Collider>());
+
+        for (int i = -2; i <= 2; i++)
+        {
+            GameObject beamObject = new GameObject("Window sunlight");
+            beamObject.transform.SetParent(parent, false);
+            beamObject.transform.position = center + new Vector3(i * 4.2f, 6.5f, depth * 0.5f + 0.55f);
+            Vector3 target = center + new Vector3(i * 3.2f - 2.2f, 0.2f, depth * 0.12f);
+            beamObject.transform.rotation = Quaternion.LookRotation(target - beamObject.transform.position, Vector3.up);
+            Light beam = beamObject.AddComponent<Light>();
+            beam.type = LightType.Spot;
+            beam.color = new Color(1f, 0.79f, 0.54f);
+            beam.intensity = 1450f;
+            beam.range = 18f;
+            beam.spotAngle = 38f;
+            beam.innerSpotAngle = 25f;
+            // The directional sun supplies the window shadows. Extra realtime
+            // spot shadows overflow URP's atlas and add avoidable Play Mode lag.
+            beam.shadows = LightShadows.None;
+        }
+    }
+
     private static void CreateWallBand(Transform parent, Vector3 center, float width, float depth, float y, float thickness, Material material)
     {
         CreateBox("North wall stripe", parent, center + new Vector3(0f, y, depth * 0.5f - 0.19f), new Vector3(width - 0.5f, thickness, 0.05f), material, false);
@@ -95,15 +227,15 @@ public static class GymInteriorBuilder
         Renderer[] mirrorRenderers = new Renderer[5];
         for (int i = -2; i <= 2; i++)
         {
-            Vector3 panelCenter = center + new Vector3(i * (panelWidth + 0.18f), 3.05f, depth * 0.5f - 0.2f);
+            Vector3 panelCenter = center + new Vector3(i * (panelWidth + 0.18f), 3.05f, -depth * 0.5f + 0.2f);
             GameObject panel = CreateBox("Mirror panel", parent, panelCenter, new Vector3(panelWidth, 4.6f, 0.055f), mirror, false);
             mirrorRenderers[i + 2] = panel.GetComponent<Renderer>();
             CreateBox("Mirror top frame", parent, panelCenter + Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
             CreateBox("Mirror bottom frame", parent, panelCenter - Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
         }
 
-        Vector3 mirrorPlanePoint = center + new Vector3(0f, 3.05f, depth * 0.5f - 0.23f);
-        PlanarGymMirror.Create(parent, playerCamera, mirrorRenderers, mirrorPlanePoint, Vector3.back);
+        Vector3 mirrorPlanePoint = center + new Vector3(0f, 3.05f, -depth * 0.5f + 0.23f);
+        PlanarGymMirror.Create(parent, playerCamera, mirrorRenderers, mirrorPlanePoint, Vector3.forward);
 
         ReflectionProbe probe = new GameObject("Gym Reflection Probe").AddComponent<ReflectionProbe>();
         probe.transform.SetParent(parent, false);
@@ -133,13 +265,32 @@ public static class GymInteriorBuilder
     private static void CreateLighting(Transform parent, Vector3 center, float width, float depth, float height, Material lightMaterial)
     {
         Light[] existingLights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
+        bool foundDirectional = false;
         for (int i = 0; i < existingLights.Length; i++)
         {
             if (existingLights[i].type == LightType.Directional)
             {
-                existingLights[i].intensity = 0.18f;
-                existingLights[i].color = new Color(0.72f, 0.8f, 0.9f);
+                foundDirectional = true;
+                existingLights[i].name = "Warm exterior sun";
+                existingLights[i].intensity = 1.15f;
+                existingLights[i].color = new Color(1f, 0.79f, 0.6f);
+                existingLights[i].transform.rotation = Quaternion.Euler(42f, -32f, 0f);
+                existingLights[i].shadows = LightShadows.Soft;
+                existingLights[i].shadowStrength = 0.78f;
             }
+        }
+
+        if (!foundDirectional)
+        {
+            GameObject sunObject = new GameObject("Warm exterior sun");
+            sunObject.transform.SetParent(parent, false);
+            sunObject.transform.rotation = Quaternion.Euler(42f, -32f, 0f);
+            Light sun = sunObject.AddComponent<Light>();
+            sun.type = LightType.Directional;
+            sun.color = new Color(1f, 0.79f, 0.6f);
+            sun.intensity = 1.15f;
+            sun.shadows = LightShadows.Soft;
+            sun.shadowStrength = 0.78f;
         }
 
         int xCount = Mathf.Max(3, Mathf.RoundToInt(width / 10f));
@@ -160,12 +311,11 @@ public static class GymInteriorBuilder
                 Light light = lightObject.AddComponent<Light>();
                 light.type = LightType.Spot;
                 light.color = new Color(0.86f, 0.92f, 1f);
-                light.intensity = 900f;
+                light.intensity = 620f;
                 light.range = 13f;
                 light.spotAngle = 105f;
                 light.innerSpotAngle = 70f;
-                light.shadows = LightShadows.Soft;
-                light.shadowStrength = 0.55f;
+                light.shadows = LightShadows.None;
             }
         }
     }
@@ -183,26 +333,35 @@ public static class GymInteriorBuilder
             CreateBox("Locker handle", parent, lockerPosition + new Vector3(-0.39f, 0f, -0.42f), new Vector3(0.05f, 0.25f, 0.05f), accent, false);
         }
 
-        for (int i = -2; i <= 2; i++)
+        string[] posterResources =
         {
-            Vector3 posterPosition = center + new Vector3(i * 4.2f, 4.7f, -depth * 0.5f + 0.19f);
-            Material poster = CreateMaterial("Poster", Color.HSVToRGB(Mathf.Repeat(0.02f + i * 0.11f, 1f), 0.7f, 0.72f), 0f, 0.35f);
-            CreateBox("Training poster", parent, posterPosition, new Vector3(2.6f, 2.2f, 0.05f), poster, false);
+            "Environment/Posters/Arnold_1974",
+            "Environment/Posters/Franco_Columbu_1970s",
+            "Environment/Posters/Frank_Zane_2011",
+            "Environment/Posters/George_Eiferman_1950",
+            "Environment/Posters/Charles_Atlas_1920"
+        };
+        for (int i = 0; i < posterResources.Length; i++)
+        {
+            float x = Mathf.Lerp(-width * 0.28f, width * 0.28f, (float)i / (posterResources.Length - 1));
+            Vector3 posterPosition = center + new Vector3(x, 6.68f, -depth * 0.5f + 0.185f);
+            Material poster = CreatePosterMaterial(posterResources[i], i);
+            CreateBox("Golden era bodybuilder poster", parent, posterPosition, new Vector3(2.15f, 2.15f, 0.055f), poster, false);
+            CreateBox("Golden poster frame", parent, posterPosition + Vector3.forward * 0.035f,
+                new Vector3(2.32f, 2.32f, 0.035f), trim, false);
+            CreateBox("Golden era bodybuilder poster", parent, posterPosition + Vector3.forward * 0.075f,
+                new Vector3(2.15f, 2.15f, 0.025f), poster, false);
         }
     }
 
     private static void ConfigureAmbientLighting(Vector3 center, float width, float depth, float height)
     {
         RenderSettings.ambientMode = AmbientMode.Trilight;
-        RenderSettings.ambientSkyColor = new Color(0.2f, 0.24f, 0.3f);
-        RenderSettings.ambientEquatorColor = new Color(0.12f, 0.14f, 0.17f);
-        RenderSettings.ambientGroundColor = new Color(0.045f, 0.05f, 0.06f);
-        RenderSettings.ambientIntensity = 1.05f;
-        RenderSettings.fog = true;
-        RenderSettings.fogColor = new Color(0.075f, 0.085f, 0.1f);
-        RenderSettings.fogMode = FogMode.Linear;
-        RenderSettings.fogStartDistance = Mathf.Min(width, depth) * 0.55f;
-        RenderSettings.fogEndDistance = Mathf.Max(width, depth) * 1.15f;
+        RenderSettings.ambientSkyColor = new Color(0.32f, 0.4f, 0.54f);
+        RenderSettings.ambientEquatorColor = new Color(0.18f, 0.2f, 0.25f);
+        RenderSettings.ambientGroundColor = new Color(0.035f, 0.045f, 0.075f);
+        RenderSettings.ambientIntensity = 1.12f;
+        RenderSettings.fog = false;
     }
 
     private static Material CreateMaterial(string name, Color color, float metallic, float smoothness)
@@ -218,6 +377,41 @@ public static class GymInteriorBuilder
         material.color = color;
         material.SetFloat("_Metallic", metallic);
         material.SetFloat("_Smoothness", smoothness);
+        return material;
+    }
+
+    private static Material CreatePosterMaterial(string resourcePath, int index)
+    {
+        Material material = CreateMaterial(
+            $"Golden era poster {index + 1}", Color.white, 0f, 0.3f);
+        Texture2D texture = Resources.Load<Texture2D>(resourcePath);
+        if (texture == null)
+        {
+            Debug.LogWarning($"Poster texture is missing at Resources/{resourcePath}.");
+            material.color = new Color(0.32f, 0.2f, 0.08f);
+            return material;
+        }
+
+        material.mainTexture = texture;
+        material.SetTexture("_BaseMap", texture);
+        material.SetTexture("_MainTex", texture);
+        material.SetColor("_BaseColor", Color.white);
+        material.SetColor("_Color", Color.white);
+        return material;
+    }
+
+    private static Material CreateTransparentMaterial(
+        string name, Color color, float smoothness)
+    {
+        Material material = CreateMaterial(name, color, 0f, smoothness);
+        material.SetFloat("_Surface", 1f);
+        material.SetFloat("_Blend", 0f);
+        material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+        material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+        material.SetFloat("_ZWrite", 0f);
+        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.DisableKeyword("_ALPHATEST_ON");
+        material.renderQueue = (int)RenderQueue.Transparent;
         return material;
     }
 

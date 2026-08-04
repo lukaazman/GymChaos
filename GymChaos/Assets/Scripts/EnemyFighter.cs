@@ -23,6 +23,8 @@ public class EnemyFighter : MonoBehaviour
     private PlayerMovement playerTarget;
     private Rigidbody body;
     private BodybuilderEnemyAnimator bodyAnimator;
+    private ExternalRiggedCharacterAnimator externalBodyAnimator;
+    private MixamoScanRetargetAnimator mixamoScanAnimator;
     private BodybuilderIdentity identity;
     private Transform currentTarget;
     private EnemyFighter currentFighterTarget;
@@ -47,6 +49,7 @@ public class EnemyFighter : MonoBehaviour
 
     private const float GokuFlightHeight = 2.35f;
     private const float GokuFlightGroundClearance = 0.08f;
+    private const float GokuFlightMinimumDistance = 5.2f;
     private const float GokuSpeedMultiplier = 1.5f;
     private const float GokuFlightTransitionDuration = 0.42f;
     private const float GokuFlightModelRotation = 90f;
@@ -64,6 +67,28 @@ public class EnemyFighter : MonoBehaviour
     public bool IsPolice => isPolice;
     public BodybuilderIdentity Identity => identity;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
+    public float GokuFlightAuraBlend
+    {
+        get
+        {
+            if (!IsGoku() || isDead)
+            {
+                return 0f;
+            }
+
+            switch (gokuFlightState)
+            {
+                case GokuFlightState.TakingOff:
+                    return SmoothStep(gokuFlightTransition);
+                case GokuFlightState.Flying:
+                    return 1f;
+                case GokuFlightState.Landing:
+                    return 1f - SmoothStep(gokuFlightTransition);
+                default:
+                    return 0f;
+            }
+        }
+    }
     public Color HealthBarColor => identity == BodybuilderIdentity.Ronnie
         ? new Color(0.035f, 0.12f, 0.32f, 1f)
         : identity == BodybuilderIdentity.Manwithsuit1
@@ -106,6 +131,8 @@ public class EnemyFighter : MonoBehaviour
     {
         body = GetComponent<Rigidbody>();
         bodyAnimator = GetComponent<BodybuilderEnemyAnimator>();
+        externalBodyAnimator = GetComponent<ExternalRiggedCharacterAnimator>();
+        mixamoScanAnimator = GetComponent<MixamoScanRetargetAnimator>();
         health = maxHealth;
         Fighters.Add(this);
         ActiveCount++;
@@ -189,17 +216,29 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
-        if (IsGoku() && !UpdateGokuFlight(true, planarToTarget))
+        bool shouldGokuFly = IsGoku() && distance > GokuFlightMinimumDistance;
+        if (IsGoku() && !UpdateGokuFlight(shouldGokuFly, planarToTarget))
         {
             return;
         }
 
         body.WakeUp();
+        if (distance <= attackRange)
+        {
+            StopForAttack(planarToTarget);
+            if (Time.time >= lastAttackTime + attackCooldown)
+            {
+                lastAttackTime = Time.time;
+                Attack(planarToTarget.sqrMagnitude > 0.01f
+                    ? planarToTarget.normalized : transform.forward);
+            }
+            return;
+        }
+
         float planarSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
-        bool pursuingOutsideAttackPose = distance > attackRange * 0.8f;
         bool policeStillMovingNearTarget = isPolice && planarSpeed > 0.12f;
         SetAnimatedMovement(
-            pursuingOutsideAttackPose || policeStillMovingNearTarget,
+            distance > attackRange || policeStillMovingNearTarget,
             planarSpeed / Mathf.Max(0.01f, chaseSpeed));
 
         if (distance > 0.15f)
@@ -227,11 +266,21 @@ public class EnemyFighter : MonoBehaviour
             }
         }
 
-        if (distance <= attackRange && Time.time >= lastAttackTime + attackCooldown)
+    }
+
+    private void StopForAttack(Vector3 planarToTarget)
+    {
+        Vector3 verticalVelocity = Vector3.Project(body.linearVelocity, Vector3.up);
+        Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+        body.linearVelocity = Vector3.MoveTowards(
+            planarVelocity, Vector3.zero, 18f * Time.fixedDeltaTime) + verticalVelocity;
+        SetAnimatedMovement(false);
+
+        if (planarToTarget.sqrMagnitude > 0.01f)
         {
-            lastAttackTime = Time.time;
-            Attack(planarToTarget.sqrMagnitude > 0.01f
-                ? planarToTarget.normalized : transform.forward);
+            Quaternion lookRotation = Quaternion.LookRotation(planarToTarget.normalized, Vector3.up);
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation, lookRotation, 12f * Time.fixedDeltaTime);
         }
     }
 
@@ -346,7 +395,9 @@ public class EnemyFighter : MonoBehaviour
     private void Attack(Vector3 direction)
     {
         bodyAnimator?.TriggerAttack();
-        body.AddForce(direction * 3.5f + Vector3.up, ForceMode.Impulse);
+        externalBodyAnimator?.TriggerAttack();
+        mixamoScanAnimator?.TriggerAttack();
+        body.AddForce(direction * 0.65f, ForceMode.Impulse);
         Vector3 impact = direction * attackImpulse + Vector3.up * 1.1f;
         if (currentFighterTarget != null)
         {
@@ -409,6 +460,8 @@ public class EnemyFighter : MonoBehaviour
         health = 0f;
         deathStartedTime = Time.time;
         bodyAnimator?.SetDowned(true);
+        externalBodyAnimator?.SetDowned(true);
+        mixamoScanAnimator?.SetDowned(true);
         SetAnimatedMovement(false);
         body.constraints = RigidbodyConstraints.None;
         body.useGravity = true;
@@ -496,11 +549,23 @@ public class EnemyFighter : MonoBehaviour
         {
             bodyAnimator = GetComponent<BodybuilderEnemyAnimator>();
         }
+        if (externalBodyAnimator == null)
+        {
+            externalBodyAnimator = GetComponent<ExternalRiggedCharacterAnimator>();
+        }
+        if (mixamoScanAnimator == null)
+        {
+            mixamoScanAnimator = GetComponent<MixamoScanRetargetAnimator>();
+        }
         if (IsGoku())
         {
             bodyAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
+            externalBodyAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
+            mixamoScanAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
         }
         bodyAnimator?.SetMoving(moving, normalizedSpeed);
+        externalBodyAnimator?.SetMoving(moving, normalizedSpeed);
+        mixamoScanAnimator?.SetMoving(moving, normalizedSpeed);
     }
 
     private bool IsGoku()
@@ -510,7 +575,9 @@ public class EnemyFighter : MonoBehaviour
 
     private float GetChaseSpeed()
     {
-        return IsGoku() ? maxSpeed * GokuSpeedMultiplier : maxSpeed;
+        return IsGoku() && gokuFlightState != GokuFlightState.Grounded
+            ? maxSpeed * GokuSpeedMultiplier
+            : maxSpeed;
     }
 
     private float GetDetectionRange()
@@ -589,7 +656,6 @@ public class EnemyFighter : MonoBehaviour
                 currentTarget != null ? currentTarget.position.z : transform.position.z);
             body.position = Vector3.MoveTowards(
                 body.position, flightTarget, GetChaseSpeed() * Time.fixedDeltaTime);
-            body.linearVelocity = Vector3.zero;
             KeepGokuAboveGround();
             bodyAnimator?.SetFlying(true);
             return true;
@@ -671,10 +737,23 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
-        body.linearVelocity = Vector3.zero;
-        body.angularVelocity = Vector3.zero;
-        body.useGravity = !flying;
-        body.isKinematic = flying;
+        if (flying)
+        {
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+            body.useGravity = false;
+            body.isKinematic = true;
+        }
+        else
+        {
+            body.isKinematic = false;
+            body.useGravity = true;
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
         body.constraints = flying
             ? RigidbodyConstraints.FreezeRotation
             : RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
@@ -692,6 +771,7 @@ public class EnemyFighter : MonoBehaviour
         body.constraints = RigidbodyConstraints.None;
         gokuFlightState = GokuFlightState.Grounded;
         bodyAnimator?.SetFlying(false);
+        externalBodyAnimator?.SetFlying(false);
     }
 
     private static float SmoothStep(float value)

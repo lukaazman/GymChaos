@@ -176,6 +176,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
     public static BodybuilderEnemyVisual Build(GameObject enemy, BodybuilderIdentity identity)
     {
         BodybuilderEnemyVisual visual = enemy.AddComponent<BodybuilderEnemyVisual>();
+        // Keep the original scan topology, UVs and model-specific proportions.
+        // The externally baked FBXs visibly shrank and tore several scans in
+        // motion, so gameplay uses the established GLB path until those rigs
+        // can match the source bodies without deformation.
         visual.StartCoroutine(visual.BuildVisual(identity, false));
         return visual;
     }
@@ -185,6 +189,48 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         BodybuilderEnemyVisual visual = npc.AddComponent<BodybuilderEnemyVisual>();
         visual.StartCoroutine(visual.BuildVisual(identity, true));
         return visual;
+    }
+
+    public static void ConfigureImportedVisual(
+        Transform visualRoot, SkinnedMeshRenderer bodyRenderer, Rig rig,
+        BodybuilderIdentity identity, bool neutralNpc)
+    {
+        if (visualRoot == null || bodyRenderer == null || rig == null || rig.Head == null)
+        {
+            return;
+        }
+
+        Mesh baked = new Mesh { name = identity + " imported visual setup" };
+        bodyRenderer.BakeMesh(baked);
+        Vector3[] bakedVertices = baked.vertices;
+        Vector3[] vertices = new Vector3[bakedVertices.Length];
+        Bounds bounds = default;
+        for (int i = 0; i < bakedVertices.Length; i++)
+        {
+            Vector3 world = bodyRenderer.transform.TransformPoint(bakedVertices[i]);
+            vertices[i] = visualRoot.InverseTransformPoint(world);
+            if (i == 0)
+            {
+                bounds = new Bounds(vertices[i], Vector3.zero);
+            }
+            else
+            {
+                bounds.Encapsulate(vertices[i]);
+            }
+        }
+        Destroy(baked);
+
+        RigProfile profile = GetRigProfile(identity);
+        if (neutralNpc)
+        {
+            CreateDeathMarkersAndName(
+                visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity);
+        }
+        else
+        {
+            CreateFaceCensorAndName(
+                visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity);
+        }
     }
 
     private IEnumerator BuildVisual(BodybuilderIdentity identity, bool neutralNpc)
@@ -319,6 +365,16 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
         EnemyMeshHitboxRig.Configure(gameObject, rig, renderer);
 
+        if (identity == BodybuilderIdentity.Goku)
+        {
+            GokuAura aura = gameObject.GetComponent<GokuAura>();
+            if (aura == null)
+            {
+                aura = gameObject.AddComponent<GokuAura>();
+            }
+            aura.Configure(renderer);
+        }
+
         if (neutralNpc)
         {
             CreateDeathMarkersAndName(
@@ -332,8 +388,15 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             CreateFaceCensorAndName(
                 renderObject.transform, positions, bounds, profile,
                 rig.Head, renderer, identity);
-            BodybuilderEnemyAnimator animator = gameObject.AddComponent<BodybuilderEnemyAnimator>();
-            animator.Configure(identity, rig);
+            MixamoScanRetargetAnimator mixamoAnimator =
+                gameObject.AddComponent<MixamoScanRetargetAnimator>();
+            if (!mixamoAnimator.Configure(identity, rig))
+            {
+                Destroy(mixamoAnimator);
+                BodybuilderEnemyAnimator fallbackAnimator =
+                    gameObject.AddComponent<BodybuilderEnemyAnimator>();
+                fallbackAnimator.Configure(identity, rig);
+            }
         }
     }
 

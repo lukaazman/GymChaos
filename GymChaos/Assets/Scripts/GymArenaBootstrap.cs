@@ -29,6 +29,7 @@ public class GymArenaBootstrap : MonoBehaviour
     private readonly HashSet<Transform> configuredPickupRoots = new HashSet<Transform>();
     private readonly HashSet<Transform> stabilizedEquipmentRoots = new HashSet<Transform>();
     private readonly HashSet<Transform> spatiallyMountedWeightRoots = new HashSet<Transform>();
+    private readonly Collider[] enemySpawnOverlap = new Collider[64];
 
     private PlayerMovement player;
 
@@ -160,6 +161,7 @@ public class GymArenaBootstrap : MonoBehaviour
     {
         player = targetPlayer;
         GymInteriorBuilder.Build(player);
+        EquipmentMaterialRestorer.ApplyToScene();
         EnsureSceneColliders();
         MarkSpatiallyMountedWeightCandidates();
         EnsureWeightGameplayObjects();
@@ -500,6 +502,7 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             GetEnemyDisplayPose(EnemyRoster[i], i, out Vector3 position, out Quaternion rotation);
+            position = ResolveEnemySpawnPosition(position);
             CreateEnemy(EnemyRoster[i], position, rotation);
         }
     }
@@ -662,10 +665,18 @@ public class GymArenaBootstrap : MonoBehaviour
             GameObject cableMachine = GameObject.Find("CableMachineDual");
             if (cableMachine != null && TryGetCombinedBounds(cableMachine.transform, out Bounds cableBounds))
             {
-                position = new Vector3(cableBounds.center.x, floorY, cableBounds.center.z);
-                Vector3 faceRoom = Vector3.ProjectOnPlane(roomCenter - position, Vector3.up);
+                Vector3 faceRoom = Vector3.ProjectOnPlane(roomCenter - cableBounds.center, Vector3.up);
+                if (faceRoom.sqrMagnitude < 0.01f)
+                {
+                    faceRoom = Vector3.back;
+                }
+                faceRoom.Normalize();
+                float machineDepth = Mathf.Abs(faceRoom.x) * cableBounds.extents.x +
+                    Mathf.Abs(faceRoom.z) * cableBounds.extents.z;
+                position = cableBounds.center + faceRoom * (machineDepth + 1.35f);
+                position.y = floorY;
                 rotation = faceRoom.sqrMagnitude > 0.01f
-                    ? Quaternion.LookRotation(faceRoom.normalized, Vector3.up)
+                    ? Quaternion.LookRotation(faceRoom, Vector3.up)
                     : cableMachine.transform.rotation;
                 return;
             }
@@ -699,6 +710,73 @@ public class GymArenaBootstrap : MonoBehaviour
         position.y = floorY;
         rotation = Quaternion.LookRotation(
             Vector3.ProjectOnPlane(roomCenter - position, Vector3.up).normalized, Vector3.up);
+    }
+
+    private Vector3 ResolveEnemySpawnPosition(Vector3 preferred)
+    {
+        GameObject floorObject = GameObject.Find("Rubber Floor");
+        Bounds floorBounds = default;
+        Renderer floorRenderer = null;
+        bool hasFloor = floorObject != null &&
+            floorObject.TryGetComponent(out floorRenderer);
+        if (hasFloor)
+        {
+            floorBounds = floorRenderer.bounds;
+            preferred.x = Mathf.Clamp(preferred.x, floorBounds.min.x + 1f, floorBounds.max.x - 1f);
+            preferred.z = Mathf.Clamp(preferred.z, floorBounds.min.z + 1f, floorBounds.max.z - 1f);
+            preferred.y = floorBounds.max.y;
+        }
+
+        Physics.SyncTransforms();
+        if (IsEnemySpawnClear(preferred))
+        {
+            return preferred;
+        }
+
+        float[] rings = { 1.25f, 2f, 2.8f, 3.7f, 4.8f };
+        for (int ringIndex = 0; ringIndex < rings.Length; ringIndex++)
+        {
+            float distance = rings[ringIndex];
+            for (int directionIndex = 0; directionIndex < 12; directionIndex++)
+            {
+                float angle = directionIndex * 30f + ringIndex * 15f;
+                Vector3 offset = Quaternion.Euler(0f, angle, 0f) * Vector3.forward * distance;
+                Vector3 candidate = preferred + offset;
+                if (hasFloor)
+                {
+                    candidate.x = Mathf.Clamp(candidate.x, floorBounds.min.x + 1f, floorBounds.max.x - 1f);
+                    candidate.z = Mathf.Clamp(candidate.z, floorBounds.min.z + 1f, floorBounds.max.z - 1f);
+                    candidate.y = floorBounds.max.y;
+                }
+
+                if (IsEnemySpawnClear(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        Debug.LogWarning($"No fully clear enemy spawn was found near {preferred}; using the preferred point.");
+        return preferred;
+    }
+
+    private bool IsEnemySpawnClear(Vector3 floorPosition)
+    {
+        Vector3 lower = floorPosition + Vector3.up * 0.55f;
+        Vector3 upper = floorPosition + Vector3.up * 1.85f;
+        int count = Physics.OverlapCapsuleNonAlloc(
+            lower, upper, 0.52f, enemySpawnOverlap, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = enemySpawnOverlap[i];
+            if (hit == null || HasNameInHierarchy(hit.transform, "rubber floor"))
+            {
+                continue;
+            }
+
+            return false;
+        }
+        return true;
     }
 
     private static bool TryGetMirrorBounds(out Bounds bounds)

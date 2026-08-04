@@ -1,0 +1,447 @@
+{
+  "materials": [
+    {
+      "name": "black latex",
+      "aliases": [
+        "Black Latex",
+        "Black Latex.001",
+        "Black Latex.002",
+        "Black Latex.003",
+        "Black Latex.004",
+        "Black Latex.005",
+        "Black Latex.006",
+        "Black Latex.007",
+        "Black Latex.008",
+        "Black Latex.009",
+        "Black Latex.010",
+        "Black Latex.011",
+        "Black Latex.012",
+        "Black Latex.013",
+        "Black Latex.014",
+        "Black Latex.015",
+        "Black Latex.016",
+        "Black Latex.017",
+        "Black Latex.018",
+        "Black Latex.019",
+        "Black Latex.020",
+        "Black Latex.021",
+        "Black Latex.022",
+        "Black Latex.023",
+        "Black Latex.024",
+        "Black Latex.025",
+        "Black Latex.026",
+        "Black Latex.027",
+        "Black Latex.028",
+        "Black Latex.029",
+        "Black Latex.030",
+        "Black Latex.031",
+        "Black Latex.032",
+        "Black Latex.033",
+        "Black Latex.034",
+        "Black Latex.035",
+        "Black Latex.036",
+        "Black Latex.037",
+        "Black Latex.038",
+        "Black Latex.039",
+        "Black Latex.040",
+        "Black Latex.041",
+        "Black Latex.042",
+        "Black Latex.043",
+        "Black Latex.044",
+        "Black Latex.045",
+        "Black Latex.046",
+        "Black Latex.047",
+        "Black Latex.048",
+        "Black Latex.049",
+        "Black Latex.050"
+      ],
+      "baseColor": [
+        0.004999999888241291,
+        0.004999999888241291,
+        0.004999999888241291,
+        1.0
+      ],
+      "metallic": 0.5,
+      "smoothness": 1.0,
+      "albedo": "",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "carpet orange checker",
+      "aliases": [
+        "Carpet Orange Checker"
+      ],
+      "baseColor": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "metallic": 0.20000000298023224,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/carpet-orange-checker/albedo",
+      "normal": "EquipmentMaterials/carpet-orange-checker/normal",
+      "metallicSmoothness": "EquipmentMaterials/carpet-orange-checker/metallic-smoothness"
+    },
+    {
+      "name": "dark",
+      "aliases": [
+        "dark"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/dark/albedo",
+      "normal": "EquipmentMaterials/dark/normal",
+      "metallicSmoothness": "EquipmentMaterials/dark/metallic-smoothness"
+    },
+    {
+      "name": "dark metal",
+      "aliases": [
+        "Dark metal",
+        "Dark metal.001",
+        "Dark metal.002",
+        "Dark metal.003",
+        "Dark metal.004",
+        "Dark metal.005",
+        "Dark metal.006",
+        "Dark metal.007",
+        "Dark metal.008",
+        "Dark metal.009",
+        "Dark metal.010",
+        "Dark metal.011",
+        "Dark metal.012",
+        "Dark metal.013",
+        "Dark metal.014",
+        "Dark metal.015",
+        "Dark metal.016",
+        "Dark metal.017",
+        "Dark metal.018",
+        "Dark metal.019",
+        "Dark metal.020",
+        "Dark metal.021",
+        "Dark metal.022",
+        "Dark metal.023",
+        "Dark metal.024",
+        "Dark metal.025",
+        "Dark metal.026",
+        "Dark metal.027",
+        "Dark metal.028",
+        "Dark metal.029",
+        "Dark metal.030",
+        "Dark metal.031",
+        "Dark metal.032",
+        "Dark metal.033",
+        "Dark metal.034",
+        "Dark metal.035",
+        "Dark metal.036",
+        "Dark metal.037"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/dark-metal/albedo",
+      "normal": "EquipmentMaterials/dark-metal/normal",
+      "metallicSmoothness": "EquipmentMaterials/dark-metal/metallic-smoothness"
+    },
+    {
+      "name": "dotted rubber material",
+      "aliases": [
+        "Dotted Rubber Material"
+      ],
+      "baseColor": [
+        0.010219560004770756,
+        0.010219560004770756,
+        0.010219560004770756,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.75,
+      "albedo": "",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "grey plastic",
+      "aliases": [
+        "Grey plastic",
+        "Grey plastic.001",
+        "Grey plastic.002",
+        "Grey plastic.003",
+        "Grey plastic.004",
+        "Grey plastic.005",
+        "Grey plastic.006",
+        "Grey plastic.007",
+        "Grey plastic.008"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.25,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/grey-plastic/albedo",
+      "normal": "EquipmentMaterials/grey-plastic/normal",
+      "metallicSmoothness": "EquipmentMaterials/grey-plastic/metallic-smoothness"
+    },
+    {
+      "name": "light iron",
+      "aliases": [
+        "Light iron"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 1.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/light-iron/albedo",
+      "normal": "EquipmentMaterials/light-iron/normal",
+      "metallicSmoothness": "EquipmentMaterials/light-iron/metallic-smoothness"
+    },
+    {
+      "name": "material",
+      "aliases": [
+        "Material"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/material/albedo",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "old iron",
+      "aliases": [
+        "Old Iron",
+        "Old Iron.001",
+        "Old Iron.002",
+        "Old Iron.003",
+        "Old Iron.004",
+        "Old Iron.005",
+        "Old Iron.006",
+        "Old Iron.007",
+        "Old Iron.008",
+        "Old Iron.009",
+        "Old Iron.010",
+        "Old Iron.011",
+        "Old Iron.012",
+        "Old Iron.013",
+        "Old Iron.014",
+        "Old Iron.015",
+        "Old Iron.016",
+        "Old Iron.017",
+        "Old Iron.018",
+        "Old Iron.019",
+        "Old Iron.020",
+        "Old Iron.021",
+        "Old Iron.022",
+        "Old Iron.023",
+        "Old Iron.024",
+        "Old Iron.025",
+        "Old Iron.026",
+        "Old Iron.027",
+        "Old Iron.028",
+        "Old Iron.029",
+        "Old Iron.030",
+        "Old Iron.031",
+        "Old Iron.032",
+        "Old Iron.033",
+        "Old Iron.034",
+        "Old Iron.035",
+        "Old Iron.036",
+        "Old Iron.037",
+        "Old Iron.038",
+        "Old Iron.039",
+        "Old Iron.040",
+        "Old Iron.041",
+        "Old Iron.042",
+        "Old Iron.043",
+        "Old Iron.044",
+        "Old Iron.045"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/old-iron/albedo",
+      "normal": "EquipmentMaterials/old-iron/normal",
+      "metallicSmoothness": "EquipmentMaterials/old-iron/metallic-smoothness"
+    },
+    {
+      "name": "rubber",
+      "aliases": [
+        "Rubber"
+      ],
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "rubber black",
+      "aliases": [
+        "Rubber Black",
+        "Rubber Black.001",
+        "Rubber Black.002",
+        "Rubber Black.003",
+        "Rubber Black.004",
+        "Rubber Black.005",
+        "Rubber Black.006",
+        "Rubber Black.007",
+        "Rubber Black.008",
+        "Rubber Black.009",
+        "Rubber Black.010",
+        "Rubber Black.011",
+        "Rubber Black.012",
+        "Rubber Black.013",
+        "Rubber Black.014",
+        "Rubber Black.015",
+        "Rubber Black.016",
+        "Rubber Black.017",
+        "Rubber Black.018",
+        "Rubber Black.019",
+        "Rubber Black.020",
+        "Rubber Black.021",
+        "Rubber Black.022",
+        "Rubber Black.023",
+        "Rubber Black.024",
+        "Rubber Black.026",
+        "Rubber Black.027"
+      ],
+      "baseColor": [
+        0.009999999776482582,
+        0.009999999776482582,
+        0.009999999776482582,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "screen",
+      "aliases": [
+        "Screen"
+      ],
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "smoked blue light colored glass",
+      "aliases": [
+        "Smoked Blue Light Colored Glass"
+      ],
+      "baseColor": [
+        0.8,
+        0.8,
+        0.8,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "",
+      "normal": "",
+      "metallicSmoothness": ""
+    },
+    {
+      "name": "white painted lightly scratched metal",
+      "aliases": [
+        "White painted lightly scratched metal",
+        "White painted lightly scratched metal.001",
+        "White painted lightly scratched metal.002",
+        "White painted lightly scratched metal.003",
+        "White painted lightly scratched metal.004",
+        "White painted lightly scratched metal.005"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/white-painted-lightly-scratched-metal/albedo",
+      "normal": "EquipmentMaterials/white-painted-lightly-scratched-metal/normal",
+      "metallicSmoothness": "EquipmentMaterials/white-painted-lightly-scratched-metal/metallic-smoothness"
+    },
+    {
+      "name": "white painted metal",
+      "aliases": [
+        "White painted metal"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/white-painted-metal/albedo",
+      "normal": "EquipmentMaterials/white-painted-metal/normal",
+      "metallicSmoothness": "EquipmentMaterials/white-painted-metal/metallic-smoothness"
+    },
+    {
+      "name": "wool carpet floor",
+      "aliases": [
+        "Wool Carpet Floor"
+      ],
+      "baseColor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1.0
+      ],
+      "metallic": 0.0,
+      "smoothness": 0.5,
+      "albedo": "EquipmentMaterials/wool-carpet-floor/albedo",
+      "normal": "EquipmentMaterials/wool-carpet-floor/normal",
+      "metallicSmoothness": "EquipmentMaterials/wool-carpet-floor/metallic-smoothness"
+    }
+  ]
+}
