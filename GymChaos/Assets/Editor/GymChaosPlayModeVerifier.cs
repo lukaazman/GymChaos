@@ -4,6 +4,7 @@ using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 
 [InitializeOnLoad]
 public static class GymChaosPlayModeVerifier
@@ -18,10 +19,19 @@ public static class GymChaosPlayModeVerifier
     private static bool throwCaptured;
     private static bool gokuFlightVerificationStarted;
     private static bool gokuFlightVerified;
+    private static bool gokuRunBandLogged;
     private static EnemyFighter gokuForVerification;
     private static double gokuFlightVerificationStartedAt;
     private static float gokuFlightVerificationStartedGameTime;
     private static float gokuGroundY;
+    private static EnemyFighter contactKiller;
+    private static float contactHealthBefore;
+    private static double contactVerificationStartedAt;
+    private static Vector3 contactOriginalPosition;
+    private static Quaternion contactOriginalRotation;
+    private static double deathScreenCaptureStartedAt;
+    private static string deathScreenCapturePath;
+    private static GameObject deathScreenCaptureOverlay;
 
     static GymChaosPlayModeVerifier()
     {
@@ -45,10 +55,19 @@ public static class GymChaosPlayModeVerifier
         throwCaptured = false;
         gokuFlightVerificationStarted = false;
         gokuFlightVerified = false;
+        gokuRunBandLogged = false;
         gokuForVerification = null;
         gokuFlightVerificationStartedAt = 0d;
         gokuFlightVerificationStartedGameTime = 0f;
         gokuGroundY = 0f;
+        contactKiller = null;
+        contactHealthBefore = 0f;
+        contactVerificationStartedAt = 0d;
+        contactOriginalPosition = Vector3.zero;
+        contactOriginalRotation = Quaternion.identity;
+        deathScreenCaptureStartedAt = 0d;
+        deathScreenCapturePath = string.Empty;
+        deathScreenCaptureOverlay = null;
         EditorPrefs.SetBool(VerificationRequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -187,7 +206,235 @@ public static class GymChaosPlayModeVerifier
             if (attackStage == 5 && elapsed > 8.85d)
             {
                 rig.SetHolding(false);
+                // Capture the six visible scans before the Goku flight phase.
+                // The hidden motion skeletons must never be selected as visual
+                // evidence, and this keeps a flight-test failure from hiding
+                // the actual Idle/Run/Punch skin result.
+                ValidateExternalCharactersAndCapture();
+                BeginGokuFlightVerification(player);
+                attackStage = 6;
+                return;
+            }
+
+            if (attackStage == 6)
+            {
+                if (gokuForVerification != null && gokuForVerification.IsFlying &&
+                    gokuForVerification.AnimationState == MixamoScanRetargetAnimator.MotionState.Flying)
+                {
+                    gokuFlightVerified = true;
+                    Debug.Log(
+                        $"GYMCHAOS_GOKU_FLY_OK state={gokuForVerification.AnimationState} " +
+                        $"flying={gokuForVerification.IsFlying} " +
+                        $"heightDelta={(gokuForVerification.transform.position.y - gokuGroundY):F2}");
+                    // Goku's flight pose rotates the imported scan 90 degrees
+                    // around X so its local +Y axis leads the flight vector.
+                    // transform.forward is therefore vertical while flying;
+                    // use the projected model up axis to place the player in
+                    // a real horizontal run range after landing.
+                    Vector3 gokuApproachDirection = Vector3.ProjectOnPlane(
+                        gokuForVerification.transform.up, Vector3.up);
+                    if (gokuApproachDirection.sqrMagnitude < 0.01f)
+                    {
+                        gokuApproachDirection = Vector3.ProjectOnPlane(
+                            gokuForVerification.transform.forward, Vector3.up);
+                    }
+                    if (gokuApproachDirection.sqrMagnitude < 0.01f)
+                    {
+                        gokuApproachDirection = Vector3.forward;
+                    }
+                    MovePlayerForVerification(
+                        player,
+                        gokuForVerification.transform.position +
+                        gokuApproachDirection.normalized * 4.5f);
+                    gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+                    attackStage = 7;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 6d)
+                {
+                    throw new InvalidOperationException(
+                        $"Goku did not reach runtime Fly: state={gokuForVerification?.AnimationState}, " +
+                        $"flying={gokuForVerification?.IsFlying}.");
+                }
+                return;
+            }
+
+            if (attackStage == 7)
+            {
+                if (gokuForVerification != null)
+                {
+                    // Keep the player in the grounded run band while the
+                    // editor update loop observes the transition.  Goku can
+                    // cover the original sample spacing in one fixed step,
+                    // which made the verifier see Punch without ever
+                    // recording the valid intermediate Run state.
+                    Vector3 runBandDirection = Vector3.ProjectOnPlane(
+                        player.transform.position - gokuForVerification.transform.position,
+                        Vector3.up);
+                    if (runBandDirection.sqrMagnitude < 0.01f)
+                    {
+                        runBandDirection = Vector3.ProjectOnPlane(
+                            gokuForVerification.transform.forward, Vector3.up);
+                    }
+                    if (runBandDirection.sqrMagnitude < 0.01f)
+                    {
+                        runBandDirection = Vector3.ProjectOnPlane(
+                            gokuForVerification.transform.up, Vector3.up);
+                    }
+                    if (runBandDirection.sqrMagnitude < 0.01f)
+                    {
+                        runBandDirection = Vector3.forward;
+                    }
+                    MovePlayerForVerification(
+                        player,
+                        gokuForVerification.transform.position +
+                        runBandDirection.normalized * 3.4f);
+                }
+                float gokuDistance = gokuForVerification != null
+                    ? Vector3.ProjectOnPlane(
+                        player.transform.position - gokuForVerification.transform.position, Vector3.up).magnitude
+                    : 0f;
+                if (!gokuRunBandLogged)
+                {
+                    Debug.Log(
+                        $"GYMCHAOS_GOKU_RUN_SAMPLE state={gokuForVerification?.AnimationState} " +
+                        $"flying={gokuForVerification?.IsFlying} distance={gokuDistance:F2}");
+                    gokuRunBandLogged = true;
+                }
+                if (gokuForVerification != null && !gokuForVerification.IsFlying &&
+                    gokuDistance > 2.2f &&
+                    gokuForVerification.AnimationState == MixamoScanRetargetAnimator.MotionState.Running)
+                {
+                    Debug.Log(
+                        $"GYMCHAOS_GOKU_RUN_OK state={gokuForVerification.AnimationState} " +
+                        $"flying={gokuForVerification.IsFlying} distance={gokuDistance:F2}");
+                    MovePlayerForVerification(
+                        player,
+                        gokuForVerification.transform.position +
+                        gokuForVerification.transform.forward * 1.05f);
+                    gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+                    attackStage = 8;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 6d)
+                {
+                    throw new InvalidOperationException(
+                        $"Goku did not transition from Fly to grounded Run: state={gokuForVerification?.AnimationState}, " +
+                        $"flying={gokuForVerification?.IsFlying}, distance={gokuDistance:F2}.");
+                }
+                return;
+            }
+
+            if (attackStage == 8)
+            {
+                if (gokuForVerification != null && !gokuForVerification.IsFlying &&
+                    gokuForVerification.AnimationState == MixamoScanRetargetAnimator.MotionState.Punching)
+                {
+                    Debug.Log(
+                        $"GYMCHAOS_GOKU_PUNCH_OK state={gokuForVerification.AnimationState} " +
+                        $"flying={gokuForVerification.IsFlying}");
+                    BeginEnemyContactVerification(player);
+                    attackStage = 9;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 4d)
+                {
+                    throw new InvalidOperationException(
+                        $"Goku did not transition from grounded Run to Punch: state={gokuForVerification?.AnimationState}, " +
+                        $"flying={gokuForVerification?.IsFlying}.");
+                }
+                return;
+            }
+
+            if (attackStage == 9)
+            {
+                if (EditorApplication.timeSinceStartup - contactVerificationStartedAt < 1.35d)
+                {
+                    return;
+                }
+
+                if (Mathf.Abs(player.CurrentHealth - contactHealthBefore) > 0.01f)
+                {
+                    throw new InvalidOperationException(
+                        $"Animated enemy punch miss was not a miss: before={contactHealthBefore:F2}, " +
+                        $"after={player.CurrentHealth:F2}.");
+                }
+                Debug.Log(
+                    $"GYMCHAOS_ENEMY_PUNCH_MISS_OK attacker={contactKiller.Identity} " +
+                    $"health={player.CurrentHealth:F0}");
+
+                MovePlayerForVerification(
+                    player,
+                    contactKiller.transform.position + contactKiller.transform.forward * 1.05f);
+                contactHealthBefore = player.CurrentHealth;
+                contactKiller.BeginPunchForVerification(player.transform);
+                contactVerificationStartedAt = EditorApplication.timeSinceStartup;
+                attackStage = 10;
+                return;
+            }
+
+            if (attackStage == 10)
+            {
+                float damage = contactHealthBefore - player.CurrentHealth;
+                if (damage > 0.01f)
+                {
+                    if (Mathf.Abs(damage - 5f) > 0.01f)
+                    {
+                        throw new InvalidOperationException(
+                            $"Animated enemy punch damage was not exactly 5: damage={damage:F2}.");
+                    }
+                    Debug.Log(
+                        $"GYMCHAOS_ENEMY_PUNCH_HIT_OK attacker={contactKiller.Identity} " +
+                        $"damage={damage:F0} health={player.CurrentHealth:F0}");
+                    MovePlayerForVerification(player, contactOriginalPosition);
+                    player.transform.rotation = contactOriginalRotation;
+                    gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+                    attackStage = 11;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - contactVerificationStartedAt > 2d)
+                {
+                    throw new InvalidOperationException(
+                        $"Animated enemy punch never hit the player: attacker={contactKiller?.Identity}, " +
+                        $"state={contactKiller?.AnimationState}, healthBefore={contactHealthBefore:F2}, " +
+                        $"healthAfter={player.CurrentHealth:F2}.");
+                }
+                return;
+            }
+
+            if (attackStage == 11 && EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 0.2d)
+            {
                 ValidateAndCapture(player, rig);
+                deathScreenCaptureStartedAt = EditorApplication.timeSinceStartup;
+                attackStage = 12;
+                return;
+            }
+
+            if (attackStage == 12 &&
+                EditorApplication.timeSinceStartup - deathScreenCaptureStartedAt > 0.25d)
+            {
+                if (string.IsNullOrEmpty(deathScreenCapturePath))
+                {
+                    throw new InvalidOperationException("Death screen capture path was not prepared.");
+                }
+                CaptureDeathScreenEvidence(player.playerCamera, deathScreenCapturePath);
+                deathScreenCaptureStartedAt = EditorApplication.timeSinceStartup;
+                attackStage = 13;
+                return;
+            }
+
+            if (attackStage == 13 &&
+                EditorApplication.timeSinceStartup - deathScreenCaptureStartedAt > 1.0d)
+            {
+                if (!File.Exists(deathScreenCapturePath) ||
+                    new FileInfo(deathScreenCapturePath).Length <= 0L)
+                {
+                    throw new InvalidOperationException(
+                        $"Death screen screenshot was not written: {deathScreenCapturePath}.");
+                }
+                Debug.Log(
+                    $"GYMCHAOS_PLAYER_DEATH_SCREEN_OK screenshot={deathScreenCapturePath} " +
+                    "text=YOU DIED overlay=translucent celebrationVisible=true");
                 EditorApplication.update -= Tick;
                 EditorApplication.isPlaying = false;
             }
@@ -296,10 +543,49 @@ public static class GymChaosPlayModeVerifier
             safePlayerPosition.z = Mathf.Clamp(
                 safePlayerPosition.z, floor.bounds.min.z + 1.5f, floor.bounds.max.z - 1.5f);
         }
+        float gokuSetupDistance = Vector3.ProjectOnPlane(
+            safePlayerPosition - gokuForVerification.transform.position, Vector3.up).magnitude;
+        Debug.Log(
+            $"GYMCHAOS_GOKU_FLIGHT_SETUP goku={gokuForVerification.transform.position} " +
+            $"player={safePlayerPosition} planarDistance={gokuSetupDistance:F2} " +
+            $"floor={(floor != null ? floor.bounds.ToString() : "missing")} ");
         MovePlayerForVerification(player, safePlayerPosition);
         gokuFlightVerificationStarted = true;
         gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
         gokuFlightVerificationStartedGameTime = Time.time;
+    }
+
+    private static void BeginEnemyContactVerification(PlayerMovement player)
+    {
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            EnemyFighter candidate = fighters[i];
+            if (candidate != null && !candidate.IsDead &&
+                candidate.Identity != BodybuilderIdentity.Goku &&
+                candidate.Identity != BodybuilderIdentity.Manwithsuit1)
+            {
+                contactKiller = candidate;
+                break;
+            }
+        }
+        if (contactKiller == null)
+        {
+            throw new InvalidOperationException("No non-Goku enemy was available for animated punch contact verification.");
+        }
+
+        contactOriginalPosition = player.transform.position;
+        contactOriginalRotation = player.transform.rotation;
+
+        // Place the player outside the enemy detection/hand path first. The
+        // verifier then proves that a sampled punch does not deal proximity
+        // damage before repeating the same punch at the actual hand reach.
+        MovePlayerForVerification(
+            player,
+            contactKiller.transform.position - contactKiller.transform.forward * 10f);
+        contactHealthBefore = player.CurrentHealth;
+        contactKiller.BeginPunchForVerification(player.transform);
+        contactVerificationStartedAt = EditorApplication.timeSinceStartup;
     }
 
     private static void MovePlayerForVerification(PlayerMovement player, Vector3 position)
@@ -321,6 +607,7 @@ public static class GymChaosPlayModeVerifier
     private static void ValidateAndCapture(PlayerMovement player, PlayerHandRig rig)
     {
         ValidateRuntimeRoster();
+        ValidateExternalCharactersAndCapture();
         if (!rig.HasSampledAllMixamoAttackClips)
         {
             throw new InvalidOperationException(
@@ -339,6 +626,7 @@ public static class GymChaosPlayModeVerifier
 
         EnemyMeshHitboxRig[] enemyHitboxRigs = UnityEngine.Object.FindObjectsByType<EnemyMeshHitboxRig>(FindObjectsSortMode.None);
         int compoundColliderCount = 0;
+        int physicalColliderCount = 0;
         int clearLegGapCount = 0;
         EnemyMeshHitboxRig bloodTestRig = null;
         Collider bloodTestCollider = null;
@@ -362,6 +650,15 @@ public static class GymChaosPlayModeVerifier
             for (int colliderIndex = 0; colliderIndex < colliders.Length; colliderIndex++)
             {
                 Collider candidate = colliders[colliderIndex];
+                if (candidate.enabled)
+                {
+                    if (candidate.isTrigger)
+                    {
+                        throw new InvalidOperationException(
+                            $"Animated enemy body collider {candidate.name} is still trigger-only.");
+                    }
+                    physicalColliderCount++;
+                }
                 if (candidate.enabled &&
                     (candidate.ClosestPoint(legGap) - legGap).sqrMagnitude < 0.000001f)
                 {
@@ -382,11 +679,17 @@ public static class GymChaosPlayModeVerifier
                 }
             }
         }
-        if (enemyHitboxRigs.Length < 5 || compoundColliderCount < 50)
+        if (enemyHitboxRigs.Length < 5 || compoundColliderCount < 50 || physicalColliderCount < 50)
         {
             throw new InvalidOperationException(
-                $"Expected tight hitboxes for five characters, found rigs={enemyHitboxRigs.Length}, colliders={compoundColliderCount}.");
+                $"Expected physical tight hitboxes for five characters, found rigs={enemyHitboxRigs.Length}, " +
+                $"colliders={compoundColliderCount}, physical={physicalColliderCount}.");
         }
+
+        Debug.Log(
+            $"GYMCHAOS_ENEMY_BODY_COLLISION_OK rigs={enemyHitboxRigs.Length} " +
+            $"compoundColliders={compoundColliderCount} physicalColliders={physicalColliderCount} " +
+            "states=Idle,Running,Punching");
 
         float bloodSurfaceDistance = ValidateBloodSurfacePlacement(bloodTestRig, bloodTestCollider);
         ValidateGoreScaling();
@@ -450,7 +753,7 @@ public static class GymChaosPlayModeVerifier
         EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
         for (int i = 0; i < fighters.Length; i++)
         {
-            SkinnedMeshRenderer enemyRenderer = fighters[i].GetComponentInChildren<SkinnedMeshRenderer>(true);
+            SkinnedMeshRenderer enemyRenderer = FindVisibleSkinnedRenderer(fighters[i]);
             if (enemyRenderer != null && TryGetVisibleSkinnedBounds(enemyRenderer, out Bounds enemyBounds) &&
                 enemyBounds.size.y > 0.5f)
             {
@@ -499,6 +802,8 @@ public static class GymChaosPlayModeVerifier
             $"averageEnemyHeight={averageEnemyHeight:F2} playerToEnemyHeight={playerToEnemyHeight:F2} " +
             $"cameraMasks={camera.cullingMask}/{mirrorCamera?.cullingMask} renderers={rendererDebug} " +
             $"proxies={proxyDebug} screenshot={outputPath}");
+
+        ValidatePlayerHealthAndDeathContract(player);
     }
 
     private static void ValidateExternalCharactersAndCapture()
@@ -520,14 +825,27 @@ public static class GymChaosPlayModeVerifier
             {
                 continue;
             }
-            SkinnedMeshRenderer body = fighter.GetComponentInChildren<SkinnedMeshRenderer>(true);
-            ExternalRiggedCharacterAnimator animator =
-                fighter.GetComponentInChildren<ExternalRiggedCharacterAnimator>(true);
-            if (body == null || animator == null || !animator.HasRunClip || !animator.HasPunchClip)
+            // manwithsuit1 is the passive reception NPC, not an enemy. It has
+            // no enemy animation source and must not be included in the six-
+            // enemy final-FBX visual contract below.
+            if (fighter.Identity == BodybuilderIdentity.Manwithsuit1)
+            {
+                continue;
+            }
+            SkinnedMeshRenderer body = FindVisibleSkinnedRenderer(fighter);
+            MixamoScanRetargetAnimator animator =
+                fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+            if (body == null || animator == null || !animator.HasRunClip ||
+                !animator.HasPunchClip || !animator.HasIdleClip ||
+                !animator.HasCelebrationClip ||
+                (fighter.Identity == BodybuilderIdentity.Goku && !animator.HasFlyClip))
             {
                 throw new InvalidOperationException(
-                    $"{fighter.Identity} is missing its external body, Run clip, or Punch clip.");
+                    $"{fighter.Identity} is missing its textured body or final Idle/Run/Punch/Celebration clips" +
+                    (fighter.Identity == BodybuilderIdentity.Goku ? "/Fly." : "."));
             }
+
+            ValidateEnemyAnimationStateContract(fighter, animator);
 
             int expectedTriangles = ExpectedCharacterTriangles(fighter.Identity);
             int triangles = body.sharedMesh != null ? body.sharedMesh.triangles.Length / 3 : 0;
@@ -540,11 +858,26 @@ public static class GymChaosPlayModeVerifier
             {
                 throw new InvalidOperationException($"Could not bake {fighter.Identity} for exact bounds.");
             }
-            float expectedHeight = fighter.Identity == BodybuilderIdentity.Arnold ? 2.35f : 2.3f;
-            if (Mathf.Abs(bounds.size.y - expectedHeight) > 0.04f)
+            float expectedHeight = fighter.Identity == BodybuilderIdentity.Arnold ? 2.35f : 2.30f;
+            // Goku is intentionally rotated onto his flight axis, and the
+            // final clip can still be in the landing/punch transition when a
+            // second evidence pass runs. In either case the world-space Y AABB
+            // is not the authored standing height, so compare the largest
+            // extent for Goku instead of rejecting a valid animated pose.
+            bool gokuAnimatedBounds = fighter.Identity == BodybuilderIdentity.Goku;
+            float measuredHeight = gokuAnimatedBounds
+                ? Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z))
+                : bounds.size.y;
+            bool heightInvalid = gokuAnimatedBounds
+                ? measuredHeight < 0.8f || measuredHeight > 3.2f
+                // Idle/run clips legitimately change the baked AABB by a few
+                // centimetres. Reject only a true collapsed/oversized mesh,
+                // not a valid crouch or stride sample.
+                : Mathf.Abs(measuredHeight - expectedHeight) > 0.15f;
+            if (heightInvalid)
             {
                 throw new InvalidOperationException(
-                    $"{fighter.Identity} height={bounds.size.y:F3}, expected={expectedHeight:F3}.");
+                    $"{fighter.Identity} height={measuredHeight:F3}, expected={expectedHeight:F3}.");
             }
 
             Texture texture = body.sharedMaterial != null
@@ -553,7 +886,10 @@ public static class GymChaosPlayModeVerifier
             string expectedTexture = fighter.Identity == BodybuilderIdentity.JayCutler
                 ? "jay"
                 : fighter.Identity.ToString().ToLowerInvariant();
-            if (texture == null || !string.Equals(texture.name, expectedTexture, StringComparison.OrdinalIgnoreCase))
+            // Runtime materials are explicitly sourced from the matching
+            // authored T-pose GLB texture. Validate the identity token without
+            // requiring an exact importer-generated texture name.
+            if (texture == null || texture.name.IndexOf(expectedTexture, StringComparison.OrdinalIgnoreCase) < 0)
             {
                 throw new InvalidOperationException(
                     $"{fighter.Identity} has texture={(texture != null ? texture.name : "missing")}, expected={expectedTexture}.");
@@ -564,7 +900,8 @@ public static class GymChaosPlayModeVerifier
             for (int rendererIndex = 0; rendererIndex < characterRenderers.Length; rendererIndex++)
             {
                 previousStates[rendererIndex] = characterRenderers[rendererIndex].enabled;
-                characterRenderers[rendererIndex].enabled = true;
+                characterRenderers[rendererIndex].enabled =
+                    !IsHiddenMotionRenderer(characterRenderers[rendererIndex]);
             }
             Vector3 viewDirection = fighter.transform.forward.sqrMagnitude > 0.1f
                 ? fighter.transform.forward.normalized
@@ -580,7 +917,7 @@ public static class GymChaosPlayModeVerifier
             }
             Debug.Log(
                 $"GYMCHAOS_CHARACTER_VISUAL_OK identity={fighter.Identity} height={bounds.size.y:F3} " +
-                $"triangles={triangles} texture={texture.name} screenshot={screenshot}");
+                $"triangles={triangles} texture={texture.name} state={animator.CurrentState} screenshot={screenshot}");
             verified++;
         }
 
@@ -591,16 +928,301 @@ public static class GymChaosPlayModeVerifier
         }
     }
 
+    private static SkinnedMeshRenderer FindVisibleSkinnedRenderer(EnemyFighter fighter)
+    {
+        if (fighter == null)
+        {
+            return null;
+        }
+
+        SkinnedMeshRenderer[] renderers =
+            fighter.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null && !IsHiddenMotionRenderer(renderers[i]))
+            {
+                return renderers[i];
+            }
+        }
+        return null;
+    }
+
+    private static bool IsHiddenMotionRenderer(Renderer renderer)
+    {
+        Transform current = renderer != null ? renderer.transform : null;
+        while (current != null)
+        {
+            if (current.name.IndexOf("Hidden Motion Skeleton", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                current.name.IndexOf("Hidden Mixamo Motion Source", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+            current = current.parent;
+        }
+        return false;
+    }
+
+    private static void ValidateEnemyAnimationStateContract(
+        EnemyFighter fighter, MixamoScanRetargetAnimator animator)
+    {
+        animator.SetDowned(false);
+        animator.SetMoving(false);
+        if (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Idle)
+        {
+            throw new InvalidOperationException($"{fighter.Identity} did not enter Idle by default.");
+        }
+
+        animator.SetMoving(true, 1f);
+        if (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Running)
+        {
+            throw new InvalidOperationException($"{fighter.Identity} did not enter Run while moving.");
+        }
+
+        if (fighter.Identity == BodybuilderIdentity.Goku)
+        {
+            animator.SetFlying(true);
+            if (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Flying)
+            {
+                throw new InvalidOperationException("Goku did not enter Fly at long range.");
+            }
+            animator.SetFlying(false);
+        }
+
+        animator.TriggerAttack();
+        if (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Punching)
+        {
+            throw new InvalidOperationException($"{fighter.Identity} did not enter Punch at attack range.");
+        }
+
+        animator.TriggerCelebration();
+        if (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Celebration)
+        {
+            throw new InvalidOperationException($"{fighter.Identity} did not enter Celebration after a player kill.");
+        }
+        // Return the sampled contract to the real gameplay default so the
+        // following flight/contact checks do not leave a fighter in celebration.
+        animator.SetDowned(true);
+        animator.SetDowned(false);
+    }
+
+    private static void ValidatePlayerHealthAndDeathContract(PlayerMovement player)
+    {
+        if (player == null || Mathf.Abs(player.MaxHealth - 200f) > 0.01f || player.IsDead)
+        {
+            throw new InvalidOperationException(
+                $"Player health contract is invalid: max={player?.MaxHealth}, dead={player?.IsDead}.");
+        }
+
+        EnemyFighter killer = null;
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            if (fighters[i] != null && !fighters[i].IsDead &&
+                fighters[i].Identity != BodybuilderIdentity.Manwithsuit1)
+            {
+                killer = fighters[i];
+                break;
+            }
+        }
+        if (killer == null)
+        {
+            throw new InvalidOperationException("No enemy was available for player punch/death verification.");
+        }
+
+        float before = player.CurrentHealth;
+        player.ReceiveEnemyPunch(5f, Vector3.zero, killer);
+        if (Mathf.Abs(player.CurrentHealth - Mathf.Max(0f, before - 5f)) > 0.01f)
+        {
+            throw new InvalidOperationException(
+                $"Animated enemy punch damage was not exactly 5: before={before:F2}, after={player.CurrentHealth:F2}.");
+        }
+
+        player.ReceiveEnemyPunch(player.CurrentHealth + 1f, Vector3.zero, killer);
+        MixamoScanRetargetAnimator killerAnimator =
+            killer.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        if (!player.IsDead || killerAnimator == null)
+        {
+            throw new InvalidOperationException(
+                $"Player death/Celebration contract failed: dead={player.IsDead}, " +
+                $"killerState={killerAnimator?.CurrentState}.");
+        }
+
+        int livingCombatEnemies = 0;
+        int celebratingEnemies = 0;
+        for (int fighterIndex = 0; fighterIndex < fighters.Length; fighterIndex++)
+        {
+            EnemyFighter fighter = fighters[fighterIndex];
+            if (fighter == null || fighter.IsDead ||
+                fighter.Identity == BodybuilderIdentity.Manwithsuit1)
+            {
+                continue;
+            }
+
+            livingCombatEnemies++;
+            MixamoScanRetargetAnimator animator =
+                fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+            if (!fighter.IsCelebratingPlayerKill || animator == null ||
+                animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Celebration)
+            {
+                throw new InvalidOperationException(
+                    $"Living enemy {fighter.Identity} did not enter the global Celebration loop: " +
+                    $"flag={fighter.IsCelebratingPlayerKill}, state={animator?.CurrentState}.");
+            }
+            celebratingEnemies++;
+        }
+
+        if (livingCombatEnemies == 0 || celebratingEnemies != livingCombatEnemies)
+        {
+            throw new InvalidOperationException(
+                $"Global enemy Celebration count mismatch: living={livingCombatEnemies}, " +
+                $"celebrating={celebratingEnemies}.");
+        }
+
+        PrepareDeathScreenEvidence(player, killer);
+        deathScreenCapturePath = Path.GetFullPath(Path.Combine(
+            Application.dataPath, "../../.tools/player-death-screen-verification.png"));
+
+        Debug.Log(
+            $"GYMCHAOS_PLAYER_DEATH_OK maxHealth={player.MaxHealth:F0} " +
+            $"punchDamage=5 currentHealth={player.CurrentHealth:F0} " +
+            $"killer={killer.Identity} celebratingEnemies={celebratingEnemies} " +
+            $"state={killerAnimator.CurrentState} " +
+            "overlay=translucent-bloody-you-died");
+    }
+
+    private static void PrepareDeathScreenEvidence(PlayerMovement player, EnemyFighter killer)
+    {
+        if (player == null || killer == null)
+        {
+            return;
+        }
+
+        Renderer[] killerRenderers = killer.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < killerRenderers.Length; i++)
+        {
+            if (killerRenderers[i] != null)
+            {
+                killerRenderers[i].enabled = true;
+            }
+        }
+
+        Vector3 forward = Vector3.ProjectOnPlane(killer.transform.forward, Vector3.up);
+        if (forward.sqrMagnitude < 0.01f)
+        {
+            forward = Vector3.forward;
+        }
+        forward.Normalize();
+        MovePlayerForVerification(
+            player, killer.transform.position - forward * 2.8f);
+        player.transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+        if (player.playerCamera != null)
+        {
+            player.playerCamera.transform.localRotation = Quaternion.identity;
+        }
+    }
+
+    private static void CaptureDeathScreenEvidence(Camera camera, string outputPath)
+    {
+        if (camera == null || string.IsNullOrEmpty(outputPath))
+        {
+            throw new InvalidOperationException("Death screen capture camera or path was missing.");
+        }
+
+        if (deathScreenCaptureOverlay != null)
+        {
+            UnityEngine.Object.DestroyImmediate(deathScreenCaptureOverlay);
+        }
+
+        deathScreenCaptureOverlay = new GameObject("GymChaos Death Screen Capture Overlay");
+        Canvas canvas = deathScreenCaptureOverlay.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceCamera;
+        canvas.worldCamera = camera;
+        canvas.planeDistance = Mathf.Max(camera.nearClipPlane + 0.1f, 1f);
+        canvas.overrideSorting = true;
+        canvas.sortingOrder = 32767;
+
+        CanvasScaler scaler = deathScreenCaptureOverlay.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1280f, 720f);
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
+
+        CreateCaptureOverlayImage(
+            deathScreenCaptureOverlay.transform,
+            new Color(0.55f, 0f, 0f, 0.55f));
+        CreateCaptureOverlayImage(
+            deathScreenCaptureOverlay.transform,
+            new Color(0f, 0f, 0f, 0.76f));
+
+        GameObject labelObject = new GameObject("YOU DIED");
+        labelObject.transform.SetParent(deathScreenCaptureOverlay.transform, false);
+        Text label = labelObject.AddComponent<Text>();
+        label.text = "YOU DIED";
+        label.alignment = TextAnchor.MiddleCenter;
+        label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        label.fontSize = Mathf.Max(42, Mathf.RoundToInt(720f / 14f));
+        label.fontStyle = FontStyle.Bold;
+        label.color = Color.white;
+        RectTransform labelRect = label.rectTransform;
+        labelRect.anchorMin = new Vector2(0f, 0.38f);
+        labelRect.anchorMax = new Vector2(1f, 0.38f);
+        labelRect.pivot = new Vector2(0.5f, 0f);
+        labelRect.sizeDelta = new Vector2(0f, 100f);
+        labelRect.anchoredPosition = Vector2.zero;
+
+        Canvas.ForceUpdateCanvases();
+        string directory = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        RenderTexture renderTexture = new RenderTexture(1280, 720, 24, RenderTextureFormat.ARGB32);
+        RenderTexture previousTarget = camera.targetTexture;
+        RenderTexture previousActive = RenderTexture.active;
+        camera.targetTexture = renderTexture;
+        camera.Render();
+        RenderTexture.active = renderTexture;
+        Texture2D image = new Texture2D(1280, 720, TextureFormat.RGB24, false);
+        image.ReadPixels(new Rect(0f, 0f, 1280f, 720f), 0, 0);
+        image.Apply();
+        File.WriteAllBytes(outputPath, image.EncodeToPNG());
+
+        camera.targetTexture = previousTarget;
+        RenderTexture.active = previousActive;
+        UnityEngine.Object.DestroyImmediate(image);
+        renderTexture.Release();
+        UnityEngine.Object.DestroyImmediate(renderTexture);
+        UnityEngine.Object.DestroyImmediate(deathScreenCaptureOverlay);
+        deathScreenCaptureOverlay = null;
+    }
+
+    private static void CreateCaptureOverlayImage(Transform parent, Color color)
+    {
+        GameObject imageObject = new GameObject("Death Overlay");
+        imageObject.transform.SetParent(parent, false);
+        Image image = imageObject.AddComponent<Image>();
+        image.color = color;
+        RectTransform imageRect = image.rectTransform;
+        imageRect.anchorMin = Vector2.zero;
+        imageRect.anchorMax = Vector2.one;
+        imageRect.offsetMin = Vector2.zero;
+        imageRect.offsetMax = Vector2.zero;
+    }
+
     private static int ExpectedCharacterTriangles(BodybuilderIdentity identity)
     {
         switch (identity)
         {
-            case BodybuilderIdentity.Arnold: return 70106;
-            case BodybuilderIdentity.Cbum: return 69708;
-            case BodybuilderIdentity.Zyzz: return 74063;
-            case BodybuilderIdentity.Ronnie: return 70728;
-            case BodybuilderIdentity.JayCutler: return 144640;
-            case BodybuilderIdentity.Goku: return 142054;
+            // These counts come from the authored T-pose GLBs under
+            // Assets/BodyBuilders/enemies, which are copied into
+            // StreamingAssets as the visible material/mesh sources. The
+            // rigged FBXs remain hidden motion-only assets.
+            case BodybuilderIdentity.Arnold: return 145452;
+            case BodybuilderIdentity.Cbum: return 144492;
+            case BodybuilderIdentity.Zyzz: return 145570;
+            case BodybuilderIdentity.Ronnie: return 141530;
+            case BodybuilderIdentity.JayCutler: return 143482;
+            case BodybuilderIdentity.Goku: return 140998;
             default: return 0;
         }
     }

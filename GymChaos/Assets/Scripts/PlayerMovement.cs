@@ -46,6 +46,10 @@ public class PlayerMovement : MonoBehaviour
     public float heldPlateShoveReach = 0.95f;
     public float attackCooldown = 0.28f;
 
+    [Header("Health")]
+    [SerializeField] private float maxHealth = 200f;
+    [SerializeField] private float currentHealth = 200f;
+
     [Header("Interaction")]
     public float interactRange = 5.5f;
     public float carryDistance = 1.45f;
@@ -86,9 +90,16 @@ public class PlayerMovement : MonoBehaviour
     private float cameraFieldOfViewBeforeExercise;
 
     public bool IsExercising => activeExerciseStation != null || pendingWeightStation != null;
+    public float MaxHealth => maxHealth;
+    public float CurrentHealth => currentHealth;
+    public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
+    public bool IsDead { get; private set; }
 
     private void Start()
     {
+        maxHealth = 200f;
+        currentHealth = maxHealth;
+        IsDead = false;
         characterController = GetComponent<CharacterController>();
 
         if (playerCamera == null)
@@ -117,6 +128,12 @@ public class PlayerMovement : MonoBehaviour
     {
         if (playerCamera == null)
         {
+            return;
+        }
+
+        if (IsDead)
+        {
+            HandleCursorToggle();
             return;
         }
 
@@ -157,13 +174,52 @@ public class PlayerMovement : MonoBehaviour
 
     public void ReceiveImpact(Vector3 impulse)
     {
-        if (IsExercising)
+        if (IsDead || IsExercising)
         {
             return;
         }
 
         impactVelocity += new Vector3(impulse.x, 0f, impulse.z);
         verticalVelocity = Mathf.Max(verticalVelocity, impulse.y * 0.2f);
+    }
+
+    public void ReceiveEnemyPunch(float damage, Vector3 impulse, EnemyFighter attacker)
+    {
+        if (IsDead || damage <= 0f)
+        {
+            return;
+        }
+
+        currentHealth = Mathf.Clamp(currentHealth - damage, 0f, maxHealth);
+        ReceiveImpact(impulse);
+        if (currentHealth <= 0f)
+        {
+            Die(attacker);
+        }
+    }
+
+    private void Die(EnemyFighter attacker)
+    {
+        if (IsDead)
+        {
+            return;
+        }
+
+        IsDead = true;
+        currentHealth = 0f;
+        planarVelocity = Vector3.zero;
+        impactVelocity = Vector3.zero;
+        verticalVelocity = 0f;
+        nearbyExerciseStation = null;
+        pendingWeightStation = null;
+        if (activeExerciseStation != null)
+        {
+            EndExercise();
+        }
+        LockCursor(false);
+        // Player death is a global end-of-round state: every living combat
+        // enemy enters its looping Celebration clip, not only the attacker.
+        EnemyFighter.CelebrateAllLivingEnemies();
     }
 
     private void HandleMovement()
@@ -329,7 +385,7 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 origin = playerCamera.transform.position;
         Vector3 direction = playerCamera.transform.forward;
-        if (!Physics.SphereCast(origin, punchRadius, direction, out RaycastHit hit, punchRange, ~0, QueryTriggerInteraction.Ignore))
+        if (!Physics.SphereCast(origin, punchRadius, direction, out RaycastHit hit, punchRange, ~0, QueryTriggerInteraction.Collide))
         {
             return;
         }
@@ -382,7 +438,7 @@ public class PlayerMovement : MonoBehaviour
         handRig?.TriggerShove();
 
         Vector3 origin = transform.position + Vector3.up * (characterController.height * 0.45f);
-        int hitCount = Physics.OverlapSphereNonAlloc(origin + transform.forward * 1.05f, 1.1f, overlapHits, ~0, QueryTriggerInteraction.Ignore);
+        int hitCount = Physics.OverlapSphereNonAlloc(origin + transform.forward * 1.05f, 1.1f, overlapHits, ~0, QueryTriggerInteraction.Collide);
         Vector3 impulse = transform.forward * shoveForce + Vector3.up * 0.75f;
         HashSet<EnemyFighter> damagedFighters = new HashSet<EnemyFighter>();
 
@@ -426,7 +482,7 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 origin = playerCamera.transform.position;
         Vector3 direction = heldItemShoveDirection;
-        if (!Physics.SphereCast(origin, heldBarShoveRadius, direction, out RaycastHit hit, heldBarShoveRange, ~0, QueryTriggerInteraction.Ignore))
+        if (!Physics.SphereCast(origin, heldBarShoveRadius, direction, out RaycastHit hit, heldBarShoveRange, ~0, QueryTriggerInteraction.Collide))
         {
             return;
         }
@@ -468,7 +524,7 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 origin = playerCamera.transform.position;
         Vector3 direction = heldItemShoveDirection;
-        if (!Physics.SphereCast(origin, heldPlateShoveRadius, direction, out RaycastHit hit, heldPlateShoveRange, ~0, QueryTriggerInteraction.Ignore))
+        if (!Physics.SphereCast(origin, heldPlateShoveRadius, direction, out RaycastHit hit, heldPlateShoveRange, ~0, QueryTriggerInteraction.Collide))
         {
             return;
         }
@@ -913,6 +969,13 @@ public class PlayerMovement : MonoBehaviour
 
     private void OnGUI()
     {
+        if (IsDead)
+        {
+            DrawDeathOverlay();
+            return;
+        }
+
+        DrawBloodyOverlay();
         GUI.color = Color.white;
         GUIStyle hudStyle = new GUIStyle(GUI.skin.label);
         hudStyle.fontSize = 17;
@@ -949,6 +1012,42 @@ public class PlayerMovement : MonoBehaviour
             promptStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
             GUI.Label(promptRect, nearbyExerciseStation.GetInteractionPrompt(), promptStyle);
         }
+    }
+
+    private void DrawBloodyOverlay()
+    {
+        if (MissingHealth01 <= 0.001f)
+        {
+            return;
+        }
+
+        // The damage feedback is visible during normal play and scales with
+        // missing health; the death path adds its own translucent black layer.
+        GUI.color = new Color(0.62f, 0f, 0f, Mathf.Lerp(0f, 0.68f, MissingHealth01));
+        GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+        GUI.color = Color.white;
+    }
+
+    private void DrawDeathOverlay()
+    {
+        // The overlay deliberately remains translucent so the enemy that
+        // delivered the contact punch can continue its Celebration clip behind
+        // the death screen.
+        GUI.color = new Color(0.55f, 0f, 0f, Mathf.Lerp(0f, 0.68f, MissingHealth01));
+        GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+
+        GUI.color = new Color(0f, 0f, 0f, 0.76f);
+        GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
+
+        GUIStyle deathStyle = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = Mathf.Max(42, Screen.height / 14),
+            fontStyle = FontStyle.Bold
+        };
+        deathStyle.normal.textColor = Color.white;
+        GUI.color = Color.white;
+        GUI.Label(new Rect(0f, Screen.height * 0.38f, Screen.width, 100f), "YOU DIED", deathStyle);
     }
 
     private void DrawWeightSelection()

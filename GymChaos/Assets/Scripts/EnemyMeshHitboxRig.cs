@@ -2,9 +2,13 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Replaces the broad enemy root capsule with a moving compound collider and
-/// resolves impact points against the currently deformed character surface.
+/// Replaces the broad enemy root capsule with moving, skeleton-following
+/// compound body colliders and resolves impact points against the currently
+/// deformed character surface. The capsules/spheres are attached to the
+/// fighter Rigidbody, so the player cannot walk through an animated enemy;
+/// their positions follow the actual rig rather than a static root cylinder.
 /// </summary>
+[DefaultExecutionOrder(1100)]
 public sealed class EnemyMeshHitboxRig : MonoBehaviour
 {
     private sealed class Segment
@@ -44,8 +48,10 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
 
         AddSegment("Pelvis hitbox", rig.Hips, rig.Spine, height * 0.085f);
         AddSegment("Chest hitbox", rig.Spine, rig.Head, height * 0.095f);
+        AddSegment("Left shoulder hitbox", rig.LeftShoulder, rig.LeftUpperArm, height * 0.05f);
         AddSegment("Left upper arm hitbox", rig.LeftUpperArm, rig.LeftForearm, height * 0.045f);
         AddSegment("Left forearm hitbox", rig.LeftForearm, rig.LeftHand, height * 0.038f);
+        AddSegment("Right shoulder hitbox", rig.RightShoulder, rig.RightUpperArm, height * 0.05f);
         AddSegment("Right upper arm hitbox", rig.RightUpperArm, rig.RightForearm, height * 0.045f);
         AddSegment("Right forearm hitbox", rig.RightForearm, rig.RightHand, height * 0.038f);
         AddSegment("Left thigh hitbox", rig.LeftThigh, rig.LeftShin, height * 0.045f);
@@ -62,6 +68,7 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         AddSphere("Left foot hitbox", leftFoot, height * 0.045f, Vector3.zero);
         AddSphere("Right foot hitbox", rightFoot, height * 0.045f, Vector3.zero);
         UpdateSegments();
+        Physics.SyncTransforms();
     }
 
     private Transform CreateFollower(string objectName, Transform parent, Vector3 worldPosition)
@@ -86,6 +93,10 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         CapsuleCollider capsule = hitboxObject.AddComponent<CapsuleCollider>();
         capsule.direction = 1;
         capsule.radius = radius;
+        // These are the real compound body colliders. Keeping them physical
+        // makes CharacterController/Rigidbody movement stop at the animated
+        // body while the same colliders remain usable by punch/blood queries.
+        capsule.isTrigger = false;
         segments.Add(new Segment
         {
             start = start,
@@ -108,11 +119,13 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         hitboxObject.transform.position = anchor.position + worldOffset;
         SphereCollider sphere = hitboxObject.AddComponent<SphereCollider>();
         sphere.radius = radius;
+        sphere.isTrigger = false;
     }
 
     private void LateUpdate()
     {
         UpdateSegments();
+        Physics.SyncTransforms();
     }
 
     private void UpdateSegments()
