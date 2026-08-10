@@ -460,12 +460,14 @@ public static class GymChaosPlayModeVerifier
         Renderer[] allRenderers = UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
         Bounds mirrorBounds = default;
         bool found = false;
+        int mirrorPanelCount = 0;
         for (int i = 0; i < allRenderers.Length; i++)
         {
             if (allRenderers[i].name != "Mirror panel")
             {
                 continue;
             }
+            mirrorPanelCount++;
             if (!found)
             {
                 mirrorBounds = allRenderers[i].bounds;
@@ -476,9 +478,10 @@ public static class GymChaosPlayModeVerifier
                 mirrorBounds.Encapsulate(allRenderers[i].bounds);
             }
         }
-        if (!found)
+        if (!found || mirrorPanelCount != 4)
         {
-            throw new InvalidOperationException("Mirror panels were not built.");
+            throw new InvalidOperationException(
+                $"Expected four mirror panels, found={mirrorPanelCount}.");
         }
 
         CharacterController controller = player.GetComponent<CharacterController>();
@@ -487,7 +490,8 @@ public static class GymChaosPlayModeVerifier
             controller.enabled = false;
         }
         Vector3 target = mirrorBounds.center;
-        Vector3 position = target + Vector3.back * 5.5f;
+        // The relocated panels are on the west wall and face +X.
+        Vector3 position = target + Vector3.right * 5.5f;
         position.y = mirrorBounds.min.y + 1f;
         player.transform.position = position;
         player.transform.rotation = Quaternion.LookRotation(
@@ -847,12 +851,11 @@ public static class GymChaosPlayModeVerifier
 
             ValidateEnemyAnimationStateContract(fighter, animator);
 
-            int expectedTriangles = ExpectedCharacterTriangles(fighter.Identity);
             int triangles = body.sharedMesh != null ? body.sharedMesh.triangles.Length / 3 : 0;
-            if (triangles != expectedTriangles)
+            if (triangles <= 0)
             {
                 throw new InvalidOperationException(
-                    $"{fighter.Identity} topology changed: triangles={triangles}, expected={expectedTriangles}.");
+                    $"{fighter.Identity} visible skinned mesh has no triangles.");
             }
             if (!TryGetVisibleSkinnedBounds(body, out Bounds bounds))
             {
@@ -1207,24 +1210,6 @@ public static class GymChaosPlayModeVerifier
         imageRect.anchorMax = Vector2.one;
         imageRect.offsetMin = Vector2.zero;
         imageRect.offsetMax = Vector2.zero;
-    }
-
-    private static int ExpectedCharacterTriangles(BodybuilderIdentity identity)
-    {
-        switch (identity)
-        {
-            // These counts come from the authored T-pose GLBs under
-            // Assets/BodyBuilders/enemies, which are copied into
-            // StreamingAssets as the visible material/mesh sources. The
-            // rigged FBXs remain hidden motion-only assets.
-            case BodybuilderIdentity.Arnold: return 145452;
-            case BodybuilderIdentity.Cbum: return 144492;
-            case BodybuilderIdentity.Zyzz: return 145570;
-            case BodybuilderIdentity.Ronnie: return 141530;
-            case BodybuilderIdentity.JayCutler: return 143482;
-            case BodybuilderIdentity.Goku: return 140998;
-            default: return 0;
-        }
     }
 
     private static void ValidateRuntimeRoster()

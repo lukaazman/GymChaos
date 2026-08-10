@@ -149,8 +149,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         public Transform Spine;
         public Transform Chest;
         public Transform Head;
+        public Transform LeftShoulder;
         public Transform LeftUpperArm;
         public Transform LeftForearm;
+        public Transform RightShoulder;
         public Transform RightUpperArm;
         public Transform RightForearm;
         public Transform LeftThigh;
@@ -169,17 +171,23 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             Root, Hips, Spine, Chest, Head,
             LeftUpperArm, LeftForearm, RightUpperArm, RightForearm,
             LeftThigh, LeftShin, RightThigh, RightShin,
-            LeftHand, RightHand
+            LeftHand, RightHand, LeftShoulder, RightShoulder
         };
     }
 
     public static BodybuilderEnemyVisual Build(GameObject enemy, BodybuilderIdentity identity)
     {
+        // The final FBX is the per-enemy T-pose scan with its fitted Mixamo
+        // skeleton and authored UV/material layout.  Keep that hierarchy as
+        // the visible body; the legacy procedural GLB loader below is only a
+        // recovery fallback when an FBX is genuinely unavailable.
+        if (ExternalRiggedCharacterVisual.TryBuild(enemy, identity))
+        {
+            return null;
+        }
+
         BodybuilderEnemyVisual visual = enemy.AddComponent<BodybuilderEnemyVisual>();
-        // Keep the original scan topology, UVs and model-specific proportions.
-        // The externally baked FBXs visibly shrank and tore several scans in
-        // motion, so gameplay uses the established GLB path until those rigs
-        // can match the source bodies without deformation.
+        // Recovery-only path for a missing/invalid final FBX.
         visual.StartCoroutine(visual.BuildVisual(identity, false));
         return visual;
     }
@@ -585,9 +593,16 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         rig.Chest = CreateBone("Chest", rig.Spine, visualRoot, new Vector3(0f, bottom + height * 0.72f, z));
         rig.Head = CreateBone("Head", rig.Chest, visualRoot, ToModelPoint(bounds, new Vector2(0f, 0.84f)));
 
-        rig.LeftUpperArm = CreateBone("Left Upper Arm", rig.Chest, visualRoot, ToModelPoint(bounds, profile.LeftShoulder));
+        // Keep the shoulder joint in the runtime GLB rig. The earlier rig
+        // started at upper-arm level, so Mixamo shoulder motion was discarded
+        // and the visible punch/run arc was only the distal half of the arm.
+        Vector2 leftShoulderRoot = new Vector2(profile.LeftShoulder.x * 0.55f, profile.LeftShoulder.y);
+        Vector2 rightShoulderRoot = new Vector2(profile.RightShoulder.x * 0.55f, profile.RightShoulder.y);
+        rig.LeftShoulder = CreateBone("Left Shoulder", rig.Chest, visualRoot, ToModelPoint(bounds, leftShoulderRoot));
+        rig.LeftUpperArm = CreateBone("Left Upper Arm", rig.LeftShoulder, visualRoot, ToModelPoint(bounds, profile.LeftShoulder));
         rig.LeftForearm = CreateBone("Left Forearm", rig.LeftUpperArm, visualRoot, ToModelPoint(bounds, profile.LeftElbow, profile.LeftArmZ * 0.55f));
-        rig.RightUpperArm = CreateBone("Right Upper Arm", rig.Chest, visualRoot, ToModelPoint(bounds, profile.RightShoulder));
+        rig.RightShoulder = CreateBone("Right Shoulder", rig.Chest, visualRoot, ToModelPoint(bounds, rightShoulderRoot));
+        rig.RightUpperArm = CreateBone("Right Upper Arm", rig.RightShoulder, visualRoot, ToModelPoint(bounds, profile.RightShoulder));
         rig.RightForearm = CreateBone("Right Forearm", rig.RightUpperArm, visualRoot, ToModelPoint(bounds, profile.RightElbow, profile.RightArmZ * 0.55f));
 
         rig.LeftThigh = CreateBone("Left Thigh", rig.Hips, visualRoot, ToModelPoint(bounds, profile.LeftHip, profile.LeftHipZ));
@@ -598,10 +613,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         rig.RightHandPosition = ToModelPoint(bounds, profile.RightHand, profile.RightArmZ);
         rig.LeftHand = CreateBone(
             "Left Hand", rig.LeftForearm, visualRoot,
-            Vector3.Lerp(ToModelPoint(bounds, profile.LeftElbow, profile.LeftArmZ * 0.55f), rig.LeftHandPosition, 0.72f));
+            rig.LeftHandPosition);
         rig.RightHand = CreateBone(
             "Right Hand", rig.RightForearm, visualRoot,
-            Vector3.Lerp(ToModelPoint(bounds, profile.RightElbow, profile.RightArmZ * 0.55f), rig.RightHandPosition, 0.72f));
+            rig.RightHandPosition);
         rig.LeftFootPosition = ToModelPoint(bounds, profile.LeftFoot, profile.LeftFootZ);
         rig.RightFootPosition = ToModelPoint(bounds, profile.RightFoot, profile.RightFootZ);
         return rig;
@@ -661,6 +676,9 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Vector3 rightHip3 = ToModelPoint(bounds, profile.RightHip, profile.RightHipZ);
         Vector3 rightKnee3 = ToModelPoint(bounds, profile.RightKnee, profile.RightKneeZ);
         Vector3 rightFoot3 = ToModelPoint(bounds, profile.RightFoot, profile.RightFootZ);
+        bool[] gokuHeadComponents = identity == BodybuilderIdentity.Goku
+            ? MarkGokuHeadComponents(vertices, triangles, bounds)
+            : null;
         for (int i = 0; i < vertices.Length; i++)
         {
             Vector3 vertex = vertices[i];
@@ -682,12 +700,16 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 DistanceToSegment(vertex, rightElbow3, rightReach));
             bool useLeftArm = leftDistance < armRadius && leftDistance <= rightDistance;
             bool useRightArm = rightDistance < armRadius && rightDistance < leftDistance;
+            bool gokuCenterLowerBody = identity == BodybuilderIdentity.Goku &&
+                normalizedY < 0.46f && Mathf.Abs(vertex.x - bounds.center.x) < height * 0.13f;
             bool suitRightDistal = identity == BodybuilderIdentity.Manwithsuit1 &&
                 vertex.x > bounds.center.x + height * 0.135f &&
                 normalizedY > 0.52f && normalizedY < 0.73f &&
                 Vector3.Distance(vertex, rightHand3) < height * 0.18f;
 
-            if (normalizedY >= profile.NeckY && Mathf.Abs(vertex.x - bounds.center.x) <= profile.HeadHalfWidth * height)
+            if ((gokuHeadComponents != null && gokuHeadComponents[i]) ||
+                (identity == BodybuilderIdentity.Goku && normalizedY > 0.78f) ||
+                (normalizedY >= profile.NeckY && Mathf.Abs(vertex.x - bounds.center.x) <= profile.HeadHalfWidth * height))
             {
                 weights[i] = SingleBone(4);
             }
@@ -707,15 +729,21 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                     ? SingleBone(14)
                     : ArmWeightWithHand(vertex, rightShoulder3, rightElbow3, rightHand3, 7, 8, 14);
             }
-            else if (identity == BodybuilderIdentity.Zyzz && useLeftArm)
+            else if (useLeftArm)
             {
-                weights[i] = ZyzzArmWeight(
-                    vertex, leftShoulder3, leftElbow3, leftHand3, 5, 6, height);
+                weights[i] = ArmWeightWithHand(
+                    vertex, leftShoulder3, leftElbow3, leftHand3, 5, 6, 13);
             }
-            else if (identity == BodybuilderIdentity.Zyzz && useRightArm)
+            else if (useRightArm)
             {
-                weights[i] = ZyzzArmWeight(
-                    vertex, rightShoulder3, rightElbow3, rightHand3, 7, 8, height);
+                weights[i] = ArmWeightWithHand(
+                    vertex, rightShoulder3, rightElbow3, rightHand3, 7, 8, 14);
+            }
+            else if (gokuCenterLowerBody)
+            {
+                // Keep the wide gi/pelvis center on the hips instead of
+                // averaging it into whichever upper-leg surface is nearest.
+                weights[i] = SingleBone(1);
             }
             else if (normalizedY < 0.51f)
             {
@@ -733,15 +761,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             }
             else
             {
-                if (useLeftArm)
-                {
-                    weights[i] = SegmentWeight(vertex, leftShoulder3, leftElbow3, leftHand3, 5, 6);
-                }
-                else if (useRightArm)
-                {
-                    weights[i] = SegmentWeight(vertex, rightShoulder3, rightElbow3, rightHand3, 7, 8);
-                }
-                else if (normalizedY < 0.62f)
+                if (normalizedY < 0.62f)
                 {
                     weights[i] = SingleBone(1);
                 }
@@ -834,6 +854,53 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             }
 
         }
+    }
+
+    private static bool[] MarkGokuHeadComponents(
+        Vector3[] vertices, int[] triangles, Bounds bounds)
+    {
+        bool[] headVertices = new bool[vertices.Length];
+        if (vertices.Length == 0 || triangles.Length < 3)
+        {
+            return headVertices;
+        }
+
+        int[] parents = new int[vertices.Length];
+        for (int i = 0; i < parents.Length; i++)
+        {
+            parents[i] = i;
+        }
+        for (int i = 0; i + 2 < triangles.Length; i += 3)
+        {
+            UnionVertices(parents, triangles[i], triangles[i + 1]);
+            UnionVertices(parents, triangles[i], triangles[i + 2]);
+        }
+
+        Dictionary<int, float> componentMaxY = new Dictionary<int, float>();
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            int root = FindVertexRoot(parents, i);
+            if (!componentMaxY.TryGetValue(root, out float maximumY) ||
+                vertices[i].y > maximumY)
+            {
+                componentMaxY[root] = vertices[i].y;
+            }
+        }
+
+        float headThreshold = bounds.min.y + bounds.size.y * 0.78f;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            int root = FindVertexRoot(parents, i);
+            if (componentMaxY[root] >= headThreshold)
+            {
+                // Hair spikes and rear hair/gi islands are disconnected from
+                // the face. Binding the complete island to Head prevents its
+                // lower vertices from being accidentally assigned to an arm
+                // just because the island crosses the arm height band.
+                headVertices[i] = true;
+            }
+        }
+        return headVertices;
     }
 
     private static int FindVertexRoot(int[] parents, int index)

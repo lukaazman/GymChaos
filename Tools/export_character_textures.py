@@ -8,9 +8,17 @@ import bpy
 
 
 ROOT = Path("D:/GitHub/GymChaos")
-SOURCE_ROOT = ROOT / "GymChaos/Assets/StreamingAssets/BodyBuilders"
+# The runtime FBXs are built from these authored T-pose scans.  Extracting
+# from the older StreamingAssets GLBs produces a valid-looking image with a
+# different UV atlas, which is exactly the material mismatch this tool must
+# avoid.
+SOURCE_ROOT = ROOT / "Assets/BodyBuilders/enemies"
 OUTPUT_ROOT = ROOT / "GymChaos/Assets/Resources/Characters/Textures"
 CHARACTERS = ("arnold", "cbum", "zyzz", "ronnie", "jay", "goku", "manwithsuit1")
+SOURCE_OVERRIDES = {
+    # Reception keeps its own authored source outside the six combat scans.
+    "manwithsuit1": ROOT / "GymChaos/Assets/StreamingAssets/BodyBuilders/manwithsuit1.glb",
+}
 
 
 def clear_scene() -> None:
@@ -39,7 +47,8 @@ def find_base_color_image():
 
 def export_texture(name: str) -> None:
     clear_scene()
-    bpy.ops.import_scene.gltf(filepath=str(SOURCE_ROOT / f"{name}.glb"))
+    source = SOURCE_OVERRIDES.get(name, SOURCE_ROOT / f"{name}.glb")
+    bpy.ops.import_scene.gltf(filepath=str(source))
     image = find_base_color_image()
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     destination = OUTPUT_ROOT / f"{name}.png"

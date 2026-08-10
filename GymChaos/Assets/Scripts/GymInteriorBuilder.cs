@@ -223,19 +223,35 @@ public static class GymInteriorBuilder
         Transform parent, Vector3 center, float width, float depth,
         Material mirror, Material frame, Camera playerCamera)
     {
-        float panelWidth = Mathf.Min(4.5f, (width - 5f) / 6f);
-        Renderer[] mirrorRenderers = new Renderer[5];
-        for (int i = -2; i <= 2; i++)
+        // The short west wall is the camera-facing wall beside the Smith
+        // machines. Keep the north windows and the south poster wall clear,
+        // and use four panels rotated onto the wall instead of filling the long
+        // wall with a row of mirrors. Leave a margin at both ends and account
+        // for every inter-panel gap so the panels never overlap.
+        const int mirrorCount = 4;
+        float panelGap = 0.18f;
+        float usableDepth = Mathf.Max(
+            4f, depth - 4f - panelGap * (mirrorCount - 1));
+        float panelWidth = Mathf.Min(5.1f, usableDepth / mirrorCount);
+        Renderer[] mirrorRenderers = new Renderer[mirrorCount];
+        for (int i = 0; i < mirrorCount; i++)
         {
-            Vector3 panelCenter = center + new Vector3(i * (panelWidth + 0.18f), 3.05f, -depth * 0.5f + 0.2f);
+            float zOffset = (i - (mirrorCount - 1) * 0.5f) * (panelWidth + panelGap);
+            Vector3 panelCenter = center + new Vector3(-width * 0.5f + 0.2f, 3.05f, zOffset);
             GameObject panel = CreateBox("Mirror panel", parent, panelCenter, new Vector3(panelWidth, 4.6f, 0.055f), mirror, false);
-            mirrorRenderers[i + 2] = panel.GetComponent<Renderer>();
-            CreateBox("Mirror top frame", parent, panelCenter + Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
-            CreateBox("Mirror bottom frame", parent, panelCenter - Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
+            panel.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
+            mirrorRenderers[i] = panel.GetComponent<Renderer>();
+            GameObject topFrame = CreateBox("Mirror top frame", parent, panelCenter + Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
+            topFrame.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
+            GameObject bottomFrame = CreateBox("Mirror bottom frame", parent, panelCenter - Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
+            bottomFrame.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
         }
 
-        Vector3 mirrorPlanePoint = center + new Vector3(0f, 3.05f, -depth * 0.5f + 0.23f);
-        PlanarGymMirror.Create(parent, playerCamera, mirrorRenderers, mirrorPlanePoint, Vector3.forward);
+        Vector3 mirrorPlanePoint = center + new Vector3(-width * 0.5f + 0.23f, 3.05f, 0f);
+        PlanarGymMirror.Create(parent, playerCamera, mirrorRenderers, mirrorPlanePoint, Vector3.right);
+        Debug.Log(
+            $"GYMCHAOS_MIRRORS_OK count={mirrorCount} wall=West normal=+X " +
+            $"panelWidth={panelWidth:F2} panelGap={panelGap:F2}", parent);
 
         ReflectionProbe probe = new GameObject("Gym Reflection Probe").AddComponent<ReflectionProbe>();
         probe.transform.SetParent(parent, false);
@@ -335,22 +351,26 @@ public static class GymInteriorBuilder
 
         string[] posterResources =
         {
-            "Environment/Posters/Arnold_1974",
-            "Environment/Posters/Franco_Columbu_1970s",
-            "Environment/Posters/Frank_Zane_2011",
-            "Environment/Posters/George_Eiferman_1950",
-            "Environment/Posters/Charles_Atlas_1920"
+            "Environment/Posters/Tom_Platz_1995",
+            "Environment/Posters/Lee_Priest_Pec_Fly",
+            "Environment/Posters/Flex_Wheeler_2023",
+            "Environment/Posters/Kevin_Levrone_2013",
+            "Environment/Posters/Markus_Ruhl_2004",
+            "Environment/Posters/Phil_Heath_2012"
         };
+        float posterWidth = Mathf.Min(4.0f, (width - 5f) / posterResources.Length);
+        float posterHeight = 4.9f;
+        float posterGap = 0.38f;
         for (int i = 0; i < posterResources.Length; i++)
         {
-            float x = Mathf.Lerp(-width * 0.28f, width * 0.28f, (float)i / (posterResources.Length - 1));
-            Vector3 posterPosition = center + new Vector3(x, 6.68f, -depth * 0.5f + 0.185f);
+            float x = (i - (posterResources.Length - 1) * 0.5f) * (posterWidth + posterGap);
+            Vector3 posterPosition = center + new Vector3(x, 5.25f, -depth * 0.5f + 0.185f);
             Material poster = CreatePosterMaterial(posterResources[i], i);
-            CreateBox("Golden era bodybuilder poster", parent, posterPosition, new Vector3(2.15f, 2.15f, 0.055f), poster, false);
+            CreateBox("Golden era bodybuilder poster", parent, posterPosition, new Vector3(posterWidth, posterHeight, 0.055f), poster, false);
             CreateBox("Golden poster frame", parent, posterPosition + Vector3.forward * 0.035f,
-                new Vector3(2.32f, 2.32f, 0.035f), trim, false);
+                new Vector3(posterWidth + 0.18f, posterHeight + 0.18f, 0.035f), trim, false);
             CreateBox("Golden era bodybuilder poster", parent, posterPosition + Vector3.forward * 0.075f,
-                new Vector3(2.15f, 2.15f, 0.025f), poster, false);
+                new Vector3(posterWidth, posterHeight, 0.025f), poster, false);
         }
     }
 

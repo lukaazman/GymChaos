@@ -1,13 +1,18 @@
-# Golden-era gym poster sources
+# Bodybuilder gym poster sources
 
 The runtime poster materials load the image files in this folder from
 `Resources/Environment/Posters`.
 
-- `Arnold_1974.jpg` - Arnold Schwarzenegger before the 1974 Mr. Olympia; Wikimedia Commons marks the file public domain in the United States: https://commons.wikimedia.org/wiki/File:Arnold_Schwarzenegger_1974.jpg
-- `Franco_Columbu_1970s.jpg` - Franco Columbu, early 1970s; Wikimedia Commons marks the file public domain: https://commons.wikimedia.org/wiki/File:Franco_Columbu_Sardegna_anni_70.jpg
-- `George_Eiferman_1950.png` - George Eiferman, 1950; public-domain magazine image: https://commons.wikimedia.org/wiki/File:George_Eiferman.png
-- `Charles_Atlas_1920.jpg` - Charles Atlas, circa 1920; public domain in the United States: https://commons.wikimedia.org/wiki/File:Charles_Atlas_c1920.jpg
-- `Frank_Zane_2011.jpg` - Frank Zane portrait by David Shankbone; CC BY 3.0: https://commons.wikimedia.org/wiki/File:Frank_Zane_2011_Shankbone.JPG
+- `Tom_Platz_1995.jpg` - Tom Platz with Paolo Tassetto, 1995; CC BY-SA 4.0: https://commons.wikimedia.org/wiki/File:13_Maggio_1995_Paolo_Tassetto_con_Tom_Platz,_Mr._Universo_(cropped).JPG
+- `Lee_Priest_Pec_Fly.jpg` - Lee Priest at Sam's Fitness; CC BY 3.0: https://commons.wikimedia.org/wiki/File:Lee_Priest_Sam%27s_Fitness_Pec_Fly.jpg
+- `Flex_Wheeler_2023.jpg` - Flex Wheeler interview photograph; CC BY 2.0: https://commons.wikimedia.org/wiki/File:Flex_Kenny_Wheeler_interview_for_lifetime_achievement_award_(52756156088)_(cropped).jpg
+- `Kevin_Levrone_2013.jpg` - Kevin Levrone; CC BY-SA 4.0: https://commons.wikimedia.org/wiki/File:Kevin_Levrone.jpg
+- `Markus_Ruhl_2004.jpg` - Markus Rühl posing, 2004; CC BY-SA 3.0/GFDL: https://commons.wikimedia.org/wiki/File:Bodybuilder.jpg
+- `Phil_Heath_2012.jpg` - Phil Heath; CC0: https://commons.wikimedia.org/wiki/File:Phil_Heath.JPG
+
+The images are stored locally as poster materials and are cropped/scaled by the
+runtime room builder. Attribution and license links are kept here alongside
+the imported files.
 
 If a build does not contain the optional image files, the room code keeps a
 golden fallback material so the wall layout remains functional.

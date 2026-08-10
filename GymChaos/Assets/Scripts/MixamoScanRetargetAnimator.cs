@@ -3,10 +3,9 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Samples the externally baked Mixamo skeleton, but applies only its bone
-/// rotation deltas to the visible final FBX rig. The sampler and visible mesh
-/// use the same exported bind hierarchy, so the authored T-pose weights stay
-/// aligned through Idle, Run, Punch, and Goku Fly.
+/// Samples a hidden copy of the same per-enemy Mixamo FBX that is rendered by
+/// ExternalRiggedCharacterVisual. Only clip rotation deltas are copied to the
+/// visible rig, keeping each scan's T-pose bind/material layout intact.
 /// </summary>
 public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 {
@@ -365,13 +364,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             return;
         }
 
-        // The downloaded Punch clip contains a large lateral torso turn. It
-        // was authored for a generic side-on attacker, while this game keeps
-        // each enemy facing the player. Blend the axial bones back to their
-        // Apply the facing correction at full strength in the first sampled
-        // Punch frame. A gradual blend here exposed a visible look-aside at
-        // the start of every attack; only the arm motion and its target-facing
-        // reach should remain animated.
+        // The downloaded Punch clip contains a lateral torso turn. Enemies
+        // are already placed facing their target, so keep the torso/head and
+        // shoulder caps on that facing axis and solve the actual reach below.
         BlendTargetToRestRotation(rig.Hips, 1f);
         BlendTargetToRestRotation(rig.Spine, 1f);
         BlendTargetToRestRotation(rig.Chest, 1f);
@@ -392,7 +387,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             if (pairs[i].Target == target)
             {
                 Quaternion rest = transform.rotation * pairs[i].TargetRestInOwner;
-                target.rotation = Quaternion.Slerp(target.rotation, rest, Mathf.Clamp01(blend));
+                target.rotation = Quaternion.Slerp(
+                    target.rotation, rest, Mathf.Clamp01(blend));
                 return;
             }
         }

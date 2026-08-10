@@ -7,7 +7,7 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
 
     public override uint GetVersion()
     {
-        return 2;
+        return 3;
     }
 
     private void OnPreprocessModel()
@@ -32,6 +32,10 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
         importer.importAnimation = true;
         importer.animationType = ModelImporterAnimationType.Generic;
         importer.avatarSetup = ModelImporterAvatarSetup.NoAvatar;
+        importer.animationCompression = ModelImporterAnimationCompression.Off;
+        importer.animationRotationError = 0.001f;
+        importer.animationPositionError = 0.001f;
+        importer.animationScaleError = 0.001f;
         importer.optimizeGameObjects = false;
         importer.preserveHierarchy = true;
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
@@ -41,8 +45,11 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
         for (int i = 0; i < clips.Length; i++)
         {
             bool run = clips[i].name.IndexOf("run", StringComparison.OrdinalIgnoreCase) >= 0;
-            clips[i].loopTime = run;
-            clips[i].loopPose = run;
+            bool idle = clips[i].name.IndexOf("idle", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool fly = clips[i].name.IndexOf("fly", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool celebration = clips[i].name.IndexOf("celebration", StringComparison.OrdinalIgnoreCase) >= 0;
+            clips[i].loopTime = run || idle || fly || celebration;
+            clips[i].loopPose = run || idle || fly || celebration;
         }
         if (clips.Length > 0)
         {
