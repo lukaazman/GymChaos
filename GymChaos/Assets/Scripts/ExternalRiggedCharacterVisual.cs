@@ -12,8 +12,8 @@ using UnityEngine.Rendering;
 [DefaultExecutionOrder(1000)]
 public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 {
-    private const float GameplayEnemyHeight = 2.30f;
-    private const float ArnoldGameplayHeight = 2.35f;
+    public const float StandardGameplayHeight = 2.30f;
+    public const float ArnoldGameplayHeight = 2.35f;
 
     private Transform runtimeModelRoot;
     private SkinnedMeshRenderer runtimeRenderer;
@@ -152,8 +152,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
     private void LateUpdate()
     {
-        if ((!dynamicHeightCorrection && heightCorrectionFrames <= 0) ||
-            runtimeModelRoot == null || runtimeRenderer == null)
+        if (runtimeModelRoot == null || runtimeRenderer == null)
         {
             return;
         }
@@ -167,29 +166,29 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return;
         }
 
-        if (!dynamicHeightCorrection)
+        if (heightCorrectionFrames > 0)
         {
             heightCorrectionFrames--;
-        }
-        float measuredHeight = runtimeRenderer.bounds.size.y;
-        if (measuredHeight <= 0.01f)
-        {
-            return;
-        }
-
-        float correction = GetGameplayHeight(runtimeIdentity) / measuredHeight;
-        if (Mathf.Abs(correction - 1f) > 0.001f)
-        {
-            runtimeModelRoot.localScale *= correction;
-            Physics.SyncTransforms();
+            float measuredHeight = runtimeRenderer.bounds.size.y;
+            if (measuredHeight > 0.01f)
+            {
+                float correction = GetGameplayHeight(runtimeIdentity) / measuredHeight;
+                if (Mathf.Abs(correction - 1f) > 0.001f)
+                {
+                    runtimeModelRoot.localScale *= correction;
+                    Physics.SyncTransforms();
+                }
+            }
         }
 
-        Bounds correctedBounds = runtimeRenderer.bounds;
-        float floorOffset = 0.02f - correctedBounds.min.y;
-        if (Mathf.Abs(floorOffset) > 0.0005f)
+        // The imported Idle clip can change the skinned AABB by a few
+        // centimetres even after its lower-body rotations are neutralized.
+        // Keep the lowest visible foot contact on the enemy root's floor while
+        // idle so heels/toes do not float as the clip loops.
+        if (heightCorrectionFrames > 0 || fighter == null ||
+            fighter.AnimationState == MixamoScanRetargetAnimator.MotionState.Idle)
         {
-            runtimeModelRoot.position += Vector3.up * floorOffset;
-            Physics.SyncTransforms();
+            KeepVisibleModelOnFloor();
         }
 
         if (!heightCorrectionLogged &&
@@ -200,6 +199,19 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
                 $"height={runtimeRenderer.bounds.size.y:F3}", this);
             heightCorrectionLogged = true;
         }
+    }
+
+    private void KeepVisibleModelOnFloor()
+    {
+        float floorY = transform.position.y + 0.02f;
+        float floorOffset = floorY - runtimeRenderer.bounds.min.y;
+        if (Mathf.Abs(floorOffset) <= 0.0005f || Mathf.Abs(floorOffset) > 0.2f)
+        {
+            return;
+        }
+
+        runtimeModelRoot.position += Vector3.up * floorOffset;
+        Physics.SyncTransforms();
     }
 
     private static string resourcePathForLog(BodybuilderIdentity identity)
@@ -268,7 +280,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         }
         return identity == BodybuilderIdentity.Arnold
             ? ArnoldGameplayHeight
-            : GameplayEnemyHeight;
+            : StandardGameplayHeight;
     }
 
     private static void PreserveImportedTextures(GameObject modelRoot, BodybuilderIdentity identity)
@@ -359,8 +371,10 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             RightHand = FindBone(bones, "righthand"),
             LeftThigh = FindBone(bones, "leftupleg"),
             LeftShin = FindBone(bones, "leftleg"),
+            LeftFoot = FindBone(bones, "leftfoot"),
             RightThigh = FindBone(bones, "rightupleg"),
-            RightShin = FindBone(bones, "rightleg")
+            RightShin = FindBone(bones, "rightleg"),
+            RightFoot = FindBone(bones, "rightfoot")
         };
 
         Transform leftFoot = FindBone(bones, "leftfoot");

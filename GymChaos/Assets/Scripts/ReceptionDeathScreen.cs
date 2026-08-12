@@ -4,6 +4,11 @@ using UnityEngine.Video;
 public sealed class ReceptionDeathScreen : MonoBehaviour
 {
     private const string VideoRelativePath = "Videos/manwithsuit.mp4";
+    private const float PosterGap = 0.38f;
+    private const float PosterFrameHorizontalPadding = 0.09f;
+    private const float PosterScreenGap = 0.32f;
+    private const float ScreenWallMargin = 0.35f;
+    private const float DesiredScreenWidth = 4.5f;
 
     private EnemyFighter watchedFighter;
     private VideoPlayer videoPlayer;
@@ -50,11 +55,43 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         }
         position.y = floorY + 4.15f;
 
+        float screenWidth = DesiredScreenWidth;
+        if (nearestWall == southDistance)
+        {
+            // GymInteriorBuilder lays six framed posters out from the room
+            // centre. Reserve the right-hand margin for this screen and use
+            // the frame's outer edge, so neither the TV mesh nor its frame can
+            // overlap or touch the last poster at the smallest room size.
+            float posterWidth = Mathf.Min(4.0f, (floorBounds.size.x - 5f) / 6f);
+            float posterRightEdge = floorBounds.center.x
+                + 2.5f * (posterWidth + PosterGap)
+                + posterWidth * 0.5f
+                + PosterFrameHorizontalPadding;
+            float rightWallEdge = floorBounds.max.x - ScreenWallMargin;
+            float availableWidth = rightWallEdge - posterRightEdge - PosterScreenGap;
+            screenWidth = Mathf.Max(0.25f, Mathf.Min(DesiredScreenWidth, availableWidth));
+            position.x = posterRightEdge + PosterScreenGap + screenWidth * 0.5f;
+
+            float screenLeftEdge = position.x - screenWidth * 0.5f;
+            float screenRightEdge = position.x + screenWidth * 0.5f;
+            float posterToScreenGap = screenLeftEdge - posterRightEdge;
+            Debug.Log(
+                $"RECEPTION_SCREEN_LAYOUT wall=South posterRight={posterRightEdge:F3} " +
+                $"screenLeft={screenLeftEdge:F3} screenRight={screenRightEdge:F3} " +
+                $"gap={posterToScreenGap:F3} rightMargin={rightWallEdge - screenRightEdge:F3}");
+            if (posterToScreenGap <= 0f || screenRightEdge > rightWallEdge)
+            {
+                Debug.LogError(
+                    $"Reception screen layout overlaps the poster wall: gap={posterToScreenGap:F3} " +
+                    $"rightMargin={rightWallEdge - screenRightEdge:F3}.");
+            }
+        }
+
         GameObject screen = new GameObject("Reception Death Video Screen");
         screen.name = "Reception Death Video Screen";
         screen.transform.SetPositionAndRotation(
             position, Quaternion.LookRotation(roomFacing, Vector3.up));
-        screen.transform.localScale = new Vector3(7.6f, 4.25f, 1f);
+        screen.transform.localScale = new Vector3(screenWidth, screenWidth * 9f / 16f, 1f);
 
         MeshFilter meshFilter = screen.AddComponent<MeshFilter>();
         meshFilter.sharedMesh = CreateFullUvScreenMesh();

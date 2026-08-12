@@ -58,11 +58,28 @@ public class GymExerciseStation : MonoBehaviour
     private bool sceneBarUsedGravity;
     private Transform loadedPlatesRoot;
     private Transform latPulldownBar;
+    private Transform latPulldownHandle;
     private Transform latPulldownCable;
     private Vector3 latBarOriginalLocalPosition;
+    private Quaternion latBarOriginalLocalRotation;
     private Vector3 latCableOriginalLocalPosition;
     private Vector3 latBarExercisePosition;
     private Quaternion latBarExerciseRotation;
+    private sealed class LatWeightStackPart
+    {
+        public Transform transform;
+        public Transform originalParent;
+        public Vector3 originalLocalPosition;
+        public Quaternion originalLocalRotation;
+        public Vector3 originalLocalScale;
+        public bool originalActive;
+    }
+
+    private readonly List<LatWeightStackPart> latWeightStackParts =
+        new List<LatWeightStackPart>();
+    // Drive the selected plates in world Y so imported parent rotations and
+    // scale cannot turn the stack lift into a zero/sideways local movement.
+    private const float LatPulldownStackWorldTravel = 0.12f;
 
     public GymExerciseType ExerciseType => exerciseType;
     public string DisplayName => displayName;
@@ -299,8 +316,7 @@ public class GymExerciseStation : MonoBehaviour
                 localRotation = Quaternion.Euler(24f + GetCardioSway(0.25f), 0f, GetCardioSway(0.45f));
                 break;
             case GymExerciseType.LatPulldown:
-                localPosition = new Vector3(0f, 1.5f - motion * 0.035f, -0.12f);
-                localRotation = Quaternion.Euler(-22f + motion * 6f, 0f, 0f);
+                GetLatPulldownCameraPose(motion, out localPosition, out localRotation);
                 break;
             default:
                 localPosition = new Vector3(0f, 1.34f, -0.32f);
@@ -311,6 +327,14 @@ public class GymExerciseStation : MonoBehaviour
 
     public float GetCameraFieldOfView(float baseFieldOfView)
     {
+        if (exerciseType == GymExerciseType.LatPulldown)
+        {
+            // Frame the authored attachment like the other strength exercises.
+            // The stack is intentionally allowed to sit outside this tighter
+            // view so the moving bar remains the visual focus.
+            return Mathf.Max(40f, baseFieldOfView - 8f);
+        }
+
         if (!IsCardio)
         {
             return baseFieldOfView;
@@ -393,6 +417,7 @@ public class GymExerciseStation : MonoBehaviour
         if (type == GymExerciseType.LatPulldown)
         {
             ConfigureLatPulldownParts(equipment);
+            ConfigureLatPulldownWeightStack(equipment);
         }
         repDuration = GetRepDuration(type);
         if (RequiresWeightSelection)
@@ -655,11 +680,14 @@ public class GymExerciseStation : MonoBehaviour
         if (latPulldownBar != null)
         {
             latBarOriginalLocalPosition = latPulldownBar.localPosition;
+            latBarOriginalLocalRotation = latPulldownBar.localRotation;
+            // Keep the attachment at its authored far-side machine position.
+            // Only its world height changes during the repetition; moving it
+            // to playerPosition would put it on top of the front stack.
+            latBarExercisePosition = latPulldownBar.position;
             latBarExerciseRotation = latPulldownBar.rotation;
-            Vector3 playerForward = playerRotation * Vector3.forward;
-            latBarExercisePosition = playerPosition + Vector3.up * 2.02f + playerForward * 0.56f;
-            latPulldownBar.SetPositionAndRotation(latBarExercisePosition, latBarExerciseRotation);
         }
+        PrepareLatPulldownWeightStack();
         if (latPulldownCable != null) latCableOriginalLocalPosition = latPulldownCable.localPosition;
     }
 
@@ -712,6 +740,7 @@ public class GymExerciseStation : MonoBehaviour
                 Vector3 cableTravel = latPulldownCable.parent != null ? latPulldownCable.parent.InverseTransformDirection(Vector3.down) : Vector3.down;
                 latPulldownCable.localPosition = latCableOriginalLocalPosition + cableTravel * motion * 0.23f;
             }
+            UpdateLatPulldownWeightStack(motion);
         }
     }
 
@@ -741,8 +770,13 @@ public class GymExerciseStation : MonoBehaviour
             loadedPlatesRoot = null;
         }
 
-        if (latPulldownBar != null) latPulldownBar.localPosition = latBarOriginalLocalPosition;
+        if (latPulldownBar != null)
+        {
+            latPulldownBar.localPosition = latBarOriginalLocalPosition;
+            latPulldownBar.localRotation = latBarOriginalLocalRotation;
+        }
         if (latPulldownCable != null) latPulldownCable.localPosition = latCableOriginalLocalPosition;
+        RestoreLatPulldownWeightStack();
         for (int i = 0; i < bikeMovingParts.Count && i < bikeMovingPartRotations.Count; i++)
         {
             if (bikeMovingParts[i] != null) bikeMovingParts[i].localRotation = bikeMovingPartRotations[i];
@@ -988,6 +1022,13 @@ public class GymExerciseStation : MonoBehaviour
         latPulldownBar = CreateLatPulldownAttachmentGroup(equipment);
         if (latPulldownBar != null)
         {
+            latPulldownHandle = FindLatPulldownDescendant(latPulldownBar, "cube.013");
+            if (latPulldownHandle == null)
+            {
+                // Geometry fallback groups may not preserve the authored
+                // Cube.013 name; target the grouped attachment in that case.
+                latPulldownHandle = latPulldownBar;
+            }
             latPulldownCable = null;
             return;
         }
@@ -1034,7 +1075,251 @@ public class GymExerciseStation : MonoBehaviour
             }
         }
 
+        latPulldownHandle = latPulldownBar;
         if (latPulldownCable == latPulldownBar) latPulldownCable = null;
+    }
+
+    private void ConfigureLatPulldownWeightStack(Transform equipment)
+    {
+        latWeightStackParts.Clear();
+        // The exported LatPulldown FBX contains ten individual stack plates
+        // at these stable Blender object names. Keep the lookup explicit so
+        // frame rails and pulleys are never mistaken for loadable plates.
+        for (int index = 14; index <= 23; index++)
+        {
+            Transform part = FindLatPulldownDescendant(equipment, $"cube.{index:000}");
+            if (part == null)
+            {
+                continue;
+            }
+
+            latWeightStackParts.Add(new LatWeightStackPart
+            {
+                transform = part,
+                originalParent = part.parent,
+                originalLocalPosition = part.localPosition,
+                originalLocalRotation = part.localRotation,
+                originalLocalScale = part.localScale,
+                originalActive = part.gameObject.activeSelf
+            });
+        }
+
+        latWeightStackParts.Sort((left, right) =>
+            left.transform.position.y.CompareTo(right.transform.position.y));
+        if (latWeightStackParts.Count == 0)
+        {
+            Debug.LogWarning(
+                "Lat pulldown weight stack plates were not found; the station will still animate the handle.",
+                equipment);
+        }
+    }
+
+    private void GetLatPulldownCameraPose(float motion, out Vector3 localPosition, out Quaternion localRotation)
+    {
+        // Keep the authored attachment as the visual focus. The selected stack
+        // is on the opposite side of the machine and does not need to be in
+        // this tighter first-person exercise view.
+        localPosition = new Vector3(0f, 1.36f - motion * 0.02f, -1.35f);
+        Vector3 cameraWorldPosition = playerPosition + playerRotation * localPosition;
+        Vector3 targetWorldPosition = GetLatPulldownCameraTarget(motion);
+        Vector3 viewDirection = targetWorldPosition - cameraWorldPosition;
+        if (viewDirection.sqrMagnitude < 0.01f)
+        {
+            viewDirection = playerRotation * Vector3.forward;
+        }
+
+        Quaternion worldRotation = Quaternion.LookRotation(viewDirection.normalized, Vector3.up);
+        localRotation = Quaternion.Inverse(playerRotation) * worldRotation;
+    }
+
+    private Vector3 GetLatPulldownCameraTarget(float motion)
+    {
+        bool hasHandle = TryGetRendererBounds(latPulldownHandle, out Bounds handleBounds);
+        bool hasStack = false;
+        Bounds stackBounds = default;
+        for (int index = 0; index < latWeightStackParts.Count; index++)
+        {
+            LatWeightStackPart part = latWeightStackParts[index];
+            if (part == null || part.transform == null || !part.transform.gameObject.activeInHierarchy ||
+                !TryGetRendererBounds(part.transform, out Bounds partBounds))
+            {
+                continue;
+            }
+
+            if (!hasStack)
+            {
+                stackBounds = partBounds;
+                hasStack = true;
+            }
+            else
+            {
+                stackBounds.Encapsulate(partBounds);
+            }
+        }
+
+        if (hasHandle && hasStack)
+        {
+            // Aim at the authored/resting handle position. Compensating for
+            // the current bar travel keeps the camera fixed while the bar
+            // visibly moves down through the lift.
+            return handleBounds.center + Vector3.up * (motion * 0.46f);
+        }
+        if (hasHandle)
+        {
+            return handleBounds.center + Vector3.up * (motion * 0.46f);
+        }
+        if (hasStack)
+        {
+            return stackBounds.center;
+        }
+        return equipmentRoot != null ? equipmentRoot.position : playerPosition + playerRotation * Vector3.forward;
+    }
+
+    private static bool TryGetRendererBounds(Transform root, out Bounds bounds)
+    {
+        bounds = default;
+        if (root == null)
+        {
+            return false;
+        }
+
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        bool found = false;
+        for (int index = 0; index < renderers.Length; index++)
+        {
+            Renderer renderer = renderers[index];
+            if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            if (!found)
+            {
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        return found;
+    }
+
+    private void PrepareLatPulldownWeightStack()
+    {
+        if (latWeightStackParts.Count == 0)
+        {
+            return;
+        }
+
+        int visibleCount = GetLatPulldownStackPlateCount();
+        for (int index = 0; index < latWeightStackParts.Count; index++)
+        {
+            LatWeightStackPart part = latWeightStackParts[index];
+            if (part.transform == null)
+            {
+                continue;
+            }
+
+            // Each menu option maps to one more visible plate. The selected
+            // lower plates are the part coupled to the cable, while the
+            // remaining plates stay at rest, matching a real selector stack.
+            part.transform.gameObject.SetActive(index < visibleCount);
+        }
+    }
+
+    private void UpdateLatPulldownWeightStack(float motion)
+    {
+        if (latWeightStackParts.Count == 0)
+        {
+            return;
+        }
+
+        int visibleCount = GetLatPulldownStackPlateCount();
+        for (int index = 0; index < latWeightStackParts.Count; index++)
+        {
+            LatWeightStackPart part = latWeightStackParts[index];
+            if (part.transform == null)
+            {
+                continue;
+            }
+
+            part.transform.gameObject.SetActive(index < visibleCount);
+            if (index >= visibleCount)
+            {
+                continue;
+            }
+
+            Vector3 authoredWorldPosition = part.originalParent != null
+                ? part.originalParent.TransformPoint(part.originalLocalPosition)
+                : part.originalLocalPosition;
+            part.transform.position = authoredWorldPosition + Vector3.up * (motion * LatPulldownStackWorldTravel);
+            part.transform.localRotation = part.originalLocalRotation;
+        }
+    }
+
+    private int GetLatPulldownStackPlateCount()
+    {
+        if (latWeightStackParts.Count == 0)
+        {
+            return 0;
+        }
+
+        int[] options = LatPulldownWeights;
+        int optionIndex = 0;
+        for (int index = 0; index < options.Length; index++)
+        {
+            if (options[index] == selectedWeight)
+            {
+                optionIndex = index;
+                break;
+            }
+        }
+
+        return Mathf.Clamp(optionIndex + 1, 1, latWeightStackParts.Count);
+    }
+
+    private void RestoreLatPulldownWeightStack()
+    {
+        for (int index = 0; index < latWeightStackParts.Count; index++)
+        {
+            LatWeightStackPart part = latWeightStackParts[index];
+            if (part.transform == null)
+            {
+                continue;
+            }
+
+            part.transform.SetParent(part.originalParent, false);
+            part.transform.localPosition = part.originalLocalPosition;
+            part.transform.localRotation = part.originalLocalRotation;
+            part.transform.localScale = part.originalLocalScale;
+            part.transform.gameObject.SetActive(part.originalActive);
+        }
+    }
+
+    private static Transform FindLatPulldownDescendant(Transform root, string normalizedName)
+    {
+        Transform[] descendants = root.GetComponentsInChildren<Transform>(true);
+        for (int index = 0; index < descendants.Length; index++)
+        {
+            if (NormalizeLatPulldownName(descendants[index].name) == normalizedName)
+            {
+                return descendants[index];
+            }
+        }
+
+        return null;
+    }
+
+    private static string NormalizeLatPulldownName(string value)
+    {
+        return value.ToLowerInvariant()
+            .Replace("\u00e9", "e")
+            .Replace(" ", string.Empty)
+            .Replace("_", string.Empty)
+            .Replace("-", string.Empty);
     }
 
     private static Transform CreateLatPulldownAttachmentGroup(Transform equipment)
@@ -1045,25 +1330,38 @@ public class GymExerciseStation : MonoBehaviour
             return existing;
         }
 
-        string[] requiredNames = { "cylinder.028", "cylinder.029", "cube.013", "cylinder.024", "beziercurve" };
+        string[][] requiredNames =
+        {
+            new[] { "cylinder.028" },
+            new[] { "cylinder.029" },
+            new[] { "cube.013" },
+            new[] { "cylinder.024" },
+            // Blender/FBX versions expose the converted curve as either
+            // BezierCurve or Circle. Prefer the actual front cable and only
+            // use Circle as a compatibility fallback.
+            new[] { "beziercurve", "circle" }
+        };
         Transform[] descendants = equipment.GetComponentsInChildren<Transform>(true);
         List<Transform> attachmentParts = new List<Transform>();
         for (int nameIndex = 0; nameIndex < requiredNames.Length; nameIndex++)
         {
             Transform match = null;
-            for (int i = 0; i < descendants.Length; i++)
+            for (int aliasIndex = 0; aliasIndex < requiredNames[nameIndex].Length && match == null; aliasIndex++)
             {
-                string normalized = descendants[i].name.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
-                if (normalized == requiredNames[nameIndex])
+                string expected = requiredNames[nameIndex][aliasIndex];
+                for (int i = 0; i < descendants.Length; i++)
                 {
-                    match = descendants[i];
-                    break;
+                    if (NormalizeLatPulldownName(descendants[i].name) == expected)
+                    {
+                        match = descendants[i];
+                        break;
+                    }
                 }
             }
 
             if (match == null)
             {
-                Debug.LogWarning($"Lat pulldown attachment is missing scene part '{requiredNames[nameIndex]}'. Falling back to geometry detection.");
+                Debug.LogWarning($"Lat pulldown attachment is missing scene part '{string.Join(" / ", requiredNames[nameIndex])}'. Falling back to geometry detection.");
                 return null;
             }
 
@@ -1073,15 +1371,26 @@ public class GymExerciseStation : MonoBehaviour
         Renderer firstRenderer = attachmentParts[0].GetComponentInChildren<Renderer>(true);
         Vector3 groupCenter = firstRenderer != null ? firstRenderer.bounds.center : attachmentParts[0].position;
         Bounds groupBounds = new Bounds(groupCenter, Vector3.zero);
+        Bounds handleBounds = groupBounds;
         for (int i = 0; i < attachmentParts.Count; i++)
         {
             Renderer[] renderers = attachmentParts[i].GetComponentsInChildren<Renderer>(true);
-            for (int r = 0; r < renderers.Length; r++) groupBounds.Encapsulate(renderers[r].bounds);
+            for (int r = 0; r < renderers.Length; r++)
+            {
+                groupBounds.Encapsulate(renderers[r].bounds);
+                if (i < attachmentParts.Count - 1)
+                {
+                    handleBounds.Encapsulate(renderers[r].bounds);
+                }
+            }
         }
 
         GameObject groupObject = new GameObject("Lat Pulldown Moving Attachment");
         Transform group = groupObject.transform;
-        group.SetPositionAndRotation(groupBounds.center, equipment.rotation);
+        // The cable can be much longer than the handle. Use the four handle
+        // pieces as the pivot so moving the group places the bar in front of
+        // the camera instead of placing the midpoint of the cable there.
+        group.SetPositionAndRotation(handleBounds.center, equipment.rotation);
         group.SetParent(equipment, true);
         for (int i = 0; i < attachmentParts.Count; i++) attachmentParts[i].SetParent(group, true);
         return group;

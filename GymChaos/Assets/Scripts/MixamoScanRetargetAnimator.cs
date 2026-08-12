@@ -36,6 +36,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private AnimationClip flyClip;
     private AnimationClip celebrationClip;
     private BonePair[] pairs;
+    private Quaternion targetRootRestInOwner;
+    private bool hasTargetRootRest;
     private bool moving;
     private bool flying;
     private bool downed;
@@ -79,6 +81,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
 
         rig = bodyRig;
+        if (rig.Root != null)
+        {
+            targetRootRestInOwner = Quaternion.Inverse(transform.rotation) * rig.Root.rotation;
+            hasTargetRootRest = true;
+        }
         sourceModel = Instantiate(prefab, transform);
         sourceModel.name = identity + " Hidden Mixamo Motion Source";
         sourceModel.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
@@ -110,8 +117,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         AddPair(mapped, sourceBones, rig.RightHand, "righthand");
         AddPair(mapped, sourceBones, rig.LeftThigh, "leftupleg");
         AddPair(mapped, sourceBones, rig.LeftShin, "leftleg");
+        AddPair(mapped, sourceBones, rig.LeftFoot, "leftfoot");
         AddPair(mapped, sourceBones, rig.RightThigh, "rightupleg");
         AddPair(mapped, sourceBones, rig.RightShin, "rightleg");
+        AddPair(mapped, sourceBones, rig.RightFoot, "rightfoot");
         pairs = mapped.ToArray();
         RestoreTargetRest();
         Debug.Log(
@@ -330,21 +339,30 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private void ClampIdleGrounding()
     {
         // The downloaded Idle has a small forward root pitch and heel lift.
-        // Keep the head/arms animation while restoring the axial and lower-leg
-        // bones to the authored GLB rest pose.
+        // Restore the complete axial/lower-body chain to this scan's own
+        // upright rest pose, rather than inheriting a shared example pose.
+        RestoreTargetRestRotation(rig.Root);
         RestoreTargetRestRotation(rig.Hips);
         RestoreTargetRestRotation(rig.Spine);
         RestoreTargetRestRotation(rig.Chest);
+        RestoreTargetRestRotation(rig.Head);
         RestoreTargetRestRotation(rig.LeftThigh);
         RestoreTargetRestRotation(rig.LeftShin);
+        RestoreTargetRestRotation(rig.LeftFoot);
         RestoreTargetRestRotation(rig.RightThigh);
         RestoreTargetRestRotation(rig.RightShin);
+        RestoreTargetRestRotation(rig.RightFoot);
     }
 
     private void RestoreTargetRestRotation(Transform target)
     {
         if (target == null || pairs == null)
         {
+            return;
+        }
+        if (target == rig.Root && hasTargetRootRest)
+        {
+            target.rotation = transform.rotation * targetRootRestInOwner;
             return;
         }
         for (int i = 0; i < pairs.Length; i++)
@@ -558,6 +576,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             return;
         }
         Quaternion ownerRotation = transform.rotation;
+        if (hasTargetRootRest && rig.Root != null)
+        {
+            rig.Root.rotation = ownerRotation * targetRootRestInOwner;
+        }
         for (int i = 0; i < pairs.Length; i++)
         {
             pairs[i].Target.rotation = ownerRotation * pairs[i].TargetRestInOwner;

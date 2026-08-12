@@ -19,6 +19,10 @@ public enum BodybuilderIdentity
 
 public sealed class BodybuilderEnemyVisual : MonoBehaviour
 {
+    // Shared downward correction for the imported eye-line anchor. Individual
+    // asset offsets below remain relative to this common baseline.
+    private const float ImportedEyeLineBaseOffset = 0f;
+
     private const uint GlbMagic = 0x46546C67;
     private const uint JsonChunk = 0x4E4F534A;
     private const uint BinaryChunk = 0x004E4942;
@@ -157,8 +161,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         public Transform RightForearm;
         public Transform LeftThigh;
         public Transform LeftShin;
+        public Transform LeftFoot;
         public Transform RightThigh;
         public Transform RightShin;
+        public Transform RightFoot;
         public Transform LeftHand;
         public Transform RightHand;
         public Vector3 LeftHandPosition;
@@ -209,7 +215,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         }
 
         Mesh baked = new Mesh { name = identity + " imported visual setup" };
-        bodyRenderer.BakeMesh(baked);
+        // Request vertices without the renderer scale, then apply the
+        // renderer hierarchy exactly once while converting them into the
+        // visible model-root space. The imported armature has a bind scale of
+        // about 0.02; baking that scale and TransformPoint-ing it again makes
+        // the eye sample drift roughly a metre above the head.
+        bodyRenderer.BakeMesh(baked, false);
         Vector3[] bakedVertices = baked.vertices;
         Vector3[] vertices = new Vector3[bakedVertices.Length];
         Bounds bounds = default;
@@ -229,15 +240,82 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Destroy(baked);
 
         RigProfile profile = GetRigProfile(identity);
+        LogImportedHeadGeometry(identity, bodyRenderer, rig.Head, visualRoot, vertices);
+        FaceCensorProfile importedProfile = GetImportedFaceCensorProfile(
+            identity, vertices, bounds, profile, visualRoot, rig.Head,
+            bodyRenderer.bounds.size.y);
         if (neutralNpc)
         {
             CreateDeathMarkersAndName(
-                visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity);
+                visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity,
+                importedProfile);
         }
         else
         {
             CreateFaceCensorAndName(
-                visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity);
+                visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity,
+                importedProfile);
+        }
+    }
+
+    private static void LogImportedHeadGeometry(
+        BodybuilderIdentity identity, SkinnedMeshRenderer bodyRenderer,
+        Transform head, Transform visualRoot, Vector3[] vertices)
+    {
+        if (bodyRenderer.sharedMesh == null || bodyRenderer.bones == null)
+        {
+            return;
+        }
+
+        int headBoneIndex = -1;
+        for (int i = 0; i < bodyRenderer.bones.Length; i++)
+        {
+            if (bodyRenderer.bones[i] == head)
+            {
+                headBoneIndex = i;
+                break;
+            }
+        }
+        if (headBoneIndex < 0)
+        {
+            return;
+        }
+
+        BoneWeight[] weights = bodyRenderer.sharedMesh.boneWeights;
+        bool hasBounds = false;
+        Bounds headBounds = default;
+        int weightedVertices = 0;
+        for (int i = 0; i < vertices.Length && i < weights.Length; i++)
+        {
+            BoneWeight weight = weights[i];
+            float headWeight = 0f;
+            if (weight.boneIndex0 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight0);
+            if (weight.boneIndex1 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight1);
+            if (weight.boneIndex2 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight2);
+            if (weight.boneIndex3 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight3);
+            if (headWeight < 0.25f)
+            {
+                continue;
+            }
+
+            weightedVertices++;
+            if (!hasBounds)
+            {
+                headBounds = new Bounds(vertices[i], Vector3.zero);
+                hasBounds = true;
+            }
+            else
+            {
+                headBounds.Encapsulate(vertices[i]);
+            }
+        }
+
+        if (hasBounds)
+        {
+            Debug.Log(
+                $"FACE_HEAD_GEOMETRY_DEBUG identity={identity} headLocal=" +
+                $"{visualRoot.InverseTransformPoint(head.position)} weightedVertices={weightedVertices} " +
+                $"headMeshBounds={headBounds.min}/{headBounds.max} center={headBounds.center}");
         }
     }
 
@@ -1132,14 +1210,14 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
     private static void CreateFaceCensorAndName(
         Transform visualRoot, Vector3[] vertices, Bounds bounds, RigProfile rigProfile,
-        Transform head,
-        SkinnedMeshRenderer bodyRenderer, BodybuilderIdentity identity)
+        Transform head, SkinnedMeshRenderer bodyRenderer, BodybuilderIdentity identity,
+        FaceCensorProfile? importedProfile = null)
     {
-        float bodyHeight = bounds.size.y;
+        float bodyHeight = bodyRenderer.bounds.size.y;
         GameObject censorObject = new GameObject(identity + " Black Eye Bar");
         FaceCensorSettings censor = censorObject.AddComponent<FaceCensorSettings>();
         censor.Configure(
-            GetFaceCensorProfile(identity, vertices, bounds, rigProfile, visualRoot, head),
+            importedProfile ?? GetFaceCensorProfile(identity, vertices, bounds, rigProfile, visualRoot, head),
             head, identity.GetHashCode() + 31, true);
 
         EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
@@ -1153,14 +1231,20 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
     private static void CreateDeathMarkersAndName(
         Transform visualRoot, Vector3[] vertices, Bounds bounds, RigProfile rigProfile,
-        Transform head, SkinnedMeshRenderer bodyRenderer, BodybuilderIdentity identity)
+        Transform head, SkinnedMeshRenderer bodyRenderer, BodybuilderIdentity identity,
+        FaceCensorProfile? importedProfile = null)
     {
-        FaceCensorProfile markerProfile = GetFaceCensorProfile(
+        FaceCensorProfile markerProfile = importedProfile ?? GetFaceCensorProfile(
             identity, vertices, bounds, rigProfile, visualRoot, head);
         if (identity == BodybuilderIdentity.Manwithsuit1)
         {
+            Vector3 profileForwardLocal =
+                Quaternion.Euler(markerProfile.LocalEulerAngles) * Vector3.forward;
+            Vector3 profileDepthWorld = head.TransformDirection(profileForwardLocal)
+                * markerProfile.FaceDepth;
             markerProfile.LocalPosition += new Vector3(
-                0f, -bounds.size.y * 0.025f, markerProfile.FaceDepth);
+                0f, -bodyRenderer.bounds.size.y * 0.025f, 0f) +
+                head.InverseTransformVector(profileDepthWorld);
             markerProfile.FaceDepth = 0f;
         }
 
@@ -1175,7 +1259,183 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             censor.SetDead(true);
         }
 
-        CreateNameLabel(visualRoot, bodyRenderer, identity, bounds.size.y * 0.13f);
+        CreateNameLabel(visualRoot, bodyRenderer, identity, bodyRenderer.bounds.size.y * 0.13f);
+    }
+
+    private static FaceCensorProfile GetImportedFaceCensorProfile(
+        BodybuilderIdentity identity, Vector3[] vertices, Bounds bounds,
+        RigProfile rigProfile, Transform visualRoot, Transform head, float worldHeight)
+    {
+        float localHeight = Mathf.Max(0.1f, bounds.size.y);
+        // The normalized full-body FaceY profile belongs to the old
+        // procedural rig. The imported FBX has its own authored Head bone;
+        // use that asset-space position as the vertical eye anchor so a
+        // different scan cannot move the bar up into the forehead.
+        Vector3 headLocal = visualRoot.InverseTransformPoint(head.position);
+        float importedEyeOffset = 0f;
+        switch (identity)
+        {
+            // These are small asset-specific corrections from the visible
+            // FBX face proportions. Keep them local to the imported profile;
+            // the old large offsets moved the bars below the face.
+            case BodybuilderIdentity.Cbum:
+                importedEyeOffset = -0.040f;
+                break;
+            case BodybuilderIdentity.Zyzz:
+                importedEyeOffset = -0.022f;
+                break;
+            case BodybuilderIdentity.Arnold:
+                importedEyeOffset = -0.033f;
+                break;
+            case BodybuilderIdentity.Ronnie:
+                importedEyeOffset = -0.017f;
+                break;
+            case BodybuilderIdentity.JayCutler:
+                importedEyeOffset = -0.025f;
+                break;
+            case BodybuilderIdentity.Goku:
+                importedEyeOffset = -0.020f;
+                break;
+        }
+        float eyeY = headLocal.y + localHeight *
+            (ImportedEyeLineBaseOffset + importedEyeOffset);
+
+        float height = Mathf.Max(0.1f, worldHeight);
+        Vector2 size;
+        float coverage;
+        switch (identity)
+        {
+            case BodybuilderIdentity.Cbum:
+                size = new Vector2(height * 0.125f, height * 0.028f);
+                coverage = 68f;
+                break;
+            case BodybuilderIdentity.Zyzz:
+                size = new Vector2(height * 0.135f, height * 0.028f);
+                coverage = 70f;
+                break;
+            case BodybuilderIdentity.Ronnie:
+                size = new Vector2(height * 0.128f, height * 0.029f);
+                coverage = 69f;
+                break;
+            case BodybuilderIdentity.Goku:
+                size = new Vector2(height * 0.165f, height * 0.038f);
+                coverage = 72f;
+                break;
+            default:
+                size = new Vector2(height * 0.128f, height * 0.029f);
+                coverage = 69f;
+                break;
+        }
+
+        // Keep the lateral correction in the asset's model space, but sample
+        // depth in the actual head frame. This handles identities whose head
+        // sits farther forward/back or tilts relative to the body root.
+        float faceCenterX = headLocal.x;
+        switch (identity)
+        {
+            case BodybuilderIdentity.Ronnie:
+                faceCenterX += localHeight * 0.0095f;
+                break;
+            case BodybuilderIdentity.Zyzz:
+                faceCenterX += 0.001f;
+                break;
+        }
+
+        Vector3 faceDirectionWorld = head.forward;
+        if (faceDirectionWorld.sqrMagnitude < 0.0001f)
+        {
+            faceDirectionWorld = visualRoot.forward;
+        }
+        faceDirectionWorld.Normalize();
+        if (Vector3.Dot(faceDirectionWorld, visualRoot.forward) < 0f)
+        {
+            faceDirectionWorld = -faceDirectionWorld;
+        }
+
+        Vector3 faceUpWorld = head.up;
+        if (faceUpWorld.sqrMagnitude < 0.0001f)
+        {
+            faceUpWorld = Vector3.up;
+        }
+        faceUpWorld = Vector3.ProjectOnPlane(faceUpWorld, faceDirectionWorld).normalized;
+        if (faceUpWorld.sqrMagnitude < 0.0001f)
+        {
+            faceUpWorld = Vector3.up;
+        }
+        Vector3 faceRightWorld = Vector3.Cross(faceUpWorld, faceDirectionWorld).normalized;
+        if (faceRightWorld.sqrMagnitude < 0.0001f)
+        {
+            faceRightWorld = head.right.normalized;
+        }
+        faceUpWorld = Vector3.Cross(faceDirectionWorld, faceRightWorld).normalized;
+        if (Vector3.Dot(faceUpWorld, head.up) < 0f)
+        {
+            faceRightWorld = -faceRightWorld;
+            faceUpWorld = -faceUpWorld;
+        }
+
+        Vector3 eyeAnchorLocal = new Vector3(faceCenterX, eyeY, headLocal.z);
+        Vector3 eyeAnchorWorld = visualRoot.TransformPoint(eyeAnchorLocal);
+        float eyeHalfHeight = Mathf.Max(localHeight * 0.022f, size.y * 0.65f);
+        float eyeHalfWidth = Mathf.Max(
+            localHeight * rigProfile.HeadHalfWidth * 0.95f, size.x * 0.6f);
+        float frontDepth = float.NegativeInfinity;
+        float backDepth = float.PositiveInfinity;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            Vector3 vertexWorld = visualRoot.TransformPoint(vertices[i]);
+            Vector3 delta = vertexWorld - eyeAnchorWorld;
+            float horizontal = Vector3.Dot(delta, faceRightWorld);
+            float vertical = Vector3.Dot(delta, faceUpWorld);
+            if (Mathf.Abs(vertical) > eyeHalfHeight ||
+                Mathf.Abs(horizontal) > eyeHalfWidth)
+            {
+                continue;
+            }
+
+            float depth = Vector3.Dot(delta, faceDirectionWorld);
+            frontDepth = Mathf.Max(frontDepth, depth);
+            backDepth = Mathf.Min(backDepth, depth);
+        }
+
+        bool sampledFace = !float.IsNegativeInfinity(frontDepth) &&
+            !float.IsPositiveInfinity(backDepth);
+        if (!sampledFace)
+        {
+            frontDepth = Vector3.Dot(
+                visualRoot.TransformPoint(new Vector3(faceCenterX, eyeY, bounds.max.z)) -
+                eyeAnchorWorld,
+                faceDirectionWorld);
+            backDepth = frontDepth - localHeight * 0.01f;
+        }
+
+        Vector3 faceSurfaceWorld = eyeAnchorWorld + faceDirectionWorld * frontDepth;
+        float faceSurfaceZ = visualRoot.InverseTransformPoint(faceSurfaceWorld).z;
+        float faceSpread = Mathf.Max(0f, frontDepth - backDepth);
+        float arcDrop = 1f - Mathf.Cos(Mathf.Clamp(coverage, 55f, 82f) * Mathf.Deg2Rad);
+        float faceDepth = Mathf.Clamp(
+            faceSpread / Mathf.Max(0.2f, arcDrop),
+            height * 0.0015f,
+            height * 0.08f);
+
+        // The shell's centre lands exactly on the sampled front boundary;
+        // its curved sides follow the asset's measured depth spread instead
+        // of floating in front of the face or following a collision box.
+        Vector3 barOriginWorld = faceSurfaceWorld - faceDirectionWorld * faceDepth;
+        Vector3 faceDirectionLocal = head.InverseTransformDirection(faceDirectionWorld).normalized;
+        Vector3 upLocal = head.InverseTransformDirection(faceUpWorld).normalized;
+        Quaternion faceRotation = Quaternion.LookRotation(faceDirectionLocal, upLocal);
+
+        Vector3 localPosition = head.InverseTransformPoint(barOriginWorld);
+        Debug.Log(
+            $"FACE_GEOMETRY_DEBUG identity={identity} root={visualRoot.position} " +
+            $"rootScale={visualRoot.lossyScale} rootForward={visualRoot.forward} " +
+            $"head={head.position} headForward={head.forward} localBounds={bounds.min}/{bounds.max} " +
+            $"eyeLocal={eyeY:F3} surfaceLocalZ={faceSurfaceZ:F3} surfaceWorld={faceSurfaceWorld} " +
+            $"frontDepth={frontDepth:F4} backDepth={backDepth:F4} " +
+            $"faceDepth={faceDepth:F4} barOrigin={barOriginWorld} profileLocal={localPosition}");
+        return new FaceCensorProfile(
+            localPosition, faceRotation.eulerAngles, size, faceDepth, coverage, Color.black);
     }
 
     private static FaceCensorProfile GetFaceCensorProfile(

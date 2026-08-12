@@ -76,6 +76,7 @@ public class PlayerMovement : MonoBehaviour
     private bool useRightHandNext = true;
     private float crouchAmount;
     private Vector3 cameraBaseLocalPosition;
+    private const float PlayerPunchAimLift = 0.16f;
 
     private Transform carryAnchor;
     private PickupItem heldItem;
@@ -110,10 +111,11 @@ public class PlayerMovement : MonoBehaviour
         if (playerCamera != null)
         {
             cameraBaseLocalPosition = playerCamera.transform.localPosition;
-            // Keep the camera at the model's eye line. The old 1.10 m offset
-            // placed it through the upper torso/neck of the 2.75 m first-person
-            // avatar, which was especially obvious in the WebGL preview.
-            cameraBaseLocalPosition.y = Mathf.Clamp(characterController.height * 0.72f, 1.35f, 1.55f);
+            // The player model and enemies are both about 2.30 m tall. With
+            // the player root at the CharacterController centre, this places
+            // the first-person camera at the average enemy eye line instead
+            // of looking down from the old 2.75 m player height.
+            cameraBaseLocalPosition.y = characterController.height * 0.55f;
             playerCamera.transform.localPosition = cameraBaseLocalPosition;
         }
 
@@ -384,7 +386,9 @@ public class PlayerMovement : MonoBehaviour
         }
 
         Vector3 origin = playerCamera.transform.position;
-        Vector3 direction = playerCamera.transform.forward;
+        Vector3 aimPoint = origin + playerCamera.transform.forward * punchRange +
+                           playerCamera.transform.up * PlayerPunchAimLift;
+        Vector3 direction = (aimPoint - origin).normalized;
         if (!Physics.SphereCast(origin, punchRadius, direction, out RaycastHit hit, punchRange, ~0, QueryTriggerInteraction.Collide))
         {
             return;
@@ -1076,7 +1080,7 @@ public class PlayerMovement : MonoBehaviour
         infoStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
         string weightInfo = pendingWeightStation.EmptyBarWeight > 0
             ? $"Select total weight (empty bar: {pendingWeightStation.EmptyBarWeight} kg)"
-            : "Select weight stack";
+            : "Select weight stack (heavier setting = more plates)";
         GUI.Label(new Rect(panel.x + 16f, panel.y + 50f, panel.width - 32f, 52f), $"{weightInfo}\n[Q], [E] or [ESC] to cancel", infoStyle);
 
         for (int i = 0; i < options.Length; i++)

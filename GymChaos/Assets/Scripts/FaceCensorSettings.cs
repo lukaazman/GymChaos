@@ -37,7 +37,18 @@ public sealed class FaceCensorSettings : MonoBehaviour
         transform.SetParent(head, false);
         transform.localPosition = profile.LocalPosition;
         transform.localRotation = Quaternion.Euler(profile.LocalEulerAngles);
-        transform.localScale = Vector3.one;
+        Vector3 headScale = head.lossyScale;
+        transform.localScale = new Vector3(
+            SafeScaleInverse(headScale.x),
+            SafeScaleInverse(headScale.y),
+            SafeScaleInverse(headScale.z));
+
+        Debug.Log(
+            $"FACE_CENSOR_DEBUG identity={name} head={head.name} " +
+            $"headWorld={head.position} headScale={head.lossyScale} " +
+            $"barWorld={transform.position} barScale={transform.lossyScale} " +
+            $"barForward={transform.forward} local={profile.LocalPosition} " +
+            $"euler={profile.LocalEulerAngles} size={profile.Size} depth={profile.FaceDepth}", this);
 
         if (!showBlackBar)
         {
@@ -60,6 +71,11 @@ public sealed class FaceCensorSettings : MonoBehaviour
         renderer.sharedMaterial = material;
         renderer.shadowCastingMode = ShadowCastingMode.Off;
         renderer.receiveShadows = false;
+    }
+
+    private static float SafeScaleInverse(float value)
+    {
+        return Mathf.Abs(value) > 0.0001f ? 1f / value : 1f;
     }
 
     public void SetDead(bool dead)

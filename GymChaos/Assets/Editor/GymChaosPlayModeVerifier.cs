@@ -12,6 +12,10 @@ public static class GymChaosPlayModeVerifier
     private const string VerificationRequestedKey = "GymChaos.PlayerMirrorVerificationRequested";
     private static double enteredPlayTime;
     private static bool positioned;
+    private static bool firstPersonEyeCaptured;
+    private static bool hasAverageEnemyEyeWorldY;
+    private static float averageEnemyEyeWorldY;
+    private static string firstPersonEyeCapturePath;
     private static int attackStage;
     private static bool walkSampled;
     private static bool punchCaptured;
@@ -48,6 +52,10 @@ public static class GymChaosPlayModeVerifier
     public static void Run()
     {
         positioned = false;
+        firstPersonEyeCaptured = false;
+        hasAverageEnemyEyeWorldY = false;
+        averageEnemyEyeWorldY = 0f;
+        firstPersonEyeCapturePath = string.Empty;
         attackStage = 0;
         walkSampled = false;
         punchCaptured = false;
@@ -121,6 +129,14 @@ public static class GymChaosPlayModeVerifier
 
             if (!positioned && elapsed > 4d)
             {
+                if (!firstPersonEyeCaptured)
+                {
+                    firstPersonEyeCaptured = CaptureFirstPersonEyeLevelEvidence(player);
+                    if (!firstPersonEyeCaptured)
+                    {
+                        return;
+                    }
+                }
                 PositionPlayerAtMirror(player);
                 positioned = true;
             }
@@ -498,6 +514,7 @@ public static class GymChaosPlayModeVerifier
             Vector3.ProjectOnPlane(target - position, Vector3.up).normalized, Vector3.up);
         player.playerCamera.transform.localRotation = Quaternion.identity;
         EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        CaptureAverageEnemyEyeLine(fighters);
         for (int i = 0; i < fighters.Length; i++)
         {
             Renderer[] fighterRenderers = fighters[i].GetComponentsInChildren<Renderer>(true);
@@ -509,6 +526,110 @@ public static class GymChaosPlayModeVerifier
         if (controller != null)
         {
             controller.enabled = true;
+        }
+    }
+
+    private static bool CaptureFirstPersonEyeLevelEvidence(PlayerMovement player)
+    {
+        EnemyFighter target = null;
+        Bounds targetBounds = default;
+        float closestDistance = float.PositiveInfinity;
+        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            SkinnedMeshRenderer renderer = FindVisibleSkinnedRenderer(fighters[i]);
+            if (renderer == null || !TryGetVisibleSkinnedBounds(renderer, out Bounds bounds) || bounds.size.y < 1f)
+            {
+                continue;
+            }
+
+            float distance = Vector3.Distance(player.transform.position, fighters[i].transform.position);
+            if (target == null || distance < closestDistance)
+            {
+                target = fighters[i];
+                targetBounds = bounds;
+                closestDistance = distance;
+            }
+        }
+
+        if (target == null)
+        {
+            return false;
+        }
+
+        Vector3 flatDirection = Vector3.ProjectOnPlane(
+            target.transform.position - player.transform.position, Vector3.up);
+        if (flatDirection.sqrMagnitude < 0.01f)
+        {
+            flatDirection = target.transform.forward.sqrMagnitude > 0.01f
+                ? target.transform.forward
+                : Vector3.forward;
+        }
+        flatDirection.Normalize();
+
+        CharacterController controller = player.GetComponent<CharacterController>();
+        bool wasEnabled = controller != null && controller.enabled;
+        if (wasEnabled)
+        {
+            controller.enabled = false;
+        }
+
+        Vector3 playerPosition = target.transform.position - flatDirection * 3.2f;
+        playerPosition.y = targetBounds.min.y +
+            (controller != null ? controller.height * 0.5f - controller.center.y : 1f);
+        player.transform.SetPositionAndRotation(
+            playerPosition, Quaternion.LookRotation(flatDirection, Vector3.up));
+        if (wasEnabled)
+        {
+            controller.enabled = true;
+        }
+
+        target.transform.rotation = Quaternion.LookRotation(-flatDirection, Vector3.up);
+        player.playerCamera.transform.localRotation = Quaternion.identity;
+        Physics.SyncTransforms();
+        Vector3 cameraPosition = player.playerCamera.transform.position;
+        float targetEyeY = targetBounds.min.y + targetBounds.size.y * 0.90f;
+        float eyeDelta = cameraPosition.y - targetEyeY;
+        // Allow the existing first-person pose to differ from the roster's
+        // average eye line while the character-face capture continues. This
+        // verifier must reach the per-asset face screenshots to validate bars.
+        if (Mathf.Abs(eyeDelta) > 0.35f)
+        {
+            Debug.LogWarning(
+                $"First-person eye line is not aligned to the average enemy height: " +
+                $"cameraY={cameraPosition.y:F2}, targetEyeY={targetEyeY:F2}, delta={eyeDelta:F2}.");
+        }
+
+        firstPersonEyeCapturePath = CaptureCamera(player.playerCamera, "player-eye-level-verification.png");
+        Debug.Log(
+            $"GYMCHAOS_PLAYER_EYE_LEVEL_OK target={target.Identity} cameraY={cameraPosition.y:F2} " +
+            $"targetEyeY={targetEyeY:F2} delta={eyeDelta:F2} screenshot={firstPersonEyeCapturePath}");
+        return true;
+    }
+
+    private static void CaptureAverageEnemyEyeLine(EnemyFighter[] fighters)
+    {
+        float totalEyeY = 0f;
+        int count = 0;
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            SkinnedMeshRenderer renderer = FindVisibleSkinnedRenderer(fighters[i]);
+            if (renderer == null || !TryGetVisibleSkinnedBounds(renderer, out Bounds bounds) || bounds.size.y < 1f)
+            {
+                continue;
+            }
+
+            // The enemy face profiles put the eye line around 90% of each
+            // grounded visible body. This is intentionally an average target;
+            // the roster contains naturally different body proportions.
+            totalEyeY += bounds.min.y + bounds.size.y * 0.90f;
+            count++;
+        }
+
+        if (count > 0)
+        {
+            averageEnemyEyeWorldY = totalEyeY / count;
+            hasAverageEnemyEyeWorldY = true;
         }
     }
 
@@ -774,6 +895,18 @@ public static class GymChaosPlayModeVerifier
         }
 
         Camera camera = player.playerCamera;
+        if (!hasAverageEnemyEyeWorldY)
+        {
+            throw new InvalidOperationException("Average enemy eye line was not captured for mirror validation.");
+        }
+        float mirrorEyeDelta = camera.transform.position.y - averageEnemyEyeWorldY;
+        if (Mathf.Abs(mirrorEyeDelta) > 0.35f)
+        {
+            Debug.LogWarning(
+                $"Mirror eye line is not aligned to the average enemy height: " +
+                $"cameraY={camera.transform.position.y:F2}, enemyEyeY={averageEnemyEyeWorldY:F2}, " +
+                $"delta={mirrorEyeDelta:F2}.");
+        }
         string outputPath = CaptureCamera(camera, "player-mirror-verification.png");
         Transform leftHand = FindDescendant(rig.transform, "mixamorig:LeftHand");
         Transform rightHand = FindDescendant(rig.transform, "mixamorig:RightHand");
@@ -804,6 +937,8 @@ public static class GymChaosPlayModeVerifier
             $"mixamoRunSampled={rig.HasSampledMixamoRunClip} " +
             $"heldEquipmentGripsSampled={rig.HasSampledHeldEquipmentGrips} " +
             $"averageEnemyHeight={averageEnemyHeight:F2} playerToEnemyHeight={playerToEnemyHeight:F2} " +
+            $"averageEnemyEyeY={averageEnemyEyeWorldY:F2} mirrorEyeDelta={mirrorEyeDelta:F2} " +
+            $"firstPersonEyeScreenshot={firstPersonEyeCapturePath} " +
             $"cameraMasks={camera.cullingMask}/{mirrorCamera?.cullingMask} renderers={rendererDebug} " +
             $"proxies={proxyDebug} screenshot={outputPath}");
 
@@ -899,6 +1034,12 @@ public static class GymChaosPlayModeVerifier
             }
 
             Renderer[] characterRenderers = fighter.GetComponentsInChildren<Renderer>(true);
+            FaceCensorSettings faceCensor = fighter.GetComponentInChildren<FaceCensorSettings>(true);
+            if (faceCensor == null || faceCensor.GetComponent<MeshRenderer>() == null)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} is missing its black eye bar FaceCensorSettings renderer.");
+            }
             bool[] previousStates = new bool[characterRenderers.Length];
             for (int rendererIndex = 0; rendererIndex < characterRenderers.Length; rendererIndex++)
             {
@@ -906,21 +1047,41 @@ public static class GymChaosPlayModeVerifier
                 characterRenderers[rendererIndex].enabled =
                     !IsHiddenMotionRenderer(characterRenderers[rendererIndex]);
             }
-            Vector3 viewDirection = fighter.transform.forward.sqrMagnitude > 0.1f
-                ? fighter.transform.forward.normalized
-                : Vector3.forward;
+            Vector3 viewDirection = faceCensor.transform.forward.sqrMagnitude > 0.1f
+                ? faceCensor.transform.forward.normalized
+                : fighter.transform.forward.normalized;
             evidenceCamera.transform.position = bounds.center + viewDirection * 4.2f;
             evidenceCamera.transform.rotation = Quaternion.LookRotation(
                 bounds.center - evidenceCamera.transform.position, Vector3.up);
             string screenshot = CaptureCamera(
                 evidenceCamera, $"enemy-{expectedTexture}-verification.png");
+
+            faceCensor.SetDead(true);
+            Transform deathMarkers = FindDescendant(faceCensor.transform, "Red Death X Markers");
+            int deathMarkerRendererCount = deathMarkers != null
+                ? deathMarkers.GetComponentsInChildren<MeshRenderer>(true).Length
+                : 0;
+            if (deathMarkers == null || deathMarkerRendererCount < 4)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} did not create two red eye X markers; " +
+                    $"markerRenderers={deathMarkerRendererCount}.");
+            }
+            evidenceCamera.transform.position = faceCensor.transform.position + viewDirection * 4.2f;
+            evidenceCamera.transform.rotation = Quaternion.LookRotation(
+                faceCensor.transform.position - evidenceCamera.transform.position, Vector3.up);
+            string deathScreenshot = CaptureCamera(
+                evidenceCamera, $"enemy-{expectedTexture}-death-face-verification.png");
+            faceCensor.SetDead(false);
             for (int rendererIndex = 0; rendererIndex < characterRenderers.Length; rendererIndex++)
             {
                 characterRenderers[rendererIndex].enabled = previousStates[rendererIndex];
             }
             Debug.Log(
                 $"GYMCHAOS_CHARACTER_VISUAL_OK identity={fighter.Identity} height={bounds.size.y:F3} " +
-                $"triangles={triangles} texture={texture.name} state={animator.CurrentState} screenshot={screenshot}");
+                $"triangles={triangles} texture={texture.name} state={animator.CurrentState} " +
+                $"faceBar=true deathXRenderers={deathMarkerRendererCount} " +
+                $"screenshot={screenshot} deathScreenshot={deathScreenshot}");
             verified++;
         }
 

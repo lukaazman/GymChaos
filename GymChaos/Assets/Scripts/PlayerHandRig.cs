@@ -13,8 +13,8 @@ public sealed class PlayerHandRig : MonoBehaviour
     }
 
     private const string PlayerModelResource = "Player/player_mia_rigged";
-    private const float MirrorFallbackTargetHeight = 2.3f;
-    private const float MirrorEnemyHeightScale = 0.96f;
+    private const float MirrorFallbackTargetHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight;
+    private const float MirrorEnemyHeightScale = 1f;
 
     private Camera playerCamera;
     private CharacterController controller;
@@ -679,10 +679,10 @@ public sealed class PlayerHandRig : MonoBehaviour
             bounds.Encapsulate(renderers[i].bounds);
         }
 
-        const float desiredHeight = 2.75f;
+        const float desiredHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight;
         float uniformScale = desiredHeight / Mathf.Max(0.001f, bounds.size.y);
         float localMinimumY = transform.InverseTransformPoint(bounds.min).y;
-        modelRoot.transform.localScale = new Vector3(uniformScale * 1.1f, uniformScale, uniformScale * 1.05f);
+        modelRoot.transform.localScale = Vector3.one * uniformScale;
         float footY = controller != null ? -controller.height * 0.5f : -1f;
         modelRoot.transform.localPosition = new Vector3(0f, footY - localMinimumY * uniformScale, 0f);
         baseModelLocalPosition = modelRoot.transform.localPosition;

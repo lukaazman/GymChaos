@@ -14,6 +14,7 @@ Shader "GymChaos/FaceCensor"
             Name "FaceCensor"
             Blend SrcAlpha OneMinusSrcAlpha
             ZWrite On
+            Offset -1, -1
             Cull Off
 
             HLSLPROGRAM
