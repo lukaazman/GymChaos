@@ -21,7 +21,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 {
     // Shared downward correction for the imported eye-line anchor. Individual
     // asset offsets below remain relative to this common baseline.
-    private const float ImportedEyeLineBaseOffset = 0f;
+    private const float ImportedEyeLineBaseOffset = 0.06f;
 
     private const uint GlbMagic = 0x46546C67;
     private const uint JsonChunk = 0x4E4F534A;
