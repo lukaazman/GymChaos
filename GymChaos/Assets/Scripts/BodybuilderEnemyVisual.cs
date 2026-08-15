@@ -152,6 +152,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         public Transform Hips;
         public Transform Spine;
         public Transform Chest;
+        public Transform Neck;
         public Transform Head;
         public Transform LeftShoulder;
         public Transform LeftUpperArm;

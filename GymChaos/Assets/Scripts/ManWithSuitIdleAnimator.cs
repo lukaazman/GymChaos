@@ -44,7 +44,10 @@ public sealed class ManWithSuitIdleAnimator : MonoBehaviour
             stroke * 6.5f, follow * 1.5f, follow * 2.1f);
         rig.RightHand.localRotation = rightHandBaseRotation * Quaternion.Euler(
             follow * 2f, stroke * 0.8f, stroke * 1.2f);
+        // Keep the idle motion from pitching the whole body forward. The
+        // imported rest pose is corrected once by ExternalRiggedCharacterVisual;
+        // only a small side-to-side sway remains here.
         rig.Spine.localRotation = spineBaseRotation * Quaternion.Euler(
-            Mathf.Sin(Time.time * 1.25f) * 0.55f, 0f, Mathf.Sin(Time.time * 0.9f) * 0.35f);
+            0f, 0f, Mathf.Sin(Time.time * 0.9f) * 0.35f);
     }
 }

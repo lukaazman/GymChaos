@@ -83,6 +83,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return false;
         }
 
+        ApplyUprightRestPosture(modelRoot.transform, rig, identity);
         EnemyMeshHitboxRig.Configure(gameObject, rig, renderer);
         bool neutralNpc = identity == BodybuilderIdentity.Manwithsuit1;
         BodybuilderEnemyVisual.ConfigureImportedVisual(
@@ -238,6 +239,77 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         return best;
     }
 
+    private static void ApplyUprightRestPosture(
+        Transform modelRoot, BodybuilderEnemyVisual.Rig rig,
+        BodybuilderIdentity identity)
+    {
+        if (modelRoot == null || rig == null || rig.Hips == null ||
+            rig.Spine == null || rig.Chest == null || rig.Head == null)
+        {
+            return;
+        }
+
+        Vector3 up = modelRoot.up;
+        Vector3 faceForward = Vector3.ProjectOnPlane(rig.Head.forward, up);
+        if (faceForward.sqrMagnitude < 0.0001f)
+        {
+            faceForward = Vector3.ProjectOnPlane(modelRoot.forward, up);
+        }
+        if (faceForward.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
+
+        faceForward.Normalize();
+        Vector3 correctionAxis = Vector3.Cross(up, faceForward).normalized;
+        Vector3 headFromHips = rig.Head.position - rig.Hips.position;
+        float forwardOffset = Vector3.Dot(headFromHips, faceForward);
+        float verticalOffset = Mathf.Max(0.01f, Vector3.Dot(headFromHips, up));
+        float forwardLeanDegrees = Mathf.Atan2(forwardOffset, verticalOffset) * Mathf.Rad2Deg;
+        float correctionDegrees = -Mathf.Clamp(forwardLeanDegrees, 0f, 18f);
+        if (Mathf.Abs(correctionDegrees) < 0.1f)
+        {
+            return;
+        }
+
+        // Correct the complete upper-body chain around its own joints. Hips,
+        // legs and authored foot contacts stay planted; distributing the
+        // correction through spine, chest, neck and head avoids a sharp neck
+        // bend and pulls the shoulders back with the chest.
+        RotateBoneAroundAxis(rig.Spine, correctionAxis, correctionDegrees * 0.45f);
+        RotateBoneAroundAxis(rig.Chest, correctionAxis, correctionDegrees * 0.30f);
+        RotateBoneAroundAxis(rig.Neck, correctionAxis, correctionDegrees * 0.15f);
+        RotateBoneAroundAxis(rig.Head, correctionAxis, correctionDegrees * 0.10f);
+
+        // The imported scans also carry a downward-facing head orientation.
+        // Level the neck/head after the torso correction so the whole upper
+        // body reads upright instead of leaving the chin tucked forward.
+        float headPitchDegrees = Mathf.Atan2(
+            Vector3.Dot(rig.Head.forward, up),
+            Mathf.Max(0.01f, Vector3.Dot(rig.Head.forward, faceForward))) *
+            Mathf.Rad2Deg;
+        float levelCorrectionDegrees = Mathf.Clamp(headPitchDegrees, -14f, 14f);
+        RotateBoneAroundAxis(rig.Neck, correctionAxis, levelCorrectionDegrees * 0.45f);
+        RotateBoneAroundAxis(rig.Head, correctionAxis, levelCorrectionDegrees * 0.55f);
+        Debug.Log(
+            "GYMCHAOS_UPRIGHT_POSTURE identity=" + identity +
+            " forwardLean=" + forwardLeanDegrees.ToString("F2") +
+            " correction=" + correctionDegrees.ToString("F2") +
+            " headLevel=" + levelCorrectionDegrees.ToString("F2"),
+            modelRoot);
+    }
+
+    private static void RotateBoneAroundAxis(
+        Transform bone, Vector3 axis, float degrees)
+    {
+        if (bone == null || axis.sqrMagnitude < 0.0001f ||
+            Mathf.Abs(degrees) < 0.0001f)
+        {
+            return;
+        }
+
+        bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation;
+    }
     private static void FitToGameplayHeight(
         Transform modelRoot, SkinnedMeshRenderer renderer, BodybuilderIdentity identity)
     {
@@ -360,6 +432,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             Hips = FindBone(bones, "hips"),
             Spine = FindBone(bones, "spine"),
             Chest = FindBone(bones, "spine2", "spine1"),
+            Neck = FindBone(bones, "neck"),
             Head = FindBone(bones, "head"),
             LeftShoulder = FindBone(bones, "leftshoulder"),
             LeftUpperArm = FindBone(bones, "leftarm"),

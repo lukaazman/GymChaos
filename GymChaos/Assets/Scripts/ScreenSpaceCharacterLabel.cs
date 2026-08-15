@@ -48,7 +48,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
             style = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 15,
+                fontSize = 11,
                 normal = { textColor = Color.white }
             };
         }

@@ -106,6 +106,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         AddPair(mapped, sourceBones, rig.Hips, "hips");
         AddPair(mapped, sourceBones, rig.Spine, "spine");
         AddPair(mapped, sourceBones, rig.Chest, "spine2", "spine1");
+        AddPair(mapped, sourceBones, rig.Neck, "neck");
         AddPair(mapped, sourceBones, rig.Head, "head");
         AddPair(mapped, sourceBones, rig.LeftShoulder, "leftshoulder");
         AddPair(mapped, sourceBones, rig.LeftUpperArm, "leftarm");
@@ -338,20 +339,73 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 
     private void ClampIdleGrounding()
     {
-        // The downloaded Idle has a small forward root pitch and heel lift.
-        // Restore the complete axial/lower-body chain to this scan's own
-        // upright rest pose, rather than inheriting a shared example pose.
+        // The downloaded Idle can pitch the torso, neck, shoulders and feet
+        // forward. Restore this scan's complete upper/lower rest chain so
+        // the visible idle pose stays upright with planted foot contacts.
         RestoreTargetRestRotation(rig.Root);
         RestoreTargetRestRotation(rig.Hips);
         RestoreTargetRestRotation(rig.Spine);
         RestoreTargetRestRotation(rig.Chest);
+        RestoreTargetRestRotation(rig.Neck);
         RestoreTargetRestRotation(rig.Head);
+        RestoreTargetRestRotation(rig.LeftShoulder);
+        RestoreTargetRestRotation(rig.RightShoulder);
         RestoreTargetRestRotation(rig.LeftThigh);
         RestoreTargetRestRotation(rig.LeftShin);
         RestoreTargetRestRotation(rig.LeftFoot);
         RestoreTargetRestRotation(rig.RightThigh);
         RestoreTargetRestRotation(rig.RightShin);
         RestoreTargetRestRotation(rig.RightFoot);
+
+        // The imported idle leaves the elbows slightly too lateral. Tighten
+        // only the upper-arm spread so the pose sits closer to the body while
+        // preserving the corrected spine, chest, neck and head posture.
+        TightenIdleArms(0.22f);
+    }
+
+    private void TightenIdleArms(float amount)
+    {
+        if (rig == null || rig.Hips == null)
+        {
+            return;
+        }
+
+        TightenIdleArm(rig.LeftShoulder, rig.LeftUpperArm, rig.LeftForearm, amount);
+        TightenIdleArm(rig.RightShoulder, rig.RightUpperArm, rig.RightForearm, amount);
+    }
+
+    private void TightenIdleArm(
+        Transform shoulder, Transform upperArm, Transform forearm, float amount)
+    {
+        if (shoulder == null || upperArm == null || forearm == null)
+        {
+            return;
+        }
+
+        Vector3 side = Vector3.ProjectOnPlane(
+            shoulder.position - rig.Hips.position, transform.up);
+        Vector3 current = forearm.position - upperArm.position;
+        if (side.sqrMagnitude < 0.0001f || current.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
+
+        side.Normalize();
+        float outwardAmount = Vector3.Dot(current, side);
+        if (outwardAmount <= 0.0001f)
+        {
+            return;
+        }
+
+        Vector3 tightened = current - side * outwardAmount * Mathf.Clamp01(amount);
+        if (tightened.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
+
+        RotateJointToward(
+            upperArm, forearm,
+            upperArm.position + tightened.normalized * current.magnitude);
     }
 
     private void RestoreTargetRestRotation(Transform target)
@@ -507,6 +561,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         Vector3 rightTarget = transform.position + transform.right * 0.55f + transform.up * 0.98f;
         ExtendArm(rig.LeftUpperArm, rig.LeftForearm, rig.LeftHand, leftTarget);
         ExtendArm(rig.RightUpperArm, rig.RightForearm, rig.RightHand, rightTarget);
+        TightenIdleArms(0.22f);
     }
 
     private void ApplyFlightPose(float time)
