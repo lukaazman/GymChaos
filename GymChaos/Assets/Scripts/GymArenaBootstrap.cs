@@ -30,6 +30,7 @@ public class GymArenaBootstrap : MonoBehaviour
     private readonly HashSet<Transform> stabilizedEquipmentRoots = new HashSet<Transform>();
     private readonly HashSet<Transform> spatiallyMountedWeightRoots = new HashSet<Transform>();
     private readonly Collider[] enemySpawnOverlap = new Collider[64];
+    private readonly RaycastHit[] enemySpawnPathHits = new RaycastHit[32];
 
     private PlayerMovement player;
 
@@ -186,7 +187,30 @@ public class GymArenaBootstrap : MonoBehaviour
             return true;
         }
 
+        // The source scene contains a large Plane at y=0. The generated
+        // Rubber Floor is the gameplay floor; registering the source Plane as
+        // a static obstacle makes every spawn capsule overlap the whole room.
+        if (lowerName == "plane" || lowerName.StartsWith("plane("))
+        {
+            return true;
+        }
+
         return target.GetComponent<ParticleSystemRenderer>() != null;
+    }
+
+    private static bool IsRoomFloorCollider(Transform target)
+    {
+        for (Transform current = target; current != null; current = current.parent)
+        {
+            string lowerName = current.name.ToLowerInvariant();
+            if (lowerName.Contains("rubber floor") ||
+                lowerName == "plane" || lowerName.StartsWith("plane("))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private Transform FindPickupRoot(Transform target)
@@ -602,6 +626,20 @@ public class GymArenaBootstrap : MonoBehaviour
             roomCenter = floorRenderer.bounds.center;
         }
 
+        // Keep the four fighters that were commonly spawning beside dense
+        // equipment on deterministic open-room anchors. The helper validates
+        // both the body capsule and a few clear exits, so a fallback is only
+        // used when a particular imported layout occupies that anchor.
+        if ((identity == BodybuilderIdentity.Ronnie ||
+             identity == BodybuilderIdentity.Cbum ||
+             identity == BodybuilderIdentity.Arnold ||
+             identity == BodybuilderIdentity.JayCutler) &&
+            TryGetDedicatedOpenSpawn(identity, roomCenter, floorY,
+                out position, out rotation))
+        {
+            return;
+        }
+
         if (identity == BodybuilderIdentity.Ronnie && TryGetLockerBounds(out Bounds lockerBounds))
         {
             Vector3 awayFromLockers = Vector3.ProjectOnPlane(roomCenter - lockerBounds.center, Vector3.up);
@@ -756,11 +794,72 @@ public class GymArenaBootstrap : MonoBehaviour
             }
         }
 
+        // The authored equipment can occupy a broad central band, so a small
+        // ring search is not enough for the four named fighters that used to
+        // start inside machines. Find the nearest genuinely open floor cell
+        // across the room before accepting an obstructed fallback.
+        if (hasFloor && TryFindClearSpawnAcrossFloor(preferred, floorBounds, out Vector3 openPosition))
+        {
+            return openPosition;
+        }
+
         Debug.LogWarning($"No fully clear enemy spawn was found near {preferred}; using the preferred point.");
         return preferred;
     }
 
+    private bool TryFindClearSpawnAcrossFloor(
+        Vector3 preferred, Bounds floorBounds, out Vector3 position)
+    {
+        const float gridStep = 1.5f;
+        const float edgeMargin = 1.35f;
+        float minX = floorBounds.min.x + edgeMargin;
+        float maxX = floorBounds.max.x - edgeMargin;
+        float minZ = floorBounds.min.z + edgeMargin;
+        float maxZ = floorBounds.max.z - edgeMargin;
+        int bestOpenExitCount = -1;
+        float bestDistance = float.PositiveInfinity;
+        Vector3 best = preferred;
+
+        for (float x = minX; x <= maxX; x += gridStep)
+        {
+            for (float z = minZ; z <= maxZ; z += gridStep)
+            {
+                Vector3 candidate = new Vector3(x, floorBounds.max.y, z);
+                if (!IsEnemySpawnOverlapFree(candidate))
+                {
+                    continue;
+                }
+
+                int openExitCount = CountEnemySpawnOpenExits(candidate);
+                float distance = Vector3.ProjectOnPlane(candidate - preferred, Vector3.up).sqrMagnitude;
+                if (openExitCount > bestOpenExitCount ||
+                    (openExitCount == bestOpenExitCount && distance < bestDistance))
+                {
+                    bestOpenExitCount = openExitCount;
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+        }
+
+        position = best;
+        // The candidate is overlap-free and ranked by available exits. Even
+        // one clear direction is enough for the steering probes to move it
+        // out of the starting cell in a dense authored layout.
+        return bestOpenExitCount >= 1;
+    }
+
     private bool IsEnemySpawnClear(Vector3 floorPosition)
+    {
+        if (!IsEnemySpawnOverlapFree(floorPosition))
+        {
+            return false;
+        }
+
+        return CountEnemySpawnOpenExits(floorPosition) >= 3;
+    }
+
+    private bool IsEnemySpawnOverlapFree(Vector3 floorPosition)
     {
         Vector3 lower = floorPosition + Vector3.up * 0.55f;
         Vector3 upper = floorPosition + Vector3.up * 1.85f;
@@ -769,13 +868,112 @@ public class GymArenaBootstrap : MonoBehaviour
         for (int i = 0; i < count; i++)
         {
             Collider hit = enemySpawnOverlap[i];
-            if (hit == null || HasNameInHierarchy(hit.transform, "rubber floor"))
+            if (hit == null || IsRoomFloorCollider(hit.transform))
             {
                 continue;
             }
 
             return false;
         }
+        return true;
+    }
+
+    private int CountEnemySpawnOpenExits(Vector3 floorPosition)
+    {
+        int openExitCount = 0;
+        for (int directionIndex = 0; directionIndex < 8; directionIndex++)
+        {
+            Vector3 direction = Quaternion.Euler(
+                0f, directionIndex * 45f, 0f) * Vector3.forward;
+            // A 1.15 m probe matches the roaming controller's real look-ahead
+            // and still leaves enough room to pick a direction between
+            // machines without rejecting every aisle in this dense layout.
+            if (IsEnemySpawnPathClear(floorPosition, direction, 1.15f))
+            {
+                openExitCount++;
+            }
+        }
+
+        return openExitCount;
+    }
+
+    private bool TryGetDedicatedOpenSpawn(
+        BodybuilderIdentity identity, Vector3 roomCenter, float floorY,
+        out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        GameObject floor = GameObject.Find("Rubber Floor");
+        if (floor == null || !floor.TryGetComponent(out Renderer floorRenderer))
+        {
+            return false;
+        }
+
+        Bounds floorBounds = floorRenderer.bounds;
+        Vector2 anchor = identity == BodybuilderIdentity.Cbum
+            ? new Vector2(-0.30f, 0.24f)
+            : identity == BodybuilderIdentity.Arnold
+                ? new Vector2(-0.08f, -0.28f)
+                : identity == BodybuilderIdentity.Ronnie
+                    ? new Vector2(0.29f, 0.25f)
+                    : new Vector2(0.27f, -0.24f);
+        Vector3[] searchOffsets =
+        {
+            Vector3.zero,
+            Vector3.left * 1.8f,
+            Vector3.right * 1.8f,
+            Vector3.forward * 1.8f,
+            Vector3.back * 1.8f,
+            (Vector3.left + Vector3.forward).normalized * 2.5f,
+            (Vector3.right + Vector3.forward).normalized * 2.5f,
+            (Vector3.left + Vector3.back).normalized * 2.5f,
+            (Vector3.right + Vector3.back).normalized * 2.5f
+        };
+
+        for (int offsetIndex = 0; offsetIndex < searchOffsets.Length; offsetIndex++)
+        {
+            Vector3 candidate = roomCenter + new Vector3(
+                floorBounds.size.x * anchor.x, 0f, floorBounds.size.z * anchor.y) +
+                searchOffsets[offsetIndex];
+            candidate.x = Mathf.Clamp(candidate.x, floorBounds.min.x + 1.25f, floorBounds.max.x - 1.25f);
+            candidate.z = Mathf.Clamp(candidate.z, floorBounds.min.z + 1.25f, floorBounds.max.z - 1.25f);
+            candidate.y = floorY;
+            if (!IsEnemySpawnClear(candidate))
+            {
+                continue;
+            }
+
+            Vector3 lookDirection = Vector3.ProjectOnPlane(roomCenter - candidate, Vector3.up);
+            if (lookDirection.sqrMagnitude < 0.01f)
+            {
+                lookDirection = Vector3.forward;
+            }
+            position = candidate;
+            rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IsEnemySpawnPathClear(Vector3 floorPosition, Vector3 direction, float distance)
+    {
+        Vector3 lower = floorPosition + Vector3.up * 0.55f;
+        Vector3 upper = floorPosition + Vector3.up * 1.85f;
+        int count = Physics.CapsuleCastNonAlloc(
+            lower, upper, 0.52f, direction.normalized, enemySpawnPathHits,
+            distance, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = enemySpawnPathHits[i].collider;
+            if (hit == null || IsRoomFloorCollider(hit.transform))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
         return true;
     }
 
@@ -932,6 +1130,7 @@ public class GymArenaBootstrap : MonoBehaviour
     {
         GameObject enemy = new GameObject($"Enemy - {identity}");
         enemy.tag = "Enemies";
+        enemy.layer = EnemyFighter.EnemyCollisionLayer;
         enemy.transform.position = position;
         enemy.transform.rotation = rotation;
 

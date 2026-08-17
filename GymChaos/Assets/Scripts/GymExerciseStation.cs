@@ -39,6 +39,8 @@ public class GymExerciseStation : MonoBehaviour
     private float previousMovingSpeed = 4f;
     private float distance;
     private bool sessionActive;
+    private PlayerMovement playerOccupant;
+    private EnemyFighter enemyOccupant;
     private Renderer treadmillBeltRenderer;
     private MaterialPropertyBlock treadmillPropertyBlock;
     private float treadmillTextureOffset;
@@ -85,6 +87,21 @@ public class GymExerciseStation : MonoBehaviour
     public string DisplayName => displayName;
     public Vector3 PlayerPosition => playerPosition;
     public Quaternion PlayerRotation => playerRotation;
+    public bool IsTreadmill => exerciseType == GymExerciseType.Treadmill;
+    public bool IsOccupied => playerOccupant != null || enemyOccupant != null;
+    public bool IsOccupiedByEnemy => enemyOccupant != null;
+    public bool IsAvailableForPlayer => !IsTreadmill || !IsOccupied;
+    public EnemyFighter EnemyOccupant => enemyOccupant;
+    // Treadmills use the same authored center/facing correction as the player
+    // exercise pose. That keeps an enemy's feet on the belt and its chest
+    // pointed at the machine screen instead of at the aisle.
+    public Vector3 EnemyPosition => playerPosition;
+    public Quaternion EnemyRotation => playerRotation;
+    public float CurrentTreadmillSpeed => currentSpeed;
+    public float TreadmillSpeed01(float speed)
+    {
+        return Mathf.InverseLerp(1f, 18f, Mathf.Clamp(speed, 1f, 18f));
+    }
     public bool IsCardio => exerciseType == GymExerciseType.Treadmill || exerciseType == GymExerciseType.ExerciseBike;
     public bool RequiresWeightSelection => exerciseType == GymExerciseType.FlatBenchPress ||
                                            exerciseType == GymExerciseType.InclineBenchPress ||
@@ -173,6 +190,15 @@ public class GymExerciseStation : MonoBehaviour
                 continue;
             }
 
+            // An occupied treadmill must disappear from the player's nearby
+            // station query. This removes both the interaction popup and the
+            // possibility of entering the same exercise session while an NPC
+            // is using the belt.
+            if (station.IsTreadmill && station.IsOccupied)
+            {
+                continue;
+            }
+
             Vector3 offset = station.interactionPoint - position;
             offset.y = 0f;
             float candidateDistance = offset.magnitude;
@@ -181,6 +207,37 @@ public class GymExerciseStation : MonoBehaviour
             {
                 continue;
             }
+            if (candidateDistance < bestDistance)
+            {
+                bestDistance = candidateDistance;
+                closest = station;
+            }
+        }
+
+        return closest;
+    }
+
+    public static GymExerciseStation FindClosestTreadmill(Vector3 position, float maxDistance)
+    {
+        GymExerciseStation closest = null;
+        float bestDistance = maxDistance;
+        for (int i = Stations.Count - 1; i >= 0; i--)
+        {
+            GymExerciseStation station = Stations[i];
+            if (station == null)
+            {
+                Stations.RemoveAt(i);
+                continue;
+            }
+
+            if (!station.IsTreadmill || station.IsOccupied)
+            {
+                continue;
+            }
+
+            Vector3 offset = station.EnemyPosition - position;
+            offset.y = 0f;
+            float candidateDistance = offset.magnitude;
             if (candidateDistance < bestDistance)
             {
                 bestDistance = candidateDistance;
@@ -209,6 +266,88 @@ public class GymExerciseStation : MonoBehaviour
     public string GetInteractionPrompt()
     {
         return $"[F] Start exercise: {displayName}";
+    }
+
+    public bool TryReserveForPlayer(PlayerMovement player)
+    {
+        if (player == null || (IsTreadmill && enemyOccupant != null))
+        {
+            return false;
+        }
+
+        if (playerOccupant != null && playerOccupant != player)
+        {
+            return false;
+        }
+
+        playerOccupant = player;
+        return true;
+    }
+
+    public bool IsAvailableForEnemy(EnemyFighter enemy)
+    {
+        return IsTreadmill && enemy != null &&
+            (enemyOccupant == null || enemyOccupant == enemy) && playerOccupant == null;
+    }
+
+    public bool ContainsEquipmentCollider(Collider collider)
+    {
+        return collider != null && equipmentRoot != null &&
+            (collider.transform == equipmentRoot || collider.transform.IsChildOf(equipmentRoot));
+    }
+
+    public bool TryBeginEnemyTreadmill(EnemyFighter enemy, float speed)
+    {
+        if (!IsAvailableForEnemy(enemy))
+        {
+            return false;
+        }
+
+        enemyOccupant = enemy;
+        sessionActive = true;
+        repTimer = -1f;
+        distance = 0f;
+        cardioPhase = 0f;
+        currentSpeed = 0f;
+        targetSpeed = Mathf.Clamp(speed, 1f, 18f);
+        previousMovingSpeed = targetSpeed;
+        treadmillTextureOffset = 0f;
+        IgnoreEquipmentCollisions(enemy, true);
+        return true;
+    }
+
+    public bool TickEnemyTreadmill(EnemyFighter enemy, float deltaTime, float speed)
+    {
+        if (!IsTreadmill || enemyOccupant != enemy || enemy == null || enemy.IsDead)
+        {
+            return false;
+        }
+
+        IgnoreEquipmentCollisions(enemy, true);
+        targetSpeed = Mathf.Clamp(speed, 1f, 18f);
+        currentSpeed = Mathf.MoveTowards(
+            currentSpeed, targetSpeed,
+            deltaTime * (targetSpeed > currentSpeed ? 1.6f : 2.8f));
+        distance += currentSpeed / 3.6f * deltaTime;
+        cardioPhase += currentSpeed * deltaTime * 1.35f;
+        AnimateActualCardioParts(deltaTime);
+        return true;
+    }
+
+    public void EndEnemyTreadmill(EnemyFighter enemy)
+    {
+        if (enemyOccupant != enemy)
+        {
+            return;
+        }
+
+        IgnoreEquipmentCollisions(enemy, false);
+        enemyOccupant = null;
+        sessionActive = false;
+        targetSpeed = 0f;
+        currentSpeed = 0f;
+        distance = 0f;
+        cardioPhase = 0f;
     }
 
     public string GetSessionHud()
@@ -254,6 +393,7 @@ public class GymExerciseStation : MonoBehaviour
         repTimer = -1f;
         targetSpeed = 0f;
         currentSpeed = 0f;
+        playerOccupant = null;
         RestoreSceneEquipment();
         if (visualRoot != null)
         {
@@ -426,6 +566,36 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         ConfigureActualCardioParts(equipment);
+    }
+
+    private void IgnoreEquipmentCollisions(EnemyFighter enemy, bool ignore)
+    {
+        if (enemy == null || equipmentRoot == null)
+        {
+            return;
+        }
+
+        Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
+        Collider[] equipmentColliders = equipmentRoot.GetComponentsInChildren<Collider>(true);
+        for (int enemyIndex = 0; enemyIndex < enemyColliders.Length; enemyIndex++)
+        {
+            Collider enemyCollider = enemyColliders[enemyIndex];
+            if (enemyCollider == null)
+            {
+                continue;
+            }
+
+            for (int equipmentIndex = 0; equipmentIndex < equipmentColliders.Length; equipmentIndex++)
+            {
+                Collider equipmentCollider = equipmentColliders[equipmentIndex];
+                if (equipmentCollider == null || enemyCollider == equipmentCollider)
+                {
+                    continue;
+                }
+
+                Physics.IgnoreCollision(enemyCollider, equipmentCollider, ignore);
+            }
+        }
     }
 
     private void TickStrength(float deltaTime, bool actionPressed)

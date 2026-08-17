@@ -292,7 +292,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         else if (moving)
         {
             lastMotionState = MotionState.Running;
-            runTime += Time.deltaTime * Mathf.Lerp(0.75f, 1.35f, speed01);
+            // The same run clip is used for chasing and for treadmill users.
+            // Keep slow roaming readable while allowing treadmill speed to
+            // produce clearly different cadence bands instead of one fixed
+            // animation rate.
+            runTime += Time.deltaTime * Mathf.Lerp(0.55f, 1.75f, speed01);
             clip = runClip;
             sampleTime = runTime % Mathf.Max(0.01f, clip.length - 0.001f);
         }

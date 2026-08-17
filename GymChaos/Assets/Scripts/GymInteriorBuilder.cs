@@ -338,7 +338,12 @@ public static class GymInteriorBuilder
 
     private static void CreateRoomDetails(Transform parent, Vector3 center, float width, float depth, Material accent, Material trim, Material wall)
     {
-        Vector3 deskPosition = center + new Vector3(-width * 0.33f, 0.65f, -depth * 0.5f + 2.5f);
+        // Keep reception in the far north-east corner. The old south-west
+        // placement put the desk directly in the player's starting sightline
+        // and left the locker wall visually disconnected from reception.
+        // Leave a generous aisle to the east wall so the desk, receptionist,
+        // and roaming characters never spawn inside the wall or lockers.
+        Vector3 deskPosition = center + new Vector3(width * 0.5f - 4.6f, 0.65f, depth * 0.5f - 1.8f);
         CreateBox("Reception desk", parent, deskPosition, new Vector3(5.2f, 1.3f, 1.1f), trim, true);
         CreateBox("Reception accent", parent, deskPosition + new Vector3(0f, 0.05f, -0.57f), new Vector3(3.4f, 0.56f, 0.08f), accent, false);
 

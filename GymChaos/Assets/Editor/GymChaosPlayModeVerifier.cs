@@ -649,6 +649,11 @@ public static class GymChaosPlayModeVerifier
             throw new InvalidOperationException("Goku was not spawned for flight verification.");
         }
 
+        // Sight is intentionally non-hostile now. Opt Goku into the same
+        // damage-triggered combat state that gameplay uses before measuring
+        // his long-range flight pursuit.
+        gokuForVerification.SetAggressiveForVerification(player);
+
         gokuGroundY = gokuForVerification.transform.position.y;
         Renderer floor = GameObject.Find("Rubber Floor")?.GetComponent<Renderer>();
         Vector3 towardRoomCenter = floor != null

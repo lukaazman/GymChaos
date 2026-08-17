@@ -4,7 +4,30 @@ using UnityEngine;
 [RequireComponent(typeof(Rigidbody))]
 public class EnemyFighter : MonoBehaviour
 {
+    // Layer 3 is intentionally unused by the project. Enemy hitboxes use it
+    // so the physics engine can keep enemies from shoving one another while
+    // still colliding with the player and the gym equipment.
+    public const int EnemyCollisionLayer = 3;
+
     private static readonly List<EnemyFighter> Fighters = new List<EnemyFighter>();
+    private static readonly float[] MovementProbeAngles =
+        { 0f, 30f, -30f, 60f, -60f, 90f, -90f, 135f, -135f, 180f };
+    private static readonly int[] NavigationNeighborX =
+        { 1, -1, 0, 0, 1, 1, -1, -1 };
+    private static readonly int[] NavigationNeighborZ =
+        { 0, 0, 1, -1, 1, -1, 1, -1 };
+    private static readonly string[] PurposefulRoamKeywords =
+    {
+        "treadmill", "bike", "bench", "smith", "latpulldown", "lat pulldown",
+        "cable", "squat", "curl", "press", "dip", "rack", "rower", "rowing",
+        "weightstand", "weight stand", "barbell", "dumbbell", "calisthenics",
+        "reception", "locker"
+    };
+    private static readonly string[] NonPurposefulRoamKeywords =
+    {
+        "floor", "wall", "ceiling", "poster", "window", "mirror", "light",
+        "beam", "column", "pillar", "mat", "carpet", "trim", "accent"
+    };
 
     public static int ActiveCount { get; private set; }
 
@@ -17,8 +40,18 @@ public class EnemyFighter : MonoBehaviour
     [SerializeField] private float attackCooldown = 1.05f;
     [SerializeField] private float lightStunDuration = 0.3f;
     [SerializeField] private float heavyStunDuration = 1.15f;
-    [SerializeField] private float policeTargetRefreshInterval = 1.25f;
-    [SerializeField] private float policeMinimumTargetLock = 2.5f;
+    [SerializeField] private float throwPushbackDuration = 0.28f;
+    [SerializeField] private float throwPushbackMinSpeed = 2.3f;
+    [SerializeField] private float throwPushbackMaxSpeed = 4.2f;
+    [SerializeField] private float policeTargetRefreshInterval = 0.18f;
+    [SerializeField] private float policeMinimumTargetLock = 0f;
+    [SerializeField] private float roamSpeedMin = 1.15f;
+    [SerializeField] private float roamSpeedMax = 2.35f;
+    [SerializeField] private float roamIdleMin = 3.4f;
+    [SerializeField] private float roamIdleMax = 6.2f;
+    [SerializeField] private float roamWaypointPauseChance = 0.08f;
+    [SerializeField] private float roamRandomDestinationChance = 0.1f;
+    [SerializeField] private float roamBlockedRetargetDelay = 0.72f;
 
     private PlayerMovement playerTarget;
     private Rigidbody body;
@@ -29,16 +62,80 @@ public class EnemyFighter : MonoBehaviour
     private float health;
     private float lastAttackTime = -999f;
     private float stunnedUntilTime;
+    private float throwPushbackUntilTime;
     private float nextTargetRefreshTime;
     private float targetLockedUntil;
     private float deathStartedTime;
     private bool isPolice;
     private bool isPassive;
+    private bool isAggressive;
     private bool isDead;
     private bool celebratingPlayerKill;
     private bool punchInProgress;
     private bool deathPoseFrozen;
     private bool activeCounted;
+    private float floorRootY;
+    private RoamState roamState;
+    private Vector3 roamTarget;
+    private bool hasRoamTarget;
+    private Vector3 lastRoamTarget;
+    private bool hasLastRoamTarget;
+    private bool roamTargetPurposeful;
+    private string roamTargetInterestLabel;
+    private GymExerciseStation roamTargetStation;
+    private Quaternion roamTargetArrivalRotation;
+    private bool hasRoamTargetArrivalRotation;
+    private float roamIdleUntil;
+    private float nextTreadmillDecisionTime;
+    private float roamSpeed;
+    private float stalledRoamTime;
+    private Vector3 roamDirection;
+    private float roamDirectionHoldUntil;
+    private GymExerciseStation treadmillStation;
+    private float treadmillSpeed;
+    private float treadmillUntil;
+    private bool treadmillEntryActive;
+    private float treadmillEntryStarted;
+    private float treadmillEntryDuration;
+    private Vector3 treadmillEntryStartPosition;
+    private Quaternion treadmillEntryStartRotation;
+    private bool treadmillExitActive;
+    private float treadmillExitStarted;
+    private float treadmillExitDuration;
+    private Vector3 treadmillExitTargetPosition;
+    private float treadmillNextSpeedChangeTime;
+    private GymExerciseStation pendingTreadmillStation;
+    private readonly RaycastHit[] movementHits = new RaycastHit[32];
+    private readonly Collider[] roamOverlapHits = new Collider[64];
+    private readonly List<RoamInterest> roamInterests = new List<RoamInterest>();
+    private readonly List<Vector3> roamRouteWaypoints = new List<Vector3>();
+    private readonly HashSet<Transform> roamInterestRoots = new HashSet<Transform>();
+    private int roamRouteIndex;
+    private int collectedMachineInterestCount;
+    private int collectedPersonnelInterestCount;
+    private bool collectedReceptionInterest;
+    private bool collectedPlayerInterest;
+
+    private sealed class RoamInterest
+    {
+        public Transform root;
+        public Bounds bounds;
+        public Vector3 position;
+        public Vector3 interactionPoint;
+        public Quaternion arrivalRotation;
+        public GymExerciseStation station;
+        public bool useInteractionPoint;
+        public bool hasArrivalRotation;
+        public bool personnel;
+        public float weight;
+        public string label;
+    }
+
+    private enum RoamState
+    {
+        Idle,
+        Walking
+    }
 #if UNITY_EDITOR
     // The Play Mode verifier drives one explicit hand-contact punch and then
     // measures its exact damage. Keep that editor-driven fighter from starting
@@ -77,6 +174,31 @@ public class EnemyFighter : MonoBehaviour
     public bool IsDead => isDead;
     public bool IsCelebratingPlayerKill => celebratingPlayerKill;
     public bool IsPolice => isPolice;
+    public bool IsAggressive => isAggressive;
+    public bool IsRoaming => !isPassive && !isDead && !isAggressive &&
+        currentTarget == null && treadmillStation == null;
+    public bool HasRoamDestination => !isPassive && !isDead && !isAggressive &&
+        hasRoamTarget;
+    public float CurrentRoamTargetDistance => hasRoamTarget
+        ? Vector3.ProjectOnPlane(roamTarget - transform.position, Vector3.up).magnitude
+        : 0f;
+    public Vector3 CurrentRoamTarget => roamTarget;
+    public bool CurrentRoamTargetIsPurposeful => hasRoamTarget && roamTargetPurposeful;
+    public string CurrentRoamInterestLabel => roamTargetInterestLabel;
+    public float CurrentRoamBlockedTime => stalledRoamTime;
+    public int CurrentRoamRouteRemaining => Mathf.Max(0, roamRouteWaypoints.Count - roamRouteIndex);
+    public float CurrentPlanarSpeed => body != null
+        ? Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude
+        : 0f;
+    public int RoamInterestCount => roamInterests.Count;
+    public int RoamMachineInterestCount => collectedMachineInterestCount;
+    public int RoamPersonnelInterestCount => collectedPersonnelInterestCount;
+    public bool HasReceptionRoamInterest => collectedReceptionInterest;
+    public bool HasPlayerRoamInterest => collectedPlayerInterest;
+    public bool IsOnTreadmill => treadmillStation != null;
+    public GymExerciseStation CurrentTreadmill => treadmillStation;
+    public Transform CurrentTarget => currentTarget;
+    public EnemyFighter CurrentFighterTarget => currentFighterTarget;
     public BodybuilderIdentity Identity => identity;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
     public bool IsGokuFlightActive => identity == BodybuilderIdentity.Goku &&
@@ -112,6 +234,24 @@ public class EnemyFighter : MonoBehaviour
             ? new Color(0.05f, 0.78f, 0.2f, 1f)
             : new Color(0.92f, 0.04f, 0.04f, 1f);
 
+    public static bool IsFightActive
+    {
+        get
+        {
+            for (int i = 0; i < Fighters.Count; i++)
+            {
+                EnemyFighter fighter = Fighters[i];
+                if (fighter != null && fighter.isAggressive && !fighter.isDead &&
+                    !fighter.isPassive && !fighter.isPolice)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
     public static void CelebrateAllLivingEnemies()
     {
         // The receptionist also uses EnemyFighter for damage/death markers,
@@ -138,9 +278,50 @@ public class EnemyFighter : MonoBehaviour
         health = maxHealth;
         isPolice = police;
         isPassive = passive;
-        standingRootY = transform.position.y;
+        floorRootY = transform.position.y;
+        standingRootY = floorRootY;
+        isAggressive = false;
+        throwPushbackUntilTime = 0f;
+        roamState = RoamState.Idle;
+        hasRoamTarget = false;
+        pendingTreadmillStation = null;
+        treadmillStation = null;
+        treadmillSpeed = 0f;
+        treadmillUntil = 0f;
+        treadmillEntryActive = false;
+        treadmillEntryStarted = 0f;
+        treadmillEntryDuration = 0f;
+        treadmillEntryStartPosition = Vector3.zero;
+        treadmillEntryStartRotation = Quaternion.identity;
+        treadmillExitActive = false;
+        treadmillExitStarted = 0f;
+        treadmillExitDuration = 0f;
+        treadmillExitTargetPosition = Vector3.zero;
+        treadmillNextSpeedChangeTime = 0f;
+        roamSpeed = Random.Range(roamSpeedMin, roamSpeedMax);
+        // Give each identity a deterministic stagger with a small random
+        // nudge: some are already walking on Play, while at least one remains
+        // idle briefly. This avoids the whole room switching state together.
+        float identityStagger = Mathf.Repeat((int)identity * 0.31f, 1.35f);
+        roamIdleUntil = Time.time + 0.16f + identityStagger + Random.Range(-0.08f, 0.08f);
+        nextTreadmillDecisionTime = Time.time + Random.Range(3f, 8f);
+        stalledRoamTime = 0f;
+        lastRoamTarget = Vector3.zero;
+        hasLastRoamTarget = false;
+        roamTargetPurposeful = false;
+        roamTargetInterestLabel = null;
+        roamTargetStation = null;
+        roamTargetArrivalRotation = Quaternion.identity;
+        hasRoamTargetArrivalRotation = false;
+        ClearRoamRoute();
+        roamDirection = Vector3.zero;
+        roamDirectionHoldUntil = 0f;
         gokuFlightState = GokuFlightState.Grounded;
-        currentTarget = police ? null : player != null ? player.transform : null;
+        // Normal enemies begin neutral. They only acquire the player after a
+        // player-caused hit calls BecomeAggressive; Ronnie normally uses the
+        // police target search below but also becomes hostile when hit, while
+        // the receptionist remains passive.
+        currentTarget = null;
         currentFighterTarget = null;
         nextTargetRefreshTime = 0f;
         if (body != null)
@@ -166,7 +347,7 @@ public class EnemyFighter : MonoBehaviour
     public void SetTarget(PlayerMovement player)
     {
         playerTarget = player;
-        if (!isPolice)
+        if (!isPolice && isAggressive)
         {
             currentTarget = player != null ? player.transform : null;
             currentFighterTarget = null;
@@ -175,6 +356,8 @@ public class EnemyFighter : MonoBehaviour
 
     private void Awake()
     {
+        gameObject.layer = EnemyCollisionLayer;
+        Physics.IgnoreLayerCollision(EnemyCollisionLayer, EnemyCollisionLayer, true);
         body = GetComponent<Rigidbody>();
         gokuGroundCollisionMode = body.collisionDetectionMode;
         externalBodyAnimator = GetComponentInChildren<MixamoScanRetargetAnimator>(true);
@@ -186,6 +369,7 @@ public class EnemyFighter : MonoBehaviour
 
     private void OnDestroy()
     {
+        EndTreadmillVisit();
         Fighters.Remove(this);
         if (activeCounted)
         {
@@ -200,6 +384,7 @@ public class EnemyFighter : MonoBehaviour
 
         if (isDead)
         {
+            EndTreadmillVisit();
             RestoreGokuGroundPhysicsForDeath();
             UpdatePermanentDeathPose();
             return;
@@ -210,7 +395,7 @@ public class EnemyFighter : MonoBehaviour
         if (celebratingPlayerKill)
         {
             RestoreGokuGroundPhysicsForDeath();
-            StopMovingPhysicsOnly();
+            StopMovingPhysicsImmediately();
             externalBodyAnimator?.TriggerCelebration();
             return;
         }
@@ -228,11 +413,24 @@ public class EnemyFighter : MonoBehaviour
 
         if (isPolice)
         {
-            RefreshPoliceTarget(false);
+            // Police/Ronnie is a room-wide intervention observer. Refresh on
+            // every physics step so a fight participant that becomes the
+            // nearest person is selected immediately, regardless of the
+            // previous target's distance or refresh timer.
+            RefreshPoliceTarget(true);
+        }
+        else if (isAggressive
+#if UNITY_EDITOR
+            || verificationPunchOnly
+#endif
+            )
+        {
+            currentTarget = playerTarget != null ? playerTarget.transform : null;
+            currentFighterTarget = null;
         }
         else
         {
-            currentTarget = playerTarget != null ? playerTarget.transform : null;
+            currentTarget = null;
             currentFighterTarget = null;
         }
 
@@ -245,9 +443,11 @@ public class EnemyFighter : MonoBehaviour
 
         if (currentTarget == null)
         {
-            StopMoving();
+            TickRoaming();
             return;
         }
+
+        EndTreadmillVisit();
 
         if (currentFighterTarget == null && playerTarget != null &&
             currentTarget == playerTarget.transform && playerTarget.IsExercising)
@@ -259,6 +459,16 @@ public class EnemyFighter : MonoBehaviour
             if (currentTarget == playerTarget.transform)
             {
                 StopMoving();
+                return;
+            }
+
+            // RefreshPoliceTarget can clear the player target when the player
+            // starts exercising and no aggressive fighter remains in the room.
+            // Re-enter the roaming path instead of dereferencing a cleared
+            // target below.
+            if (currentTarget == null)
+            {
+                TickRoaming();
                 return;
             }
         }
@@ -276,7 +486,19 @@ public class EnemyFighter : MonoBehaviour
         float chaseSpeed = GetChaseSpeed();
         if (distance > GetDetectionRange())
         {
-            StopMoving();
+            TickRoaming();
+            return;
+        }
+
+        if (Time.time < throwPushbackUntilTime)
+        {
+            // Let the impact velocity carry the fighter backward for a short
+            // visible beat. Keep the Run animation active and let normal chase
+            // steering resume after the pushback window.
+            float impactPlanarSpeed =
+                Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
+            SetAnimatedMovement(
+                true, impactPlanarSpeed / Mathf.Max(0.01f, chaseSpeed));
             return;
         }
 
@@ -316,6 +538,12 @@ public class EnemyFighter : MonoBehaviour
             }
             else
             {
+                moveDirection = FindClearMovementDirection(moveDirection, distance, false, false);
+                if (moveDirection.sqrMagnitude < 0.001f)
+                {
+                    StopMoving();
+                    return;
+                }
                 Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
                 Vector3 desiredVelocity = moveDirection * chaseSpeed;
                 // Directly steer the planar Rigidbody velocity. The old 11 N force
@@ -333,15 +561,1906 @@ public class EnemyFighter : MonoBehaviour
 
     }
 
+    public void BecomeAggressive(PlayerMovement source = null)
+    {
+        if (isDead || isPassive)
+        {
+            return;
+        }
+
+        if (source != null)
+        {
+            playerTarget = source;
+        }
+        else if (playerTarget == null)
+        {
+            playerTarget = FindFirstObjectByType<PlayerMovement>();
+        }
+
+        isAggressive = true;
+        currentTarget = playerTarget != null ? playerTarget.transform : null;
+        currentFighterTarget = null;
+        pendingTreadmillStation = null;
+        EndTreadmillVisit();
+        roamState = RoamState.Idle;
+        hasRoamTarget = false;
+        hasLastRoamTarget = false;
+        roamTargetPurposeful = false;
+        roamTargetInterestLabel = null;
+        roamTargetStation = null;
+        hasRoamTargetArrivalRotation = false;
+        ClearRoamRoute();
+        roamDirection = Vector3.zero;
+        roamDirectionHoldUntil = 0f;
+
+        Debug.Log($"GYMCHAOS_ENEMY_AGGRO identity={identity} source=player", this);
+    }
+
+#if UNITY_EDITOR
+    // The editor play-mode verifier now has to opt a fighter into combat just
+    // like gameplay does, because sight alone is intentionally non-hostile.
+    public void SetAggressiveForVerification(PlayerMovement source)
+    {
+        BecomeAggressive(source);
+    }
+
+    public bool BeginTreadmillForVerification(GymExerciseStation station, float speed)
+    {
+        if (isDead || isPolice || isPassive || isAggressive)
+        {
+            return false;
+        }
+
+        pendingTreadmillStation = null;
+        hasRoamTarget = false;
+        roamState = RoamState.Walking;
+        return TryBeginTreadmillVisit(station);
+    }
+
+    public bool QueueTreadmillForVerification(GymExerciseStation station)
+    {
+        if (station == null || isDead || isPolice || isPassive || isAggressive ||
+            !station.IsAvailableForEnemy(this))
+        {
+            return false;
+        }
+
+        currentTarget = null;
+        currentFighterTarget = null;
+        EndTreadmillVisit();
+        pendingTreadmillStation = station;
+        roamTargetStation = station;
+        roamTarget = TryFindTreadmillApproachPoint(
+                station, out Vector3 queuedApproachPoint)
+            ? queuedApproachPoint
+            : station.EnemyPosition;
+        hasRoamTarget = true;
+        roamTargetPurposeful = true;
+        roamTargetInterestLabel = station.DisplayName;
+        roamTargetArrivalRotation = station.EnemyRotation;
+        hasRoamTargetArrivalRotation = true;
+        roamState = RoamState.Walking;
+        stalledRoamTime = 0f;
+        roamDirection = Vector3.zero;
+        roamDirectionHoldUntil = 0f;
+        BuildRoamRouteToTarget(ShouldAllowTargetEquipment());
+        return true;
+    }
+
+    public void EndTreadmillForVerification()
+    {
+        EndTreadmillVisit();
+    }
+#endif
+
+    private void TickRoaming()
+    {
+        // Angered fighters must stay in their combat state. They may stop or
+        // retarget when combat logic requires it, but they must never fall
+        // back into the room's idle/wandering loop while angered.
+        if (isAggressive)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            return;
+        }
+
+        // A treadmill visit is its own animation state. It must be evaluated
+        // before the normal idle/stun roaming branch so the fighter never
+        // drops into an idle pose while the workout session is active.
+        if (treadmillStation != null)
+        {
+            if (treadmillEntryActive)
+            {
+                TickTreadmillEntry();
+                return;
+            }
+
+            if (treadmillExitActive)
+            {
+                TickTreadmillExit();
+                return;
+            }
+
+            if (Time.time >= treadmillUntil)
+            {
+                BeginTreadmillExit();
+                return;
+            }
+
+            UpdateTreadmillTargetSpeed();
+            if (!treadmillStation.TickEnemyTreadmill(
+                    this, Time.fixedDeltaTime, treadmillSpeed))
+            {
+                EndTreadmillVisit();
+                hasRoamTarget = false;
+                ClearRoamRoute();
+                SelectRoamDestination();
+                return;
+            }
+
+            StopMovingPhysicsImmediately();
+            body.position = treadmillStation.EnemyPosition;
+            body.rotation = Quaternion.Slerp(
+                body.rotation, treadmillStation.EnemyRotation, 12f * Time.fixedDeltaTime);
+            SetAnimatedMovement(
+                true, treadmillStation.TreadmillSpeed01(
+                    treadmillStation.CurrentTreadmillSpeed));
+            return;
+        }
+
+        if (Time.time < stunnedUntilTime)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            return;
+        }
+
+        if (roamState == RoamState.Idle)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            if (Time.time >= roamIdleUntil)
+            {
+                SelectRoamDestination();
+            }
+            return;
+        }
+
+        if (pendingTreadmillStation != null && !pendingTreadmillStation.IsAvailableForEnemy(this))
+        {
+            pendingTreadmillStation = null;
+            // A treadmill can become occupied while this fighter is walking
+            // toward it. Reroute immediately; this is not a natural waypoint
+            // pause and should not create an idle flicker.
+            SelectRoamDestination();
+            return;
+        }
+
+        if (!hasRoamTarget)
+        {
+            SelectRoamDestination();
+            return;
+        }
+
+        AdvanceRoamRoute();
+        Vector3 steeringTarget = GetRoamSteeringTarget();
+        Vector3 toTarget = Vector3.ProjectOnPlane(
+            steeringTarget - transform.position, Vector3.up);
+        float distance = toTarget.magnitude;
+        bool routeComplete = roamRouteIndex >= roamRouteWaypoints.Count;
+        float finalDistance = Vector3.ProjectOnPlane(
+            roamTarget - transform.position, Vector3.up).magnitude;
+        if (routeComplete && finalDistance <= 0.72f)
+        {
+            if (pendingTreadmillStation != null)
+            {
+                if (TryBeginTreadmillVisit(pendingTreadmillStation))
+                {
+                    pendingTreadmillStation = null;
+                    return;
+                }
+
+                pendingTreadmillStation = null;
+            }
+
+            if (hasRoamTargetArrivalRotation)
+            {
+                transform.rotation = roamTargetArrivalRotation;
+            }
+
+            if (Random.value < roamWaypointPauseChance)
+            {
+                BeginRoamIdle();
+            }
+            else
+            {
+                // Most waypoints are passed through without stopping. This
+                // keeps room-wide wandering continuous and makes idle a rare
+                // deliberate pause instead of a side effect of retargeting.
+                SelectRoamDestination();
+            }
+            return;
+        }
+
+        bool allowTargetEquipment = ShouldAllowTargetEquipment() &&
+            (roamRouteWaypoints.Count == 0 ||
+             roamRouteIndex >= roamRouteWaypoints.Count - 1);
+        Vector3 desiredDirection = toTarget.normalized;
+        Vector3 direction = FindClearMovementDirection(
+            desiredDirection, distance, true, allowTargetEquipment);
+        direction = StabilizeRoamDirection(
+            desiredDirection, distance, direction, allowTargetEquipment);
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            stalledRoamTime += Time.fixedDeltaTime;
+            // A false movement animation must also mean zero location
+            // movement. The previous eased deceleration left residual
+            // velocity, so a character visibly slid in the static pose.
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            // Keep the pause short and recover to a new meaningful target.
+            // Waiting several seconds here made a rare wall contact look like
+            // a permanent AI freeze.
+            if (stalledRoamTime >= roamBlockedRetargetDelay)
+            {
+                if (roamTargetPurposeful &&
+                    BuildRoamRouteToTarget(ShouldAllowTargetEquipment()))
+                {
+                    stalledRoamTime = 0f;
+                    return;
+                }
+
+                hasRoamTarget = false;
+                pendingTreadmillStation = null;
+                ClearRoamRoute();
+                roamDirection = Vector3.zero;
+                SelectRoamDestination();
+            }
+            return;
+        }
+
+        stalledRoamTime = 0f;
+        body.WakeUp();
+        Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+        Vector3 desiredVelocity = direction * roamSpeed;
+        planarVelocity = Vector3.MoveTowards(
+            planarVelocity, desiredVelocity,
+            Mathf.Max(moveForce * 0.55f, 8f) * Time.fixedDeltaTime);
+        body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
+        ClampToRoomBounds();
+
+        Quaternion lookRotation = Quaternion.LookRotation(direction, Vector3.up);
+        transform.rotation = Quaternion.Slerp(
+            transform.rotation, lookRotation, 8f * Time.fixedDeltaTime);
+        SetAnimatedMovement(true, Mathf.Clamp01(roamSpeed / Mathf.Max(0.01f, maxSpeed)));
+    }
+
+    private void SelectRoamDestination()
+    {
+        roamState = RoamState.Walking;
+        stalledRoamTime = 0f;
+        pendingTreadmillStation = null;
+        roamTargetStation = null;
+        hasRoamTargetArrivalRotation = false;
+        ClearRoamRoute();
+        roamDirection = Vector3.zero;
+        roamDirectionHoldUntil = 0f;
+        roamSpeed = Random.Range(roamSpeedMin, roamSpeedMax);
+
+        if (Time.time >= nextTreadmillDecisionTime)
+        {
+            nextTreadmillDecisionTime = Time.time + Random.Range(10f, 19f);
+            if (Random.value < 0.34f)
+            {
+                GymExerciseStation treadmill =
+                    GymExerciseStation.FindClosestTreadmill(transform.position, 28f);
+                if (treadmill != null)
+                {
+                    pendingTreadmillStation = treadmill;
+                    roamTargetStation = treadmill;
+                    roamTarget = TryFindTreadmillApproachPoint(
+                            treadmill, out Vector3 treadmillApproachPoint)
+                        ? treadmillApproachPoint
+                        : treadmill.EnemyPosition;
+                    hasRoamTarget = true;
+                    roamTargetPurposeful = true;
+                    roamTargetInterestLabel = treadmill.DisplayName;
+                    roamTargetArrivalRotation = treadmill.EnemyRotation;
+                    hasRoamTargetArrivalRotation = true;
+                    BuildRoamRouteToTarget(ShouldAllowTargetEquipment());
+                    return;
+                }
+            }
+        }
+
+        if (Random.value < roamRandomDestinationChance &&
+            TryFindRareRandomDestination(out Vector3 randomDestination))
+        {
+            roamTarget = randomDestination;
+            hasRoamTarget = true;
+            roamTargetPurposeful = false;
+            roamTargetInterestLabel = "rare random room destination";
+            lastRoamTarget = roamTarget;
+            hasLastRoamTarget = true;
+            BuildRoamRouteToTarget(false);
+            return;
+        }
+
+        hasRoamTarget = TryFindRoamPoint(out roamTarget);
+        if (hasRoamTarget)
+        {
+            lastRoamTarget = roamTarget;
+            hasLastRoamTarget = true;
+            BuildRoamRouteToTarget(ShouldAllowTargetEquipment());
+        }
+        else if (identity == BodybuilderIdentity.JayCutler &&
+                 TryFindJayEmergencyDestination(
+                     out Vector3 jayDestination, out string jayLabel))
+        {
+            // Jay must never get stuck in the long no-waypoint idle used only
+            // when a room is genuinely saturated. Give him one more clear,
+            // purposeful destination search before allowing that fallback.
+            roamTarget = jayDestination;
+            hasRoamTarget = true;
+            roamTargetPurposeful = !string.IsNullOrEmpty(jayLabel);
+            roamTargetInterestLabel = jayLabel;
+            lastRoamTarget = roamTarget;
+            hasLastRoamTarget = true;
+            BuildRoamRouteToTarget(ShouldAllowTargetEquipment());
+        }
+        else
+        {
+            // Only enter a long idle if the room currently has no valid
+            // waypoint at all. Ordinary route changes always stay walking.
+            BeginRoamIdle();
+        }
+    }
+
+    private void ClearRoamRoute()
+    {
+        roamRouteWaypoints.Clear();
+        roamRouteIndex = 0;
+    }
+
+    private bool ShouldAllowTargetEquipment()
+    {
+        if (roamTargetStation == null)
+        {
+            return false;
+        }
+
+        // Treadmill roaming targets are normally an open approach point. Only
+        // the authored belt center is allowed to overlap the treadmill, and
+        // that overlap is handled by TryBeginTreadmillVisit after arrival.
+        if (roamTargetStation.IsTreadmill)
+        {
+            float distanceToBelt = Vector3.ProjectOnPlane(
+                roamTarget - roamTargetStation.EnemyPosition, Vector3.up).magnitude;
+            return distanceToBelt <= 0.82f;
+        }
+
+        return true;
+    }
+
+    private Vector3 GetRoamSteeringTarget()
+    {
+        return roamRouteIndex < roamRouteWaypoints.Count
+            ? roamRouteWaypoints[roamRouteIndex]
+            : roamTarget;
+    }
+
+    private void AdvanceRoamRoute()
+    {
+        while (roamRouteIndex < roamRouteWaypoints.Count)
+        {
+            Vector3 waypoint = roamRouteWaypoints[roamRouteIndex];
+            float distance = Vector3.ProjectOnPlane(
+                waypoint - transform.position, Vector3.up).magnitude;
+            float arrivalDistance = roamRouteIndex == roamRouteWaypoints.Count - 1
+                ? 0.52f : 0.72f;
+            if (distance > arrivalDistance)
+            {
+                break;
+            }
+
+            roamRouteIndex++;
+        }
+    }
+
+    private bool BuildRoamRouteToTarget(bool allowTargetEquipment)
+    {
+        ClearRoamRoute();
+        if (!hasRoamTarget || !TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return false;
+        }
+
+        Vector3 start = body != null ? body.position : transform.position;
+        Vector3 goal = roamTarget;
+        goal.y = floorBounds.max.y;
+        Vector3 direct = Vector3.ProjectOnPlane(goal - start, Vector3.up);
+        if (direct.sqrMagnitude < 1.2f * 1.2f ||
+            (!allowTargetEquipment && IsNavigationSegmentClear(start, goal, false)))
+        {
+            return true;
+        }
+
+        const float cellSize = 1.2f;
+        float margin = GetBodyRadius() + 0.28f;
+        float minX = floorBounds.min.x + margin;
+        float maxX = floorBounds.max.x - margin;
+        float minZ = floorBounds.min.z + margin;
+        float maxZ = floorBounds.max.z - margin;
+        int width = Mathf.Clamp(Mathf.FloorToInt((maxX - minX) / cellSize) + 1, 4, 48);
+        int height = Mathf.Clamp(Mathf.FloorToInt((maxZ - minZ) / cellSize) + 1, 4, 48);
+        int nodeCount = width * height;
+        int goalIndex = nodeCount;
+
+        bool[] navigable = new bool[nodeCount];
+        Vector3[] points = new Vector3[nodeCount];
+        for (int z = 0; z < height; z++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int index = z * width + x;
+                points[index] = new Vector3(
+                    Mathf.Min(minX + x * cellSize, maxX),
+                    floorBounds.max.y,
+                    Mathf.Min(minZ + z * cellSize, maxZ));
+                navigable[index] = IsNavigationPointClear(points[index]);
+            }
+        }
+
+        int startIndex = FindClosestNavigableNode(points, navigable, start);
+        if (startIndex < 0)
+        {
+            return false;
+        }
+
+        float[] gScores = new float[nodeCount + 1];
+        float[] fScores = new float[nodeCount + 1];
+        int[] cameFrom = new int[nodeCount + 1];
+        bool[] closed = new bool[nodeCount + 1];
+        List<int> open = new List<int>();
+        for (int i = 0; i < gScores.Length; i++)
+        {
+            gScores[i] = float.PositiveInfinity;
+            fScores[i] = float.PositiveInfinity;
+            cameFrom[i] = -1;
+        }
+
+        gScores[startIndex] = 0f;
+        fScores[startIndex] = Vector3.ProjectOnPlane(
+            goal - points[startIndex], Vector3.up).magnitude;
+        open.Add(startIndex);
+        bool foundGoal = false;
+
+        while (open.Count > 0)
+        {
+            int current = open[0];
+            float bestOpenScore = fScores[current];
+            for (int i = 1; i < open.Count; i++)
+            {
+                int candidate = open[i];
+                if (fScores[candidate] < bestOpenScore)
+                {
+                    bestOpenScore = fScores[candidate];
+                    current = candidate;
+                }
+            }
+            open.Remove(current);
+            if (current == goalIndex)
+            {
+                foundGoal = true;
+                break;
+            }
+            if (closed[current])
+            {
+                continue;
+            }
+            closed[current] = true;
+
+            Vector3 currentPoint = points[current];
+            float goalDistance = Vector3.ProjectOnPlane(
+                goal - currentPoint, Vector3.up).magnitude;
+            if (goalDistance <= cellSize * 3.4f &&
+                IsNavigationSegmentClear(currentPoint, goal, allowTargetEquipment))
+            {
+                float goalScore = gScores[current] + goalDistance;
+                if (goalScore < gScores[goalIndex])
+                {
+                    cameFrom[goalIndex] = current;
+                    gScores[goalIndex] = goalScore;
+                    fScores[goalIndex] = goalScore;
+                    if (!open.Contains(goalIndex))
+                    {
+                        open.Add(goalIndex);
+                    }
+                }
+            }
+
+            for (int directionIndex = 0;
+                 directionIndex < NavigationNeighborX.Length;
+                 directionIndex++)
+            {
+                int currentX = current % width;
+                int currentZ = current / width;
+                int nextX = currentX + NavigationNeighborX[directionIndex];
+                int nextZ = currentZ + NavigationNeighborZ[directionIndex];
+                if (nextX < 0 || nextX >= width || nextZ < 0 || nextZ >= height)
+                {
+                    continue;
+                }
+
+                int next = nextZ * width + nextX;
+                if (!navigable[next] || closed[next] ||
+                    !IsNavigationSegmentClear(currentPoint, points[next], false))
+                {
+                    continue;
+                }
+
+                float stepDistance = Vector3.ProjectOnPlane(
+                    points[next] - currentPoint, Vector3.up).magnitude;
+                float tentativeScore = gScores[current] + stepDistance;
+                if (tentativeScore >= gScores[next])
+                {
+                    continue;
+                }
+
+                cameFrom[next] = current;
+                gScores[next] = tentativeScore;
+                fScores[next] = tentativeScore + Vector3.ProjectOnPlane(
+                    goal - points[next], Vector3.up).magnitude;
+                if (!open.Contains(next))
+                {
+                    open.Add(next);
+                }
+            }
+        }
+
+        if (!foundGoal || cameFrom[goalIndex] < 0)
+        {
+            return false;
+        }
+
+        List<Vector3> rawRoute = new List<Vector3>();
+        int routeNode = cameFrom[goalIndex];
+        while (routeNode >= 0 && routeNode != startIndex)
+        {
+            rawRoute.Add(points[routeNode]);
+            routeNode = cameFrom[routeNode];
+        }
+        rawRoute.Reverse();
+        rawRoute.Add(goal);
+
+        // Collapse visible, collinear grid steps. The route still preserves
+        // the A* detour around machines, but the actor does not make a small
+        // left/right correction on every cell.
+        Vector3 anchor = start;
+        int rawIndex = 0;
+        while (rawIndex < rawRoute.Count)
+        {
+            int furthestVisible = rawIndex;
+            for (int candidateIndex = rawRoute.Count - 1;
+                 candidateIndex > rawIndex;
+                 candidateIndex--)
+            {
+                bool isFinalTarget = candidateIndex == rawRoute.Count - 1;
+                if (IsNavigationSegmentClear(
+                        anchor, rawRoute[candidateIndex],
+                        isFinalTarget && allowTargetEquipment))
+                {
+                    furthestVisible = candidateIndex;
+                    break;
+                }
+            }
+
+            roamRouteWaypoints.Add(rawRoute[furthestVisible]);
+            anchor = rawRoute[furthestVisible];
+            rawIndex = furthestVisible + 1;
+        }
+
+        return roamRouteWaypoints.Count > 0;
+    }
+
+    private bool TryFindTreadmillApproachPoint(
+        GymExerciseStation station, out Vector3 point)
+    {
+        point = station != null ? station.EnemyPosition : transform.position;
+        if (station == null || !TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return false;
+        }
+
+        Vector3 center = station.EnemyPosition;
+        center.y = floorBounds.max.y;
+        Vector3 preferredDirection = Vector3.ProjectOnPlane(
+            station.EnemyRotation * Vector3.back, Vector3.up);
+        if (preferredDirection.sqrMagnitude < 0.01f)
+        {
+            preferredDirection = Vector3.back;
+        }
+        preferredDirection.Normalize();
+
+        float margin = GetBodyRadius() + 0.28f;
+        float bestScore = float.NegativeInfinity;
+        bool found = false;
+        // Search a ring outside the treadmill rather than asking the route
+        // planner to finish inside its belt collider. The preferred side is
+        // the rear/aisle side, but the full ring lets differently oriented
+        // imported treadmill assets choose whichever side is actually open.
+        float[] radii = { 2.05f, 2.45f, 2.9f, 3.35f, 4.1f, 5.0f, 6.0f };
+        for (int radiusIndex = 0; radiusIndex < radii.Length; radiusIndex++)
+        {
+            float radius = radii[radiusIndex];
+            for (int sample = 0; sample < 24; sample++)
+            {
+                float angle = sample * 15f;
+                Vector3 direction = Quaternion.Euler(0f, angle, 0f) *
+                    preferredDirection;
+                Vector3 candidate = center + direction * radius;
+                candidate.x = Mathf.Clamp(
+                    candidate.x, floorBounds.min.x + margin, floorBounds.max.x - margin);
+                candidate.z = Mathf.Clamp(
+                    candidate.z, floorBounds.min.z + margin, floorBounds.max.z - margin);
+
+                float edgeClearance = Mathf.Min(
+                    candidate.x - floorBounds.min.x,
+                    floorBounds.max.x - candidate.x,
+                    candidate.z - floorBounds.min.z,
+                    floorBounds.max.z - candidate.z);
+                if (edgeClearance < 1.15f || !IsRoamPointClear(candidate))
+                {
+                    continue;
+                }
+
+                float preferredAlignment = Vector3.Dot(direction, preferredDirection);
+                float score = preferredAlignment * 2.4f +
+                    Mathf.Min(edgeClearance, 5f) * 0.65f - radius * 0.12f;
+                if (score <= bestScore)
+                {
+                    continue;
+                }
+
+                bestScore = score;
+                point = candidate;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private int FindClosestNavigableNode(
+        Vector3[] points, bool[] navigable, Vector3 position)
+    {
+        int closest = -1;
+        float closestDistance = float.PositiveInfinity;
+        for (int i = 0; i < points.Length; i++)
+        {
+            if (!navigable[i])
+            {
+                continue;
+            }
+
+            float distance = Vector3.ProjectOnPlane(
+                points[i] - position, Vector3.up).sqrMagnitude;
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                closest = i;
+            }
+        }
+
+        return closest;
+    }
+
+    private bool IsNavigationPointClear(Vector3 point)
+    {
+        Vector3 lower = point + Vector3.up * 0.55f;
+        Vector3 upper = point + Vector3.up * 1.85f;
+        int count = Physics.OverlapCapsuleNonAlloc(
+            lower, upper, GetBodyRadius(), roamOverlapHits,
+            ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = roamOverlapHits[i];
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null ||
+                HasRoomFloorInHierarchy(hit.transform) ||
+                IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool IsNavigationSegmentClear(
+        Vector3 from, Vector3 to, bool allowTargetEquipment)
+    {
+        Vector3 delta = Vector3.ProjectOnPlane(to - from, Vector3.up);
+        float distance = delta.magnitude;
+        if (distance < 0.05f)
+        {
+            return true;
+        }
+
+        Vector3 direction = delta / distance;
+        Vector3 lower = from + Vector3.up * 0.55f;
+        Vector3 upper = from + Vector3.up * 1.85f;
+        int count = Physics.CapsuleCastNonAlloc(
+            lower, upper, GetBodyRadius(), direction, movementHits,
+            distance + 0.06f, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = movementHits[i].collider;
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null)
+            {
+                continue;
+            }
+            if (allowTargetEquipment && pendingTreadmillStation != null &&
+                pendingTreadmillStation.ContainsEquipmentCollider(hit))
+            {
+                continue;
+            }
+            if (HasRoomFloorInHierarchy(hit.transform) ||
+                IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryFindJayEmergencyDestination(out Vector3 point, out string label)
+    {
+        point = transform.position;
+        label = null;
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return false;
+        }
+
+        float margin = GetBodyRadius() + 0.24f;
+        CollectRoamInterests();
+        RoamInterest jayInterest;
+        if (TryFindPurposefulRoamPoint(
+                floorBounds, margin, 2.4f, out point, out label, out jayInterest))
+        {
+            ApplySelectedRoamInterest(jayInterest);
+            return true;
+        }
+
+        for (int attempt = 0; attempt < 80; attempt++)
+        {
+            point = new Vector3(
+                Random.Range(floorBounds.min.x + margin, floorBounds.max.x - margin),
+                floorBounds.max.y,
+                Random.Range(floorBounds.min.z + margin, floorBounds.max.z - margin));
+            if (Vector3.ProjectOnPlane(point - transform.position, Vector3.up).sqrMagnitude < 5.5f ||
+                !IsRoamPointClear(point))
+            {
+                continue;
+            }
+
+            label = "Jay clear route fallback";
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryFindRareRandomDestination(out Vector3 point)
+    {
+        point = transform.position;
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return false;
+        }
+
+        float margin = GetBodyRadius() + 0.24f;
+        float roomScale = Mathf.Min(floorBounds.size.x, floorBounds.size.z);
+        float minimumDistance = Mathf.Clamp(roomScale * 0.2f, 6f, 9f);
+        for (int attempt = 0; attempt < 96; attempt++)
+        {
+            point = new Vector3(
+                Random.Range(floorBounds.min.x + margin, floorBounds.max.x - margin),
+                floorBounds.max.y,
+                Random.Range(floorBounds.min.z + margin, floorBounds.max.z - margin));
+            float distance = Vector3.ProjectOnPlane(
+                point - transform.position, Vector3.up).magnitude;
+            float edgeClearance = Mathf.Min(
+                point.x - floorBounds.min.x,
+                floorBounds.max.x - point.x,
+                point.z - floorBounds.min.z,
+                floorBounds.max.z - point.z);
+            if (distance < minimumDistance || edgeClearance < 2.1f ||
+                (hasLastRoamTarget &&
+                 Vector3.ProjectOnPlane(point - lastRoamTarget, Vector3.up).magnitude < 5.5f) ||
+                !IsRoamPointClear(point))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryFindRoamPoint(out Vector3 point)
+    {
+        roamTargetPurposeful = false;
+        roamTargetInterestLabel = null;
+        roamTargetStation = null;
+        hasRoamTargetArrivalRotation = false;
+
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            point = transform.position;
+            return true;
+        }
+
+        float margin = GetBodyRadius() + 0.24f;
+        float roomScale = Mathf.Min(floorBounds.size.x, floorBounds.size.z);
+        float minimumDistance = Mathf.Clamp(roomScale * 0.18f, 5.5f, 8.5f);
+
+        // A meaningful target is an area around a real piece of equipment,
+        // reception/lockers, or another person. This keeps the long route
+        // commitment from sending a character toward an arbitrary empty
+        // corner just because that point happened to score well on the floor.
+        CollectRoamInterests();
+        RoamInterest purposefulInterest;
+        string purposefulLabel;
+        if (TryFindPurposefulRoamPoint(
+                floorBounds, margin, minimumDistance,
+                out point, out purposefulLabel, out purposefulInterest) ||
+            TryFindPurposefulRoamPoint(
+                floorBounds, margin, Mathf.Max(3.8f, minimumDistance * 0.58f),
+                out point, out purposefulLabel, out purposefulInterest))
+        {
+            roamTargetPurposeful = true;
+            roamTargetInterestLabel = purposefulLabel;
+            ApplySelectedRoamInterest(purposefulInterest);
+            return true;
+        }
+
+        // If every useful object is temporarily surrounded by other bodies,
+        // preserve motion with a clear open-floor fallback. It is only used
+        // when no purposeful endpoint can currently be reached; it still
+        // avoids walls, equipment, characters, and the previous endpoint.
+        float minimumPreviousTargetDistance = Mathf.Max(5.5f, minimumDistance * 0.75f);
+        float bestScore = float.NegativeInfinity;
+        Vector3 bestPoint = transform.position;
+        bool foundPoint = false;
+
+        for (int attempt = 0; attempt < 56; attempt++)
+        {
+            point = new Vector3(
+                Random.Range(floorBounds.min.x + margin, floorBounds.max.x - margin),
+                floorBounds.max.y,
+                Random.Range(floorBounds.min.z + margin, floorBounds.max.z - margin));
+
+            float distance = Vector3.ProjectOnPlane(point - transform.position, Vector3.up).magnitude;
+            float edgeClearance = Mathf.Min(
+                point.x - floorBounds.min.x,
+                floorBounds.max.x - point.x,
+                point.z - floorBounds.min.z,
+                floorBounds.max.z - point.z);
+            if (distance < minimumDistance || edgeClearance < 1.8f)
+            {
+                continue;
+            }
+
+            float previousTargetDistance = hasLastRoamTarget
+                ? Vector3.ProjectOnPlane(point - lastRoamTarget, Vector3.up).magnitude
+                : float.PositiveInfinity;
+            if (hasLastRoamTarget && previousTargetDistance < minimumPreviousTargetDistance)
+            {
+                continue;
+            }
+
+            if (!IsRoamPointClear(point))
+            {
+                continue;
+            }
+
+            // Prefer a waypoint in a different part of the room and away
+            // from the previous endpoint, with a small random component so
+            // the patrol does not select the same edge every time.
+            float score = distance * 0.34f +
+                (hasLastRoamTarget ? previousTargetDistance * 0.22f : 0f) +
+                Mathf.Min(edgeClearance, 5f) * 0.9f +
+                Random.Range(0f, 2.5f);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestPoint = point;
+                foundPoint = true;
+            }
+        }
+
+        if (foundPoint)
+        {
+            point = bestPoint;
+            roamTargetInterestLabel = "clear room fallback";
+            return true;
+        }
+
+        // If machines temporarily occupy most valid room-wide samples, relax
+        // only the distance constraint. Keep endpoint and body clearance
+        // checks intact rather than falling back to an obstructed point.
+        for (int attempt = 0; attempt < 32; attempt++)
+        {
+            point = new Vector3(
+                Random.Range(floorBounds.min.x + margin, floorBounds.max.x - margin),
+                floorBounds.max.y,
+                Random.Range(floorBounds.min.z + margin, floorBounds.max.z - margin));
+            if (Vector3.ProjectOnPlane(point - transform.position, Vector3.up).sqrMagnitude < 16f ||
+                !IsRoamPointClear(point))
+            {
+                continue;
+            }
+
+            float edgeClearance = Mathf.Min(
+                point.x - floorBounds.min.x,
+                floorBounds.max.x - point.x,
+                point.z - floorBounds.min.z,
+                floorBounds.max.z - point.z);
+            if (edgeClearance < 1.2f)
+            {
+                continue;
+            }
+
+            if (hasLastRoamTarget &&
+                Vector3.ProjectOnPlane(point - lastRoamTarget, Vector3.up).magnitude < 4f)
+            {
+                continue;
+            }
+
+            roamTargetInterestLabel = "clear room fallback";
+            return true;
+        }
+
+        point = transform.position;
+        point.y = floorBounds.max.y;
+        return false;
+    }
+
+    private void CollectRoamInterests()
+    {
+        roamInterests.Clear();
+        roamInterestRoots.Clear();
+        collectedMachineInterestCount = 0;
+        collectedPersonnelInterestCount = 0;
+        collectedReceptionInterest = false;
+        collectedPlayerInterest = false;
+
+        // Stations are authoritative for the exercise assets. Their helper
+        // object is placed at the authored machine center, even when the
+        // imported model's child names are inconsistent.
+        GymExerciseStation[] stations =
+            FindObjectsByType<GymExerciseStation>(FindObjectsSortMode.None);
+        for (int i = 0; i < stations.Length; i++)
+        {
+            GymExerciseStation station = stations[i];
+            if (station == null || station.transform == null)
+            {
+                continue;
+            }
+
+            Transform stationParent = station.transform.parent;
+            if (stationParent != null)
+            {
+                // Mark the imported machine root so the renderer scan below
+                // cannot add a second, overlapping interest for the same
+                // station. Separate stations under one section still retain
+                // their own authored center points.
+                roamInterestRoots.Add(stationParent);
+            }
+
+            float footprint = station.IsTreadmill ? 2.5f
+                : station.IsCardio ? 2.2f : 2.9f;
+            Bounds stationBounds = new Bounds(
+                station.transform.position,
+                new Vector3(footprint, 2.0f, footprint));
+            AddRoamInterest(
+                station.transform, stationBounds, station.transform.position,
+                false, 1.35f, station.DisplayName,
+                station, true, station.PlayerPosition,
+                station.EnemyRotation, true);
+            collectedMachineInterestCount++;
+        }
+
+        // Cover meaningful imported/static objects that are not exercise
+        // stations, such as the generated reception desk and lockers.
+        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled ||
+                renderer is ParticleSystemRenderer ||
+                renderer.GetComponentInParent<PlayerMovement>() != null ||
+                renderer.GetComponentInParent<EnemyFighter>() != null)
+            {
+                continue;
+            }
+
+            Transform root = FindPurposefulRoamRoot(renderer.transform);
+            if (root == null || roamInterestRoots.Contains(root))
+            {
+                continue;
+            }
+
+            if (!TryGetRoamInterestBounds(root, out Bounds bounds) ||
+                bounds.size.x > 9.5f || bounds.size.z > 9.5f)
+            {
+                continue;
+            }
+
+            AddRoamInterest(
+                root, bounds, bounds.center, false, 1.15f, root.name);
+        }
+
+        // Personnel are moving points of interest, but they are only used as
+        // neutral roaming destinations. Combat targeting remains entirely in
+        // the aggressive/police state machine above.
+        for (int i = 0; i < Fighters.Count; i++)
+        {
+            EnemyFighter other = Fighters[i];
+            if (other == null || other == this || other.isDead ||
+                other.transform == null)
+            {
+                continue;
+            }
+
+            Vector3 position = other.transform.position;
+            Bounds personnelBounds = new Bounds(
+                position + Vector3.up * 1f,
+                new Vector3(1.1f, 2.2f, 1.1f));
+            AddRoamInterest(
+                other.transform, personnelBounds, position,
+                true, 1.5f, other.identity.ToString());
+            collectedPersonnelInterestCount++;
+            if (other.isPassive || other.identity == BodybuilderIdentity.Manwithsuit1)
+            {
+                collectedReceptionInterest = true;
+            }
+        }
+
+        if (playerTarget == null)
+        {
+            playerTarget = FindAnyObjectByType<PlayerMovement>();
+        }
+        if (playerTarget != null && !playerTarget.IsDead)
+        {
+            Vector3 position = playerTarget.transform.position;
+            Bounds playerBounds = new Bounds(
+                position + Vector3.up * 1f,
+                new Vector3(1.2f, 2.0f, 1.2f));
+            AddRoamInterest(
+                playerTarget.transform, playerBounds, position,
+                true, 1.6f, "Player");
+            collectedPlayerInterest = true;
+        }
+    }
+
+    private bool TryFindPurposefulRoamPoint(
+        Bounds floorBounds, float margin, float minimumDistance,
+        out Vector3 point, out string label, out RoamInterest selectedInterest)
+    {
+        point = transform.position;
+        label = null;
+        selectedInterest = null;
+        if (roamInterests.Count == 0)
+        {
+            return false;
+        }
+
+        float minimumPreviousTargetDistance = Mathf.Max(4.5f, minimumDistance * 0.7f);
+        float bestScore = float.NegativeInfinity;
+        bool foundPoint = false;
+        string bestLabel = null;
+        RoamInterest bestInterest = null;
+
+        for (int i = 0; i < roamInterests.Count; i++)
+        {
+            RoamInterest interest = roamInterests[i];
+            if (interest == null || interest.root == null)
+            {
+                continue;
+            }
+            if (interest.station != null && interest.station.IsTreadmill &&
+                !interest.station.IsAvailableForEnemy(this))
+            {
+                continue;
+            }
+
+            int samples = interest.useInteractionPoint ? 1 : (interest.personnel ? 6 : 8);
+            for (int sample = 0; sample < samples; sample++)
+            {
+                Vector2 randomDirection = Random.insideUnitCircle;
+                if (randomDirection.sqrMagnitude < 0.08f)
+                {
+                    randomDirection = Random.insideUnitCircle.normalized;
+                }
+                if (randomDirection.sqrMagnitude < 0.01f)
+                {
+                    randomDirection = Vector2.right;
+                }
+                randomDirection.Normalize();
+
+                Vector3 candidate;
+                if (interest.station != null && interest.station.IsTreadmill)
+                {
+                    if (!TryFindTreadmillApproachPoint(
+                            interest.station, out candidate))
+                    {
+                        continue;
+                    }
+                }
+                else if (interest.useInteractionPoint)
+                {
+                    // Stations expose an authored interaction point. Use it
+                    // directly so walking to a machine has a coherent
+                    // approach pose and a treadmill visit can start there.
+                    candidate = interest.interactionPoint;
+                }
+                else
+                {
+                    float footprint = interest.personnel
+                        ? 1.15f
+                        : Mathf.Clamp(
+                            Mathf.Max(interest.bounds.extents.x, interest.bounds.extents.z),
+                            0.9f, 3.2f);
+                    float ringDistance = footprint + GetBodyRadius() +
+                        Random.Range(0.65f, interest.personnel ? 1.35f : 2.15f);
+                    candidate = interest.position +
+                        new Vector3(randomDirection.x, 0f, randomDirection.y) * ringDistance;
+                }
+                candidate.y = floorBounds.max.y;
+                candidate.x = Mathf.Clamp(
+                    candidate.x, floorBounds.min.x + margin, floorBounds.max.x - margin);
+                candidate.z = Mathf.Clamp(
+                    candidate.z, floorBounds.min.z + margin, floorBounds.max.z - margin);
+
+                float distance = Vector3.ProjectOnPlane(
+                    candidate - transform.position, Vector3.up).magnitude;
+                bool endpointClear = interest.station != null
+                    ? IsNavigationPointClearForStation(candidate, interest.station)
+                    : IsRoamPointClear(candidate);
+                if (distance < minimumDistance || !endpointClear)
+                {
+                    continue;
+                }
+
+                float previousDistance = hasLastRoamTarget
+                    ? Vector3.ProjectOnPlane(candidate - lastRoamTarget, Vector3.up).magnitude
+                    : float.PositiveInfinity;
+                if (hasLastRoamTarget && previousDistance < minimumPreviousTargetDistance)
+                {
+                    continue;
+                }
+
+                float edgeClearance = Mathf.Min(
+                    candidate.x - floorBounds.min.x,
+                    floorBounds.max.x - candidate.x,
+                    candidate.z - floorBounds.min.z,
+                    floorBounds.max.z - candidate.z);
+                float minimumEdgeClearance = interest.useInteractionPoint
+                    ? 0.9f
+                    : (interest.personnel ? 1.25f : 1.7f);
+                if (edgeClearance < minimumEdgeClearance)
+                {
+                    continue;
+                }
+
+                float score = distance * 0.32f +
+                    (hasLastRoamTarget ? previousDistance * 0.18f : 0f) +
+                    Mathf.Min(edgeClearance, 5f) * 1.1f +
+                    interest.weight * 2f + Random.Range(0f, 2.25f);
+                if (score <= bestScore)
+                {
+                    continue;
+                }
+
+                bestScore = score;
+                point = candidate;
+                bestLabel = interest.label;
+                bestInterest = interest;
+                foundPoint = true;
+            }
+        }
+
+        if (!foundPoint)
+        {
+            return false;
+        }
+
+        label = bestLabel;
+        selectedInterest = bestInterest;
+        return true;
+    }
+
+    private bool IsNavigationPointClearForStation(
+        Vector3 point, GymExerciseStation station)
+    {
+        Vector3 lower = point + Vector3.up * 0.55f;
+        Vector3 upper = point + Vector3.up * 1.85f;
+        int count = Physics.OverlapCapsuleNonAlloc(
+            lower, upper, GetBodyRadius(), roamOverlapHits,
+            ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = roamOverlapHits[i];
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null ||
+                HasRoomFloorInHierarchy(hit.transform) ||
+                IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            if (station != null && station.ContainsEquipmentCollider(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private void AddRoamInterest(
+        Transform root, Bounds bounds, Vector3 position,
+        bool personnel, float weight, string label,
+        GymExerciseStation station = null, bool useInteractionPoint = false,
+        Vector3 interactionPoint = default, Quaternion arrivalRotation = default,
+        bool hasArrivalRotation = false)
+    {
+        if (root == null || roamInterestRoots.Contains(root))
+        {
+            return;
+        }
+
+        roamInterestRoots.Add(root);
+        bounds.center = new Vector3(bounds.center.x, position.y, bounds.center.z);
+        roamInterests.Add(new RoamInterest
+        {
+            root = root,
+            bounds = bounds,
+            position = position,
+            interactionPoint = interactionPoint,
+            arrivalRotation = arrivalRotation,
+            station = station,
+            useInteractionPoint = useInteractionPoint,
+            hasArrivalRotation = hasArrivalRotation,
+            personnel = personnel,
+            weight = weight,
+            label = string.IsNullOrEmpty(label) ? root.name : label
+        });
+    }
+
+    private void ApplySelectedRoamInterest(RoamInterest interest)
+    {
+        roamTargetStation = interest != null ? interest.station : null;
+        if (roamTargetStation != null && roamTargetStation.IsTreadmill &&
+            roamTargetStation.IsAvailableForEnemy(this))
+        {
+            pendingTreadmillStation = roamTargetStation;
+        }
+
+        hasRoamTargetArrivalRotation = interest != null &&
+            interest.hasArrivalRotation;
+        if (hasRoamTargetArrivalRotation)
+        {
+            roamTargetArrivalRotation = interest.arrivalRotation;
+        }
+        else if (interest != null)
+        {
+            Vector3 lookDirection = Vector3.ProjectOnPlane(
+                interest.position - roamTarget, Vector3.up);
+            if (lookDirection.sqrMagnitude > 0.01f)
+            {
+                roamTargetArrivalRotation =
+                    Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+                hasRoamTargetArrivalRotation = true;
+            }
+        }
+    }
+
+    private static Transform FindPurposefulRoamRoot(Transform target)
+    {
+        for (Transform current = target; current != null; current = current.parent)
+        {
+            string lowerName = current.name.ToLowerInvariant();
+            if (ContainsAny(lowerName, NonPurposefulRoamKeywords))
+            {
+                continue;
+            }
+            if (ContainsAny(lowerName, PurposefulRoamKeywords))
+            {
+                return current;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool ContainsAny(string value, string[] fragments)
+    {
+        for (int i = 0; i < fragments.Length; i++)
+        {
+            if (value.Contains(fragments[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetRoamInterestBounds(Transform root, out Bounds bounds)
+    {
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        bool found = false;
+        bounds = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled ||
+                renderer is ParticleSystemRenderer)
+            {
+                continue;
+            }
+
+            if (!found)
+            {
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        return found && bounds.size.x > 0.1f && bounds.size.z > 0.1f;
+    }
+
+    private bool IsRoamPointClear(Vector3 point)
+    {
+        Vector3 lower = point + Vector3.up * 0.55f;
+        Vector3 upper = point + Vector3.up * 1.85f;
+        int count = Physics.OverlapCapsuleNonAlloc(
+            lower, upper, GetBodyRadius(), roamOverlapHits,
+            ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = roamOverlapHits[i];
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null)
+            {
+                return false;
+            }
+            if (hit.GetComponentInParent<PlayerMovement>() != null)
+            {
+                return false;
+            }
+            if (HasRoomFloorInHierarchy(hit.transform))
+            {
+                continue;
+            }
+            if (IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private Vector3 FindClearMovementDirection(
+        Vector3 desiredDirection, float targetDistance, bool avoidCharacters,
+        bool allowTargetEquipment)
+    {
+        desiredDirection = Vector3.ProjectOnPlane(desiredDirection, Vector3.up);
+        if (desiredDirection.sqrMagnitude < 0.0001f)
+        {
+            return Vector3.zero;
+        }
+        desiredDirection.Normalize();
+
+        if (avoidCharacters)
+        {
+            Vector3 separation = GetCharacterSeparation();
+            if (separation.sqrMagnitude > 0.0001f)
+            {
+                // Preserve the separation magnitude. Normalizing it made even
+                // a barely-nearby enemy apply a full-strength steering shove,
+                // which produced the visible left/right indecision.
+                desiredDirection = (desiredDirection + separation * 0.85f).normalized;
+            }
+        }
+
+        float lookAhead = Mathf.Clamp(Mathf.Max(0.72f, targetDistance), 0.72f, 1.25f);
+        Vector3 best = Vector3.zero;
+        float bestScore = float.NegativeInfinity;
+        for (int i = 0; i < MovementProbeAngles.Length; i++)
+        {
+            Vector3 candidate = Quaternion.Euler(0f, MovementProbeAngles[i], 0f) * desiredDirection;
+            if (!IsInsideRoom(candidate, lookAhead) ||
+                !IsMovementPathClear(candidate, lookAhead, allowTargetEquipment))
+            {
+                continue;
+            }
+
+            float alignment = Vector3.Dot(candidate, desiredDirection);
+            float score = alignment * 4f - Mathf.Abs(MovementProbeAngles[i]) * 0.002f;
+            if (avoidCharacters && roamDirection.sqrMagnitude > 0.001f)
+            {
+                // When an obstacle requires a detour, prefer the previously
+                // selected side so two equally valid probes do not alternate
+                // on consecutive physics frames.
+                score += Vector3.Dot(candidate, roamDirection.normalized) * 0.9f;
+            }
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private Vector3 StabilizeRoamDirection(
+        Vector3 desiredDirection, float targetDistance, Vector3 candidate,
+        bool allowTargetEquipment)
+    {
+        desiredDirection = Vector3.ProjectOnPlane(desiredDirection, Vector3.up).normalized;
+        float lookAhead = Mathf.Clamp(Mathf.Max(0.72f, targetDistance), 0.72f, 1.25f);
+        bool hasHeldDirection = roamDirection.sqrMagnitude > 0.001f;
+        bool heldDirectionClear = hasHeldDirection &&
+            IsInsideRoom(roamDirection, lookAhead) &&
+            IsMovementPathClear(roamDirection, lookAhead, allowTargetEquipment);
+
+        if (heldDirectionClear && Time.time < roamDirectionHoldUntil)
+        {
+            return roamDirection;
+        }
+
+        if (candidate.sqrMagnitude < 0.001f)
+        {
+            return heldDirectionClear ? roamDirection : Vector3.zero;
+        }
+
+        candidate.Normalize();
+        bool isObstacleDetour = Vector3.Dot(candidate, desiredDirection) < 0.985f;
+        if (isObstacleDetour && heldDirectionClear &&
+            Vector3.Dot(roamDirection, desiredDirection) > 0.2f &&
+            Vector3.Dot(candidate, roamDirection) < 0.55f)
+        {
+            // Keep the current side of the obstacle briefly even after the
+            // hold expires if the new probe would reverse the route.
+            roamDirectionHoldUntil = Time.time + 0.36f;
+            return roamDirection;
+        }
+
+        roamDirection = candidate;
+        roamDirectionHoldUntil = Time.time + (isObstacleDetour ? 0.48f : 0.08f);
+        return roamDirection;
+    }
+
+    private bool IsMovementPathClear(Vector3 direction, float distance, bool allowTargetEquipment)
+    {
+        Vector3 origin = body != null ? body.position : transform.position;
+        Vector3 lower = origin + Vector3.up * 0.55f;
+        Vector3 upper = origin + Vector3.up * 1.85f;
+        int count = Physics.CapsuleCastNonAlloc(
+            lower, upper, GetBodyRadius(), direction, movementHits,
+            distance + 0.08f, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = movementHits[i].collider;
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null)
+            {
+                continue;
+            }
+            if (allowTargetEquipment && pendingTreadmillStation != null &&
+                pendingTreadmillStation.ContainsEquipmentCollider(hit))
+            {
+                continue;
+            }
+            if (HasRoomFloorInHierarchy(hit.transform) ||
+                IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private Vector3 GetCharacterSeparation()
+    {
+        Vector3 separation = Vector3.zero;
+        for (int i = 0; i < Fighters.Count; i++)
+        {
+            EnemyFighter other = Fighters[i];
+            if (other == null || other == this || other.isDead || other.isPassive)
+            {
+                continue;
+            }
+
+            Vector3 offset = Vector3.ProjectOnPlane(transform.position - other.transform.position, Vector3.up);
+            float distance = offset.magnitude;
+            if (distance > 0.001f && distance < 2.1f)
+            {
+                separation += offset.normalized * (2.1f - distance);
+            }
+        }
+        return separation;
+    }
+
+    private bool IsInsideRoom(Vector3 direction, float distance)
+    {
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return true;
+        }
+
+        Vector3 predicted = transform.position + direction * distance;
+        float margin = GetBodyRadius() + 0.24f;
+        return predicted.x >= floorBounds.min.x + margin &&
+               predicted.x <= floorBounds.max.x - margin &&
+               predicted.z >= floorBounds.min.z + margin &&
+               predicted.z <= floorBounds.max.z - margin;
+    }
+
+    private void ClampToRoomBounds()
+    {
+        if (body == null || !TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return;
+        }
+
+        float margin = GetBodyRadius() + 0.24f;
+        Vector3 position = body.position;
+        position.x = Mathf.Clamp(position.x, floorBounds.min.x + margin, floorBounds.max.x - margin);
+        position.z = Mathf.Clamp(position.z, floorBounds.min.z + margin, floorBounds.max.z - margin);
+        body.position = position;
+    }
+
+    private bool TryGetRoomBounds(out Bounds bounds)
+    {
+        GameObject floor = GameObject.Find("Rubber Floor");
+        Renderer renderer = floor != null ? floor.GetComponent<Renderer>() : null;
+        if (renderer == null)
+        {
+            bounds = default;
+            return false;
+        }
+
+        bounds = renderer.bounds;
+        return bounds.size.x > 2f && bounds.size.z > 2f;
+    }
+
+    private static bool HasRoomFloorInHierarchy(Transform target)
+    {
+        for (Transform current = target; current != null; current = current.parent)
+        {
+            string lowerName = current.name.ToLowerInvariant();
+            if (lowerName.Contains("rubber floor") ||
+                lowerName == "plane" || lowerName.StartsWith("plane("))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsWalkableFloorSurface(Collider collider)
+    {
+        if (collider == null)
+        {
+            return false;
+        }
+
+        for (Transform current = collider.transform; current != null; current = current.parent)
+        {
+            string lowerName = current.name.ToLowerInvariant();
+            if (lowerName.Contains("mat") || lowerName.Contains("carpet") ||
+                lowerName.Contains("rug"))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private float GetBodyRadius()
+    {
+        return identity == BodybuilderIdentity.Cbum || identity == BodybuilderIdentity.Ronnie
+            ? 0.54f : 0.48f;
+    }
+
+    private void BeginRoamIdle()
+    {
+        roamState = RoamState.Idle;
+        hasRoamTarget = false;
+        pendingTreadmillStation = null;
+        roamTargetStation = null;
+        roamTargetPurposeful = false;
+        roamTargetInterestLabel = null;
+        hasRoamTargetArrivalRotation = false;
+        ClearRoamRoute();
+        stalledRoamTime = 0f;
+        roamDirection = Vector3.zero;
+        roamDirectionHoldUntil = 0f;
+        roamIdleUntil = Time.time + Random.Range(roamIdleMin, roamIdleMax);
+    }
+
+    private bool TryBeginTreadmillVisit(GymExerciseStation station)
+    {
+        if (station == null || body == null || isAggressive || isPassive || isDead)
+        {
+            return false;
+        }
+
+        float[] speeds = { 5.5f, 7.5f, 10.5f, 13.5f, 16f };
+        treadmillSpeed = speeds[Random.Range(0, speeds.Length)];
+        if (!station.TryBeginEnemyTreadmill(this, treadmillSpeed))
+        {
+            treadmillSpeed = 0f;
+            return false;
+        }
+
+        treadmillStation = station;
+        treadmillEntryActive = true;
+        treadmillEntryStarted = Time.time;
+        treadmillEntryStartPosition = body.position;
+        treadmillEntryStartRotation = body.rotation;
+        float entryDistance = Vector3.ProjectOnPlane(
+            station.EnemyPosition - body.position, Vector3.up).magnitude;
+        treadmillEntryDuration = Mathf.Clamp(
+            entryDistance / Mathf.Max(1.1f, roamSpeed), 0.85f, 1.65f);
+        treadmillExitActive = false;
+        treadmillUntil = Time.time + treadmillEntryDuration +
+            Random.Range(15f, 26f);
+        treadmillNextSpeedChangeTime = Time.time + treadmillEntryDuration +
+            Random.Range(5.5f, 9.5f);
+
+        if (roamTargetStation == station && hasRoamTarget &&
+            Vector3.ProjectOnPlane(
+                roamTarget - station.EnemyPosition, Vector3.up).sqrMagnitude > 0.7f * 0.7f)
+        {
+            treadmillExitTargetPosition = roamTarget;
+        }
+        else if (!TryFindTreadmillApproachPoint(
+                     station, out treadmillExitTargetPosition))
+        {
+            Vector3 awayFromScreen = Vector3.ProjectOnPlane(
+                station.EnemyRotation * Vector3.back, Vector3.up);
+            if (awayFromScreen.sqrMagnitude < 0.01f)
+            {
+                awayFromScreen = Vector3.back;
+            }
+
+            treadmillExitTargetPosition = station.EnemyPosition +
+                awayFromScreen.normalized * 2.2f;
+        }
+        treadmillExitTargetPosition.y = floorRootY;
+        standingRootY = floorRootY;
+        roamState = RoamState.Walking;
+        StopMovingPhysicsImmediately();
+        return true;
+    }
+
+    private void TickTreadmillEntry()
+    {
+        if (treadmillStation == null)
+        {
+            return;
+        }
+
+        if (!treadmillStation.TickEnemyTreadmill(
+                this, Time.fixedDeltaTime, treadmillSpeed))
+        {
+            EndTreadmillVisit();
+            SelectRoamDestination();
+            return;
+        }
+
+        float progress = Mathf.Clamp01(
+            (Time.time - treadmillEntryStarted) /
+            Mathf.Max(0.01f, treadmillEntryDuration));
+        float eased = SmoothStep(progress);
+        Vector3 targetPosition = treadmillStation.EnemyPosition;
+        body.position = Vector3.Lerp(
+            treadmillEntryStartPosition, targetPosition, eased);
+        body.rotation = Quaternion.Slerp(
+            treadmillEntryStartRotation, treadmillStation.EnemyRotation, eased);
+        StopMovingPhysicsImmediately();
+        SetAnimatedMovement(
+            true,
+            Mathf.Lerp(
+                Mathf.Clamp01(roamSpeed / Mathf.Max(0.01f, maxSpeed)),
+                treadmillStation.TreadmillSpeed01(
+                    treadmillStation.CurrentTreadmillSpeed),
+                eased));
+
+        if (progress < 1f)
+        {
+            return;
+        }
+
+        body.position = targetPosition;
+        body.rotation = treadmillStation.EnemyRotation;
+        standingRootY = targetPosition.y;
+        treadmillEntryActive = false;
+    }
+
+    private void UpdateTreadmillTargetSpeed()
+    {
+        if (Time.time < treadmillNextSpeedChangeTime)
+        {
+            return;
+        }
+
+        float[] speeds = { 4.5f, 6.5f, 8.5f, 11f, 13.5f, 16f };
+        int currentSpeedIndex = 0;
+        float closestSpeedDistance = float.PositiveInfinity;
+        for (int i = 0; i < speeds.Length; i++)
+        {
+            float distance = Mathf.Abs(speeds[i] - treadmillSpeed);
+            if (distance < closestSpeedDistance)
+            {
+                closestSpeedDistance = distance;
+                currentSpeedIndex = i;
+            }
+        }
+
+        int nextSpeedIndex = Random.Range(0, speeds.Length - 1);
+        if (nextSpeedIndex >= currentSpeedIndex)
+        {
+            nextSpeedIndex++;
+        }
+        treadmillSpeed = speeds[nextSpeedIndex];
+        // Keep each acceleration/deceleration phase long enough to read as a
+        // deliberate pace change instead of a rapid idle/animation reset.
+        treadmillNextSpeedChangeTime = Time.time + Random.Range(5.5f, 9.5f);
+    }
+
+    private void BeginTreadmillExit()
+    {
+        if (treadmillStation == null || treadmillExitActive)
+        {
+            return;
+        }
+
+        treadmillEntryActive = false;
+        treadmillExitActive = true;
+        treadmillExitStarted = Time.time;
+        Vector3 startPosition = treadmillStation.EnemyPosition;
+        Vector3 exitOffset = Vector3.ProjectOnPlane(
+            treadmillExitTargetPosition - startPosition, Vector3.up);
+        if (exitOffset.sqrMagnitude < 0.2f * 0.2f)
+        {
+            if (!TryFindTreadmillApproachPoint(
+                    treadmillStation, out treadmillExitTargetPosition))
+            {
+                treadmillExitTargetPosition = startPosition +
+                    Vector3.back * 2.2f;
+            }
+            treadmillExitTargetPosition.y = floorRootY;
+            exitOffset = Vector3.ProjectOnPlane(
+                treadmillExitTargetPosition - startPosition, Vector3.up);
+        }
+
+        treadmillExitTargetPosition.y = floorRootY;
+        treadmillExitDuration = Mathf.Clamp(
+            exitOffset.magnitude / Mathf.Max(1.1f, roamSpeed),
+            0.95f, 1.8f);
+    }
+
+    private void TickTreadmillExit()
+    {
+        if (treadmillStation == null)
+        {
+            return;
+        }
+
+        float progress = Mathf.Clamp01(
+            (Time.time - treadmillExitStarted) /
+            Mathf.Max(0.01f, treadmillExitDuration));
+        float eased = SmoothStep(progress);
+        Vector3 startPosition = treadmillStation.EnemyPosition;
+        body.position = Vector3.Lerp(
+            startPosition, treadmillExitTargetPosition, eased);
+
+        Vector3 exitDirection = Vector3.ProjectOnPlane(
+            treadmillExitTargetPosition - startPosition, Vector3.up);
+        Quaternion exitRotation = exitDirection.sqrMagnitude > 0.01f
+            ? Quaternion.LookRotation(exitDirection.normalized, Vector3.up)
+            : treadmillStation.EnemyRotation;
+        body.rotation = Quaternion.Slerp(
+            treadmillStation.EnemyRotation, exitRotation, eased);
+        StopMovingPhysicsImmediately();
+        SetAnimatedMovement(
+            true, Mathf.Clamp01(roamSpeed / Mathf.Max(0.01f, maxSpeed)));
+
+        if (progress < 1f)
+        {
+            return;
+        }
+
+        body.position = treadmillExitTargetPosition;
+        body.rotation = exitRotation;
+        EndTreadmillVisit();
+        SelectRoamDestination();
+    }
+
+    private void EndTreadmillVisit()
+    {
+        if (treadmillStation != null)
+        {
+            treadmillStation.EndEnemyTreadmill(this);
+        }
+
+        treadmillStation = null;
+        treadmillSpeed = 0f;
+        treadmillUntil = 0f;
+        treadmillEntryActive = false;
+        treadmillEntryStarted = 0f;
+        treadmillEntryDuration = 0f;
+        treadmillEntryStartPosition = Vector3.zero;
+        treadmillEntryStartRotation = Quaternion.identity;
+        treadmillExitActive = false;
+        treadmillExitStarted = 0f;
+        treadmillExitDuration = 0f;
+        treadmillExitTargetPosition = Vector3.zero;
+        treadmillNextSpeedChangeTime = 0f;
+        standingRootY = floorRootY;
+    }
+
     private void StopForAttack(Vector3 planarToTarget)
     {
-        Vector3 verticalVelocity = Vector3.Project(body.linearVelocity, Vector3.up);
-        Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-        body.linearVelocity = Vector3.MoveTowards(
-            planarVelocity, Vector3.zero, 18f * Time.fixedDeltaTime) + verticalVelocity;
         if (!punchInProgress)
         {
+            StopMovingPhysicsImmediately();
             SetAnimatedMovement(false);
+        }
+        else
+        {
+            StopMovingPhysicsOnly();
         }
 
         if (planarToTarget.sqrMagnitude > 0.01f)
@@ -363,8 +2482,9 @@ public class EnemyFighter : MonoBehaviour
         punchInProgress = false;
         currentTarget = null;
         currentFighterTarget = null;
+        EndTreadmillVisit();
         RestoreGokuGroundPhysicsForDeath();
-        StopMovingPhysicsOnly();
+        StopMovingPhysicsImmediately();
         externalBodyAnimator?.TriggerCelebration();
     }
 
@@ -416,25 +2536,18 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
-        if (!force && Time.time < targetLockedUntil)
-        {
-            return;
-        }
-
         Transform candidate = FindNearestPoliceTarget(allowPlayer);
         if (candidate == null || candidate == currentTarget)
         {
             return;
         }
 
-        float currentDistance = Vector3.ProjectOnPlane(
-            currentTarget.position - transform.position, Vector3.up).sqrMagnitude;
-        float candidateDistance = Vector3.ProjectOnPlane(
-            candidate.position - transform.position, Vector3.up).sqrMagnitude;
-
-        // A new target must be materially closer. This prevents rapid target
-        // flipping when two people stand at almost the same distance.
-        if (candidateDistance < currentDistance * 0.72f)
+        // Ronnie is an intervention NPC, not a fixed-radius guard. Re-evaluate
+        // the nearest active participant frequently so a new punch or chase in
+        // another part of the room can immediately redirect him. Do not keep
+        // the previous target merely because it was selected a fraction of a
+        // second earlier; the nearest fight participant is the source of truth.
+        if (force || candidate != currentTarget)
         {
             SetPoliceTarget(candidate);
         }
@@ -442,15 +2555,24 @@ public class EnemyFighter : MonoBehaviour
 
     private bool IsCurrentPoliceTargetValid(bool allowPlayer)
     {
-        if (currentTarget == null)
+        if (isAggressive)
+        {
+            return allowPlayer && playerTarget != null && !playerTarget.IsDead &&
+                !playerTarget.IsExercising && currentTarget == playerTarget.transform;
+        }
+
+        if (!IsFightActive || currentTarget == null)
         {
             return false;
         }
         if (currentFighterTarget != null)
         {
-            return !currentFighterTarget.IsDead && currentFighterTarget != this;
+            return !currentFighterTarget.IsDead && currentFighterTarget != this &&
+                currentFighterTarget.isAggressive && !currentFighterTarget.isPolice &&
+                !currentFighterTarget.isPassive;
         }
-        return allowPlayer && playerTarget != null && currentTarget == playerTarget.transform;
+        return allowPlayer && playerTarget != null && !playerTarget.IsDead &&
+            !playerTarget.IsExercising && currentTarget == playerTarget.transform;
     }
 
     private Transform FindNearestPoliceTarget(bool allowPlayer)
@@ -458,17 +2580,38 @@ public class EnemyFighter : MonoBehaviour
         Transform best = null;
         float bestDistance = float.PositiveInfinity;
 
-        if (allowPlayer && playerTarget != null && !playerTarget.IsExercising)
+        // Ronnie's own anger takes precedence over the room-wide fight scan:
+        // direct damage from the player must make him pursue that player even
+        // when nobody else is currently fighting.
+        if (isAggressive)
+        {
+            return allowPlayer && playerTarget != null && !playerTarget.IsDead &&
+                !playerTarget.IsExercising ? playerTarget.transform : null;
+        }
+
+        if (!IsFightActive)
+        {
+            return null;
+        }
+
+        if (allowPlayer && playerTarget != null && !playerTarget.IsDead &&
+            !playerTarget.IsExercising)
         {
             best = playerTarget.transform;
             bestDistance = Vector3.ProjectOnPlane(
                 best.position - transform.position, Vector3.up).sqrMagnitude;
         }
 
-        for (int i = 0; i < Fighters.Count; i++)
+        // Query the live scene rather than relying only on the registration
+        // list. This keeps Ronnie responsive if an enemy was instantiated or
+        // reconfigured during the current room session.
+        EnemyFighter[] sceneFighters =
+            FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        for (int i = 0; i < sceneFighters.Length; i++)
         {
-            EnemyFighter candidate = Fighters[i];
-            if (candidate == null || candidate == this || candidate.IsDead)
+            EnemyFighter candidate = sceneFighters[i];
+            if (candidate == null || candidate == this || candidate.IsDead ||
+                candidate.isPolice || candidate.isPassive || !candidate.isAggressive)
             {
                 continue;
             }
@@ -486,6 +2629,10 @@ public class EnemyFighter : MonoBehaviour
 
     private void SetPoliceTarget(Transform target)
     {
+        if (target != null)
+        {
+            EndTreadmillVisit();
+        }
         currentTarget = target;
         currentFighterTarget = target != null ? target.GetComponent<EnemyFighter>() : null;
         targetLockedUntil = Time.time + policeMinimumTargetLock;
@@ -504,6 +2651,18 @@ public class EnemyFighter : MonoBehaviour
             planarVelocity, Vector3.zero, 8f * Time.fixedDeltaTime) + verticalVelocity;
     }
 
+    private void StopMovingPhysicsImmediately()
+    {
+        if (body == null)
+        {
+            return;
+        }
+
+        Vector3 verticalVelocity = Vector3.Project(body.linearVelocity, Vector3.up);
+        body.linearVelocity = verticalVelocity;
+        body.angularVelocity = Vector3.zero;
+    }
+
     private void StopMoving()
     {
         if (IsGoku() && gokuFlightState != GokuFlightState.Grounded)
@@ -516,7 +2675,7 @@ public class EnemyFighter : MonoBehaviour
             }
         }
 
-        StopMovingPhysicsOnly();
+        StopMovingPhysicsImmediately();
         SetAnimatedMovement(false);
     }
 
@@ -693,13 +2852,17 @@ public class EnemyFighter : MonoBehaviour
 
     public void TakeMeleeHit(Vector3 impulse, float damage, float stunDuration)
     {
-        ApplyHit(impulse, damage, stunDuration);
+        ApplyHit(impulse, damage, stunDuration, true);
     }
 
     public void TakeThrowableHit(Vector3 impulse, float damage, float stunDuration, bool knockdown)
     {
-        // Knockdown is intentionally ignored: fighters only fall at zero health.
-        ApplyHit(impulse, damage, stunDuration);
+        // Throwable impacts are physics-only. Keep the signature for existing
+        // callers, but never reuse the melee stun window: the fighter should
+        // keep its current Run/Attack animation and immediately resume chase.
+        _ = stunDuration;
+        _ = knockdown;
+        ApplyHit(impulse, damage, 0f, false);
     }
 
     public void ReceivePoliceImpact(Vector3 impulse)
@@ -712,7 +2875,8 @@ public class EnemyFighter : MonoBehaviour
         stunnedUntilTime = Mathf.Max(stunnedUntilTime, Time.time + lightStunDuration);
     }
 
-    private void ApplyHit(Vector3 impulse, float damage, float stunDuration)
+    private void ApplyHit(
+        Vector3 impulse, float damage, float stunDuration, bool applyStun)
     {
         if (body == null || damage <= 0f)
         {
@@ -724,10 +2888,26 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
-        health = Mathf.Clamp(health - damage, 0f, maxHealth);
-        body.AddForce(impulse, ForceMode.Impulse);
-        body.AddTorque(Random.onUnitSphere * 3f, ForceMode.Impulse);
-        stunnedUntilTime = Mathf.Max(stunnedUntilTime, Time.time + stunDuration);
+        // Damage is the only gameplay event that turns a normal enemy from
+        // neutral to hostile. Seeing the player, being nearby, or witnessing
+        // another NPC move never starts a fight.
+        BecomeAggressive();
+
+        if (applyStun)
+        {
+            health = Mathf.Clamp(health - damage, 0f, maxHealth);
+            body.AddForce(impulse, ForceMode.Impulse);
+            body.AddTorque(Random.onUnitSphere * 3f, ForceMode.Impulse);
+            stunnedUntilTime = Mathf.Max(stunnedUntilTime, Time.time + stunDuration);
+        }
+        else
+        {
+            health = Mathf.Clamp(health - damage, 0f, maxHealth);
+            ApplyThrowablePushback(impulse);
+            // A throw may collide while a previous recovery window is still
+            // active. Do not let the throwable re-use or extend that pause.
+            stunnedUntilTime = Time.time;
+        }
 
         if (health <= 0f)
         {
@@ -735,8 +2915,32 @@ public class EnemyFighter : MonoBehaviour
         }
     }
 
+    private void ApplyThrowablePushback(Vector3 impulse)
+    {
+        if (body == null)
+        {
+            return;
+        }
+
+        Vector3 planarImpulse = Vector3.ProjectOnPlane(impulse, Vector3.up);
+        if (planarImpulse.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
+
+        float pushSpeed = Mathf.Lerp(
+            throwPushbackMinSpeed,
+            throwPushbackMaxSpeed,
+            Mathf.InverseLerp(5f, 28f, planarImpulse.magnitude));
+        body.WakeUp();
+        body.AddForce(
+            planarImpulse.normalized * pushSpeed, ForceMode.VelocityChange);
+        throwPushbackUntilTime = Time.time + throwPushbackDuration;
+    }
+
     private void Die(Vector3 finalImpulse)
     {
+        EndTreadmillVisit();
         isDead = true;
         RestoreGokuGroundPhysicsForDeath();
         health = 0f;
@@ -845,6 +3049,13 @@ public class EnemyFighter : MonoBehaviour
 
     private float GetDetectionRange()
     {
+        if (isPolice || isAggressive)
+        {
+            // Ronnie and angered enemies follow activity across the room. A
+            // neutral enemy never reaches this method because it is roaming.
+            return float.PositiveInfinity;
+        }
+
         return IsGoku() ? detectionRange * GokuSpeedMultiplier : detectionRange;
     }
 
@@ -1165,7 +3376,6 @@ public class EnemyFighter : MonoBehaviour
         float damage = item.GetImpactDamage(impactSpeed);
         Vector3 impulse = collision.relativeVelocity.normalized *
             Mathf.Clamp(impactSpeed * item.ImpactMultiplier, 5f, 28f);
-        float stunDuration = impactSpeed > 6f ? heavyStunDuration : lightStunDuration;
         ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
         Vector3 bloodPoint = collision.contactCount > 0 ? contact.point : transform.position + Vector3.up;
         Vector3 bloodNormal = collision.contactCount > 0 ? contact.normal : -collision.relativeVelocity.normalized;
@@ -1181,7 +3391,7 @@ public class EnemyFighter : MonoBehaviour
         }
         else
         {
-            TakeThrowableHit(impulse, damage, stunDuration, false);
+            TakeThrowableHit(impulse, damage, 0f, false);
         }
     }
 }

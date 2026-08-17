@@ -846,6 +846,16 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        // Reserve before moving the player into the authored exercise pose.
+        // The nearby query normally filters occupied treadmills, but this
+        // second check closes the race where an enemy claims the belt between
+        // the query and the F key press.
+        if (!station.TryReserveForPlayer(this))
+        {
+            nearbyExerciseStation = null;
+            return;
+        }
+
         if (heldItem != null)
         {
             DropHeldItem();
@@ -1004,7 +1014,7 @@ public class PlayerMovement : MonoBehaviour
                      $"{heldText}";
         GUI.Label(new Rect(16f, 16f, 940f, 60f), hud, hudStyle);
 
-        if (nearbyExerciseStation != null)
+        if (nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer)
         {
             float width = 440f;
             Rect promptRect = new Rect((Screen.width - width) * 0.5f, Screen.height - 105f, width, 54f);
