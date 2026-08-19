@@ -34,17 +34,24 @@ public static class GymInteriorBuilder
         CreateBox("Rubber Floor", root.transform, center + Vector3.down * 0.12f, new Vector3(width, 0.24f, depth), floor, true);
         CreateBox("Ceiling", root.transform, center + Vector3.up * height, new Vector3(width, 0.24f, depth), ceiling, true);
         CreateBox("South Wall", root.transform, center + new Vector3(0f, height * 0.5f, -depth * 0.5f), new Vector3(width, height, 0.32f), wall, true);
-        CreateBox("East Wall", root.transform, center + new Vector3(width * 0.5f, height * 0.5f, 0f), new Vector3(0.32f, height, depth), wall, true);
         CreateBox("West Wall", root.transform, center + new Vector3(-width * 0.5f, height * 0.5f, 0f), new Vector3(0.32f, height, depth), wall, true);
+        CreateEastWallWithDoor(root.transform, center, width, depth, height, wall, trim, accent);
 
         CreateWindowWall(root.transform, center, width, depth, height, wall, trim, glass);
-        CreateWallBand(root.transform, center, width, depth, 1.15f, 0.24f, accent);
-        CreateWallBand(root.transform, center, width, depth, 0.18f, 0.18f, trim);
+        const float visitorDoorWidth = 3.25f;
+        float visitorDoorZ = GetReceptionDoorZ(center, depth, visitorDoorWidth);
+        CreateWallBand(
+            root.transform, center, width, depth, 1.15f, 0.24f, accent,
+            visitorDoorZ, visitorDoorWidth);
+        CreateWallBand(
+            root.transform, center, width, depth, 0.18f, 0.18f, trim,
+            visitorDoorZ, visitorDoorWidth);
         CreateMirrors(root.transform, center, width, depth, mirror, trim, player != null ? player.playerCamera : null);
         CreateCeilingGrid(root.transform, center, width, depth, height, trim);
         CreateLighting(root.transform, center, width, depth, height, lightMaterial);
         CreateRoomDetails(root.transform, center, width, depth, accent, trim, wall);
         ConfigureAmbientLighting(center, width, depth, height);
+        GymTimeOfDay.CreateForScene(root.transform, center, width, depth, 2.05f, 7.05f);
     }
 
     private static Bounds FindEquipmentBounds(PlayerMovement player)
@@ -127,17 +134,29 @@ public static class GymInteriorBuilder
         float mullionWidth = 0.13f;
         float panelWidth = (openingWidth - mullionWidth * (windowCount + 1)) / windowCount;
         float panelCenterY = center.y + openingBottom + openingHeight * 0.5f;
+        const float glassInset = 0.035f;
+        // The frame projects toward the gym interior. Put the glass just
+        // behind that inner frame face instead of leaving it at the wall
+        // centre; the old depth offset made an oblique camera angle reveal a
+        // visible gap between the pane and its black frame.
+        float glassZ = wallZ - 0.19f;
         for (int i = 0; i < windowCount; i++)
         {
-            float panelX = center.x - openingWidth * 0.5f + mullionWidth + panelWidth * 0.5f +
+            // Mullion centres sit on the opening boundaries. Centre each pane
+            // in the clear span between adjacent mullion faces so the glass
+            // cannot drift to one side and reveal a frame-sized gap.
+            float panelX = center.x - openingWidth * 0.5f + mullionWidth * 0.5f + panelWidth * 0.5f +
                 i * (panelWidth + mullionWidth);
             CreateBox(
                 "Window glass",
                 parent,
-                new Vector3(panelX, panelCenterY, wallZ),
-                new Vector3(panelWidth, openingHeight - 0.18f, 0.035f),
+                new Vector3(panelX, panelCenterY, glassZ),
+                new Vector3(
+                    Mathf.Max(0.1f, panelWidth - glassInset * 2f),
+                    openingHeight - glassInset * 2f,
+                    0.035f),
                 glass,
-                false);
+                true);
         }
 
         CreateBox("Window sill", parent,
@@ -145,16 +164,156 @@ public static class GymInteriorBuilder
             new Vector3(openingWidth + 0.3f, 0.15f, 0.42f), frame, true);
         CreateBox("Window header", parent,
             new Vector3(center.x, center.y + openingTop, wallZ - 0.03f),
-            new Vector3(openingWidth + 0.3f, 0.15f, 0.42f), frame, false);
+            new Vector3(openingWidth + 0.3f, 0.15f, 0.42f), frame, true);
         for (int i = 0; i <= windowCount; i++)
         {
             float x = center.x - openingWidth * 0.5f + i * (panelWidth + mullionWidth);
             CreateBox("Window mullion", parent,
                 new Vector3(x, panelCenterY, wallZ - 0.03f),
-                new Vector3(mullionWidth, openingHeight, 0.38f), frame, false);
+                new Vector3(mullionWidth, openingHeight, 0.38f), frame, true);
         }
 
         CreateExteriorView(parent, center, width, depth, openingBottom, openingTop);
+    }
+
+    private static void CreateEastWallWithDoor(
+        Transform parent,
+        Vector3 center,
+        float width,
+        float depth,
+        float height,
+        Material wall,
+        Material frame,
+        Material accent)
+    {
+        const float doorWidth = 3.25f;
+        const float doorHeight = 3.45f;
+        float wallX = center.x + width * 0.5f;
+        float minZ = center.z - depth * 0.5f;
+        float maxZ = center.z + depth * 0.5f;
+        // Reception and the generated player spawn are on the east/reception
+        // side of the room. Keep the door on this wall and align its opening
+        // with the reception desk instead of placing it across the room.
+        float doorZ = GetReceptionDoorZ(center, depth, doorWidth);
+        float southLength = Mathf.Max(0.5f, doorZ - doorWidth * 0.5f - minZ);
+        float northLength = Mathf.Max(0.5f, maxZ - (doorZ + doorWidth * 0.5f));
+
+        CreateBox(
+            "East Wall South",
+            parent,
+            new Vector3(wallX, center.y + height * 0.5f, minZ + southLength * 0.5f),
+            new Vector3(0.32f, height, southLength),
+            wall,
+            true);
+        CreateBox(
+            "East Wall North",
+            parent,
+            new Vector3(wallX, center.y + height * 0.5f, maxZ - northLength * 0.5f),
+            new Vector3(0.32f, height, northLength),
+            wall,
+            true);
+        CreateBox(
+            "East Wall Above Visitor Door",
+            parent,
+            new Vector3(wallX, center.y + doorHeight + (height - doorHeight) * 0.5f, doorZ),
+            new Vector3(0.32f, height - doorHeight, doorWidth),
+            wall,
+            true);
+
+        GameObject doorwayObject = new GameObject("Gym Visitor Doorway");
+        doorwayObject.transform.SetParent(parent, true);
+        Vector3 doorCenter = new Vector3(wallX + 0.08f, center.y + doorHeight * 0.5f, doorZ);
+        doorwayObject.transform.position = doorCenter;
+        GymDoorway doorway = doorwayObject.AddComponent<GymDoorway>();
+
+        // Keep the panel's closed pose as the baseline; GymDoorway immediately
+        // animates it to its open pose and keeps the passage unobstructed.
+        GameObject panel = CreateBox(
+            "Visitor Door Panel",
+            doorwayObject.transform,
+            doorCenter,
+            new Vector3(0.12f, doorHeight, doorWidth),
+            frame,
+            false);
+        panel.transform.localRotation = Quaternion.identity;
+        panel.transform.localPosition = Vector3.zero;
+
+        CreateBox(
+            "Visitor Door Frame Left",
+            doorwayObject.transform,
+            new Vector3(wallX + 0.08f, center.y + doorHeight * 0.5f, doorZ - doorWidth * 0.5f),
+            new Vector3(0.22f, doorHeight + 0.18f, 0.18f),
+            accent,
+            false);
+        CreateBox(
+            "Visitor Door Frame Right",
+            doorwayObject.transform,
+            new Vector3(wallX + 0.08f, center.y + doorHeight * 0.5f, doorZ + doorWidth * 0.5f),
+            new Vector3(0.22f, doorHeight + 0.18f, 0.18f),
+            accent,
+            false);
+        CreateBox(
+            "Visitor Door Frame Top",
+            doorwayObject.transform,
+            new Vector3(wallX + 0.08f, center.y + doorHeight + 0.08f, doorZ),
+            new Vector3(0.22f, 0.18f, doorWidth + 0.18f),
+            accent,
+            false);
+
+        // Give visitors a small exterior landing so the same physical path is
+        // usable on both sides of the wall.
+        CreateBox(
+            "Visitor Door Exterior Landing",
+            parent,
+            new Vector3(wallX + 2.35f, center.y - 0.12f, doorZ),
+            new Vector3(4.6f, 0.24f, doorWidth + 2.2f),
+            wall,
+            true);
+
+        Vector3 interiorPoint = new Vector3(wallX - 1.45f, center.y, doorZ);
+        Vector3 exteriorPoint = new Vector3(wallX + 3.25f, center.y, doorZ);
+        doorway.Configure(doorCenter, interiorPoint, exteriorPoint, panel.transform);
+    }
+
+    private static float GetReceptionDoorZ(Vector3 center, float depth, float doorWidth)
+    {
+        float minZ = center.z - depth * 0.5f;
+        float maxZ = center.z + depth * 0.5f;
+        float doorZ = maxZ - 5.4f;
+        GameObject desk = GameObject.Find("Reception desk");
+        if (desk != null)
+        {
+            Renderer[] renderers = desk.GetComponentsInChildren<Renderer>(true);
+            bool hasBounds = false;
+            Bounds deskBounds = default;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] == null)
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    deskBounds = renderers[i].bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    deskBounds.Encapsulate(renderers[i].bounds);
+                }
+            }
+
+            if (hasBounds)
+            {
+                doorZ = deskBounds.center.z;
+            }
+        }
+
+        return Mathf.Clamp(
+            doorZ,
+            minZ + doorWidth * 0.5f + 1f,
+            maxZ - doorWidth * 0.5f - 1f);
     }
 
     private static void CreateExteriorView(
@@ -166,6 +325,8 @@ public static class GymInteriorBuilder
         Material ground = CreateMaterial("Exterior landscape", new Color(0.075f, 0.2f, 0.07f), 0f, 0.12f);
         Material sunMaterial = CreateMaterial("Visible sun", new Color(1f, 0.74f, 0.24f), 0f, 0.2f);
         SetEmission(sunMaterial, new Color(8f, 5.5f, 1.4f));
+        Material moonMaterial = CreateMaterial("Visible moon", new Color(0.78f, 0.86f, 1f), 0f, 0.15f);
+        SetEmission(moonMaterial, new Color(1.25f, 1.55f, 2.4f));
 
         CreateBox(
             "Exterior sky backdrop",
@@ -191,6 +352,15 @@ public static class GymInteriorBuilder
         sun.GetComponent<Renderer>().sharedMaterial = sunMaterial;
         Object.Destroy(sun.GetComponent<Collider>());
 
+        GameObject moon = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        moon.name = "Exterior visible moon";
+        moon.transform.SetParent(parent, true);
+        moon.transform.position = new Vector3(
+            center.x - Mathf.Min(width * 0.24f, 8f), center.y + openingBottom + 2.6f, exteriorZ - 0.45f);
+        moon.transform.localScale = Vector3.one * 1.02f;
+        moon.GetComponent<Renderer>().sharedMaterial = moonMaterial;
+        Object.Destroy(moon.GetComponent<Collider>());
+
         for (int i = -2; i <= 2; i++)
         {
             GameObject beamObject = new GameObject("Window sunlight");
@@ -211,12 +381,68 @@ public static class GymInteriorBuilder
         }
     }
 
-    private static void CreateWallBand(Transform parent, Vector3 center, float width, float depth, float y, float thickness, Material material)
+    private static void CreateWallBand(
+        Transform parent,
+        Vector3 center,
+        float width,
+        float depth,
+        float y,
+        float thickness,
+        Material material,
+        float visitorDoorZ,
+        float visitorDoorWidth)
     {
         CreateBox("North wall stripe", parent, center + new Vector3(0f, y, depth * 0.5f - 0.19f), new Vector3(width - 0.5f, thickness, 0.05f), material, false);
         CreateBox("South wall stripe", parent, center + new Vector3(0f, y, -depth * 0.5f + 0.19f), new Vector3(width - 0.5f, thickness, 0.05f), material, false);
-        CreateBox("East wall stripe", parent, center + new Vector3(width * 0.5f - 0.19f, y, 0f), new Vector3(0.05f, thickness, depth - 0.5f), material, false);
+        CreateInterruptedEastWallStripe(
+            parent, center, width, depth, y, thickness, material,
+            visitorDoorZ, visitorDoorWidth);
         CreateBox("West wall stripe", parent, center + new Vector3(-width * 0.5f + 0.19f, y, 0f), new Vector3(0.05f, thickness, depth - 0.5f), material, false);
+    }
+
+    private static void CreateInterruptedEastWallStripe(
+        Transform parent,
+        Vector3 center,
+        float width,
+        float depth,
+        float y,
+        float thickness,
+        Material material,
+        float visitorDoorZ,
+        float visitorDoorWidth)
+    {
+        float stripeMinZ = center.z - depth * 0.5f + 0.25f;
+        float stripeMaxZ = center.z + depth * 0.5f - 0.25f;
+        // Leave a small visual margin around the black inner panel and its
+        // red jambs. No red line should draw through the doorway opening.
+        float openingHalfWidth = visitorDoorWidth * 0.5f + 0.25f;
+        float southEnd = visitorDoorZ - openingHalfWidth;
+        float northStart = visitorDoorZ + openingHalfWidth;
+        float stripeX = center.x + width * 0.5f - 0.19f;
+
+        float southLength = southEnd - stripeMinZ;
+        if (southLength > 0.05f)
+        {
+            CreateBox(
+                "East wall stripe South of visitor door",
+                parent,
+                new Vector3(stripeX, center.y + y, stripeMinZ + southLength * 0.5f),
+                new Vector3(0.05f, thickness, southLength),
+                material,
+                false);
+        }
+
+        float northLength = stripeMaxZ - northStart;
+        if (northLength > 0.05f)
+        {
+            CreateBox(
+                "East wall stripe North of visitor door",
+                parent,
+                new Vector3(stripeX, center.y + y, northStart + northLength * 0.5f),
+                new Vector3(0.05f, thickness, northLength),
+                material,
+                false);
+        }
     }
 
     private static void CreateMirrors(

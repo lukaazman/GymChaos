@@ -15,9 +15,23 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     public const float StandardGameplayHeight = 2.30f;
     public const float ArnoldGameplayHeight = 2.35f;
 
+    public float GroundContactError => runtimeRenderer == null
+        ? float.PositiveInfinity
+        : Mathf.Abs(GetGroundContactY() - (transform.position.y + 0.02f));
+    public float GroundContactY => GetGroundContactY();
+    public float GroundedFootToMeshOffset => groundedFootToMeshOffset;
+    public bool HasGroundedFootReference => hasGroundedFootReference;
+
     private Transform runtimeModelRoot;
     private SkinnedMeshRenderer runtimeRenderer;
     private BodybuilderIdentity runtimeIdentity;
+    private Transform groundedLeftFoot;
+    private Transform groundedRightFoot;
+    private float groundedFootToMeshOffset;
+    private bool hasGroundedFootReference;
+    private int groundingSettleFrames;
+    private bool groundingSettled;
+    private bool initialGroundingCorrectionApplied;
     private int heightCorrectionFrames;
     private bool dynamicHeightCorrection;
     private bool heightCorrectionLogged;
@@ -129,6 +143,8 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         runtimeModelRoot = modelRoot.transform;
         runtimeRenderer = renderer;
         runtimeIdentity = identity;
+        groundedLeftFoot = rig.LeftFoot;
+        groundedRightFoot = rig.RightFoot;
         heightCorrectionFrames = identity == BodybuilderIdentity.Manwithsuit1 ? 0 : 4;
         // Settle the imported renderer for a few grounded frames, then leave
         // the child model transform alone. Rewriting it every frame from an
@@ -136,8 +152,22 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // the owner Rigidbody is now floor-locked while alive.
         dynamicHeightCorrection = false;
         heightCorrectionLogged = false;
+        groundingSettleFrames = 12;
+        groundingSettled = false;
+        initialGroundingCorrectionApplied = false;
 
         Bounds verifiedBounds = CalculateBakedWorldBounds(renderer);
+        float lowestFootY = GetLowestFootY();
+        if (lowestFootY < float.PositiveInfinity)
+        {
+            groundedFootToMeshOffset = verifiedBounds.min.y - lowestFootY;
+            hasGroundedFootReference = true;
+        }
+        else
+        {
+            groundedFootToMeshOffset = 0f;
+            hasGroundedFootReference = false;
+        }
         Texture verifiedTexture = renderer.sharedMaterial != null
             ? renderer.sharedMaterial.GetTexture("_BaseMap")
             : null;
@@ -182,12 +212,11 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             }
         }
 
-        // The imported Idle clip can change the skinned AABB by a few
-        // centimetres even after its lower-body rotations are neutralized.
-        // Keep the lowest visible foot contact on the enemy root's floor while
-        // idle so heels/toes do not float as the clip loops.
-        if (heightCorrectionFrames > 0 || fighter == null ||
-            fighter.AnimationState == MixamoScanRetargetAnimator.MotionState.Idle)
+        // Every grounded pose can change the skinned AABB. The run clip is
+        // allowed to animate the legs, but it must not lift the whole visible
+        // character off the enemy root's floor while the visitor is walking.
+        // Goku is the only intentional airborne exception.
+        if (fighter == null || (!fighter.IsDead && !fighter.IsGokuFlightActive))
         {
             KeepVisibleModelOnFloor();
         }
@@ -204,15 +233,83 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
     private void KeepVisibleModelOnFloor()
     {
-        float floorY = transform.position.y + 0.02f;
-        float floorOffset = floorY - runtimeRenderer.bounds.min.y;
-        if (Mathf.Abs(floorOffset) <= 0.0005f || Mathf.Abs(floorOffset) > 0.2f)
+        if (runtimeRenderer == null || runtimeRenderer.bounds.size.y < 0.1f)
         {
             return;
         }
 
-        runtimeModelRoot.position += Vector3.up * floorOffset;
-        Physics.SyncTransforms();
+        // Only settle the imported child once, while its first idle pose and
+        // height correction are becoming authoritative. After that initial
+        // pass, only a clear airborne offset is corrected; lifting the model
+        // back up on every stride would recreate the walking shake.
+        if (groundingSettled)
+        {
+            float settledFloorY = transform.position.y + 0.02f;
+            float settledFloorOffset = settledFloorY - GetGroundContactY();
+            if (settledFloorOffset < -0.12f)
+            {
+                // Correct the visual child, not the enemy root, so navigation
+                // and Rigidbody movement remain stable while the visible rig
+                // cannot continue walking above the floor.
+                runtimeModelRoot.position += Vector3.up * settledFloorOffset;
+                Physics.SyncTransforms();
+            }
+            return;
+        }
+
+        float floorY = transform.position.y + 0.02f;
+        float floorOffset = floorY - GetGroundContactY();
+        const float correctionThreshold = 0.18f;
+        if (!initialGroundingCorrectionApplied &&
+            Mathf.Abs(floorOffset) > correctionThreshold)
+        {
+            runtimeModelRoot.position += Vector3.up * floorOffset;
+            initialGroundingCorrectionApplied = true;
+            Physics.SyncTransforms();
+            if (Mathf.Abs(floorOffset) > 0.08f)
+            {
+                Debug.Log(
+                    $"GYMCHAOS_GROUNDING_CORRECTED identity={runtimeIdentity} " +
+                    $"offset={floorOffset:0.000} floorY={floorY:0.000}",
+                    this);
+            }
+        }
+
+        groundingSettleFrames--;
+        if (groundingSettleFrames <= 0)
+        {
+            groundingSettled = true;
+        }
+    }
+
+    private float GetGroundContactY()
+    {
+        if (runtimeRenderer == null)
+        {
+            return float.PositiveInfinity;
+        }
+
+        float lowestFootY = GetLowestFootY();
+        if (hasGroundedFootReference && lowestFootY < float.PositiveInfinity)
+        {
+            return lowestFootY + groundedFootToMeshOffset;
+        }
+
+        return runtimeRenderer.bounds.min.y;
+    }
+
+    private float GetLowestFootY()
+    {
+        float lowest = float.PositiveInfinity;
+        if (groundedLeftFoot != null)
+        {
+            lowest = Mathf.Min(lowest, groundedLeftFoot.position.y);
+        }
+        if (groundedRightFoot != null)
+        {
+            lowest = Mathf.Min(lowest, groundedRightFoot.position.y);
+        }
+        return lowest;
     }
 
     private static string resourcePathForLog(BodybuilderIdentity identity)

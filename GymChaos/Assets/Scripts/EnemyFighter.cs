@@ -49,12 +49,12 @@ public class EnemyFighter : MonoBehaviour
     [SerializeField] private float roamSpeedMax = 2.35f;
     [SerializeField] private float roamIdleMin = 3.4f;
     [SerializeField] private float roamIdleMax = 6.2f;
-    [SerializeField] private float roamWaypointPauseChance = 0.08f;
     [SerializeField] private float roamRandomDestinationChance = 0.1f;
     [SerializeField] private float roamBlockedRetargetDelay = 0.72f;
 
     private PlayerMovement playerTarget;
     private Rigidbody body;
+    private Renderer gymFloorRenderer;
     private MixamoScanRetargetAnimator externalBodyAnimator;
     private BodybuilderIdentity identity;
     private Transform currentTarget;
@@ -105,6 +105,7 @@ public class EnemyFighter : MonoBehaviour
     private Vector3 treadmillExitTargetPosition;
     private float treadmillNextSpeedChangeTime;
     private GymExerciseStation pendingTreadmillStation;
+    private GymVisitorAgent visitorAgent;
     private readonly RaycastHit[] movementHits = new RaycastHit[32];
     private readonly Collider[] roamOverlapHits = new Collider[64];
     private readonly List<RoamInterest> roamInterests = new List<RoamInterest>();
@@ -200,7 +201,10 @@ public class EnemyFighter : MonoBehaviour
     public Transform CurrentTarget => currentTarget;
     public EnemyFighter CurrentFighterTarget => currentFighterTarget;
     public BodybuilderIdentity Identity => identity;
+    public bool HasVisitorAgent => visitorAgent != null;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
+    public bool IsGokuGrounded => identity == BodybuilderIdentity.Goku &&
+        gokuFlightState == GokuFlightState.Grounded;
     public bool IsGokuFlightActive => identity == BodybuilderIdentity.Goku &&
         gokuFlightState != GokuFlightState.Grounded;
     public MixamoScanRetargetAnimator.MotionState AnimationState => externalBodyAnimator != null
@@ -278,7 +282,7 @@ public class EnemyFighter : MonoBehaviour
         health = maxHealth;
         isPolice = police;
         isPassive = passive;
-        floorRootY = transform.position.y;
+        floorRootY = ResolveGymFloorY(transform.position.y);
         standingRootY = floorRootY;
         isAggressive = false;
         throwPushbackUntilTime = 0f;
@@ -326,6 +330,9 @@ public class EnemyFighter : MonoBehaviour
         nextTargetRefreshTime = 0f;
         if (body != null)
         {
+            Vector3 groundedPosition = body.position;
+            groundedPosition.y = floorRootY;
+            body.position = groundedPosition;
             // The animated limb hitboxes are physical compound colliders. Keep
             // the fighter root on the gym floor so animation contacts do not
             // create vertical launch impulses beside equipment.
@@ -378,6 +385,30 @@ public class EnemyFighter : MonoBehaviour
         }
     }
 
+    private void OnEnable()
+    {
+        if (body != null && !activeCounted && !isDead)
+        {
+            ActiveCount++;
+            activeCounted = true;
+        }
+    }
+
+    private void OnDisable()
+    {
+        // Keep station ownership and attached squat bars from surviving a
+        // disable before the visitor director gets another Update tick.
+        if (visitorAgent != null)
+        {
+            visitorAgent.CancelForCombat();
+        }
+        if (activeCounted)
+        {
+            ActiveCount = Mathf.Max(0, ActiveCount - 1);
+            activeCounted = false;
+        }
+    }
+
     private void FixedUpdate()
     {
         ProcessPunchContact();
@@ -391,6 +422,12 @@ public class EnemyFighter : MonoBehaviour
         }
 
         KeepGroundedRoot();
+
+        if (visitorAgent != null && visitorAgent.isActiveAndEnabled &&
+            visitorAgent.TickPhysics(this))
+        {
+            return;
+        }
 
         if (celebratingPlayerKill)
         {
@@ -568,6 +605,26 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
+        // Repeated throwable contacts can call this method several times
+        // while Goku is still flying. Do not restart the visitor/combat
+        // handoff on every contact; that can keep interrupting the landing
+        // frame and leave the fighter in a visual idle state.
+        if (isAggressive)
+        {
+            if (source != null)
+            {
+                playerTarget = source;
+                currentTarget = source.transform;
+                currentFighterTarget = null;
+            }
+            return;
+        }
+
+        if (visitorAgent != null)
+        {
+            visitorAgent.CancelForCombat();
+        }
+
         if (source != null)
         {
             playerTarget = source;
@@ -594,6 +651,123 @@ public class EnemyFighter : MonoBehaviour
         roamDirectionHoldUntil = 0f;
 
         Debug.Log($"GYMCHAOS_ENEMY_AGGRO identity={identity} source=player", this);
+    }
+
+    public void AttachVisitorAgent(GymVisitorAgent agent)
+    {
+        visitorAgent = agent;
+        EndTreadmillVisit();
+        currentTarget = null;
+        currentFighterTarget = null;
+        isAggressive = false;
+    }
+
+    public void DetachVisitorAgent(GymVisitorAgent agent)
+    {
+        if (visitorAgent == agent)
+        {
+            visitorAgent = null;
+        }
+    }
+
+    public void SetVisitorSpawnPose(Vector3 position, Quaternion rotation)
+    {
+        position.y = ResolveGymFloorY(position.y);
+        if (body != null)
+        {
+            body.position = position;
+            body.rotation = rotation;
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
+        else
+        {
+            transform.SetPositionAndRotation(position, rotation);
+        }
+
+        standingRootY = position.y;
+        floorRootY = position.y;
+        transform.SetPositionAndRotation(position, rotation);
+    }
+
+    public bool MoveVisitorTo(Vector3 destination, float speed, bool allowOutsideRoom)
+    {
+        return MoveVisitorTo(destination, speed, allowOutsideRoom, null);
+    }
+
+    public bool MoveVisitorTo(
+        Vector3 destination,
+        float speed,
+        bool allowOutsideRoom,
+        GymExerciseStation targetStation)
+    {
+        if (body == null || isDead)
+        {
+            return false;
+        }
+
+        destination.y = standingRootY;
+        Vector3 toDestination = Vector3.ProjectOnPlane(destination - body.position, Vector3.up);
+        float distance = toDestination.magnitude;
+        if (distance <= 0.34f)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            return true;
+        }
+
+        Vector3 desired = toDestination / distance;
+        Vector3 direction = FindVisitorMovementDirection(
+            desired, Mathf.Min(distance, 1.25f), allowOutsideRoom, targetStation);
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            return false;
+        }
+
+        float movementSpeed = Mathf.Clamp(speed, 0.8f, maxSpeed);
+        Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+        Vector3 desiredVelocity = direction * movementSpeed;
+        planarVelocity = Vector3.MoveTowards(
+            planarVelocity, desiredVelocity,
+            Mathf.Max(moveForce * 0.55f, 8f) * Time.fixedDeltaTime);
+        body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
+        Quaternion lookRotation = Quaternion.LookRotation(direction, Vector3.up);
+        transform.rotation = Quaternion.Slerp(
+            transform.rotation, lookRotation, 9f * Time.fixedDeltaTime);
+        SetAnimatedMovement(true, Mathf.Clamp01(movementSpeed / Mathf.Max(0.01f, maxSpeed)));
+        return false;
+    }
+
+    public void StopVisitorMovement()
+    {
+        StopMovingPhysicsImmediately();
+        SetAnimatedMovement(false);
+    }
+
+    public void ResumeVisitorRoaming()
+    {
+        if (isDead || isAggressive || isPassive)
+        {
+            return;
+        }
+
+        EndTreadmillVisit();
+        currentTarget = null;
+        currentFighterTarget = null;
+        pendingTreadmillStation = null;
+        hasRoamTarget = false;
+        roamTargetPurposeful = false;
+        roamTargetInterestLabel = null;
+        roamTargetStation = null;
+        hasRoamTargetArrivalRotation = false;
+        ClearRoamRoute();
+        roamDirection = Vector3.zero;
+        roamDirectionHoldUntil = 0f;
+        stalledRoamTime = 0f;
+        roamState = RoamState.Walking;
+        SelectRoamDestination();
     }
 
 #if UNITY_EDITOR
@@ -769,17 +943,11 @@ public class EnemyFighter : MonoBehaviour
                 transform.rotation = roamTargetArrivalRotation;
             }
 
-            if (Random.value < roamWaypointPauseChance)
-            {
-                BeginRoamIdle();
-            }
-            else
-            {
-                // Most waypoints are passed through without stopping. This
-                // keeps room-wide wandering continuous and makes idle a rare
-                // deliberate pause instead of a side effect of retargeting.
-                SelectRoamDestination();
-            }
+            // A normal free-roam waypoint is a pass-through. Do not inject an
+            // idle animation here: a single-direction route must stay in Run
+            // across target handoffs. Idle is reserved for the initial
+            // stagger or the genuine no-waypoint fallback below.
+            SelectRoamDestination();
             return;
         }
 
@@ -794,9 +962,37 @@ public class EnemyFighter : MonoBehaviour
         if (direction.sqrMagnitude < 0.001f)
         {
             stalledRoamTime += Time.fixedDeltaTime;
-            // A false movement animation must also mean zero location
-            // movement. The previous eased deceleration left residual
-            // velocity, so a character visibly slid in the static pose.
+            // A capsule probe can be blocked for one or two physics frames by
+            // a nearby equipment edge or an enemy separation update even when
+            // the current straight route is still the correct route. Do a
+            // short continuity probe before declaring a real blockage. This
+            // prevents the visible Run -> Idle -> Run flicker that looked like
+            // a one-second stop on every roaming path handoff.
+            Vector3 continuityDirection = GetRoamContinuityDirection(
+                desiredDirection, distance, allowTargetEquipment);
+            if (continuityDirection.sqrMagnitude > 0.001f)
+            {
+                stalledRoamTime = 0f;
+                ApplyRoamMovement(continuityDirection);
+                return;
+            }
+
+            // Preserve the locomotion state briefly while a genuine obstacle
+            // is being retargeted. Intentional rare idles and actual direction
+            // changes still use the normal idle/turn path; only this transient
+            // path-test failure gets the continuity grace period.
+            bool sameRouteDirection = roamDirection.sqrMagnitude > 0.001f &&
+                Vector3.Dot(roamDirection.normalized, desiredDirection) > 0.82f;
+            if (sameRouteDirection && stalledRoamTime < 0.18f)
+            {
+                // A failed capsule probe can be caused by a one-frame enemy
+                // separation update, not a real turn. Keep the established
+                // direction and Run state so the character does not flicker
+                // through a visible stop/glide/Run transition.
+                ApplyRoamMovement(roamDirection.normalized);
+                return;
+            }
+
             StopMovingPhysicsImmediately();
             SetAnimatedMovement(false);
             // Keep the pause short and recover to a new meaningful target.
@@ -821,6 +1017,49 @@ public class EnemyFighter : MonoBehaviour
         }
 
         stalledRoamTime = 0f;
+        ApplyRoamMovement(direction);
+    }
+
+    private Vector3 GetRoamContinuityDirection(
+        Vector3 desiredDirection, float targetDistance, bool allowTargetEquipment)
+    {
+        desiredDirection = Vector3.ProjectOnPlane(desiredDirection, Vector3.up);
+        if (desiredDirection.sqrMagnitude < 0.0001f)
+        {
+            return Vector3.zero;
+        }
+
+        desiredDirection.Normalize();
+        float shortLookAhead = Mathf.Clamp(
+            Mathf.Min(Mathf.Max(0.18f, targetDistance), 0.34f), 0.18f, 0.34f);
+        if (roamDirection.sqrMagnitude > 0.001f)
+        {
+            Vector3 held = Vector3.ProjectOnPlane(roamDirection, Vector3.up).normalized;
+            if (Vector3.Dot(held, desiredDirection) > 0.82f &&
+                IsInsideRoom(held, shortLookAhead) &&
+                IsMovementPathClear(held, shortLookAhead, allowTargetEquipment))
+            {
+                return held;
+            }
+        }
+
+        if (IsInsideRoom(desiredDirection, shortLookAhead) &&
+            IsMovementPathClear(desiredDirection, shortLookAhead, allowTargetEquipment))
+        {
+            return desiredDirection;
+        }
+
+        return Vector3.zero;
+    }
+
+    private void ApplyRoamMovement(Vector3 direction)
+    {
+        if (body == null || direction.sqrMagnitude < 0.001f)
+        {
+            return;
+        }
+
+        direction = Vector3.ProjectOnPlane(direction, Vector3.up).normalized;
         body.WakeUp();
         Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
         Vector3 desiredVelocity = direction * roamSpeed;
@@ -847,6 +1086,27 @@ public class EnemyFighter : MonoBehaviour
         roamDirection = Vector3.zero;
         roamDirectionHoldUntil = 0f;
         roamSpeed = Random.Range(roamSpeedMin, roamSpeedMax);
+
+        // Ronnie is a police/intervention NPC, not a gym customer. Keep his
+        // neutral patrol on clear room points so a machine interest (most
+        // visibly the Smith machine) can never become his startup destination.
+        if (isPolice)
+        {
+            if (TryFindPoliceRoomDestination(out Vector3 policeDestination))
+            {
+                roamTarget = policeDestination;
+                hasRoamTarget = true;
+                roamTargetPurposeful = false;
+                roamTargetInterestLabel = "police room patrol";
+                lastRoamTarget = roamTarget;
+                hasLastRoamTarget = true;
+                BuildRoamRouteToTarget(false);
+                return;
+            }
+
+            BeginRoamIdle();
+            return;
+        }
 
         if (Time.time >= nextTreadmillDecisionTime)
         {
@@ -915,6 +1175,54 @@ public class EnemyFighter : MonoBehaviour
             // waypoint at all. Ordinary route changes always stay walking.
             BeginRoamIdle();
         }
+    }
+
+    private bool TryFindPoliceRoomDestination(out Vector3 point)
+    {
+        // Prefer the existing long-range open-floor sampler. It explicitly
+        // rejects equipment, walls and the previous endpoint.
+        if (TryFindRareRandomDestination(out point))
+        {
+            return true;
+        }
+
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            point = transform.position;
+            return false;
+        }
+
+        float margin = GetBodyRadius() + 0.24f;
+        for (int attempt = 0; attempt < 96; attempt++)
+        {
+            point = new Vector3(
+                Random.Range(floorBounds.min.x + margin, floorBounds.max.x - margin),
+                floorBounds.max.y,
+                Random.Range(floorBounds.min.z + margin, floorBounds.max.z - margin));
+            if (Vector3.ProjectOnPlane(
+                    point - transform.position, Vector3.up).sqrMagnitude < 16f ||
+                (hasLastRoamTarget && Vector3.ProjectOnPlane(
+                    point - lastRoamTarget, Vector3.up).sqrMagnitude < 16f) ||
+                !IsRoamPointClear(point))
+            {
+                continue;
+            }
+
+            float edgeClearance = Mathf.Min(
+                point.x - floorBounds.min.x,
+                floorBounds.max.x - point.x,
+                point.z - floorBounds.min.z,
+                floorBounds.max.z - point.z);
+            if (edgeClearance < 1.4f)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        point = transform.position;
+        return false;
     }
 
     private void ClearRoamRoute()
@@ -1574,6 +1882,15 @@ public class EnemyFighter : MonoBehaviour
                 roamInterestRoots.Add(stationParent);
             }
 
+            if (station.IsSquat)
+            {
+                // Squat cages and the Smith machine are scheduled workout
+                // destinations owned by GymVisitorDirector. They must never
+                // be selected as ordinary free-roam interests, otherwise an
+                // enemy can pace beside a rack without ever starting a squat.
+                continue;
+            }
+
             float footprint = station.IsTreadmill ? 2.5f
                 : station.IsCardio ? 2.2f : 2.9f;
             Bounds stationBounds = new Bounds(
@@ -2035,6 +2352,81 @@ public class EnemyFighter : MonoBehaviour
         return best;
     }
 
+    private Vector3 FindVisitorMovementDirection(
+        Vector3 desiredDirection,
+        float targetDistance,
+        bool allowOutsideRoom,
+        GymExerciseStation targetStation)
+    {
+        desiredDirection = Vector3.ProjectOnPlane(desiredDirection, Vector3.up);
+        if (desiredDirection.sqrMagnitude < 0.0001f)
+        {
+            return Vector3.zero;
+        }
+        desiredDirection.Normalize();
+
+        Vector3 best = Vector3.zero;
+        float bestScore = float.NegativeInfinity;
+        for (int i = 0; i < MovementProbeAngles.Length; i++)
+        {
+            Vector3 candidate = Quaternion.Euler(0f, MovementProbeAngles[i], 0f) * desiredDirection;
+            if ((!allowOutsideRoom && !IsInsideRoom(candidate, targetDistance)) ||
+                !IsVisitorPathClear(candidate, targetDistance, targetStation))
+            {
+                continue;
+            }
+
+            float alignment = Vector3.Dot(candidate, desiredDirection);
+            float score = alignment * 4f - Mathf.Abs(MovementProbeAngles[i]) * 0.002f;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private bool IsVisitorPathClear(
+        Vector3 direction,
+        float distance,
+        GymExerciseStation targetStation)
+    {
+        Vector3 origin = body != null ? body.position : transform.position;
+        Vector3 lower = origin + Vector3.up * 0.55f;
+        Vector3 upper = origin + Vector3.up * 1.85f;
+        int count = Physics.CapsuleCastNonAlloc(
+            lower, upper, GetBodyRadius(), direction, movementHits,
+            distance + 0.08f, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = movementHits[i].collider;
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null ||
+                HasRoomFloorInHierarchy(hit.transform) ||
+                IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<GymDoorway>() != null)
+            {
+                continue;
+            }
+            if (targetStation != null && targetStation.ContainsEquipmentCollider(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
     private Vector3 StabilizeRoamDirection(
         Vector3 desiredDirection, float targetDistance, Vector3 candidate,
         bool allowTargetEquipment)
@@ -2226,6 +2618,11 @@ public class EnemyFighter : MonoBehaviour
         roamDirection = Vector3.zero;
         roamDirectionHoldUntil = 0f;
         roamIdleUntil = Time.time + Random.Range(roamIdleMin, roamIdleMax);
+        // End the movement and animation state in the same physics tick. The
+        // old implementation waited for the next TickRoaming call, leaving
+        // one short residual glide after Run had already switched to Idle.
+        StopMovingPhysicsImmediately();
+        SetAnimatedMovement(false);
     }
 
     private bool TryBeginTreadmillVisit(GymExerciseStation station)
@@ -2640,7 +3037,7 @@ public class EnemyFighter : MonoBehaviour
 
     private void StopMovingPhysicsOnly()
     {
-        if (body == null)
+        if (body == null || body.isKinematic)
         {
             return;
         }
@@ -2653,7 +3050,7 @@ public class EnemyFighter : MonoBehaviour
 
     private void StopMovingPhysicsImmediately()
     {
-        if (body == null)
+        if (body == null || body.isKinematic)
         {
             return;
         }
@@ -2687,12 +3084,33 @@ public class EnemyFighter : MonoBehaviour
             return;
         }
 
-        Vector3 position = body.position;
-        position.y = standingRootY;
-        body.position = position;
-        Vector3 velocity = body.linearVelocity;
-        body.linearVelocity = new Vector3(velocity.x, 0f, velocity.z);
-        body.angularVelocity = Vector3.zero;
+        // Configure() and SetGokuFlightPhysics(false) already freeze the
+        // alive root on Y. Do not rewrite body.position or vertical velocity
+        // every physics step: even a small corrective write fights Rigidbody
+        // interpolation/contact solving and appears as a shake on each step.
+        // Only restore the constraint if another alive-state system removed
+        // it; this branch never runs for corpses because FixedUpdate exits at
+        // the death guard before calling KeepGroundedRoot().
+        RigidbodyConstraints groundedConstraints = body.constraints |
+            RigidbodyConstraints.FreezePositionY;
+        if (groundedConstraints != body.constraints)
+        {
+            body.constraints = groundedConstraints;
+        }
+    }
+
+    private float ResolveGymFloorY(float fallback)
+    {
+        if (gymFloorRenderer == null)
+        {
+            GameObject floor = GameObject.Find("Rubber Floor");
+            if (floor != null)
+            {
+                gymFloorRenderer = floor.GetComponent<Renderer>();
+            }
+        }
+
+        return gymFloorRenderer != null ? gymFloorRenderer.bounds.max.y : fallback;
     }
 
     private void Attack(Vector3 direction)
@@ -2703,6 +3121,14 @@ public class EnemyFighter : MonoBehaviour
         externalBodyAnimator?.SetPunchTarget(
             currentTarget != null ? currentTarget.position : transform.position + direction);
         body.AddForce(direction * 0.65f, ForceMode.Impulse);
+        if (IsGoku())
+        {
+            Debug.Log(
+                $"GYMCHAOS_GOKU_ATTACK state={externalBodyAnimator?.CurrentState} " +
+                $"grounded={IsGokuGrounded} targetDistance=" +
+                $"{(currentTarget != null ? Vector3.ProjectOnPlane(currentTarget.position - transform.position, Vector3.up).magnitude : -1f):0.00}",
+                this);
+        }
     }
 
     private bool CanStartAutomaticPunch()
@@ -2941,6 +3367,10 @@ public class EnemyFighter : MonoBehaviour
     private void Die(Vector3 finalImpulse)
     {
         EndTreadmillVisit();
+        if (visitorAgent != null)
+        {
+            visitorAgent.CancelForCombat();
+        }
         isDead = true;
         RestoreGokuGroundPhysicsForDeath();
         health = 0f;
@@ -3164,6 +3594,10 @@ public class EnemyFighter : MonoBehaviour
             {
                 gokuFlightState = GokuFlightState.Grounded;
                 SetGokuFlightPhysics(false);
+                // The landing frame is already on the floor. Let the normal
+                // grounded combat branch run immediately so an angered Goku
+                // can start a punch without spending one extra frame in Idle.
+                return true;
             }
             return false;
         }
@@ -3311,6 +3745,11 @@ public class EnemyFighter : MonoBehaviour
 
         if (flying)
         {
+            if (punchInProgress)
+            {
+                punchInProgress = false;
+                externalBodyAnimator?.CancelPunch();
+            }
             if (!body.isKinematic)
             {
                 body.linearVelocity = Vector3.zero;

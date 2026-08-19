@@ -41,6 +41,7 @@ public class GymExerciseStation : MonoBehaviour
     private bool sessionActive;
     private PlayerMovement playerOccupant;
     private EnemyFighter enemyOccupant;
+    private EnemyFighter enemySquatReleaseOccupant;
     private Renderer treadmillBeltRenderer;
     private MaterialPropertyBlock treadmillPropertyBlock;
     private float treadmillTextureOffset;
@@ -59,6 +60,21 @@ public class GymExerciseStation : MonoBehaviour
     private bool sceneBarWasKinematic;
     private bool sceneBarUsedGravity;
     private Transform loadedPlatesRoot;
+    private float squatMotion;
+    private Transform squatBarOriginalParent;
+    private Vector3 squatBarOriginalLocalPosition;
+    private Quaternion squatBarOriginalLocalRotation;
+    private Vector3 squatBarOriginalLocalScale;
+    private Transform squatBarRackParent;
+    private Rigidbody squatBarBody;
+    private bool squatBarWasKinematic;
+    private bool squatBarUsedGravity;
+    private bool squatBarWasPickupEnabled;
+    private bool squatBarWasActive;
+    private bool squatBarOriginalStateCaptured;
+    private PickupItem squatBarPickup;
+    private bool enemySquatApproachReserved;
+    [SerializeField] private Vector3 enemySquatBarOffset = new Vector3(0f, 0.12f, -0.08f);
     private Transform latPulldownBar;
     private Transform latPulldownHandle;
     private Transform latPulldownCable;
@@ -88,9 +104,11 @@ public class GymExerciseStation : MonoBehaviour
     public Vector3 PlayerPosition => playerPosition;
     public Quaternion PlayerRotation => playerRotation;
     public bool IsTreadmill => exerciseType == GymExerciseType.Treadmill;
-    public bool IsOccupied => playerOccupant != null || enemyOccupant != null;
-    public bool IsOccupiedByEnemy => enemyOccupant != null;
-    public bool IsAvailableForPlayer => !IsTreadmill || !IsOccupied;
+    public bool IsSquat => exerciseType == GymExerciseType.BarbellSquat;
+    public bool IsOccupied => playerOccupant != null || enemyOccupant != null ||
+        enemySquatReleaseOccupant != null;
+    public bool IsOccupiedByEnemy => enemyOccupant != null || enemySquatReleaseOccupant != null;
+    public bool IsAvailableForPlayer => !IsOccupied;
     public EnemyFighter EnemyOccupant => enemyOccupant;
     // Treadmills use the same authored center/facing correction as the player
     // exercise pose. That keeps an enemy's feet on the belt and its chest
@@ -98,6 +116,65 @@ public class GymExerciseStation : MonoBehaviour
     public Vector3 EnemyPosition => playerPosition;
     public Quaternion EnemyRotation => playerRotation;
     public float CurrentTreadmillSpeed => currentSpeed;
+    public string EquipmentName => equipmentRoot != null ? equipmentRoot.name : string.Empty;
+    public Transform EquipmentRoot => equipmentRoot;
+    public bool IsEnemySquatBarAttached => enemyOccupant != null && sceneBar != null &&
+        sceneBar.IsChildOf(enemyOccupant.transform);
+    public bool HasAuthoredSquatBar => IsSquat && sceneBar != null &&
+        equipmentRoot != null;
+    public bool IsSquatBarOnRack => HasAuthoredSquatBar &&
+        !IsEnemySquatBarAttached && !enemySquatApproachReserved &&
+        (squatBarRackParent == null || sceneBar.parent == squatBarRackParent);
+    public Vector3 EnemySquatBarCenter
+    {
+        get
+        {
+            if (sceneBar == null)
+            {
+                return Vector3.zero;
+            }
+
+            Renderer[] renderers = sceneBar.GetComponentsInChildren<Renderer>(true);
+            return renderers.Length > 0 ? GetCombinedBounds(renderers).center : sceneBar.position;
+        }
+    }
+    public float EnemySquatBarAxisError
+    {
+        get
+        {
+            if (!IsEnemySquatBarAttached)
+            {
+                return float.PositiveInfinity;
+            }
+
+            Vector3 barAxis = Vector3.ProjectOnPlane(GetBarAxis(sceneBar), Vector3.up);
+            Vector3 shoulderAxis = Vector3.ProjectOnPlane(
+                enemyOccupant.transform.right, Vector3.up);
+            if (barAxis.sqrMagnitude < 0.0001f || shoulderAxis.sqrMagnitude < 0.0001f)
+            {
+                return float.PositiveInfinity;
+            }
+
+            return 1f - Mathf.Abs(Vector3.Dot(
+                barAxis.normalized, shoulderAxis.normalized));
+        }
+    }
+    public float EnemySquatBarTiltError
+    {
+        get
+        {
+            if (!IsEnemySquatBarAttached)
+            {
+                return float.PositiveInfinity;
+            }
+
+            Vector3 barAxis = GetBarAxis(sceneBar).normalized;
+            return barAxis.sqrMagnitude > 0.0001f
+                ? Mathf.Abs(Vector3.Dot(barAxis, Vector3.up))
+                : float.PositiveInfinity;
+        }
+    }
+    public Vector3 SquatStagingCenter => IsSquat ? playerPosition : Vector3.zero;
     public float TreadmillSpeed01(float speed)
     {
         return Mathf.InverseLerp(1f, 18f, Mathf.Clamp(speed, 1f, 18f));
@@ -139,13 +216,20 @@ public class GymExerciseStation : MonoBehaviour
             }
 
             Bounds bounds = GetCombinedBounds(renderers);
-            if ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress ||
-                 type == GymExerciseType.BarbellSquat) && FindNearestSceneWeight(candidate, bounds, "barbell") == null)
+            if ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress) &&
+                FindNearestSceneWeight(candidate, bounds, "barbell") == null)
             {
                 continue;
             }
             if (type == GymExerciseType.PreacherCurl && FindNearestSceneWeight(candidate, bounds, "ezbar") == null)
             {
+                continue;
+            }
+            if (type == GymExerciseType.BarbellSquat &&
+                FindNearestSceneWeight(candidate, bounds, "barbell") == null)
+            {
+                // A visitor squat must use the bar already authored in this
+                // cage/smith rack. Never create a substitute bar at runtime.
                 continue;
             }
 
@@ -190,11 +274,10 @@ public class GymExerciseStation : MonoBehaviour
                 continue;
             }
 
-            // An occupied treadmill must disappear from the player's nearby
-            // station query. This removes both the interaction popup and the
-            // possibility of entering the same exercise session while an NPC
-            // is using the belt.
-            if (station.IsTreadmill && station.IsOccupied)
+            // Any occupied station must disappear from the player's nearby
+            // station query. This applies to treadmills as well as the two
+            // squat cages and smith machine used by visitor workouts.
+            if (station.IsOccupied)
             {
                 continue;
             }
@@ -248,6 +331,46 @@ public class GymExerciseStation : MonoBehaviour
         return closest;
     }
 
+    public static GymExerciseStation FindClosestSquat(Vector3 position, float maxDistance)
+    {
+        return FindClosestSquat(position, maxDistance, null);
+    }
+
+    public static GymExerciseStation FindClosestSquat(
+        Vector3 position,
+        float maxDistance,
+        ICollection<GymExerciseStation> excludedStations)
+    {
+        GymExerciseStation closest = null;
+        float bestDistance = maxDistance;
+        for (int i = Stations.Count - 1; i >= 0; i--)
+        {
+            GymExerciseStation station = Stations[i];
+            if (station == null)
+            {
+                Stations.RemoveAt(i);
+                continue;
+            }
+
+            if (!station.IsSquat || station.IsOccupied ||
+                (excludedStations != null && excludedStations.Contains(station)))
+            {
+                continue;
+            }
+
+            Vector3 offset = station.EnemyPosition - position;
+            offset.y = 0f;
+            float candidateDistance = offset.magnitude;
+            if (candidateDistance < bestDistance)
+            {
+                bestDistance = candidateDistance;
+                closest = station;
+            }
+        }
+
+        return closest;
+    }
+
     public void SelectWeight(int totalWeight)
     {
         int[] options = WeightOptions;
@@ -270,7 +393,7 @@ public class GymExerciseStation : MonoBehaviour
 
     public bool TryReserveForPlayer(PlayerMovement player)
     {
-        if (player == null || (IsTreadmill && enemyOccupant != null))
+        if (player == null || enemyOccupant != null || enemySquatReleaseOccupant != null)
         {
             return false;
         }
@@ -286,19 +409,34 @@ public class GymExerciseStation : MonoBehaviour
 
     public bool IsAvailableForEnemy(EnemyFighter enemy)
     {
-        return IsTreadmill && enemy != null &&
-            (enemyOccupant == null || enemyOccupant == enemy) && playerOccupant == null;
+        return (IsTreadmill || IsSquat) && enemy != null &&
+            (enemyOccupant == null || enemyOccupant == enemy) &&
+            enemySquatReleaseOccupant == null && playerOccupant == null;
     }
 
     public bool ContainsEquipmentCollider(Collider collider)
     {
-        return collider != null && equipmentRoot != null &&
-            (collider.transform == equipmentRoot || collider.transform.IsChildOf(equipmentRoot));
+        if (collider == null)
+        {
+            return false;
+        }
+
+        if (equipmentRoot != null &&
+            (collider.transform == equipmentRoot || collider.transform.IsChildOf(equipmentRoot)))
+        {
+            return true;
+        }
+
+        // Some authored cage files keep the rack bar as a sibling root rather
+        // than a child of the cage object. It is still this station's physical
+        // bar, so its collider must not block the visitor's final entry path.
+        return sceneBar != null &&
+            (collider.transform == sceneBar || collider.transform.IsChildOf(sceneBar));
     }
 
     public bool TryBeginEnemyTreadmill(EnemyFighter enemy, float speed)
     {
-        if (!IsAvailableForEnemy(enemy))
+        if (!IsTreadmill || !IsAvailableForEnemy(enemy))
         {
             return false;
         }
@@ -348,6 +486,171 @@ public class GymExerciseStation : MonoBehaviour
         currentSpeed = 0f;
         distance = 0f;
         cardioPhase = 0f;
+    }
+
+    public bool TryBeginEnemySquat(EnemyFighter enemy, Transform traps)
+    {
+        Vector3 target = traps != null && enemy != null
+            ? traps.position + enemy.transform.TransformVector(enemySquatBarOffset)
+            : Vector3.zero;
+        return TryBeginEnemySquat(enemy, traps, target);
+    }
+
+    public bool TryBeginEnemySquat(
+        EnemyFighter enemy,
+        Transform traps,
+        Vector3 barTargetPosition)
+    {
+        if (!IsSquat || !HasAuthoredSquatBar || !IsAvailableForEnemy(enemy) || traps == null)
+        {
+            return false;
+        }
+
+        bool wasReservedForApproach = enemyOccupant == enemy && enemySquatApproachReserved;
+        enemyOccupant = enemy;
+        sessionActive = true;
+        squatMotion = 0f;
+        enemySquatApproachReserved = false;
+        if (!AttachSquatBarToEnemy(enemy, traps, barTargetPosition))
+        {
+            if (wasReservedForApproach)
+            {
+                IgnoreEquipmentCollisions(enemy, false);
+            }
+            enemyOccupant = null;
+            sessionActive = false;
+            return false;
+        }
+
+        IgnoreEquipmentCollisions(enemy, true);
+        Debug.Log($"GYMCHAOS_SQUAT_STATION_START station={EquipmentName} enemy={enemy.Identity}", this);
+        return true;
+    }
+
+    public bool TryReserveEnemySquatApproach(EnemyFighter enemy)
+    {
+        if (!IsSquat || !HasAuthoredSquatBar || !IsAvailableForEnemy(enemy))
+        {
+            return false;
+        }
+
+        enemyOccupant = enemy;
+        sessionActive = true;
+        enemySquatApproachReserved = true;
+        IgnoreEquipmentCollisions(enemy, true);
+        return true;
+    }
+
+    public void CancelEnemySquatApproach(EnemyFighter enemy)
+    {
+        if (enemy == null || enemyOccupant != enemy || !enemySquatApproachReserved)
+        {
+            return;
+        }
+
+        IgnoreEquipmentCollisions(enemy, false);
+        enemyOccupant = null;
+        sessionActive = false;
+        enemySquatApproachReserved = false;
+    }
+
+    public bool TickEnemySquat(EnemyFighter enemy, float motion)
+    {
+        if (!IsSquat || enemyOccupant != enemy || enemy == null || enemy.IsDead)
+        {
+            return false;
+        }
+
+        squatMotion = Mathf.Clamp01(motion);
+        IgnoreEquipmentCollisions(enemy, true);
+        return true;
+    }
+
+    public void EndEnemySquat(EnemyFighter enemy)
+    {
+        if (enemy == null || enemyOccupant != enemy)
+        {
+            return;
+        }
+
+        IgnoreEquipmentCollisions(enemy, false);
+        RestoreSquatBar();
+        enemyOccupant = null;
+        sessionActive = false;
+        squatMotion = 0f;
+        enemySquatApproachReserved = false;
+        Debug.Log(
+            $"GYMCHAOS_SQUAT_STATION_END station={EquipmentName} enemy={enemy.Identity} " +
+            $"barOnRack={IsSquatBarOnRack}",
+            this);
+    }
+
+    public bool BeginEnemySquatRelease(EnemyFighter enemy)
+    {
+        if (!IsSquat || enemy == null || enemyOccupant != null ||
+            enemySquatReleaseOccupant != null ||
+            !IsSquatBarOnRack)
+        {
+            return false;
+        }
+
+        enemySquatReleaseOccupant = enemy;
+        // A visitor finishes at the authored centre of the cage. Keep only
+        // this station's colliders non-blocking during the short physical
+        // walk-out; the visitor is still moved by normal Rigidbody steering,
+        // never teleported through the equipment.
+        IgnoreEquipmentCollisions(enemy, true);
+        return true;
+    }
+
+    public void EndEnemySquatRelease(EnemyFighter enemy)
+    {
+        if (enemySquatReleaseOccupant != enemy)
+        {
+            return;
+        }
+
+        IgnoreEquipmentCollisions(enemy, false);
+        enemySquatReleaseOccupant = null;
+    }
+
+    public void SyncEnemySquatBarPose(
+        EnemyFighter enemy,
+        Transform traps,
+        Vector3 targetBarCenter)
+    {
+        if (!IsSquat || enemy == null || enemyOccupant != enemy ||
+            sceneBar == null || traps == null || !IsEnemySquatBarAttached)
+        {
+            return;
+        }
+
+        if (sceneBar.parent != traps)
+        {
+            sceneBar.SetParent(traps, true);
+        }
+
+        Vector3 desiredBarAxis = Vector3.ProjectOnPlane(enemy.transform.right, Vector3.up);
+        if (desiredBarAxis.sqrMagnitude < 0.0001f)
+        {
+            desiredBarAxis = Vector3.right;
+        }
+        desiredBarAxis.Normalize();
+        AlignAttachedSquatBar(targetBarCenter, desiredBarAxis);
+    }
+
+    private void OnDestroy()
+    {
+        if (enemyOccupant != null)
+        {
+            IgnoreEquipmentCollisions(enemyOccupant, false);
+        }
+        if (enemySquatReleaseOccupant != null)
+        {
+            IgnoreEquipmentCollisions(enemySquatReleaseOccupant, false);
+        }
+        RestoreSquatBar();
+        Stations.Remove(this);
     }
 
     public string GetSessionHud()
@@ -504,15 +807,40 @@ public class GymExerciseStation : MonoBehaviour
         sceneBar = type == GymExerciseType.PreacherCurl ? FindNearestSceneWeight(equipment, bounds, "ezbar") :
                    ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress || type == GymExerciseType.BarbellSquat)
                        ? FindNearestSceneWeight(equipment, bounds, "barbell") : null);
+        if (type == GymExerciseType.BarbellSquat && sceneBar == null)
+        {
+            Debug.LogError(
+                $"Squat station '{equipment.name}' has no authored rack barbell; " +
+                "visitor squats are disabled for this station.",
+                this);
+        }
+        if (type == GymExerciseType.BarbellSquat)
+        {
+            squatBarRackParent = sceneBar != null ? sceneBar.parent : null;
+        }
         Vector3 forward = Vector3.ProjectOnPlane(equipment.forward, Vector3.up).normalized;
         if (forward.sqrMagnitude < 0.01f)
         {
             forward = Vector3.forward;
         }
 
+        Bounds stagingBounds = type == GymExerciseType.BarbellSquat
+            ? GetSquatFrameBounds(equipment, bounds, sceneBar)
+            : bounds;
         float floorY = bounds.min.y + 0.06f;
         Vector3 offset = GetPlayerOffset(type, forward);
-        playerPosition = new Vector3(bounds.center.x + offset.x, floorY, bounds.center.z + offset.z);
+        playerPosition = new Vector3(
+            stagingBounds.center.x + offset.x,
+            floorY,
+            stagingBounds.center.z + offset.z);
+        if (type == GymExerciseType.BarbellSquat)
+        {
+            Debug.Log(
+                $"GYMCHAOS_SQUAT_STAGING_CENTER station={equipment.name} " +
+                $"bar={sceneBar?.name ?? "missing"} " +
+                $"center={playerPosition} frameBoundsCenter={stagingBounds.center}",
+                this);
+        }
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
@@ -568,15 +896,263 @@ public class GymExerciseStation : MonoBehaviour
         ConfigureActualCardioParts(equipment);
     }
 
+    private static Bounds GetSquatFrameBounds(
+        Transform equipment,
+        Bounds fallback,
+        Transform bar)
+    {
+        if (equipment == null)
+        {
+            return fallback;
+        }
+
+        Renderer[] renderers = equipment.GetComponentsInChildren<Renderer>(true);
+        bool hasFrameBounds = false;
+        Bounds frameBounds = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null ||
+                (bar != null && (renderer.transform == bar || renderer.transform.IsChildOf(bar))))
+            {
+                continue;
+            }
+
+            string lowerName = renderer.name.ToLowerInvariant();
+            if (lowerName.Contains("barbell") || lowerName.Contains("plate") ||
+                lowerName.Contains("weight") || lowerName.Contains("collar"))
+            {
+                continue;
+            }
+
+            if (!hasFrameBounds)
+            {
+                frameBounds = renderer.bounds;
+                hasFrameBounds = true;
+            }
+            else
+            {
+                frameBounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        return hasFrameBounds ? frameBounds : fallback;
+    }
+
+    private bool AttachSquatBarToEnemy(
+        EnemyFighter enemy,
+        Transform traps,
+        Vector3 targetBarCenter)
+    {
+        if (sceneBar == null || enemy == null || traps == null)
+        {
+            // The workout and its reservation remain valid without a bar only
+            // for a malformed imported asset. Keep the failure visible instead
+            // of pretending a missing bar is attached.
+            Debug.LogWarning($"Squat station '{EquipmentName}' has no barbell visual.", this);
+            return false;
+        }
+
+        squatBarOriginalParent = sceneBar.parent;
+        squatBarOriginalLocalPosition = sceneBar.localPosition;
+        squatBarOriginalLocalRotation = sceneBar.localRotation;
+        squatBarOriginalLocalScale = sceneBar.localScale;
+        squatBarWasActive = sceneBar.gameObject.activeSelf;
+        squatBarOriginalStateCaptured = true;
+        squatBarBody = sceneBar.GetComponent<Rigidbody>();
+        if (squatBarBody == null)
+        {
+            squatBarBody = sceneBar.GetComponentInChildren<Rigidbody>();
+        }
+        if (squatBarBody != null)
+        {
+            squatBarWasKinematic = squatBarBody.isKinematic;
+            squatBarUsedGravity = squatBarBody.useGravity;
+            squatBarBody.linearVelocity = Vector3.zero;
+            squatBarBody.angularVelocity = Vector3.zero;
+            squatBarBody.isKinematic = true;
+            squatBarBody.useGravity = false;
+        }
+
+        squatBarPickup = sceneBar.GetComponentInParent<PickupItem>();
+        if (squatBarPickup != null)
+        {
+            squatBarWasPickupEnabled = squatBarPickup.enabled;
+            squatBarPickup.enabled = false;
+        }
+
+        Vector3 barAxis = GetBarAxis(sceneBar);
+        Vector3 desiredBarAxis = Vector3.ProjectOnPlane(enemy.transform.right, Vector3.up);
+        if (desiredBarAxis.sqrMagnitude < 0.0001f)
+        {
+            desiredBarAxis = Vector3.right;
+        }
+        desiredBarAxis.Normalize();
+        sceneBar.gameObject.SetActive(true);
+        sceneBar.SetParent(traps, true);
+        AlignAttachedSquatBar(targetBarCenter, desiredBarAxis, barAxis);
+        Debug.Log(
+            $"GYMCHAOS_SQUAT_BAR_ATTACH station={EquipmentName} " +
+            $"enemy={enemy.Identity} target={targetBarCenter} " +
+            $"axisDot={Mathf.Abs(Vector3.Dot(GetBarAxis(sceneBar).normalized, desiredBarAxis)):0.000} " +
+            $"tilt={EnemySquatBarTiltError:0.000}",
+            this);
+        return true;
+    }
+
+    private void AlignAttachedSquatBar(
+        Vector3 targetBarCenter,
+        Vector3 desiredBarAxis,
+        Vector3? precomputedBarAxis = null)
+    {
+        Vector3 barAxis = precomputedBarAxis ?? GetBarAxis(sceneBar);
+        if (barAxis.sqrMagnitude > 0.0001f && desiredBarAxis.sqrMagnitude > 0.0001f)
+        {
+            sceneBar.rotation = Quaternion.FromToRotation(
+                barAxis.normalized, desiredBarAxis.normalized) * sceneBar.rotation;
+        }
+
+        // Align the bar's roll independently from its long axis. This keeps
+        // the shaft horizontal and the plates upright even when an imported
+        // bar prefab starts with a rotated root or the enemy has a tiny
+        // physics tilt.
+        Vector3 currentBarUp = Vector3.ProjectOnPlane(sceneBar.up, desiredBarAxis);
+        Vector3 desiredBarUp = Vector3.ProjectOnPlane(Vector3.up, desiredBarAxis);
+        if (currentBarUp.sqrMagnitude > 0.0001f && desiredBarUp.sqrMagnitude > 0.0001f)
+        {
+            sceneBar.rotation = Quaternion.FromToRotation(
+                currentBarUp, desiredBarUp) * sceneBar.rotation;
+        }
+        sceneBar.position = targetBarCenter;
+        Renderer[] attachedRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
+        if (attachedRenderers.Length > 0)
+        {
+            // Imported bar prefabs do not all use their visual center as the
+            // root pivot. Correct the pivot-independent offset after the
+            // attachment rotation so the bar itself, not its root, sits on
+            // the traps.
+            Vector3 actualCenter = GetCombinedBounds(attachedRenderers).center;
+            sceneBar.position += targetBarCenter - actualCenter;
+        }
+    }
+
+    private void RestoreSquatBar()
+    {
+        if (sceneBar != null && squatBarOriginalStateCaptured)
+        {
+            sceneBar.SetParent(squatBarOriginalParent, false);
+            sceneBar.localPosition = squatBarOriginalLocalPosition;
+            sceneBar.localRotation = squatBarOriginalLocalRotation;
+            sceneBar.localScale = squatBarOriginalLocalScale;
+            sceneBar.gameObject.SetActive(squatBarWasActive);
+        }
+        if (squatBarBody != null)
+        {
+            squatBarBody.isKinematic = squatBarWasKinematic;
+            squatBarBody.useGravity = squatBarUsedGravity;
+            if (!squatBarBody.isKinematic)
+            {
+                squatBarBody.linearVelocity = Vector3.zero;
+                squatBarBody.angularVelocity = Vector3.zero;
+            }
+        }
+        if (squatBarPickup != null)
+        {
+            squatBarPickup.enabled = squatBarWasPickupEnabled;
+        }
+
+        squatBarOriginalParent = null;
+        squatBarOriginalStateCaptured = false;
+        squatBarBody = null;
+        squatBarPickup = null;
+    }
+
+    private static Vector3 GetBarAxis(Transform bar)
+    {
+        Renderer[] renderers = bar != null ? bar.GetComponentsInChildren<Renderer>(true) : new Renderer[0];
+        if (renderers.Length == 0)
+        {
+            return bar != null ? bar.right : Vector3.right;
+        }
+
+        Vector3[] axes = { bar.right.normalized, bar.up.normalized, bar.forward.normalized };
+        float[] projectedExtents = { 0f, 0f, 0f };
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            Renderer renderer = renderers[rendererIndex];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Bounds bounds = renderer.bounds;
+            Vector3 center = bounds.center;
+            Vector3 extents = bounds.extents;
+            for (int corner = 0; corner < 8; corner++)
+            {
+                Vector3 point = center + new Vector3(
+                    (corner & 1) == 0 ? -extents.x : extents.x,
+                    (corner & 2) == 0 ? -extents.y : extents.y,
+                    (corner & 4) == 0 ? -extents.z : extents.z);
+                Vector3 offset = point - center;
+                for (int axisIndex = 0; axisIndex < axes.Length; axisIndex++)
+                {
+                    projectedExtents[axisIndex] = Mathf.Max(
+                        projectedExtents[axisIndex],
+                        Mathf.Abs(Vector3.Dot(offset, axes[axisIndex])));
+                }
+            }
+        }
+
+        int longestAxis = 0;
+        if (projectedExtents[1] > projectedExtents[longestAxis])
+        {
+            longestAxis = 1;
+        }
+        if (projectedExtents[2] > projectedExtents[longestAxis])
+        {
+            longestAxis = 2;
+        }
+        return axes[longestAxis];
+    }
+
     private void IgnoreEquipmentCollisions(EnemyFighter enemy, bool ignore)
     {
-        if (enemy == null || equipmentRoot == null)
+        if (enemy == null)
         {
             return;
         }
 
         Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
-        Collider[] equipmentColliders = equipmentRoot.GetComponentsInChildren<Collider>(true);
+        Collider[] equipmentColliders = equipmentRoot != null
+            ? equipmentRoot.GetComponentsInChildren<Collider>(true)
+            : new Collider[0];
+        SetCollisionIgnore(enemyColliders, equipmentColliders, ignore);
+
+        // Cage and Smith scenes can author the working barbell as a sibling
+        // object instead of a child of the equipment root. It is still this
+        // station's physical bar, so it must be included in the same
+        // reservation/workout collision policy or it can push the visitor
+        // away while they are lining up inside the rack.
+        if (sceneBar != null && (equipmentRoot == null || !sceneBar.IsChildOf(equipmentRoot)))
+        {
+            SetCollisionIgnore(
+                enemyColliders,
+                sceneBar.GetComponentsInChildren<Collider>(true),
+                ignore);
+        }
+    }
+
+    private static void SetCollisionIgnore(
+        Collider[] enemyColliders,
+        Collider[] targetColliders,
+        bool ignore)
+    {
+        if (enemyColliders == null || targetColliders == null)
+        {
+            return;
+        }
+
         for (int enemyIndex = 0; enemyIndex < enemyColliders.Length; enemyIndex++)
         {
             Collider enemyCollider = enemyColliders[enemyIndex];
@@ -585,15 +1161,15 @@ public class GymExerciseStation : MonoBehaviour
                 continue;
             }
 
-            for (int equipmentIndex = 0; equipmentIndex < equipmentColliders.Length; equipmentIndex++)
+            for (int equipmentIndex = 0; equipmentIndex < targetColliders.Length; equipmentIndex++)
             {
-                Collider equipmentCollider = equipmentColliders[equipmentIndex];
-                if (equipmentCollider == null || enemyCollider == equipmentCollider)
+                Collider targetCollider = targetColliders[equipmentIndex];
+                if (targetCollider == null || enemyCollider == targetCollider)
                 {
                     continue;
                 }
 
-                Physics.IgnoreCollision(enemyCollider, equipmentCollider, ignore);
+                Physics.IgnoreCollision(enemyCollider, targetCollider, ignore);
             }
         }
     }
@@ -1106,13 +1682,12 @@ public class GymExerciseStation : MonoBehaviour
             bodies[i].angularVelocity = Vector3.zero;
             bodies[i].useGravity = false;
             bodies[i].isKinematic = true;
-            Object.Destroy(bodies[i]);
+            bodies[i].detectCollisions = false;
         }
         PickupItem[] pickups = clone.GetComponentsInChildren<PickupItem>(true);
         for (int i = 0; i < pickups.Length; i++)
         {
             pickups[i].enabled = false;
-            Object.Destroy(pickups[i]);
         }
     }
 
@@ -1587,7 +2162,10 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.ExerciseBike: return Vector3.zero;
             case GymExerciseType.PreacherCurl: return -forward * 0.95f;
             case GymExerciseType.Dips: return Vector3.zero;
-            case GymExerciseType.BarbellSquat: return -forward * 0.15f;
+            // The visitor target is the centre of the cage/smith footprint.
+            // A forward offset puts the character at the front edge instead
+            // of under the rack, especially on imported cages with deep feet.
+            case GymExerciseType.BarbellSquat: return Vector3.zero;
             case GymExerciseType.LatPulldown: return -forward * 0.3f;
             default: return -forward * 0.55f;
         }

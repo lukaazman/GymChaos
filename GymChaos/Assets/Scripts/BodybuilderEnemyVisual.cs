@@ -620,6 +620,17 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                     new Vector2(-0.065f, 0.49f), new Vector2(-0.065f, 0.25f), new Vector2(-0.075f, 0.02f),
                     new Vector2(0.065f, 0.49f), new Vector2(0.065f, 0.25f), new Vector2(0.075f, 0.02f),
                     0.79f, 0.085f, 0.095f, 0.88f);
+            case BodybuilderIdentity.Zyzz:
+                // The generic profile previously put Zyzz's right knee and
+                // foot forward of the left side. Keep his proportions, but
+                // make the complete leg and arm chains bilateral so the
+                // fallback visual uses the same squat stance as the FBX rig.
+                return new RigProfile(
+                    new Vector2(-0.10f, 0.70f), new Vector2(-0.14f, 0.56f), new Vector2(-0.12f, 0.42f),
+                    new Vector2(0.10f, 0.70f), new Vector2(0.14f, 0.56f), new Vector2(0.12f, 0.42f),
+                    new Vector2(-0.052f, 0.49f), new Vector2(-0.052f, 0.25f), new Vector2(-0.048f, 0.02f),
+                    new Vector2(0.052f, 0.49f), new Vector2(0.052f, 0.25f), new Vector2(0.048f, 0.02f),
+                    0.79f, 0.085f, 0.095f, 0.88f);
             case BodybuilderIdentity.Ronnie:
                 return new RigProfile(
                     new Vector2(-0.13f, 0.70f), new Vector2(-0.18f, 0.57f), new Vector2(-0.14f, 0.43f),
@@ -650,12 +661,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                     0.79f, 0.085f, 0.095f, 0.78f);
             default:
                 return new RigProfile(
-                    new Vector2(-0.10f, 0.70f), new Vector2(-0.14f, 0.55f), new Vector2(-0.13f, 0.40f),
-                    new Vector2(0.10f, 0.70f), new Vector2(0.13f, 0.58f), new Vector2(0.07f, 0.43f),
-                    new Vector2(-0.045f, 0.49f), new Vector2(-0.04f, 0.25f), new Vector2(0.00f, 0.02f),
-                    new Vector2(0.045f, 0.49f), new Vector2(0.06f, 0.25f), new Vector2(0.075f, 0.02f),
+                    new Vector2(-0.10f, 0.70f), new Vector2(-0.14f, 0.56f), new Vector2(-0.12f, 0.42f),
+                    new Vector2(0.10f, 0.70f), new Vector2(0.14f, 0.56f), new Vector2(0.12f, 0.42f),
+                    new Vector2(-0.05f, 0.49f), new Vector2(-0.05f, 0.25f), new Vector2(-0.045f, 0.02f),
+                    new Vector2(0.05f, 0.49f), new Vector2(0.05f, 0.25f), new Vector2(0.045f, 0.02f),
                     0.79f, 0.08f, 0.10f, 0.87f, -0.085f, 0.08f,
-                    0f, -0.025f, -0.08f, 0f, 0.08f, 0.15f);
+                    0f, -0.025f, -0.08f, 0f, 0.025f, 0.08f);
         }
     }
 

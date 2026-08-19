@@ -145,8 +145,36 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         lastMotionState = shouldMove ? MotionState.Running : MotionState.Idle;
     }
 
+    public void PrepareForWorkoutPose()
+    {
+        if (sourceModel == null || pairs == null)
+        {
+            return;
+        }
+
+        // A workout controller needs a stable imported rest reference. Do not
+        // let the current frame of Run or the looping Idle clip become the
+        // base rotations for the IK solve; that makes the arm branch depend
+        // on which frame the visitor happened to reach the rack.
+        moving = false;
+        flying = false;
+        celebrating = false;
+        attackTime = -1f;
+        punchContactSent = false;
+        lastMotionState = MotionState.Idle;
+        RestoreTargetRest();
+    }
+
     public void SetFlying(bool shouldFly)
     {
+        // Flight does not sample the punch clip. Cancel an unfinished punch
+        // when the fighter leaves the ground so its attack timer cannot freeze
+        // forever and block the next grounded attack.
+        if (shouldFly && attackTime >= 0f)
+        {
+            attackTime = -1f;
+            punchContactSent = false;
+        }
         if (shouldFly && !flying)
         {
             flightTime = 0f;
@@ -157,6 +185,18 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         if (flying)
         {
             moving = false;
+        }
+    }
+
+    public void CancelPunch()
+    {
+        attackTime = -1f;
+        punchContactSent = false;
+        hasPunchTarget = false;
+        if (lastMotionState == MotionState.Punching)
+        {
+            lastMotionState = flying ? MotionState.Flying :
+                moving ? MotionState.Running : MotionState.Idle;
         }
     }
 

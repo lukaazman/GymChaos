@@ -169,10 +169,18 @@ public class GymArenaBootstrap : MonoBehaviour
         GymExerciseStation.CreateForScene();
         SpawnNeutralReceptionNpc();
         SpawnEnemies();
+        GymVisitorDirector.CreateForScene(player);
     }
 
     private bool ShouldIgnoreRenderer(Transform target)
     {
+        if (target.GetComponentInParent<GymDoorway>() != null)
+        {
+            // Door panels and trim are controlled by GymDoorway. The wall
+            // segments around the opening carry the real static colliders.
+            return true;
+        }
+
         string lowerName = target.name.ToLowerInvariant();
         for (int i = 0; i < StaticNameBlocks.Length; i++)
         {

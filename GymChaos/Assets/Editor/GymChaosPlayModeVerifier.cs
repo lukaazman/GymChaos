@@ -21,6 +21,7 @@ public static class GymChaosPlayModeVerifier
     private static bool punchCaptured;
     private static bool pushCaptured;
     private static bool throwCaptured;
+    private static bool visitorSimulationSuspended;
     private static bool gokuFlightVerificationStarted;
     private static bool gokuFlightVerified;
     private static bool gokuRunBandLogged;
@@ -61,6 +62,7 @@ public static class GymChaosPlayModeVerifier
         punchCaptured = false;
         pushCaptured = false;
         throwCaptured = false;
+        visitorSimulationSuspended = false;
         gokuFlightVerificationStarted = false;
         gokuFlightVerified = false;
         gokuRunBandLogged = false;
@@ -117,6 +119,16 @@ public static class GymChaosPlayModeVerifier
         {
             double elapsed = EditorApplication.timeSinceStartup - enteredPlayTime;
             PlayerMovement player = UnityEngine.Object.FindFirstObjectByType<PlayerMovement>();
+            if (!visitorSimulationSuspended)
+            {
+                GymVisitorDirector visitorDirector =
+                    UnityEngine.Object.FindFirstObjectByType<GymVisitorDirector>();
+                if (visitorDirector != null)
+                {
+                    visitorDirector.SuspendVisitorSimulationForVerification();
+                    visitorSimulationSuspended = true;
+                }
+            }
             PlanarGymMirror mirror = UnityEngine.Object.FindFirstObjectByType<PlanarGymMirror>();
             if (player == null || player.playerCamera == null || mirror == null)
             {
@@ -343,12 +355,12 @@ public static class GymChaosPlayModeVerifier
 
             if (attackStage == 8)
             {
-                if (gokuForVerification != null && !gokuForVerification.IsFlying &&
+                if (gokuForVerification != null && gokuForVerification.IsGokuGrounded &&
                     gokuForVerification.AnimationState == MixamoScanRetargetAnimator.MotionState.Punching)
                 {
                     Debug.Log(
                         $"GYMCHAOS_GOKU_PUNCH_OK state={gokuForVerification.AnimationState} " +
-                        $"flying={gokuForVerification.IsFlying}");
+                        $"flying={gokuForVerification.IsFlying} grounded={gokuForVerification.IsGokuGrounded}");
                     BeginEnemyContactVerification(player);
                     attackStage = 9;
                     return;

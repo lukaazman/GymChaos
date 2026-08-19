@@ -24,6 +24,7 @@ public static class GymChaosEnemyBehaviorVerifier
     private static double treadmillDeadline;
     private static double ronnieMismatchSince;
     private static bool ronnieDirectAggroTested;
+    private static bool visitorSimulationSuspended;
     private static EnemyFighter aggressionTarget;
     private static EnemyFighter treadmillUser;
     private static GymExerciseStation treadmillStation;
@@ -40,6 +41,9 @@ public static class GymChaosEnemyBehaviorVerifier
         new HashSet<BodybuilderIdentity>();
     private static readonly Dictionary<EnemyFighter, Vector3> startupPositions =
         new Dictionary<EnemyFighter, Vector3>();
+    private static readonly Dictionary<EnemyFighter, MixamoScanRetargetAnimator.MotionState>
+        previousRoamAnimationStates =
+        new Dictionary<EnemyFighter, MixamoScanRetargetAnimator.MotionState>();
 
     static GymChaosEnemyBehaviorVerifier()
     {
@@ -80,6 +84,7 @@ public static class GymChaosEnemyBehaviorVerifier
         treadmillDeadline = 0d;
         ronnieMismatchSince = -1d;
         ronnieDirectAggroTested = false;
+        visitorSimulationSuspended = false;
         aggressionTarget = null;
         treadmillUser = null;
         treadmillStation = null;
@@ -90,6 +95,7 @@ public static class GymChaosEnemyBehaviorVerifier
         earlyIdleIdentities.Clear();
         earlyMovedIdentities.Clear();
         startupPositions.Clear();
+        previousRoamAnimationStates.Clear();
     }
 
     private static void ResumeAfterDomainReload()
@@ -130,6 +136,17 @@ public static class GymChaosEnemyBehaviorVerifier
             player = UnityEngine.Object.FindFirstObjectByType<PlayerMovement>();
             EnemyFighter[] fighters =
                 UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+            if (!visitorSimulationSuspended)
+            {
+                GymVisitorDirector visitorDirector =
+                    UnityEngine.Object.FindFirstObjectByType<GymVisitorDirector>();
+                if (visitorDirector != null)
+                {
+                    visitorDirector.SuspendVisitorSimulationForVerification();
+                    visitorSimulationSuspended = true;
+                    fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+                }
+            }
             if (player == null || CountCombatFighters(fighters) < 6)
             {
                 if (elapsed > 25d)
@@ -328,6 +345,19 @@ public static class GymChaosEnemyBehaviorVerifier
         for (int i = 0; i < combatFighters.Count; i++)
         {
             EnemyFighter fighter = combatFighters[i];
+            MixamoScanRetargetAnimator.MotionState currentState = fighter.AnimationState;
+            if (currentState == MixamoScanRetargetAnimator.MotionState.Idle &&
+                previousRoamAnimationStates.TryGetValue(
+                    fighter, out MixamoScanRetargetAnimator.MotionState previousState) &&
+                previousState == MixamoScanRetargetAnimator.MotionState.Running &&
+                fighter.IsRoaming && fighter.CurrentRoamRouteRemaining > 0 &&
+                fighter.CurrentRoamBlockedTime < 0.2f)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} switched Run->Idle mid-route without " +
+                    $"a direction change: routeRemaining={fighter.CurrentRoamRouteRemaining}.");
+            }
+            previousRoamAnimationStates[fighter] = currentState;
             maximumObservedBlockedTime = Mathf.Max(
                 maximumObservedBlockedTime, fighter.CurrentRoamBlockedTime);
             if (fighter.AnimationState == MixamoScanRetargetAnimator.MotionState.Idle)
@@ -364,6 +394,18 @@ public static class GymChaosEnemyBehaviorVerifier
         if (ronnie == null)
         {
             throw new InvalidOperationException("Ronnie was not found in the behavior verification scene.");
+        }
+
+        if (!ronnie.IsAggressive && (ronnie.IsOnTreadmill ||
+            (!string.IsNullOrEmpty(ronnie.CurrentRoamInterestLabel) &&
+             (ronnie.CurrentRoamInterestLabel.IndexOf("smith", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+              ronnie.CurrentRoamInterestLabel.IndexOf("squat", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+              ronnie.CurrentRoamInterestLabel.IndexOf("cage", System.StringComparison.OrdinalIgnoreCase) >= 0))))
+        {
+            throw new InvalidOperationException(
+                $"Ronnie selected gym equipment during neutral patrol: " +
+                $"interest={ronnie.CurrentRoamInterestLabel ?? "none"} " +
+                $"onTreadmill={ronnie.IsOnTreadmill}.");
         }
 
         if (!ronnieDirectAggroTested && elapsed >= 4.4d)
@@ -457,6 +499,19 @@ public static class GymChaosEnemyBehaviorVerifier
             throw new InvalidOperationException(
                 "Treadmill occupancy did not block the player and other enemies.");
         }
+
+        // Occupancy is reserved at the beginning of the authored entry
+        // interpolation. Do not validate the final facing until the fighter
+        // has actually arrived at the belt; sampling this frame used to make
+        // a correct entry fail while the body was still travelling there.
+        float treadmillPositionError = Vector3.ProjectOnPlane(
+            treadmillUser.transform.position - treadmillStation.EnemyPosition,
+            Vector3.up).magnitude;
+        if (treadmillPositionError > 0.18f)
+        {
+            return;
+        }
+
         if (Quaternion.Angle(
                 treadmillUser.transform.rotation, treadmillStation.EnemyRotation) > 5f)
         {
