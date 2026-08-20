@@ -1,5 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
+#if UNITY_WEBGL && !UNITY_EDITOR
+using System.Runtime.InteropServices;
+#endif
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -104,6 +107,11 @@ public class PlayerMovement : MonoBehaviour
 
     private const float PullUpMountDuration = 0.82f;
     private const float PullUpMountJumpHeight = 0.38f;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+    [DllImport("__Internal")]
+    private static extern int GymChaosDocumentHasFocus();
+#endif
 
     public bool IsExercising => activeExerciseStation != null ||
         pendingWeightStation != null || pullUpMountTransitionActive;
@@ -1217,8 +1225,17 @@ public class PlayerMovement : MonoBehaviour
         return true;
     }
 
-    private bool CanRequestCursorLock =>
-        Application.platform != RuntimePlatform.WebGLPlayer || Application.isFocused;
+    private bool CanRequestCursorLock
+    {
+        get
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return GymChaosDocumentHasFocus() != 0;
+#else
+            return Application.platform != RuntimePlatform.WebGLPlayer || Application.isFocused;
+#endif
+        }
+    }
 
     private bool IsCursorCaptured => Cursor.lockState == CursorLockMode.Locked && !Cursor.visible;
 
