@@ -111,6 +111,15 @@ public class PlayerMovement : MonoBehaviour
 #if UNITY_WEBGL && !UNITY_EDITOR
     [DllImport("__Internal")]
     private static extern int GymChaosDocumentHasFocus();
+
+    [DllImport("__Internal")]
+    private static extern void GymChaosInstallPointerLock();
+
+    [DllImport("__Internal")]
+    private static extern void GymChaosExitPointerLock();
+
+    [DllImport("__Internal")]
+    private static extern int GymChaosIsPointerLocked();
 #endif
 
     public bool IsExercising => activeExerciseStation != null ||
@@ -147,6 +156,12 @@ public class PlayerMovement : MonoBehaviour
         CreateCarryAnchor();
         handRig = PlayerHandRig.Create(playerCamera.transform);
         GymArenaBootstrap.EnsureExists(this);
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // Install the request handler before the first click. The browser
+        // must receive requestPointerLock directly from that DOM gesture;
+        // Unity's deferred Cursor.lockState call is too late for some pages.
+        GymChaosInstallPointerLock();
+#endif
         // Browsers only permit pointer lock from a focused user gesture.
         // Do not request it during WebGL startup; TryCaptureCursor() retries
         // the lock from the first real click on the game canvas instead.
@@ -1173,12 +1188,22 @@ public class PlayerMovement : MonoBehaviour
 
         if (!locked)
         {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            GymChaosExitPointerLock();
+#else
             Cursor.lockState = CursorLockMode.None;
+#endif
             Cursor.visible = true;
             showCursor = true;
             return;
         }
 
+#if UNITY_WEBGL && !UNITY_EDITOR
+        bool webGlCaptured = IsCursorCaptured;
+        Cursor.visible = !webGlCaptured;
+        showCursor = !webGlCaptured;
+        return;
+#else
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
         bool captured = IsCursorCaptured;
@@ -1187,12 +1212,14 @@ public class PlayerMovement : MonoBehaviour
         {
             Cursor.visible = true;
         }
+#endif
     }
 
     private bool TryCaptureCursor()
     {
         if (IsCursorCaptured)
         {
+            suppressGameplayInputThisFrame = showCursor;
             showCursor = false;
             Cursor.visible = false;
             return false;
@@ -1214,6 +1241,15 @@ public class PlayerMovement : MonoBehaviour
         }
 
         suppressGameplayInputThisFrame = true;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // The canvas mousedown handler has already requested pointer lock in
+        // the browser's trusted gesture. Do not call Cursor.lockState here:
+        // Unity defers that request and can raise WrongDocumentError.
+        bool webGlCaptured = IsCursorCaptured;
+        Cursor.visible = !webGlCaptured;
+        showCursor = !webGlCaptured;
+        return true;
+#else
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
         bool captured = IsCursorCaptured;
@@ -1223,6 +1259,7 @@ public class PlayerMovement : MonoBehaviour
             Cursor.visible = true;
         }
         return true;
+#endif
     }
 
     private bool CanRequestCursorLock
@@ -1237,7 +1274,17 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
-    private bool IsCursorCaptured => Cursor.lockState == CursorLockMode.Locked && !Cursor.visible;
+    private bool IsCursorCaptured
+    {
+        get
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return GymChaosIsPointerLocked() != 0;
+#else
+            return Cursor.lockState == CursorLockMode.Locked && !Cursor.visible;
+#endif
+        }
+    }
 
     private void OnApplicationFocus(bool hasFocus)
     {
