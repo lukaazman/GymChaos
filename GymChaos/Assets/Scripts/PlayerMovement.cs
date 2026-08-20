@@ -139,7 +139,17 @@ public class PlayerMovement : MonoBehaviour
         CreateCarryAnchor();
         handRig = PlayerHandRig.Create(playerCamera.transform);
         GymArenaBootstrap.EnsureExists(this);
-        LockCursor(true);
+        // Browsers only permit pointer lock from a focused user gesture.
+        // Do not request it during WebGL startup; TryCaptureCursor() retries
+        // the lock from the first real click on the game canvas instead.
+        if (Application.platform == RuntimePlatform.WebGLPlayer)
+        {
+            LockCursor(false);
+        }
+        else
+        {
+            LockCursor(true);
+        }
     }
 
     private void Update()
