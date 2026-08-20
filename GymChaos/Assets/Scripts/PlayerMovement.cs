@@ -1158,6 +1158,11 @@ public class PlayerMovement : MonoBehaviour
 
     private void LockCursor(bool locked)
     {
+        if (locked && !CanRequestCursorLock)
+        {
+            locked = false;
+        }
+
         if (!locked)
         {
             Cursor.lockState = CursorLockMode.None;
@@ -1192,6 +1197,14 @@ public class PlayerMovement : MonoBehaviour
             return false;
         }
 
+        // A browser click can reach Unity just before the WebGL document has
+        // reported focus. Avoid issuing requestPointerLock in that window;
+        // the next click will retry without raising WrongDocumentError.
+        if (!CanRequestCursorLock)
+        {
+            return false;
+        }
+
         suppressGameplayInputThisFrame = true;
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
@@ -1203,6 +1216,9 @@ public class PlayerMovement : MonoBehaviour
         }
         return true;
     }
+
+    private bool CanRequestCursorLock =>
+        Application.platform != RuntimePlatform.WebGLPlayer || Application.isFocused;
 
     private bool IsCursorCaptured => Cursor.lockState == CursorLockMode.Locked && !Cursor.visible;
 
