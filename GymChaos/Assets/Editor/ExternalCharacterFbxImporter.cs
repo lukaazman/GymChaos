@@ -4,15 +4,18 @@ using UnityEditor;
 public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
 {
     private const string CharacterRoot = "Assets/Resources/Characters/";
+    private const string EquipmentRoot = "Assets/Assets/";
 
     public override uint GetVersion()
     {
-        return 3;
+        return 4;
     }
 
     private void OnPreprocessModel()
     {
-        if (!assetPath.StartsWith(CharacterRoot, StringComparison.OrdinalIgnoreCase) ||
+        bool isCharacter = assetPath.StartsWith(CharacterRoot, StringComparison.OrdinalIgnoreCase);
+        bool isEquipment = assetPath.StartsWith(EquipmentRoot, StringComparison.OrdinalIgnoreCase);
+        if ((!isCharacter && !isEquipment) ||
             !assetPath.EndsWith(".fbx", StringComparison.OrdinalIgnoreCase))
         {
             return;
@@ -24,6 +27,15 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
         importer.weldVertices = false;
         importer.optimizeMeshPolygons = false;
         importer.optimizeMeshVertices = false;
+
+        // Runtime pickup/static colliders are generated from these meshes.
+        // Keep the source geometry readable so WebGL does not emit a
+        // MeshCollider collision-data error when the bootstrap attaches them.
+        if (!isCharacter)
+        {
+            return;
+        }
+
         importer.importNormals = ModelImporterNormals.Import;
         importer.importTangents = ModelImporterTangents.None;
         importer.importBlendShapes = false;

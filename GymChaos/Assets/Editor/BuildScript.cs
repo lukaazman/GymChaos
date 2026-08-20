@@ -21,14 +21,24 @@ public static class BuildScript
 
         Directory.CreateDirectory(outputPath);
 
-        string streamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets", "BodyBuilders");
-        string[] requiredModels = { "jay.glb", "goku.glb" };
-        for (int i = 0; i < requiredModels.Length; i++)
+        string streamingAssetsRoot = Path.Combine(Application.dataPath, "StreamingAssets");
+        string[] requiredStreamingFiles =
         {
-            string modelPath = Path.Combine(streamingAssetsPath, requiredModels[i]);
-            if (!File.Exists(modelPath))
+            Path.Combine("BodyBuilders", "arnold.glb"),
+            Path.Combine("BodyBuilders", "cbum.glb"),
+            Path.Combine("BodyBuilders", "goku.glb"),
+            Path.Combine("BodyBuilders", "jay.glb"),
+            Path.Combine("BodyBuilders", "manwithsuit1.glb"),
+            Path.Combine("BodyBuilders", "ronnie.glb"),
+            Path.Combine("BodyBuilders", "zyzz.glb"),
+            Path.Combine("Videos", "manwithsuit.mp4")
+        };
+        for (int i = 0; i < requiredStreamingFiles.Length; i++)
+        {
+            string requiredPath = Path.Combine(streamingAssetsRoot, requiredStreamingFiles[i]);
+            if (!File.Exists(requiredPath))
             {
-                throw new BuildFailedException($"Required runtime model is missing: {modelPath}");
+                throw new BuildFailedException($"Required runtime asset is missing: {requiredPath}");
             }
         }
 
@@ -48,6 +58,6 @@ public static class BuildScript
         }
 
         File.WriteAllText(Path.Combine(outputPath, "gymchaos-runtime.json"),
-            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\",\"jay-cutler\",\"goku-flight\"]}");
+            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\",\"pointer-lock\",\"day-night\",\"tv-screen\",\"webgl-colliders\",\"jay-cutler\",\"goku-flight\"]}");
     }
 }

@@ -1159,6 +1159,15 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         {
             shader = Shader.Find("Universal Render Pipeline/Unlit");
         }
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Lit");
+        }
+        if (shader == null)
+        {
+            Debug.LogError($"No runtime body shader is available for {identity}; keeping the renderer unassigned.");
+            return null;
+        }
 
         Material material = new Material(shader) { name = identity + " Body Material" };
         if (gltf.images != null && gltf.images.Length > 0)

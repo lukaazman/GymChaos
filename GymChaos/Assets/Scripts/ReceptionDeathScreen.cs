@@ -96,10 +96,24 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         MeshFilter meshFilter = screen.AddComponent<MeshFilter>();
         meshFilter.sharedMesh = CreateFullUvScreenMesh();
         Renderer screenRenderer = screen.AddComponent<MeshRenderer>();
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        Shader shader = Shader.Find("GymChaos/BodybuilderUnlit");
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Unlit");
+        }
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Lit");
+        }
         if (shader == null)
         {
             shader = Shader.Find("Unlit/Texture");
+        }
+        if (shader == null)
+        {
+            Debug.LogError("Reception screen could not find a player-build shader; skipping TV creation.");
+            Destroy(screen);
+            return null;
         }
         Material material = new Material(shader) { name = "Reception Screen Material" };
         material.color = Color.black;
@@ -111,6 +125,7 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         controller.watchedFighter = fighter;
         controller.screenMaterial = material;
         controller.ConfigurePlayback(screenRenderer);
+        Debug.Log($"GYMCHAOS_RECEPTION_SCREEN_OK shader={shader.name}", controller);
         return controller;
     }
 

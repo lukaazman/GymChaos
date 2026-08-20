@@ -464,6 +464,15 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         {
             shader = Shader.Find("Universal Render Pipeline/Unlit");
         }
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/Lit");
+        }
+        if (shader == null)
+        {
+            Debug.LogError($"No runtime body shader is available for {identity}; keeping imported materials.");
+            return;
+        }
         Texture2D originalTexture = Resources.Load<Texture2D>(
             "Characters/Textures/" + GetTextureResourceName(identity));
 

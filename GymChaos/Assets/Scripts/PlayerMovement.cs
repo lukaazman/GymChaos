@@ -73,6 +73,7 @@ public class PlayerMovement : MonoBehaviour
     private float heldBarShoveTimer;
     private Vector3 heldItemShoveDirection = Vector3.zero;
     private bool showCursor;
+    private bool suppressGameplayInputThisFrame;
     private bool useRightHandNext = true;
     private float crouchAmount;
     private Vector3 cameraBaseLocalPosition;
@@ -148,6 +149,17 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        suppressGameplayInputThisFrame = false;
+
+        // Browsers reject the initial lock request because Start is not a
+        // user gesture. Wait for a real click, then retry the same request so
+        // the deployed build behaves like the editor without stealing the
+        // click as an attack or shove.
+        if (!IsDead && pendingWeightStation == null && TryCaptureCursor())
+        {
+            return;
+        }
+
         if (IsDead)
         {
             HandleCursorToggle();
@@ -161,6 +173,11 @@ public class PlayerMovement : MonoBehaviour
         }
 
         HandleCursorToggle();
+
+        if (showCursor)
+        {
+            return;
+        }
 
         if (pullUpMountTransitionActive)
         {
@@ -351,7 +368,7 @@ public class PlayerMovement : MonoBehaviour
 
     private void HandleLook()
     {
-        if (showCursor)
+        if (showCursor || !IsCursorCaptured)
         {
             return;
         }
@@ -366,6 +383,11 @@ public class PlayerMovement : MonoBehaviour
 
     private void HandleCombatAndInteraction()
     {
+        if (suppressGameplayInputThisFrame)
+        {
+            return;
+        }
+
         if (ReadInteractPressed())
         {
             if (heldItem != null)
@@ -730,11 +752,18 @@ public class PlayerMovement : MonoBehaviour
 
     private static bool IsTightEnemySurface(EnemyFighter enemy, Collider hitCollider)
     {
-        if (enemy == null || hitCollider == null || enemy.GetComponent<EnemyMeshHitboxRig>() == null)
+        if (enemy == null || hitCollider == null)
         {
             return false;
         }
-        return hitCollider.transform != enemy.transform;
+
+        // The animated compound rig is the preferred contact surface, but a
+        // WebGL build can briefly receive the broad root capsule while the
+        // external character finishes loading. Accept every collider owned by
+        // the enemy, including that root fallback, so punches and shoves are
+        // never silently discarded during that handoff.
+        return hitCollider.transform == enemy.transform ||
+               hitCollider.transform.IsChildOf(enemy.transform);
     }
 
     private Vector3 GetPlateThrowImpulse(Vector3 direction, float plateMass)
@@ -869,9 +898,9 @@ public class PlayerMovement : MonoBehaviour
 
     private void HandleCursorToggle()
     {
-        if (ReadPauseToggle())
+        if (ReadPauseToggle() && IsCursorCaptured)
         {
-            LockCursor(showCursor);
+            LockCursor(false);
         }
     }
 
@@ -1119,9 +1148,68 @@ public class PlayerMovement : MonoBehaviour
 
     private void LockCursor(bool locked)
     {
-        showCursor = !locked;
-        Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
-        Cursor.visible = !locked;
+        if (!locked)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            showCursor = true;
+            return;
+        }
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+        bool captured = IsCursorCaptured;
+        showCursor = !captured;
+        if (!captured)
+        {
+            Cursor.visible = true;
+        }
+    }
+
+    private bool TryCaptureCursor()
+    {
+        if (IsCursorCaptured)
+        {
+            showCursor = false;
+            Cursor.visible = false;
+            return false;
+        }
+
+        showCursor = true;
+        Cursor.visible = true;
+        if (!ReadPointerCapturePressed())
+        {
+            return false;
+        }
+
+        suppressGameplayInputThisFrame = true;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+        bool captured = IsCursorCaptured;
+        showCursor = !captured;
+        if (!captured)
+        {
+            Cursor.visible = true;
+        }
+        return true;
+    }
+
+    private bool IsCursorCaptured => Cursor.lockState == CursorLockMode.Locked && !Cursor.visible;
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (!hasFocus)
+        {
+            LockCursor(false);
+        }
+    }
+
+    private void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus)
+        {
+            LockCursor(false);
+        }
     }
 
     private void OnGUI()
@@ -1166,6 +1254,21 @@ public class PlayerMovement : MonoBehaviour
                      $"LMB punch / throw   RMB shove   E pick up / drop   F exercise   Shift sprint   C crouch   Space jump\n" +
                      $"{heldText}";
         GUI.Label(new Rect(16f, 16f, 940f, 60f), hud, hudStyle);
+
+        if (!IsCursorCaptured)
+        {
+            float width = Mathf.Min(520f, Screen.width - 32f);
+            Rect captureRect = new Rect((Screen.width - width) * 0.5f, Screen.height * 0.5f - 38f, width, 76f);
+            GUI.Box(captureRect, string.Empty);
+            GUIStyle captureStyle = new GUIStyle(hudStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 18,
+                fontStyle = FontStyle.Bold
+            };
+            captureStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
+            GUI.Label(captureRect, "CLICK THE GAME TO LOOK AROUND\nESC releases the cursor", captureStyle);
+        }
 
         if (nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer)
         {
@@ -1340,6 +1443,17 @@ public class PlayerMovement : MonoBehaviour
         return Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
 #else
         return Input.GetMouseButtonDown(0);
+#endif
+    }
+
+    private bool ReadPointerCapturePressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Mouse.current != null &&
+               (Mouse.current.leftButton.wasPressedThisFrame ||
+                Mouse.current.rightButton.wasPressedThisFrame);
+#else
+        return Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1);
 #endif
     }
 

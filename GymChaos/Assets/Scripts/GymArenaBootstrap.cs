@@ -34,6 +34,8 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private PlayerMovement player;
 
+    private static bool IsWebGlPlayer => Application.platform == RuntimePlatform.WebGLPlayer;
+
     public static void EnsureExists(PlayerMovement player)
     {
         if (instance != null)
@@ -48,6 +50,7 @@ public class GymArenaBootstrap : MonoBehaviour
 
     public void EnsureSceneColliders()
     {
+        int repairedWebGlMeshColliders = RepairUnreadableWebGlMeshColliders();
         Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
         HashSet<Transform> processedRenderers = new HashSet<Transform>();
 
@@ -108,6 +111,13 @@ public class GymArenaBootstrap : MonoBehaviour
 
             EnsureStaticCollider(target.gameObject, renderer);
         }
+
+        if (IsWebGlPlayer)
+        {
+            Debug.Log(
+                $"GYMCHAOS_WEBGL_COLLIDERS_OK repaired={repairedWebGlMeshColliders}",
+                this);
+        }
     }
 
     public void EnsureWeightGameplayObjects()
@@ -135,10 +145,23 @@ public class GymArenaBootstrap : MonoBehaviour
             for (int i = 0; i < colliders.Length; i++)
             {
                 MeshCollider meshCollider = colliders[i] as MeshCollider;
-                if (meshCollider != null)
+                if (meshCollider != null && meshCollider.enabled)
                 {
                     meshCollider.convex = true;
                 }
+            }
+
+            List<Collider> enabledColliders = new List<Collider>();
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                if (colliders[i] != null && colliders[i].enabled)
+                {
+                    enabledColliders.Add(colliders[i]);
+                }
+            }
+            if (enabledColliders.Count == 0)
+            {
+                continue;
             }
 
             PickupItem pickup = item.GetComponent<PickupItem>();
@@ -147,7 +170,7 @@ public class GymArenaBootstrap : MonoBehaviour
                 pickup = item.AddComponent<PickupItem>();
             }
 
-            pickup.Configure(body, entry.Value, colliders);
+            pickup.Configure(body, entry.Value, enabledColliders.ToArray());
             if (spatiallyMountedWeightRoots.Contains(entry.Key))
             {
                 body.linearVelocity = Vector3.zero;
@@ -381,13 +404,13 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void EnsureStaticCollider(GameObject target, Renderer renderer)
     {
-        if (target.GetComponent<Collider>() != null)
+        if (HasEnabledCollider(target))
         {
             return;
         }
 
         MeshFilter meshFilter = target.GetComponent<MeshFilter>();
-        if (meshFilter != null && meshFilter.sharedMesh != null)
+        if (!IsWebGlPlayer && meshFilter != null && meshFilter.sharedMesh != null)
         {
             MeshCollider meshCollider = target.AddComponent<MeshCollider>();
             meshCollider.sharedMesh = meshFilter.sharedMesh;
@@ -411,13 +434,13 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             GameObject renderObject = renderer.gameObject;
-            if (renderObject.GetComponent<Collider>() != null)
+            if (HasEnabledCollider(renderObject))
             {
                 continue;
             }
 
             MeshFilter meshFilter = renderObject.GetComponent<MeshFilter>();
-            if (meshFilter != null && meshFilter.sharedMesh != null)
+            if (!IsWebGlPlayer && meshFilter != null && meshFilter.sharedMesh != null)
             {
                 MeshCollider meshCollider = renderObject.AddComponent<MeshCollider>();
                 meshCollider.sharedMesh = meshFilter.sharedMesh;
@@ -427,6 +450,66 @@ public class GymArenaBootstrap : MonoBehaviour
 
             AddFallbackCollider(renderObject.transform, renderer, type);
         }
+    }
+
+    private static int RepairUnreadableWebGlMeshColliders()
+    {
+        if (!IsWebGlPlayer)
+        {
+            return 0;
+        }
+
+        MeshCollider[] meshColliders = FindObjectsByType<MeshCollider>(FindObjectsSortMode.None);
+        int repaired = 0;
+        for (int i = 0; i < meshColliders.Length; i++)
+        {
+            MeshCollider meshCollider = meshColliders[i];
+            if (meshCollider == null || meshCollider.sharedMesh == null || meshCollider.sharedMesh.isReadable)
+            {
+                continue;
+            }
+
+            meshCollider.enabled = false;
+            Renderer renderer = meshCollider.GetComponent<Renderer>();
+            if (renderer == null)
+            {
+                renderer = meshCollider.GetComponentInParent<Renderer>();
+            }
+
+            if (renderer != null)
+            {
+                AddBoxFallback(meshCollider.gameObject, renderer);
+            }
+            repaired++;
+        }
+
+        return repaired;
+    }
+
+    private static bool HasEnabledCollider(GameObject target)
+    {
+        Collider[] colliders = target.GetComponents<Collider>();
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] != null && colliders[i].enabled)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void AddBoxFallback(GameObject target, Renderer renderer)
+    {
+        BoxCollider boxCollider = target.GetComponent<BoxCollider>();
+        if (boxCollider == null)
+        {
+            boxCollider = target.AddComponent<BoxCollider>();
+        }
+
+        boxCollider.enabled = true;
+        ApplyRendererBoundsToBox(target.transform, renderer, boxCollider);
     }
 
     private void AddFallbackCollider(Transform target, Renderer renderer, WeightType type)
