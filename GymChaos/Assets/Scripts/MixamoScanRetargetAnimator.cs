@@ -7,6 +7,7 @@ using UnityEngine;
 /// ExternalRiggedCharacterVisual. Only clip rotation deltas are copied to the
 /// visible rig, keeping each scan's T-pose bind/material layout intact.
 /// </summary>
+[DefaultExecutionOrder(900)]
 public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 {
     public enum MotionState
@@ -48,6 +49,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private float attackTime = -1f;
     private bool punchContactSent;
     private bool celebrating;
+    private bool workoutPoseLocked;
     private Vector3 punchDirection = Vector3.forward;
     private Vector3 punchTargetPosition;
     private bool hasPunchTarget;
@@ -64,6 +66,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public bool IsPunchComplete => attackTime >= 0.72f;
     public MotionState CurrentState => lastMotionState;
     public MotionState LastMotionState => lastMotionState;
+    public bool IsWorkoutPoseLocked => workoutPoseLocked;
 
     public bool Configure(BodybuilderIdentity identity, BodybuilderEnemyVisual.Rig bodyRig)
     {
@@ -152,6 +155,14 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             return;
         }
 
+        // GymVisitorAgent locks the rest pose during the physics-side arrival
+        // handoff. Repeated callers in the same frame must not rewrite the
+        // complete visible bone chain again before the squat solver runs.
+        if (workoutPoseLocked)
+        {
+            return;
+        }
+
         // A workout controller needs a stable imported rest reference. Do not
         // let the current frame of Run or the looping Idle clip become the
         // base rotations for the IK solve; that makes the arm branch depend
@@ -162,7 +173,17 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         attackTime = -1f;
         punchContactSent = false;
         lastMotionState = MotionState.Idle;
+        workoutPoseLocked = true;
         RestoreTargetRest();
+    }
+
+    public void ReleaseWorkoutPose()
+    {
+        workoutPoseLocked = false;
+        if (lastMotionState == MotionState.Uninitialized)
+        {
+            lastMotionState = MotionState.Idle;
+        }
     }
 
     public void SetFlying(bool shouldFly)
@@ -277,6 +298,17 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         {
             return;
         }
+
+        if (workoutPoseLocked)
+        {
+            // The squat solver owns the visible rig for this frame and the
+            // whole workout. Do not sample even one idle frame between the
+            // visitor's authored arrival pose and the squat zero pose.
+            RestoreTargetRest();
+            lastMotionState = MotionState.Idle;
+            return;
+        }
+
         RestoreTargetRest();
         if (downed)
         {

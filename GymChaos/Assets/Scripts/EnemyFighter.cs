@@ -75,6 +75,9 @@ public class EnemyFighter : MonoBehaviour
     private bool deathPoseFrozen;
     private bool activeCounted;
     private float floorRootY;
+    private RigidbodyInterpolation visitorPoseInterpolationBeforeSnap;
+    private bool visitorPoseInterpolationOverrideActive;
+    private int visitorPoseSnapFramesRemaining;
     private RoamState roamState;
     private Vector3 roamTarget;
     private bool hasRoamTarget;
@@ -423,6 +426,16 @@ public class EnemyFighter : MonoBehaviour
 
         KeepGroundedRoot();
 
+        if (visitorPoseSnapFramesRemaining > 0)
+        {
+            visitorPoseSnapFramesRemaining--;
+            if (visitorPoseSnapFramesRemaining == 0 && body != null)
+            {
+                body.interpolation = visitorPoseInterpolationBeforeSnap;
+                visitorPoseInterpolationOverrideActive = false;
+            }
+        }
+
         if (visitorAgent != null && visitorAgent.isActiveAndEnabled &&
             visitorAgent.TickPhysics(this))
         {
@@ -670,15 +683,53 @@ public class EnemyFighter : MonoBehaviour
         }
     }
 
-    public void SetVisitorSpawnPose(Vector3 position, Quaternion rotation)
+    public void PrepareVisitorWorkoutPose()
+    {
+        if (externalBodyAnimator == null)
+        {
+            externalBodyAnimator = GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        }
+
+        if (externalBodyAnimator != null && externalBodyAnimator.IsWorkoutPoseLocked)
+        {
+            return;
+        }
+
+        externalBodyAnimator?.PrepareForWorkoutPose();
+    }
+
+    public void ReleaseVisitorWorkoutPose()
+    {
+        if (externalBodyAnimator == null)
+        {
+            externalBodyAnimator = GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        }
+
+        externalBodyAnimator?.ReleaseWorkoutPose();
+    }
+
+    public void SetVisitorSpawnPose(
+        Vector3 position,
+        Quaternion rotation,
+        bool keepInterpolationDisabled = false)
     {
         position.y = ResolveGymFloorY(position.y);
         if (body != null)
         {
+            if (!visitorPoseInterpolationOverrideActive)
+            {
+                visitorPoseInterpolationBeforeSnap = body.interpolation;
+                visitorPoseInterpolationOverrideActive = true;
+            }
+            // A final visitor pose is a deliberate authored snap. Keeping
+            // Interpolate active for that write renders one frame between the
+            // approach pose and the squat pose as a visible microstutter.
+            body.interpolation = RigidbodyInterpolation.None;
             body.position = position;
             body.rotation = rotation;
             body.linearVelocity = Vector3.zero;
             body.angularVelocity = Vector3.zero;
+            visitorPoseSnapFramesRemaining = keepInterpolationDisabled ? 0 : 1;
         }
         else
         {
@@ -687,7 +738,19 @@ public class EnemyFighter : MonoBehaviour
 
         standingRootY = position.y;
         floorRootY = position.y;
-        transform.SetPositionAndRotation(position, rotation);
+    }
+
+    public void RestoreVisitorPoseInterpolation()
+    {
+        if (body == null || !visitorPoseInterpolationOverrideActive)
+        {
+            return;
+        }
+
+        visitorPoseSnapFramesRemaining = 0;
+        body.interpolation = visitorPoseInterpolationBeforeSnap;
+        visitorPoseInterpolationOverrideActive = false;
+        Physics.SyncTransforms();
     }
 
     public bool MoveVisitorTo(Vector3 destination, float speed, bool allowOutsideRoom)
@@ -709,7 +772,13 @@ public class EnemyFighter : MonoBehaviour
         destination.y = standingRootY;
         Vector3 toDestination = Vector3.ProjectOnPlane(destination - body.position, Vector3.up);
         float distance = toDestination.magnitude;
-        if (distance <= 0.34f)
+        // Squat entry immediately switches to a precise authored pose. Keep
+        // the final physical approach tighter so that handoff does not snap
+        // the visitor across the generic 0.34m arrival radius.
+        float arrivalDistance = targetStation != null && targetStation.IsSquat
+            ? 0.008f
+            : 0.34f;
+        if (distance <= arrivalDistance)
         {
             StopMovingPhysicsImmediately();
             SetAnimatedMovement(false);
@@ -734,6 +803,16 @@ public class EnemyFighter : MonoBehaviour
             Mathf.Max(moveForce * 0.55f, 8f) * Time.fixedDeltaTime);
         body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
         Quaternion lookRotation = Quaternion.LookRotation(direction, Vector3.up);
+        if (targetStation != null && targetStation.IsSquat)
+        {
+            // Rotate toward the authored squat-facing direction during the
+            // final approach. This leaves almost no orientation correction
+            // for the atomic handoff when the visitor reaches the station.
+            float alignment = Mathf.SmoothStep(
+                0f, 1f, Mathf.InverseLerp(0.9f, arrivalDistance, distance));
+            lookRotation = Quaternion.Slerp(
+                lookRotation, targetStation.EnemyRotation, alignment);
+        }
         transform.rotation = Quaternion.Slerp(
             transform.rotation, lookRotation, 9f * Time.fixedDeltaTime);
         SetAnimatedMovement(true, Mathf.Clamp01(movementSpeed / Mathf.Max(0.01f, maxSpeed)));
@@ -748,6 +827,8 @@ public class EnemyFighter : MonoBehaviour
 
     public void ResumeVisitorRoaming()
     {
+        ReleaseVisitorWorkoutPose();
+        RestoreVisitorPoseInterpolation();
         if (isDead || isAggressive || isPassive)
         {
             return;

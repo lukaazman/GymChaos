@@ -125,6 +125,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private int repetitions;
     private bool running;
     private bool completed;
+    private bool initialPoseHoldPending;
     private bool warnedMissingBones;
     private float maxHipDrop;
     private float currentHipDrop;
@@ -157,6 +158,10 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private bool hasPreviousRightElbowPose;
     private Vector3 previousLeftElbowDirection;
     private Vector3 previousRightElbowDirection;
+    private bool footSoleCalibrationPrepared;
+    private bool hasCachedMeshFootSoleCalibration;
+    private float cachedLeftFootMeshSoleOffset;
+    private float cachedRightFootMeshSoleOffset;
 
     public bool IsActive => running;
     public bool IsComplete => completed;
@@ -303,17 +308,16 @@ public sealed class SquatWorkoutController : MonoBehaviour
             return false;
         }
 
-        // The visitor may have arrived from Run or a different Idle phase.
-        // Reset the hidden retarget source to its imported rest pose before
-        // sampling all per-enemy limb lengths and reference rotations; the
-        // squat IK must not inherit an animation-frame-dependent arm branch.
-        fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true)
-            ?.PrepareForWorkoutPose();
+        // GymVisitorAgent normally locks this pose during the physics-side
+        // arrival handoff. Keep this fallback for direct callers, but the
+        // locked-state guard makes it a no-op during the normal entry frame.
+        fighter.PrepareVisitorWorkoutPose();
         CaptureBasePose(fighter);
         barTargetPosition = CalculateBarTargetPosition(fighter);
         if (!targetStation.TryBeginEnemySquat(fighter, Traps, barTargetPosition))
         {
             RestoreBasePose();
+            fighter.ReleaseVisitorWorkoutPose();
             return false;
         }
 
@@ -330,10 +334,8 @@ public sealed class SquatWorkoutController : MonoBehaviour
         running = true;
         completed = false;
         CurrentMotion = 0f;
+        initialPoseHoldPending = true;
         poseMetricLogged = false;
-        Debug.Log(
-            $"GYMCHAOS_SQUAT_START enemy={fighter.Identity} station={targetStation.EquipmentName} reps={repetitions}",
-            this);
         return true;
     }
 
@@ -345,8 +347,10 @@ public sealed class SquatWorkoutController : MonoBehaviour
         }
 
         RestoreBasePose();
+        owner?.ReleaseVisitorWorkoutPose();
         running = false;
         completed = false;
+        initialPoseHoldPending = false;
         owner = null;
         station = null;
         elapsed = 0f;
@@ -384,6 +388,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private void Awake()
     {
         ResolveBones();
+        PrepareFootSoleCalibration();
     }
 
     private void Update()
@@ -396,6 +401,17 @@ public sealed class SquatWorkoutController : MonoBehaviour
         if (owner == null || owner.IsDead || station == null)
         {
             Cancel();
+            return;
+        }
+
+        if (initialPoseHoldPending)
+        {
+            // Begin() can run from FixedUpdate before this component's
+            // Update. Keep the first render frame at the exact authored
+            // zero-motion pose instead of advancing the rep immediately.
+            initialPoseHoldPending = false;
+            CurrentMotion = 0f;
+            station.TickEnemySquat(owner, 0f);
             return;
         }
 
@@ -416,8 +432,10 @@ public sealed class SquatWorkoutController : MonoBehaviour
             string stationName = station.EquipmentName;
             station.EndEnemySquat(owner);
             RestoreBasePose();
+            owner.ReleaseVisitorWorkoutPose();
             running = false;
             completed = true;
+            initialPoseHoldPending = false;
             Debug.Log(
                 $"GYMCHAOS_SQUAT_COMPLETE enemy={owner.Identity} station={stationName} reps={repetitions}",
                 this);
@@ -2480,12 +2498,14 @@ public sealed class SquatWorkoutController : MonoBehaviour
             GetLowestFootBoneY(leftFoot, leftToe) - baseLeftFootPosition.y;
         rightFootBoneToSoleOffset =
             GetLowestFootBoneY(rightFoot, rightToe) - baseRightFootPosition.y;
-        hasMeshFootSoleCalibration = TryCaptureMeshFootSoleOffsets(
-            leftFoot,
-            rightFoot,
-            out leftFootMeshSoleOffset,
-            out rightFootMeshSoleOffset);
-        if (!hasMeshFootSoleCalibration)
+        PrepareFootSoleCalibration();
+        hasMeshFootSoleCalibration = hasCachedMeshFootSoleCalibration;
+        if (hasMeshFootSoleCalibration)
+        {
+            leftFootMeshSoleOffset = cachedLeftFootMeshSoleOffset;
+            rightFootMeshSoleOffset = cachedRightFootMeshSoleOffset;
+        }
+        else
         {
             leftFootMeshSoleOffset = leftFootBoneToSoleOffset;
             rightFootMeshSoleOffset = rightFootBoneToSoleOffset;
@@ -2501,13 +2521,6 @@ public sealed class SquatWorkoutController : MonoBehaviour
             (leftFootMeshSoleOffset + rightFootMeshSoleOffset) * 0.5f;
         leftFootRootOffsetY = -commonFootSoleOffset;
         rightFootRootOffsetY = -commonFootSoleOffset;
-        Debug.Log(
-            $"GYMCHAOS_SQUAT_FOOT_CALIBRATION enemy={fighter.Identity} " +
-            $"source={(hasMeshFootSoleCalibration ? "mesh" : "bone")} " +
-            $"leftOffset={leftFootMeshSoleOffset:0.000} " +
-            $"rightOffset={rightFootMeshSoleOffset:0.000} " +
-            $"common={commonFootSoleOffset:0.000}",
-            this);
         Vector3 sideAxis = Vector3.ProjectOnPlane(
             fighter.transform.right, fighter.transform.up);
         if (sideAxis.sqrMagnitude < 0.0001f)
@@ -2684,6 +2697,25 @@ public sealed class SquatWorkoutController : MonoBehaviour
             rightArmSideSign = -leftArmSideSign;
         }
         basePoseCaptured = true;
+    }
+
+    private void PrepareFootSoleCalibration()
+    {
+        if (footSoleCalibrationPrepared || leftFoot == null || rightFoot == null)
+        {
+            return;
+        }
+
+        // Bake the visible shoe mesh while the visitor/controller is being
+        // created, never on the frame that hands the visitor to the squat
+        // solver. The result is an offset from each ankle, so it remains
+        // valid when the visitor later moves to a rack with a yaw-only pose.
+        footSoleCalibrationPrepared = true;
+        hasCachedMeshFootSoleCalibration = TryCaptureMeshFootSoleOffsets(
+            leftFoot,
+            rightFoot,
+            out cachedLeftFootMeshSoleOffset,
+            out cachedRightFootMeshSoleOffset);
     }
 
     private bool TryCaptureMeshFootSoleOffsets(

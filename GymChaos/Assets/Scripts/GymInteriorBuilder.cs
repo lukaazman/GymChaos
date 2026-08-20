@@ -134,18 +134,19 @@ public static class GymInteriorBuilder
         float mullionWidth = 0.13f;
         float panelWidth = (openingWidth - mullionWidth * (windowCount + 1)) / windowCount;
         float panelCenterY = center.y + openingBottom + openingHeight * 0.5f;
-        const float glassInset = 0.035f;
+        const float glassInset = -0.015f;
         // The frame projects toward the gym interior. Put the glass just
-        // behind that inner frame face instead of leaving it at the wall
-        // centre; the old depth offset made an oblique camera angle reveal a
-        // visible gap between the pane and its black frame.
-        float glassZ = wallZ - 0.19f;
+        // behind that inner frame face and slightly into the wall so there
+        // is no dark/green sliver between the pane, frame and wall at an
+        // oblique camera angle.
+        float glassZ = wallZ - 0.175f;
+        float openingStartX = center.x - openingWidth * 0.5f;
         for (int i = 0; i < windowCount; i++)
         {
-            // Mullion centres sit on the opening boundaries. Centre each pane
-            // in the clear span between adjacent mullion faces so the glass
-            // cannot drift to one side and reveal a frame-sized gap.
-            float panelX = center.x - openingWidth * 0.5f + mullionWidth * 0.5f + panelWidth * 0.5f +
+            // Centre each pane between the actual inner mullion faces. The
+            // small overlap is intentional: the black frame hides the edge
+            // instead of allowing a camera-facing gap to expose the wall.
+            float panelX = openingStartX + mullionWidth + panelWidth * 0.5f +
                 i * (panelWidth + mullionWidth);
             CreateBox(
                 "Window glass",
@@ -167,7 +168,10 @@ public static class GymInteriorBuilder
             new Vector3(openingWidth + 0.3f, 0.15f, 0.42f), frame, true);
         for (int i = 0; i <= windowCount; i++)
         {
-            float x = center.x - openingWidth * 0.5f + i * (panelWidth + mullionWidth);
+            // Include half the mullion width in the boundary position so the
+            // two outside mullions finish flush with the wall returns.
+            float x = openingStartX + mullionWidth * 0.5f +
+                i * (panelWidth + mullionWidth);
             CreateBox("Window mullion", parent,
                 new Vector3(x, panelCenterY, wallZ - 0.03f),
                 new Vector3(mullionWidth, openingHeight, 0.38f), frame, true);
@@ -464,7 +468,7 @@ public static class GymInteriorBuilder
         {
             float zOffset = (i - (mirrorCount - 1) * 0.5f) * (panelWidth + panelGap);
             Vector3 panelCenter = center + new Vector3(-width * 0.5f + 0.2f, 3.05f, zOffset);
-            GameObject panel = CreateBox("Mirror panel", parent, panelCenter, new Vector3(panelWidth, 4.6f, 0.055f), mirror, false);
+            GameObject panel = CreateBox("Mirror panel", parent, panelCenter, new Vector3(panelWidth, 4.6f, 0.055f), mirror, true);
             panel.transform.rotation = Quaternion.Euler(0f, 90f, 0f);
             mirrorRenderers[i] = panel.GetComponent<Renderer>();
             GameObject topFrame = CreateBox("Mirror top frame", parent, panelCenter + Vector3.up * 2.36f, new Vector3(panelWidth + 0.12f, 0.09f, 0.09f), frame, false);
@@ -683,6 +687,11 @@ public static class GymInteriorBuilder
         if (!keepCollider)
         {
             Object.Destroy(box.GetComponent<Collider>());
+        }
+
+        if (name == "Window glass" || name == "Mirror panel")
+        {
+            box.AddComponent<GlassShatterPanel>();
         }
 
         return box;

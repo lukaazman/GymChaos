@@ -6,6 +6,7 @@ using UnityEngine;
 /// roaming. It owns only door travel and scheduled squat travel; free roaming
 /// is handed back to EnemyFighter so existing behavior remains intact.
 /// </summary>
+[DefaultExecutionOrder(1050)]
 public sealed class GymVisitorAgent : MonoBehaviour
 {
     private const float WorkoutApproachStallTimeout = 2.4f;
@@ -47,7 +48,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private float workoutApproachStartedAt;
     private float workoutApproachStalledSeconds;
     private float lastWorkoutApproachDistance = float.PositiveInfinity;
-    private float workoutBeginNotBefore;
+    private bool squatStartPending;
     private GymExerciseStation workoutReleaseStation;
     private Vector3 workoutReleaseTarget;
     private float workoutReleaseStartedAt;
@@ -110,11 +111,14 @@ public sealed class GymVisitorAgent : MonoBehaviour
         completedDoorExit = false;
         doorway = GymDoorway.Instance;
         pendingStation = null;
+        squatStartPending = false;
         postWorkoutFreeRoamUntil = 0f;
         roomTravelStalledSeconds = 0f;
         lastRoomTravelDistance = float.PositiveInfinity;
         if (fighter != null)
         {
+            fighter.ReleaseVisitorWorkoutPose();
+            fighter.RestoreVisitorPoseInterpolation();
             fighter.StopVisitorMovement();
         }
     }
@@ -154,10 +158,10 @@ public sealed class GymVisitorAgent : MonoBehaviour
         }
 
         pendingStation = station;
+        squatStartPending = false;
         attemptedWorkoutStations.Clear();
         pendingRepetitions = Mathf.Clamp(repetitions, 6, 12);
         pendingRepDuration = Mathf.Clamp(repDuration, 0.55f, 2.2f);
-        workoutBeginNotBefore = 0f;
         if (station.IsSquat)
         {
             if (!station.TryReserveEnemySquatApproach(fighter))
@@ -279,12 +283,15 @@ public sealed class GymVisitorAgent : MonoBehaviour
         postWorkoutFreeRoamUntil = 0f;
         if (fighter != null)
         {
+            fighter.ReleaseVisitorWorkoutPose();
+            fighter.RestoreVisitorPoseInterpolation();
             fighter.StopVisitorMovement();
         }
     }
 
     public void CancelForCombat()
     {
+        squatStartPending = false;
         if (squatController != null && squatController.IsActive)
         {
             squatController.Cancel();
@@ -294,6 +301,8 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
         if (fighter != null)
         {
+            fighter.ReleaseVisitorWorkoutPose();
+            fighter.RestoreVisitorPoseInterpolation();
             fighter.StopVisitorMovement();
         }
 
@@ -383,6 +392,14 @@ public sealed class GymVisitorAgent : MonoBehaviour
                 return true;
 
             case VisitorState.ApproachingWorkout:
+                if (squatStartPending)
+                {
+                    // The final pose is prepared in FixedUpdate; the actual
+                    // bar attach is deferred to this component's LateUpdate
+                    // so it lands after retarget animation and before render.
+                    return true;
+                }
+
                 if (pendingStation == null ||
                     !pendingStation.IsAvailableForEnemy(fighter) ||
                     pendingStation.EnemyOccupant != fighter)
@@ -399,61 +416,40 @@ public sealed class GymVisitorAgent : MonoBehaviour
                     false,
                     pendingStation != null && pendingStation.IsSquat ? pendingStation : null))
                 {
-                    // MoveVisitorTo stops the physics body immediately, but
-                    // the retarget animator applies the idle pose on its next
-                    // render update. Capture the squat base pose only after
-                    // that settle frame; otherwise a visitor who arrived
-                    // during Run can freeze a run-frame arm/leg pose as the
-                    // IK reference and occasionally choose the crossed-arm
-                    // branch.
-                    if (workoutBeginNotBefore <= 0f)
+                    if (pendingStation != null && pendingStation.IsSquat)
+                    {
+                        // Lock the visible retarget pose before its next
+                        // LateUpdate. This prevents a final idle sample from
+                        // appearing between the authored arrival and the
+                        // attached-bar squat pose.
+                        fighter.PrepareVisitorWorkoutPose();
+                    }
+
+                    // Prepare the visitor root in this physics callback. The
+                    // actual bar attach and squat begin happen in LateUpdate,
+                    // after retarget animation has sampled and immediately
+                    // before the squat pose is rendered. The previous
+                    // two-step settle window left the rack bar visible for
+                    // one rendered frame before it was reparented to the
+                    // traps, which appeared as a start microstutter.
+                    Vector3 authoredPosition = pendingStation.EnemyPosition;
+                    bool needsAuthoredPoseSnap =
+                        Vector3.Distance(fighter.transform.position, authoredPosition) > 0.012f ||
+                        Quaternion.Angle(
+                            fighter.transform.rotation,
+                            pendingStation.EnemyRotation) > 0.5f;
+                    if (needsAuthoredPoseSnap)
                     {
                         fighter.SetVisitorSpawnPose(
-                            pendingStation.EnemyPosition,
-                            pendingStation.EnemyRotation);
-                        fighter.StopVisitorMovement();
-                        workoutBeginNotBefore = Time.time + 0.12f;
-                        return true;
-                    }
-
-                    if (Time.time < workoutBeginNotBefore)
-                    {
-                        fighter.StopVisitorMovement();
-                        return true;
-                    }
-
-                    // The collision-probe mover leaves the fighter facing
-                    // the last travel segment. Snap only at the authored
-                    // squat pose so every cage visitor faces the mirrors,
-                    // independent of which side they approached from.
-                    fighter.SetVisitorSpawnPose(
-                        pendingStation.EnemyPosition,
-                        pendingStation.EnemyRotation);
-                    Vector3 actualForward = Vector3.ProjectOnPlane(
-                        fighter.transform.forward, Vector3.up).normalized;
-                    Vector3 stationForward = Vector3.ProjectOnPlane(
-                        pendingStation.EnemyRotation * Vector3.forward,
-                        Vector3.up).normalized;
-                    Debug.Log(
-                        $"GYMCHAOS_SQUAT_ORIENTATION enemy={fighter.Identity} " +
-                        $"station={pendingStation.EquipmentName} " +
-                        $"facingDot={Vector3.Dot(actualForward, stationForward):0.000}",
-                        this);
-
-                    if (squatController == null || !squatController.Begin(
-                        pendingStation, fighter, pendingRepetitions, pendingRepDuration))
-                    {
-                        if (!TrySwitchToAlternativeSquatStation())
-                        {
-                            CancelWorkoutApproach("workout_begin_failed");
-                        }
+                            authoredPosition,
+                            pendingStation.EnemyRotation,
+                            keepInterpolationDisabled: pendingStation.IsSquat);
                     }
                     else
                     {
-                        state = VisitorState.Squatting;
-                        workoutBeginNotBefore = 0f;
-                        ResetWorkoutApproachTracking();
+                        fighter.StopVisitorMovement();
                     }
+                    squatStartPending = true;
                 }
                 else if (approachDistance < lastWorkoutApproachDistance - 0.025f)
                 {
@@ -540,6 +536,41 @@ public sealed class GymVisitorAgent : MonoBehaviour
                 $"releaseUntil={postWorkoutFreeRoamUntil:0.00}",
                 this);
         }
+    }
+
+    private void LateUpdate()
+    {
+        if (!squatStartPending)
+        {
+            return;
+        }
+
+        squatStartPending = false;
+        if (fighter == null || fighter.IsDead ||
+            state != VisitorState.ApproachingWorkout || pendingStation == null ||
+            !pendingStation.IsAvailableForEnemy(fighter) ||
+            pendingStation.EnemyOccupant != fighter)
+        {
+            fighter?.ReleaseVisitorWorkoutPose();
+            fighter?.RestoreVisitorPoseInterpolation();
+            CancelWorkoutApproach("workout_begin_invalidated");
+            return;
+        }
+
+        if (squatController == null || !squatController.Begin(
+            pendingStation, fighter, pendingRepetitions, pendingRepDuration))
+        {
+            fighter.ReleaseVisitorWorkoutPose();
+            fighter.RestoreVisitorPoseInterpolation();
+            if (!TrySwitchToAlternativeSquatStation())
+            {
+                CancelWorkoutApproach("workout_begin_failed");
+            }
+            return;
+        }
+
+        state = VisitorState.Squatting;
+        ResetWorkoutApproachTracking();
     }
 
     private bool BeginWorkoutStationRelease(GymExerciseStation station)
@@ -637,7 +668,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
         workoutApproachStartedAt = 0f;
         workoutApproachStalledSeconds = 0f;
         lastWorkoutApproachDistance = float.PositiveInfinity;
-        workoutBeginNotBefore = 0f;
+        squatStartPending = false;
     }
 
     private bool TrySwitchToAlternativeSquatStation()
@@ -672,7 +703,6 @@ public sealed class GymVisitorAgent : MonoBehaviour
             workoutApproachStalledSeconds = 0f;
             lastWorkoutApproachDistance = Vector3.ProjectOnPlane(
                 travelTarget - fighter.transform.position, Vector3.up).magnitude;
-            workoutBeginNotBefore = 0f;
             Debug.LogWarning(
                 $"GYMCHAOS_SQUAT_STATION_FALLBACK enemy={fighter.Identity} " +
                 $"from={previousStation.EquipmentName} to={alternative.EquipmentName}",
@@ -685,6 +715,8 @@ public sealed class GymVisitorAgent : MonoBehaviour
     {
         GymExerciseStation canceledStation = pendingStation;
         ReleasePendingStationApproach();
+        fighter?.ReleaseVisitorWorkoutPose();
+        fighter?.RestoreVisitorPoseInterpolation();
         pendingStation = null;
         attemptedWorkoutStations.Clear();
         state = VisitorState.FreeRoaming;
@@ -725,6 +757,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
     private void OnDisable()
     {
+        squatStartPending = false;
         if (Application.isPlaying && !applicationQuitting &&
             enteredGym && !completedDoorExit)
         {
@@ -743,6 +776,8 @@ public sealed class GymVisitorAgent : MonoBehaviour
             squatController.Cancel();
         }
         EndWorkoutStationRelease();
+        fighter?.ReleaseVisitorWorkoutPose();
+        fighter?.RestoreVisitorPoseInterpolation();
         ReleasePendingStationApproach();
         pendingStation = null;
         attemptedWorkoutStations.Clear();

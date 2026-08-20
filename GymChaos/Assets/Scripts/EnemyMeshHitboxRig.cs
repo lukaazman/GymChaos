@@ -8,7 +8,10 @@ using UnityEngine;
 /// fighter Rigidbody, so the player cannot walk through an animated enemy;
 /// their positions follow the actual rig rather than a static root cylinder.
 /// </summary>
-[DefaultExecutionOrder(1100)]
+// The squat solver writes the final bone pose at order 1100. Update compound
+// colliders afterwards so Physics.SyncTransforms never applies a one-frame
+// idle hitbox pose during the squat handoff.
+[DefaultExecutionOrder(1200)]
 public sealed class EnemyMeshHitboxRig : MonoBehaviour
 {
     private sealed class Segment

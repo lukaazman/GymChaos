@@ -255,7 +255,8 @@ public class GymArenaBootstrap : MonoBehaviour
             string lower = current.name.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
             if (lower.Contains("bench") || lower.Contains("cage") || lower.Contains("smithmachine") ||
                 lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("preacher") ||
-                lower.Contains("dips") || lower.Contains("dipstation") || lower.Contains("treadmill") ||
+                lower.Contains("dips") || lower.Contains("dipstation") || lower.Contains("calisthenics") ||
+                lower.Contains("monkeybar") || lower.Contains("pullup") || lower.Contains("treadmill") ||
                 lower.Contains("bike") || lower.Contains("weightstand") || lower == "stand" || lower.StartsWith("stand("))
             {
                 return current;
@@ -373,6 +374,8 @@ public class GymArenaBootstrap : MonoBehaviour
         string lower = objectName.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
         return lower.Contains("bench") || lower.Contains("cage") || lower.Contains("smithmachine") ||
                lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("preacher") ||
+               lower.Contains("dips") || lower.Contains("dipstation") || lower.Contains("calisthenics") ||
+               lower.Contains("monkeybar") || lower.Contains("pullup") ||
                lower.Contains("weightstand") || lower == "stand" || lower.StartsWith("stand(");
     }
 

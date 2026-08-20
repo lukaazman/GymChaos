@@ -192,12 +192,16 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // horizontal axis; its world-Y bounds are intentionally only the body
         // thickness in that state.  Wait for a grounded/idle pose instead.
         EnemyFighter fighter = GetComponent<EnemyFighter>();
+        MixamoScanRetargetAnimator retargetAnimator =
+            GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        bool workoutPoseLocked = retargetAnimator != null &&
+            retargetAnimator.IsWorkoutPoseLocked;
         if (runtimeIdentity == BodybuilderIdentity.Goku && fighter != null && fighter.IsGokuFlightActive)
         {
             return;
         }
 
-        if (heightCorrectionFrames > 0)
+        if (!workoutPoseLocked && heightCorrectionFrames > 0)
         {
             heightCorrectionFrames--;
             float measuredHeight = runtimeRenderer.bounds.size.y;
@@ -216,7 +220,8 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // allowed to animate the legs, but it must not lift the whole visible
         // character off the enemy root's floor while the visitor is walking.
         // Goku is the only intentional airborne exception.
-        if (fighter == null || (!fighter.IsDead && !fighter.IsGokuFlightActive))
+        if (!workoutPoseLocked &&
+            (fighter == null || (!fighter.IsDead && !fighter.IsGokuFlightActive)))
         {
             KeepVisibleModelOnFloor();
         }

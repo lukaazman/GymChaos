@@ -89,8 +89,23 @@ public class PlayerMovement : MonoBehaviour
     private Vector3 cameraPositionBeforeExercise;
     private Quaternion cameraRotationBeforeExercise;
     private float cameraFieldOfViewBeforeExercise;
+    private bool pullUpMountTransitionActive;
+    private GymExerciseStation pullUpMountStation;
+    private float pullUpMountElapsed;
+    private Vector3 pullUpMountStartPosition;
+    private Quaternion pullUpMountStartRotation;
+    private Vector3 pullUpMountTargetPosition;
+    private Quaternion pullUpMountTargetRotation;
+    private Vector3 pullUpMountStartCameraPosition;
+    private Quaternion pullUpMountStartCameraRotation;
+    private Vector3 pullUpMountTargetCameraPosition;
+    private Quaternion pullUpMountTargetCameraRotation;
 
-    public bool IsExercising => activeExerciseStation != null || pendingWeightStation != null;
+    private const float PullUpMountDuration = 0.82f;
+    private const float PullUpMountJumpHeight = 0.38f;
+
+    public bool IsExercising => activeExerciseStation != null ||
+        pendingWeightStation != null || pullUpMountTransitionActive;
     public float MaxHealth => maxHealth;
     public float CurrentHealth => currentHealth;
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
@@ -146,6 +161,12 @@ public class PlayerMovement : MonoBehaviour
         }
 
         HandleCursorToggle();
+
+        if (pullUpMountTransitionActive)
+        {
+            HandlePullUpMountTransition();
+            return;
+        }
 
         if (activeExerciseStation != null)
         {
@@ -214,7 +235,7 @@ public class PlayerMovement : MonoBehaviour
         verticalVelocity = 0f;
         nearbyExerciseStation = null;
         pendingWeightStation = null;
-        if (activeExerciseStation != null)
+        if (activeExerciseStation != null || pullUpMountTransitionActive)
         {
             EndExercise();
         }
@@ -514,6 +535,8 @@ public class PlayerMovement : MonoBehaviour
             pickup.ApplyImpact(impulse * 0.65f);
         }
 
+        TryShatterGlassFromHeldImpact(hit, impulse);
+
         Rigidbody body = hit.rigidbody;
         if (body != null && enemy == null)
         {
@@ -555,11 +578,24 @@ public class PlayerMovement : MonoBehaviour
             pickup.ApplyImpact(impulse * 0.6f);
         }
 
+        TryShatterGlassFromHeldImpact(hit, impulse);
+
         Rigidbody body = hit.rigidbody;
         if (body != null && enemy == null)
         {
             body.AddForceAtPosition(impulse, hit.point, ForceMode.Impulse);
         }
+    }
+
+    private void TryShatterGlassFromHeldImpact(RaycastHit hit, Vector3 impulse)
+    {
+        if (heldItem == null || !heldItem.IsThrowableWeapon || hit.collider == null)
+        {
+            return;
+        }
+
+        GlassShatterPanel panel = hit.collider.GetComponentInParent<GlassShatterPanel>();
+        panel?.ShatterFromPlayerImpact(heldItem, hit.point, hit.normal, impulse);
     }
 
     private void TryPickupItem()
@@ -841,7 +877,8 @@ public class PlayerMovement : MonoBehaviour
 
     private void BeginExercise(GymExerciseStation station)
     {
-        if (station == null || activeExerciseStation != null)
+        if (station == null || activeExerciseStation != null ||
+            pullUpMountTransitionActive)
         {
             return;
         }
@@ -870,8 +907,16 @@ public class PlayerMovement : MonoBehaviour
         impactVelocity = Vector3.zero;
         verticalVelocity = 0f;
 
-        activeExerciseStation = station;
         characterController.enabled = false;
+        LockCursor(true);
+
+        if (station.ExerciseType == GymExerciseType.PullUps)
+        {
+            BeginPullUpMountTransition(station);
+            return;
+        }
+
+        activeExerciseStation = station;
         transform.SetPositionAndRotation(station.PlayerPosition, station.PlayerRotation);
         station.BeginSession(playerCamera.transform);
         station.GetCameraPose(out Vector3 cameraPosition, out Quaternion cameraRotation);
@@ -881,8 +926,95 @@ public class PlayerMovement : MonoBehaviour
         {
             handRig.gameObject.SetActive(false);
         }
+    }
 
-        LockCursor(true);
+    private void BeginPullUpMountTransition(GymExerciseStation station)
+    {
+        pullUpMountStation = station;
+        pullUpMountTransitionActive = true;
+        pullUpMountElapsed = 0f;
+        pullUpMountStartPosition = transform.position;
+        pullUpMountStartRotation = transform.rotation;
+        pullUpMountTargetPosition = station.PlayerPosition;
+        pullUpMountTargetRotation = station.PlayerRotation;
+        pullUpMountStartCameraPosition = playerCamera.transform.localPosition;
+        pullUpMountStartCameraRotation = playerCamera.transform.localRotation;
+        station.GetCameraPose(
+            out pullUpMountTargetCameraPosition,
+            out pullUpMountTargetCameraRotation);
+
+        // The controller is disabled only for this short authored mount so
+        // input and collision resolution cannot fight the jump arc. The root
+        // is still moved every frame, so the player sees the approach instead
+        // of receiving the old instant teleport to the bar.
+        if (handRig != null)
+        {
+            handRig.gameObject.SetActive(true);
+        }
+    }
+
+    private void HandlePullUpMountTransition()
+    {
+        if (pullUpMountStation == null)
+        {
+            EndExercise();
+            return;
+        }
+
+        if (ReadExerciseExitPressed())
+        {
+            EndExercise();
+            return;
+        }
+
+        pullUpMountElapsed += Time.deltaTime;
+        float rawT = Mathf.Clamp01(
+            pullUpMountElapsed / Mathf.Max(0.01f, PullUpMountDuration));
+        float easedT = Mathf.SmoothStep(0f, 1f, rawT);
+        Vector3 mountPosition = Vector3.Lerp(
+            pullUpMountStartPosition, pullUpMountTargetPosition, easedT);
+        mountPosition.y += Mathf.Sin(rawT * Mathf.PI) * PullUpMountJumpHeight;
+        Quaternion mountRotation = Quaternion.Slerp(
+            pullUpMountStartRotation, pullUpMountTargetRotation, easedT);
+        transform.SetPositionAndRotation(mountPosition, mountRotation);
+
+        playerCamera.transform.localPosition = Vector3.Lerp(
+            pullUpMountStartCameraPosition,
+            pullUpMountTargetCameraPosition,
+            easedT);
+        Quaternion worldCameraRotation = Quaternion.Slerp(
+            pullUpMountStartRotation * pullUpMountStartCameraRotation,
+            pullUpMountTargetRotation * pullUpMountTargetCameraRotation,
+            easedT);
+        playerCamera.transform.localRotation = Quaternion.Inverse(mountRotation) *
+            worldCameraRotation;
+
+        if (rawT >= 1f)
+        {
+            FinishPullUpMountTransition();
+        }
+    }
+
+    private void FinishPullUpMountTransition()
+    {
+        GymExerciseStation station = pullUpMountStation;
+        pullUpMountTransitionActive = false;
+        pullUpMountStation = null;
+        pullUpMountElapsed = 0f;
+        transform.SetPositionAndRotation(
+            pullUpMountTargetPosition, pullUpMountTargetRotation);
+        playerCamera.transform.localPosition = pullUpMountTargetCameraPosition;
+        playerCamera.transform.localRotation = pullUpMountTargetCameraRotation;
+
+        activeExerciseStation = station;
+        station.BeginSession(playerCamera.transform);
+        station.GetCameraPose(out Vector3 cameraPosition, out Quaternion cameraRotation);
+        playerCamera.transform.localPosition = cameraPosition;
+        playerCamera.transform.localRotation = cameraRotation;
+        if (handRig != null)
+        {
+            handRig.gameObject.SetActive(false);
+        }
     }
 
     private void OpenWeightSelection(GymExerciseStation station)
@@ -953,13 +1085,24 @@ public class PlayerMovement : MonoBehaviour
 
     private void EndExercise()
     {
-        if (activeExerciseStation == null)
+        if (activeExerciseStation == null && !pullUpMountTransitionActive)
         {
             return;
         }
 
-        activeExerciseStation.EndSession();
+        if (activeExerciseStation != null)
+        {
+            activeExerciseStation.EndSession();
+        }
+        else if (pullUpMountStation != null)
+        {
+            pullUpMountStation.CancelPlayerReservation(this);
+        }
+
         activeExerciseStation = null;
+        pullUpMountTransitionActive = false;
+        pullUpMountStation = null;
+        pullUpMountElapsed = 0f;
         transform.SetPositionAndRotation(positionBeforeExercise, rotationBeforeExercise);
         playerCamera.transform.localPosition = cameraPositionBeforeExercise;
         playerCamera.transform.localRotation = cameraRotationBeforeExercise;
@@ -998,6 +1141,16 @@ public class PlayerMovement : MonoBehaviour
         if (pendingWeightStation != null)
         {
             DrawWeightSelection();
+            return;
+        }
+
+        if (pullUpMountTransitionActive)
+        {
+            GUI.Box(new Rect(14f, 14f, 780f, 82f), string.Empty);
+            GUI.Label(
+                new Rect(27f, 24f, 750f, 65f),
+                "PULL UPS  |  MOUNTING BAR...\n[Q] cancel",
+                hudStyle);
             return;
         }
 

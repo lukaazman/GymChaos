@@ -8,6 +8,7 @@ public enum GymExerciseType
     BarbellSquat,
     PreacherCurl,
     Dips,
+    PullUps,
     Treadmill,
     ExerciseBike,
     LatPulldown
@@ -67,13 +68,17 @@ public class GymExerciseStation : MonoBehaviour
     private Vector3 squatBarOriginalLocalScale;
     private Transform squatBarRackParent;
     private Rigidbody squatBarBody;
+    private bool squatBarWasDetectCollisions;
     private bool squatBarWasKinematic;
     private bool squatBarUsedGravity;
+    private RigidbodyInterpolation squatBarWasInterpolation;
     private bool squatBarWasPickupEnabled;
     private bool squatBarWasActive;
     private bool squatBarOriginalStateCaptured;
     private PickupItem squatBarPickup;
     private bool enemySquatApproachReserved;
+    private EnemyFighter collisionIgnoreOwner;
+    private bool enemyEquipmentCollisionIgnored;
     [SerializeField] private Vector3 enemySquatBarOffset = new Vector3(0f, 0.12f, -0.08f);
     private Transform latPulldownBar;
     private Transform latPulldownHandle;
@@ -83,6 +88,9 @@ public class GymExerciseStation : MonoBehaviour
     private Vector3 latCableOriginalLocalPosition;
     private Vector3 latBarExercisePosition;
     private Quaternion latBarExerciseRotation;
+    private Vector3 pullUpBarTarget;
+    private Vector3 pullUpLookDirection = Vector3.forward;
+    private float pullUpBarHeightAbovePlayer;
     private sealed class LatWeightStackPart
     {
         public Transform transform;
@@ -407,6 +415,14 @@ public class GymExerciseStation : MonoBehaviour
         return true;
     }
 
+    public void CancelPlayerReservation(PlayerMovement player)
+    {
+        if (playerOccupant == player)
+        {
+            playerOccupant = null;
+        }
+    }
+
     public bool IsAvailableForEnemy(EnemyFighter enemy)
     {
         return (IsTreadmill || IsSquat) && enemy != null &&
@@ -523,7 +539,6 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         IgnoreEquipmentCollisions(enemy, true);
-        Debug.Log($"GYMCHAOS_SQUAT_STATION_START station={EquipmentName} enemy={enemy.Identity}", this);
         return true;
     }
 
@@ -665,6 +680,12 @@ public class GymExerciseStation : MonoBehaviour
             return $"EXERCISE BIKE  |  pace {currentSpeed:0.0}  |  distance {distance / 1000f:0.00} km\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
         }
 
+        if (exerciseType == GymExerciseType.PullUps)
+        {
+            string pullUpState = repTimer >= 0f ? "rep in progress" : "ready";
+            return $"PULL UPS  |  BODYWEIGHT  |  reps: {repetitions}  |  {pullUpState}\n[SPACE] perform rep   [Q] exit";
+        }
+
         string repState = repTimer >= 0f ? "rep in progress" : "ready";
         if (!RequiresWeightSelection)
         {
@@ -750,6 +771,9 @@ public class GymExerciseStation : MonoBehaviour
                 localPosition = new Vector3(0f, 1.4f - motion * 0.42f, -0.32f);
                 localRotation = Quaternion.Euler(9f + motion * 5f, 0f, 0f);
                 break;
+            case GymExerciseType.PullUps:
+                GetPullUpCameraPose(motion, out localPosition, out localRotation);
+                break;
             case GymExerciseType.Treadmill:
                 localPosition = new Vector3(GetCardioSway(0.012f), 1.62f + GetCardioBob(0.035f), 0.08f);
                 localRotation = Quaternion.Euler(5f + GetCardioSway(0.7f), 0f, GetCardioSway(0.9f));
@@ -785,6 +809,27 @@ public class GymExerciseStation : MonoBehaviour
 
         float maximum = exerciseType == GymExerciseType.Treadmill ? 18f : 14f;
         return baseFieldOfView + Mathf.Clamp01(currentSpeed / maximum) * 9f;
+    }
+
+    private void GetPullUpCameraPose(
+        float motion, out Vector3 localPosition, out Quaternion localRotation)
+    {
+        // Keep the camera just below the real bar at the bottom of the rep,
+        // then lift it a little above the bar at the top. The old fixed 1.48m
+        // pose was too low for this imported, scaled calisthenics asset.
+        float belowBarHeight = Mathf.Max(
+            1.42f, pullUpBarHeightAbovePlayer - 0.24f);
+        float aboveBarHeight = Mathf.Max(
+            belowBarHeight + 0.24f, pullUpBarHeightAbovePlayer + 0.10f);
+        float cameraHeight = Mathf.Lerp(belowBarHeight, aboveBarHeight, motion);
+        localPosition = new Vector3(0f, cameraHeight, -0.34f);
+
+        // Pull Ups should look through the station toward the Dips/reception
+        // side of the room. Do not aim at the bar: that creates the unwanted
+        // upward camera pitch visible in the previous implementation.
+        Quaternion worldRotation = Quaternion.LookRotation(
+            pullUpLookDirection, Vector3.up);
+        localRotation = Quaternion.Inverse(playerRotation) * worldRotation;
     }
 
     private float GetCardioBob(float maximumAmplitude)
@@ -833,6 +878,14 @@ public class GymExerciseStation : MonoBehaviour
             stagingBounds.center.x + offset.x,
             floorY,
             stagingBounds.center.z + offset.z);
+        if (type == GymExerciseType.PullUps)
+        {
+            pullUpBarTarget = new Vector3(
+                stagingBounds.center.x,
+                GetPullUpBarHeight(equipment, bounds),
+                stagingBounds.center.z);
+            pullUpBarHeightAbovePlayer = pullUpBarTarget.y - playerPosition.y;
+        }
         if (type == GymExerciseType.BarbellSquat)
         {
             Debug.Log(
@@ -859,6 +912,13 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         playerRotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up) * GetFacingCorrection(type);
+        if (type == GymExerciseType.PullUps)
+        {
+            pullUpLookDirection = GetPullUpLookDirection(
+                bounds.center, forward);
+            playerRotation = Quaternion.LookRotation(
+                pullUpLookDirection, Vector3.up);
+        }
         if (type == GymExerciseType.InclineBenchPress && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
@@ -886,6 +946,14 @@ public class GymExerciseStation : MonoBehaviour
         {
             ConfigureLatPulldownParts(equipment);
             ConfigureLatPulldownWeightStack(equipment);
+        }
+        if (type == GymExerciseType.PullUps)
+        {
+            Debug.Log(
+                $"GYMCHAOS_PULLUP_CONFIG station={equipment.name} " +
+                $"barHeight={pullUpBarHeightAbovePlayer:0.00} " +
+                $"look={pullUpLookDirection}",
+                this);
         }
         repDuration = GetRepDuration(type);
         if (RequiresWeightSelection)
@@ -939,6 +1007,59 @@ public class GymExerciseStation : MonoBehaviour
         return hasFrameBounds ? frameBounds : fallback;
     }
 
+    private static float GetPullUpBarHeight(
+        Transform equipment,
+        Bounds fallback)
+    {
+        float fallbackHeight = fallback.max.y - 0.12f;
+        if (equipment == null)
+        {
+            return fallbackHeight;
+        }
+
+        Renderer[] renderers = equipment.GetComponentsInChildren<Renderer>(true);
+        float equipmentHeight = Mathf.Max(0.01f, fallback.size.y);
+        float bestScore = float.NegativeInfinity;
+        float bestHeight = fallbackHeight;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Bounds candidate = renderer.bounds;
+            Vector3 size = candidate.size;
+            float horizontalSpan = Mathf.Max(size.x, size.z);
+            float horizontalAspect = horizontalSpan / Mathf.Max(0.01f, size.y);
+            float relativeHeight = Mathf.InverseLerp(
+                fallback.min.y, fallback.max.y, candidate.center.y);
+            // Upright frame posts are tall and narrow in the horizontal
+            // plane. A pull-up bar is the opposite: thin vertically, wide
+            // horizontally, and located near the top of the station.
+            if (horizontalSpan < 0.2f || horizontalAspect < 2.2f ||
+                size.y > equipmentHeight * 0.24f || relativeHeight < 0.55f)
+            {
+                continue;
+            }
+
+            string lowerName = renderer.name.ToLowerInvariant();
+            float nameBonus = lowerName.Contains("bar") ||
+                              lowerName.Contains("pull") ||
+                              lowerName.Contains("monkey") ? 8f : 0f;
+            float score = relativeHeight * 8f +
+                          Mathf.Min(horizontalAspect, 16f) + nameBonus;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestHeight = candidate.center.y;
+            }
+        }
+
+        return bestHeight;
+    }
+
     private bool AttachSquatBarToEnemy(
         EnemyFighter enemy,
         Transform traps,
@@ -968,10 +1089,16 @@ public class GymExerciseStation : MonoBehaviour
         {
             squatBarWasKinematic = squatBarBody.isKinematic;
             squatBarUsedGravity = squatBarBody.useGravity;
+            squatBarWasInterpolation = squatBarBody.interpolation;
+            squatBarWasDetectCollisions = squatBarBody.detectCollisions;
             squatBarBody.linearVelocity = Vector3.zero;
             squatBarBody.angularVelocity = Vector3.zero;
+            // An interpolated kinematic pickup otherwise renders one frame
+            // between its rack pose and the traps pose during reparenting.
+            squatBarBody.interpolation = RigidbodyInterpolation.None;
             squatBarBody.isKinematic = true;
             squatBarBody.useGravity = false;
+            squatBarBody.detectCollisions = false;
         }
 
         squatBarPickup = sceneBar.GetComponentInParent<PickupItem>();
@@ -991,12 +1118,13 @@ public class GymExerciseStation : MonoBehaviour
         sceneBar.gameObject.SetActive(true);
         sceneBar.SetParent(traps, true);
         AlignAttachedSquatBar(targetBarCenter, desiredBarAxis, barAxis);
-        Debug.Log(
-            $"GYMCHAOS_SQUAT_BAR_ATTACH station={EquipmentName} " +
-            $"enemy={enemy.Identity} target={targetBarCenter} " +
-            $"axisDot={Mathf.Abs(Vector3.Dot(GetBarAxis(sceneBar).normalized, desiredBarAxis)):0.000} " +
-            $"tilt={EnemySquatBarTiltError:0.000}",
-            this);
+        if (squatBarBody != null)
+        {
+            squatBarBody.position = sceneBar.position;
+            squatBarBody.rotation = sceneBar.rotation;
+            squatBarBody.linearVelocity = Vector3.zero;
+            squatBarBody.angularVelocity = Vector3.zero;
+        }
         return true;
     }
 
@@ -1048,13 +1176,18 @@ public class GymExerciseStation : MonoBehaviour
         }
         if (squatBarBody != null)
         {
+            squatBarBody.position = sceneBar.position;
+            squatBarBody.rotation = sceneBar.rotation;
             squatBarBody.isKinematic = squatBarWasKinematic;
             squatBarBody.useGravity = squatBarUsedGravity;
+            squatBarBody.interpolation = squatBarWasInterpolation;
+            squatBarBody.detectCollisions = squatBarWasDetectCollisions;
             if (!squatBarBody.isKinematic)
             {
                 squatBarBody.linearVelocity = Vector3.zero;
                 squatBarBody.angularVelocity = Vector3.zero;
             }
+            Physics.SyncTransforms();
         }
         if (squatBarPickup != null)
         {
@@ -1123,6 +1256,12 @@ public class GymExerciseStation : MonoBehaviour
             return;
         }
 
+        if (enemyEquipmentCollisionIgnored == ignore &&
+            (!ignore || collisionIgnoreOwner == enemy))
+        {
+            return;
+        }
+
         Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
         Collider[] equipmentColliders = equipmentRoot != null
             ? equipmentRoot.GetComponentsInChildren<Collider>(true)
@@ -1141,6 +1280,9 @@ public class GymExerciseStation : MonoBehaviour
                 sceneBar.GetComponentsInChildren<Collider>(true),
                 ignore);
         }
+
+        enemyEquipmentCollisionIgnored = ignore;
+        collisionIgnoreOwner = ignore ? enemy : null;
     }
 
     private static void SetCollisionIgnore(
@@ -2162,6 +2304,7 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.ExerciseBike: return Vector3.zero;
             case GymExerciseType.PreacherCurl: return -forward * 0.95f;
             case GymExerciseType.Dips: return Vector3.zero;
+            case GymExerciseType.PullUps: return Vector3.zero;
             // The visitor target is the centre of the cage/smith footprint.
             // A forward offset puts the character at the front edge instead
             // of under the rack, especially on imported cages with deep feet.
@@ -2169,6 +2312,31 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.LatPulldown: return -forward * 0.3f;
             default: return -forward * 0.55f;
         }
+    }
+
+    private static Vector3 GetPullUpLookDirection(
+        Vector3 equipmentCenter, Vector3 fallback)
+    {
+        Transform dips = GameObject.Find("Dips")?.transform;
+        Vector3 direction = dips != null
+            ? Vector3.ProjectOnPlane(dips.position - equipmentCenter, Vector3.up)
+            : Vector3.zero;
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            Transform reception = GameObject.Find("Reception desk")?.transform;
+            direction = reception != null
+                ? Vector3.ProjectOnPlane(reception.position - equipmentCenter, Vector3.up)
+                : Vector3.zero;
+        }
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            direction = Vector3.ProjectOnPlane(fallback, Vector3.up);
+        }
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            direction = Vector3.forward;
+        }
+        return direction.normalized;
     }
 
     private static Quaternion GetFacingCorrection(GymExerciseType type)
@@ -2184,6 +2352,8 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.ExerciseBike:
             case GymExerciseType.Dips:
                 return Quaternion.Euler(0f, -90f, 0f);
+            case GymExerciseType.PullUps:
+                return Quaternion.identity;
             case GymExerciseType.PreacherCurl:
                 return Quaternion.identity;
             case GymExerciseType.LatPulldown:
@@ -2199,6 +2369,7 @@ public class GymExerciseStation : MonoBehaviour
         {
             case GymExerciseType.BarbellSquat: return 2.35f;
             case GymExerciseType.Dips: return 1.65f;
+            case GymExerciseType.PullUps: return 1.8f;
             case GymExerciseType.PreacherCurl: return 1.9f;
             case GymExerciseType.LatPulldown: return 2.1f;
             default: return 1.8f;
@@ -2213,6 +2384,9 @@ public class GymExerciseStation : MonoBehaviour
         if (lower.Contains("preacher")) { type = GymExerciseType.PreacherCurl; return true; }
         if (lower.Contains("latpulldown")) { type = GymExerciseType.LatPulldown; return true; }
         if (lower.Contains("dips") || lower.Contains("dipstation")) { type = GymExerciseType.Dips; return true; }
+        if (lower.Contains("pullup") || lower.Contains("pullups") || lower.Contains("chinup") ||
+            lower.Contains("monkeybar") || lower.Contains("monkeybars") ||
+            lower.Contains("calisthenics")) { type = GymExerciseType.PullUps; return true; }
         if (lower.Contains("cage") || lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("smithmachine")) { type = GymExerciseType.BarbellSquat; return true; }
         if (lower.Contains("inclinebench") || lower.Contains("bench2")) { type = GymExerciseType.InclineBenchPress; return true; }
         if (lower.Contains("bench") && !lower.Contains("preacher")) { type = GymExerciseType.FlatBenchPress; return true; }
@@ -2229,6 +2403,7 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.BarbellSquat: return "Barbell squat";
             case GymExerciseType.PreacherCurl: return "Preacher curls";
             case GymExerciseType.Dips: return "Dips";
+            case GymExerciseType.PullUps: return "Pull ups";
             case GymExerciseType.Treadmill: return "Treadmill";
             case GymExerciseType.ExerciseBike: return "Exercise bike";
             case GymExerciseType.LatPulldown: return "Lat pulldown";
