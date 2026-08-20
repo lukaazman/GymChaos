@@ -7,3 +7,8 @@ UserSettings/
 MemoryCaptures/
 .tools/
 AGENTS.md
+
+# Local Unity recovery and face-censor diagnostics
+/UNITY-LICENSING-RECOVERY.md
+/unity-face-censor-batch.log
+/unity-face-censor-batch-2.log
