@@ -104,6 +104,20 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             animators[i].enabled = false;
         }
 
+        // Unity WebGL does not allow non-Legacy AnimationClips to be sampled
+        // on a hierarchy that has no Animator.  The imported prefab usually
+        // keeps its Animator on a child armature, while SampleAnimation is
+        // invoked on this hidden root.  Keep a controller-free root Animator
+        // enabled as the sampling anchor; it does not drive a visible rig.
+        Animator samplingAnimator = sourceModel.GetComponent<Animator>();
+        if (samplingAnimator == null)
+        {
+            samplingAnimator = sourceModel.AddComponent<Animator>();
+        }
+        samplingAnimator.runtimeAnimatorController = null;
+        samplingAnimator.applyRootMotion = false;
+        samplingAnimator.enabled = true;
+
         Transform[] sourceBones = sourceModel.GetComponentsInChildren<Transform>(true);
         List<BonePair> mapped = new List<BonePair>();
         AddPair(mapped, sourceBones, rig.Hips, "hips");
