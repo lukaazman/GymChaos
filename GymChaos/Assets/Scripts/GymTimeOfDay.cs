@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 /// <summary>
 /// Single source of truth for the short simulated day used by the gym. It
@@ -35,6 +36,8 @@ public sealed class GymTimeOfDay : MonoBehaviour
     private Material sunMaterial;
     private Material moonMaterial;
     private Light[] windowSunLights;
+    private bool loggedLighting;
+    private bool lastUsingSun;
 
     private readonly Color dayAmbientSky = new Color(0.32f, 0.4f, 0.54f);
     private readonly Color dayAmbientEquator = new Color(0.18f, 0.2f, 0.25f);
@@ -190,6 +193,17 @@ public sealed class GymTimeOfDay : MonoBehaviour
         moonMaterial = GetRuntimeMaterial(moonRenderer);
 
         sunLight = FindLight("Warm exterior sun");
+        if (sunLight == null)
+        {
+            GameObject sunObject = new GameObject("Warm exterior sun");
+            sunObject.transform.SetParent(transform, true);
+            sunLight = sunObject.AddComponent<Light>();
+            sunLight.type = LightType.Directional;
+            sunLight.color = new Color(1f, 0.79f, 0.6f);
+            sunLight.shadows = LightShadows.Soft;
+            sunLight.shadowStrength = 0.78f;
+        }
+
         moonLight = FindLight("Cool moonlight");
         if (moonLight == null)
         {
@@ -201,6 +215,11 @@ public sealed class GymTimeOfDay : MonoBehaviour
             moonLight.shadows = LightShadows.Soft;
             moonLight.shadowStrength = 0.22f;
         }
+
+        sunLight.type = LightType.Directional;
+        moonLight.type = LightType.Directional;
+        sunLight.enabled = true;
+        moonLight.enabled = false;
 
         Light[] allLights = FindObjectsByType<Light>();
         System.Collections.Generic.List<Light> windowLights =
@@ -287,11 +306,26 @@ public sealed class GymTimeOfDay : MonoBehaviour
                 148f + time01 * 360f,
                 0f);
         }
+
+        // URP has one main directional light. Keep the day/night pair
+        // mutually exclusive so WebGL cannot select the stale scene sun
+        // instead of the moon when the simulated night starts.
+        bool useSun = daylight >= night;
+        if (sunLight != null)
+        {
+            sunLight.enabled = useSun && daylight > 0.001f;
+        }
+        if (moonLight != null)
+        {
+            moonLight.enabled = !useSun && night > 0.001f;
+        }
+
         for (int i = 0; i < windowSunLights.Length; i++)
         {
             if (windowSunLights[i] != null)
             {
                 windowSunLights[i].intensity = 1450f * daylight;
+                windowSunLights[i].enabled = daylight > 0.001f;
             }
         }
 
@@ -300,7 +334,23 @@ public sealed class GymTimeOfDay : MonoBehaviour
         RenderSettings.ambientEquatorColor = Color.Lerp(dayAmbientEquator, new Color(0.018f, 0.022f, 0.045f), night);
         RenderSettings.ambientGroundColor = Color.Lerp(dayAmbientGround, new Color(0.006f, 0.008f, 0.018f), night);
         RenderSettings.ambientIntensity = Mathf.Lerp(1.12f, 0.38f, night);
-        RenderSettings.sun = daylight >= night ? sunLight : moonLight;
+        RenderSettings.sun = useSun ? sunLight : moonLight;
+
+        if (!loggedLighting || lastUsingSun != useSun)
+        {
+            loggedLighting = true;
+            lastUsingSun = useSun;
+            string pipeline = GraphicsSettings.currentRenderPipeline != null
+                ? GraphicsSettings.currentRenderPipeline.name
+                : "BuiltIn";
+            Debug.Log(
+                $"GYMCHAOS_LIGHTING_OK pipeline={pipeline} " +
+                $"sunEnabled={sunLight != null && sunLight.enabled} " +
+                $"moonEnabled={moonLight != null && moonLight.enabled} " +
+                $"active={(useSun ? "sun" : "moon")} " +
+                $"windowLights={windowSunLights.Length} daylight={daylight:F3}",
+                this);
+        }
 
         if (night > 0.7f && !loggedNight)
         {
