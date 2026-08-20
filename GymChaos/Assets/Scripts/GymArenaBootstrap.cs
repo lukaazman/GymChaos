@@ -31,6 +31,10 @@ public class GymArenaBootstrap : MonoBehaviour
     private readonly HashSet<Transform> spatiallyMountedWeightRoots = new HashSet<Transform>();
     private readonly Collider[] enemySpawnOverlap = new Collider[64];
     private readonly RaycastHit[] enemySpawnPathHits = new RaycastHit[32];
+    private int webGlExactMeshColliderCount;
+    private int webGlBoundsFallbackCount;
+    private int webGlPickupExactMeshColliderCount;
+    private int webGlPickupFallbackCount;
 
     private PlayerMovement player;
 
@@ -50,6 +54,10 @@ public class GymArenaBootstrap : MonoBehaviour
 
     public void EnsureSceneColliders()
     {
+        webGlExactMeshColliderCount = 0;
+        webGlBoundsFallbackCount = 0;
+        webGlPickupExactMeshColliderCount = 0;
+        webGlPickupFallbackCount = 0;
         int repairedWebGlMeshColliders = RepairUnreadableWebGlMeshColliders();
         Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
         HashSet<Transform> processedRenderers = new HashSet<Transform>();
@@ -115,7 +123,10 @@ public class GymArenaBootstrap : MonoBehaviour
         if (IsWebGlPlayer)
         {
             Debug.Log(
-                $"GYMCHAOS_WEBGL_COLLIDERS_OK repaired={repairedWebGlMeshColliders}",
+                $"GYMCHAOS_WEBGL_COLLIDERS_OK repaired={repairedWebGlMeshColliders} " +
+                $"exact={webGlExactMeshColliderCount} fallback={webGlBoundsFallbackCount} " +
+                $"pickupExact={webGlPickupExactMeshColliderCount} " +
+                $"pickupFallback={webGlPickupFallbackCount}",
                 this);
         }
     }
@@ -410,6 +421,19 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         MeshFilter meshFilter = target.GetComponent<MeshFilter>();
+        if (meshFilter != null && meshFilter.sharedMesh != null &&
+            meshFilter.sharedMesh.isReadable)
+        {
+            MeshCollider meshCollider = target.AddComponent<MeshCollider>();
+            meshCollider.sharedMesh = meshFilter.sharedMesh;
+            meshCollider.convex = false;
+            if (IsWebGlPlayer)
+            {
+                webGlExactMeshColliderCount++;
+            }
+            return;
+        }
+
         if (!IsWebGlPlayer && meshFilter != null && meshFilter.sharedMesh != null)
         {
             MeshCollider meshCollider = target.AddComponent<MeshCollider>();
@@ -420,6 +444,10 @@ public class GymArenaBootstrap : MonoBehaviour
 
         BoxCollider boxCollider = target.AddComponent<BoxCollider>();
         ApplyRendererBoundsToBox(target.transform, renderer, boxCollider);
+        if (IsWebGlPlayer)
+        {
+            webGlBoundsFallbackCount++;
+        }
     }
 
     private void EnsurePickupRootGameplay(GameObject rootObject, WeightType type)
@@ -440,6 +468,19 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             MeshFilter meshFilter = renderObject.GetComponent<MeshFilter>();
+            if (meshFilter != null && meshFilter.sharedMesh != null &&
+                meshFilter.sharedMesh.isReadable)
+            {
+                MeshCollider meshCollider = renderObject.AddComponent<MeshCollider>();
+                meshCollider.sharedMesh = meshFilter.sharedMesh;
+                meshCollider.convex = true;
+                if (IsWebGlPlayer)
+                {
+                    webGlPickupExactMeshColliderCount++;
+                }
+                continue;
+            }
+
             if (!IsWebGlPlayer && meshFilter != null && meshFilter.sharedMesh != null)
             {
                 MeshCollider meshCollider = renderObject.AddComponent<MeshCollider>();
@@ -449,6 +490,10 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             AddFallbackCollider(renderObject.transform, renderer, type);
+            if (IsWebGlPlayer)
+            {
+                webGlPickupFallbackCount++;
+            }
         }
     }
 
