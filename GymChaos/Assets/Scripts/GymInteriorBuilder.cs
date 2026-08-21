@@ -7,6 +7,8 @@ public static class GymInteriorBuilder
 
     public static void Build(PlayerMovement player)
     {
+        RemoveLegacyExteriorHorizon();
+        RemoveLegacyVisibleSun();
         if (GameObject.Find(RootName) != null)
         {
             return;
@@ -52,6 +54,32 @@ public static class GymInteriorBuilder
         CreateRoomDetails(root.transform, center, width, depth, accent, trim, wall);
         ConfigureAmbientLighting(center, width, depth, height);
         GymTimeOfDay.CreateForScene(root.transform, center, width, depth, 2.05f, 7.05f);
+    }
+
+    private static void RemoveLegacyExteriorHorizon()
+    {
+        GameObject legacyHorizon = GameObject.Find("Exterior green horizon");
+        if (legacyHorizon != null)
+        {
+            Object.Destroy(legacyHorizon);
+        }
+    }
+
+    private static void RemoveLegacyVisibleSun()
+    {
+        string[] legacySunObjects =
+        {
+            "Exterior visible sun",
+            "Exterior sun halo"
+        };
+        for (int i = 0; i < legacySunObjects.Length; i++)
+        {
+            GameObject legacySun = GameObject.Find(legacySunObjects[i]);
+            if (legacySun != null)
+            {
+                Object.Destroy(legacySun);
+            }
+        }
     }
 
     private static Bounds FindEquipmentBounds(PlayerMovement player)
@@ -264,16 +292,6 @@ public static class GymInteriorBuilder
             accent,
             false);
 
-        // Give visitors a small exterior landing so the same physical path is
-        // usable on both sides of the wall.
-        CreateBox(
-            "Visitor Door Exterior Landing",
-            parent,
-            new Vector3(wallX + 2.35f, center.y - 0.12f, doorZ),
-            new Vector3(4.6f, 0.24f, doorWidth + 2.2f),
-            wall,
-            true);
-
         Vector3 interiorPoint = new Vector3(wallX - 1.45f, center.y, doorZ);
         Vector3 exteriorPoint = new Vector3(wallX + 3.25f, center.y, doorZ);
         doorway.Configure(doorCenter, interiorPoint, exteriorPoint, panel.transform);
@@ -324,46 +342,19 @@ public static class GymInteriorBuilder
         Transform parent, Vector3 center, float width, float depth, float openingBottom, float openingTop)
     {
         float exteriorZ = center.z + depth * 0.5f + 8f;
-        Material sky = CreateMaterial("Exterior blue sky", new Color(0.18f, 0.48f, 0.86f), 0f, 0.08f);
-        SetEmission(sky, new Color(0.22f, 0.58f, 1.1f));
-        Material ground = CreateMaterial("Exterior landscape", new Color(0.075f, 0.2f, 0.07f), 0f, 0.12f);
-        Material sunMaterial = CreateMaterial("Visible sun", new Color(1f, 0.74f, 0.24f), 0f, 0.2f);
-        SetEmission(sunMaterial, new Color(8f, 5.5f, 1.4f));
-        Material moonMaterial = CreateMaterial("Visible moon", new Color(0.78f, 0.86f, 1f), 0f, 0.15f);
-        SetEmission(moonMaterial, new Color(1.25f, 1.55f, 2.4f));
+        Material moonMaterial = CreateMaterial(
+            "Visible moon core", new Color(0.68f, 0.82f, 1f), 0f, 0.12f);
+        SetEmission(moonMaterial, new Color(2.2f, 3.5f, 6f));
+        Material moonHaloMaterial = CreateTransparentMaterial(
+            "Visible moon halo", new Color(0.2f, 0.45f, 1f, 0.13f), 0.02f);
+        SetEmission(moonHaloMaterial, new Color(1.2f, 2.2f, 5f));
 
-        CreateBox(
-            "Exterior sky backdrop",
-            parent,
-            new Vector3(center.x, center.y + (openingBottom + openingTop) * 0.5f + 1.2f, exteriorZ),
-            new Vector3(width * 1.35f, openingTop - openingBottom + 4f, 0.2f),
-            sky,
-            false);
-        CreateBox(
-            "Exterior green horizon",
-            parent,
-            new Vector3(center.x, center.y + openingBottom - 0.55f, center.z + depth * 0.5f + 4.5f),
-            new Vector3(width * 1.2f, 1.1f, 8f),
-            ground,
-            false);
-
-        GameObject sun = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        sun.name = "Exterior visible sun";
-        sun.transform.SetParent(parent, true);
-        sun.transform.position = new Vector3(
-            center.x + Mathf.Min(width * 0.28f, 9f), center.y + openingTop - 0.65f, exteriorZ - 0.4f);
-        sun.transform.localScale = Vector3.one * 1.35f;
-        sun.GetComponent<Renderer>().sharedMaterial = sunMaterial;
-        Object.Destroy(sun.GetComponent<Collider>());
-
-        GameObject moon = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        moon.name = "Exterior visible moon";
-        moon.transform.SetParent(parent, true);
-        moon.transform.position = new Vector3(
-            center.x - Mathf.Min(width * 0.24f, 8f), center.y + openingBottom + 2.6f, exteriorZ - 0.45f);
-        moon.transform.localScale = Vector3.one * 1.02f;
-        moon.GetComponent<Renderer>().sharedMaterial = moonMaterial;
-        Object.Destroy(moon.GetComponent<Collider>());
+        Vector3 moonStart = new Vector3(
+            center.x - Mathf.Min(width * 0.24f, 8f),
+            center.y + openingBottom + 2.6f,
+            exteriorZ - 0.45f);
+        CreateCelestialSphere(parent, "Exterior visible moon", moonStart, 3.8f, moonMaterial);
+        CreateCelestialSphere(parent, "Exterior moon halo", moonStart, 13f, moonHaloMaterial);
 
         for (int i = -2; i <= 2; i++)
         {
@@ -374,7 +365,7 @@ public static class GymInteriorBuilder
             beamObject.transform.rotation = Quaternion.LookRotation(target - beamObject.transform.position, Vector3.up);
             Light beam = beamObject.AddComponent<Light>();
             beam.type = LightType.Spot;
-            beam.color = new Color(1f, 0.79f, 0.54f);
+            beam.color = new Color(0.68f, 0.84f, 1f);
             beam.intensity = 1450f;
             beam.range = 18f;
             beam.spotAngle = 38f;
@@ -383,6 +374,29 @@ public static class GymInteriorBuilder
             // spot shadows overflow URP's atlas and add avoidable Play Mode lag.
             beam.shadows = LightShadows.None;
         }
+    }
+
+    private static GameObject CreateCelestialSphere(
+        Transform parent,
+        string name,
+        Vector3 position,
+        float diameter,
+        Material material)
+    {
+        GameObject celestialBody = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        celestialBody.name = name;
+        celestialBody.transform.SetParent(parent, true);
+        celestialBody.transform.position = position;
+        celestialBody.transform.localScale = Vector3.one * diameter;
+        Renderer renderer = celestialBody.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+        }
+        Object.Destroy(celestialBody.GetComponent<Collider>());
+        return celestialBody;
     }
 
     private static void CreateWallBand(
@@ -514,16 +528,28 @@ public static class GymInteriorBuilder
         bool foundDirectional = false;
         for (int i = 0; i < existingLights.Length; i++)
         {
-            if (existingLights[i].type == LightType.Directional)
+            if (existingLights[i] == null || existingLights[i].type != LightType.Directional)
             {
-                foundDirectional = true;
-                existingLights[i].name = "Warm exterior sun";
-                existingLights[i].intensity = 1.15f;
-                existingLights[i].color = new Color(1f, 0.79f, 0.6f);
-                existingLights[i].transform.rotation = Quaternion.Euler(42f, -32f, 0f);
-                existingLights[i].shadows = LightShadows.Soft;
-                existingLights[i].shadowStrength = 0.78f;
+                continue;
             }
+
+            if (foundDirectional)
+            {
+                // Keep exactly one directional sun. A second authored
+                // directional light creates a second sky disk and flattens
+                // the blue exterior lighting.
+                existingLights[i].enabled = false;
+                existingLights[i].name = "Disabled duplicate exterior sun";
+                continue;
+            }
+
+            foundDirectional = true;
+            existingLights[i].name = "Warm exterior sun";
+            existingLights[i].intensity = 1.15f;
+            existingLights[i].color = new Color(0.72f, 0.86f, 1f);
+            existingLights[i].transform.rotation = Quaternion.Euler(42f, -32f, 0f);
+            existingLights[i].shadows = LightShadows.Soft;
+            existingLights[i].shadowStrength = 0.78f;
         }
 
         if (!foundDirectional)
@@ -533,7 +559,7 @@ public static class GymInteriorBuilder
             sunObject.transform.rotation = Quaternion.Euler(42f, -32f, 0f);
             Light sun = sunObject.AddComponent<Light>();
             sun.type = LightType.Directional;
-            sun.color = new Color(1f, 0.79f, 0.6f);
+            sun.color = new Color(0.72f, 0.86f, 1f);
             sun.intensity = 1.15f;
             sun.shadows = LightShadows.Soft;
             sun.shadowStrength = 0.78f;

@@ -720,7 +720,7 @@ PlayerSettings:
   switchRamDiskSpaceSize: 12
   switchUpgradedPlayerSettingsToNMETA: 0
   switchCaStoreSource: 0
-  switchCaStoreFilePath:
+  switchCaStoreFilePath: 
   ps4NPAgeRating: 12
   ps4NPTitleSecret: 
   ps4NPTrophyPackPath: 

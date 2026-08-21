@@ -17,9 +17,6 @@ public sealed class GymTimeOfDay : MonoBehaviour
     private Vector3 roomCenter;
     private float roomWidth;
     private float roomDepth;
-    private float windowBottom;
-    private float windowTop;
-    private float exteriorZ;
     private float time01;
     private int currentDay;
     private bool configured;
@@ -27,21 +24,20 @@ public sealed class GymTimeOfDay : MonoBehaviour
 
     private Light sunLight;
     private Light moonLight;
-    private Renderer skyRenderer;
-    private Renderer horizonRenderer;
-    private Renderer sunRenderer;
     private Renderer moonRenderer;
-    private Material skyMaterial;
-    private Material horizonMaterial;
-    private Material sunMaterial;
+    private Renderer moonHaloRenderer;
     private Material moonMaterial;
+    private Material moonHaloMaterial;
+    private Material proceduralSkyboxMaterial;
+    private Material previousSkyboxMaterial;
+    private bool ownsProceduralSkybox;
     private Light[] windowSunLights;
     private bool loggedLighting;
     private bool lastUsingSun;
 
-    private readonly Color dayAmbientSky = new Color(0.32f, 0.4f, 0.54f);
-    private readonly Color dayAmbientEquator = new Color(0.18f, 0.2f, 0.25f);
-    private readonly Color dayAmbientGround = new Color(0.035f, 0.045f, 0.075f);
+    private readonly Color dayAmbientSky = new Color(0.3f, 0.44f, 0.66f);
+    private readonly Color dayAmbientEquator = new Color(0.14f, 0.22f, 0.34f);
+    private readonly Color dayAmbientGround = new Color(0.025f, 0.05f, 0.09f);
 
     public event Action<int> DayChanged;
 
@@ -82,15 +78,13 @@ public sealed class GymTimeOfDay : MonoBehaviour
         roomCenter = center;
         roomWidth = width;
         roomDepth = depth;
-        windowBottom = openingBottom;
-        windowTop = openingTop;
-        exteriorZ = center.z + depth * 0.5f + 8f;
         time01 = Mathf.Repeat(startTime01, 1f);
         configured = true;
         CacheSceneVisuals();
         ApplyVisuals();
         Debug.Log(
-            $"GYMCHAOS_TIME_OK dayLength={simulatedDayLengthSeconds:F1}s start={time01:F3}",
+            $"GYMCHAOS_TIME_OK dayLength={simulatedDayLengthSeconds:F1}s start={time01:F3} " +
+            $"skybox={(proceduralSkyboxMaterial != null ? "procedural" : "fallback")} sun=single-sky-disk moon=3d",
             this);
     }
 
@@ -145,6 +139,17 @@ public sealed class GymTimeOfDay : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (ownsProceduralSkybox && RenderSettings.skybox == proceduralSkyboxMaterial)
+        {
+            RenderSettings.skybox = previousSkyboxMaterial;
+        }
+
+        if (proceduralSkyboxMaterial != null)
+        {
+            Destroy(proceduralSkyboxMaterial);
+            proceduralSkyboxMaterial = null;
+        }
+
         if (Instance == this)
         {
             Instance = null;
@@ -183,14 +188,11 @@ public sealed class GymTimeOfDay : MonoBehaviour
 
     private void CacheSceneVisuals()
     {
-        skyRenderer = FindRenderer("Exterior sky backdrop");
-        horizonRenderer = FindRenderer("Exterior green horizon");
-        sunRenderer = FindRenderer("Exterior visible sun");
         moonRenderer = FindRenderer("Exterior visible moon");
-        skyMaterial = GetRuntimeMaterial(skyRenderer);
-        horizonMaterial = GetRuntimeMaterial(horizonRenderer);
-        sunMaterial = GetRuntimeMaterial(sunRenderer);
+        moonHaloRenderer = FindRenderer("Exterior moon halo");
         moonMaterial = GetRuntimeMaterial(moonRenderer);
+        moonHaloMaterial = GetRuntimeMaterial(moonHaloRenderer);
+        EnsureProceduralSkybox();
 
         sunLight = FindLight("Warm exterior sun");
         if (sunLight == null)
@@ -199,7 +201,7 @@ public sealed class GymTimeOfDay : MonoBehaviour
             sunObject.transform.SetParent(transform, true);
             sunLight = sunObject.AddComponent<Light>();
             sunLight.type = LightType.Directional;
-            sunLight.color = new Color(1f, 0.79f, 0.6f);
+            sunLight.color = new Color(0.72f, 0.86f, 1f);
             sunLight.shadows = LightShadows.Soft;
             sunLight.shadowStrength = 0.78f;
         }
@@ -245,66 +247,49 @@ public sealed class GymTimeOfDay : MonoBehaviour
         float night = 1f - daylight;
         float sunAngle = (time01 - 0.25f) * Mathf.PI * 2f;
         float moonAngle = sunAngle + Mathf.PI;
-        float exteriorWidth = Mathf.Max(8f, roomWidth * 0.38f);
-        float visibleHeight = Mathf.Max(1f, windowTop - windowBottom);
+        float celestialRadius = Mathf.Max(roomWidth, roomDepth) * 1.85f + 95f;
+        Vector3 celestialCenter = roomCenter + Vector3.up * 2f;
+        Vector3 sunPosition = GetCelestialPosition(celestialCenter, sunAngle, celestialRadius);
+        Vector3 moonPosition = GetCelestialPosition(
+            celestialCenter, moonAngle, celestialRadius * 0.94f);
 
-        if (sunRenderer != null)
-        {
-            sunRenderer.enabled = daylight >= 0.25f;
-            sunRenderer.transform.position = new Vector3(
-                roomCenter.x + Mathf.Cos(sunAngle) * exteriorWidth,
-                roomCenter.y + windowBottom + visibleHeight * (0.2f + 0.75f * Mathf.Max(0f, Mathf.Sin(sunAngle))),
-                exteriorZ - 0.4f);
-        }
         if (moonRenderer != null)
         {
             moonRenderer.enabled = night >= 0.25f;
-            moonRenderer.transform.position = new Vector3(
-                roomCenter.x + Mathf.Cos(moonAngle) * exteriorWidth * 0.85f,
-                roomCenter.y + windowBottom + visibleHeight * (0.25f + 0.65f * Mathf.Max(0f, Mathf.Sin(moonAngle))),
-                exteriorZ - 0.45f);
+            moonRenderer.transform.position = moonPosition;
+        }
+        if (moonHaloRenderer != null)
+        {
+            moonHaloRenderer.enabled = night >= 0.25f;
+            moonHaloRenderer.transform.position = moonPosition;
         }
 
-        SetMaterialColor(skyMaterial, Color.Lerp(
-            new Color(0.18f, 0.48f, 0.86f),
-            new Color(0.008f, 0.015f, 0.055f), night));
-        SetMaterialEmission(skyMaterial, Color.Lerp(
-            new Color(0.22f, 0.58f, 1.1f),
-            new Color(0.004f, 0.008f, 0.025f), night));
-        SetMaterialColor(horizonMaterial, Color.Lerp(
-            new Color(0.075f, 0.2f, 0.07f),
-            new Color(0.008f, 0.018f, 0.035f), night));
-        SetMaterialColor(sunMaterial, Color.Lerp(
-            new Color(1f, 0.74f, 0.24f),
-            new Color(0.08f, 0.045f, 0.02f), night));
-        SetMaterialEmission(sunMaterial, Color.Lerp(
-            new Color(8f, 5.5f, 1.4f),
-            Color.black, night));
         SetMaterialColor(moonMaterial, Color.Lerp(
-            new Color(0.05f, 0.07f, 0.13f),
+            new Color(0.08f, 0.11f, 0.2f),
             new Color(0.78f, 0.86f, 1f), night));
         SetMaterialEmission(moonMaterial, Color.Lerp(
             Color.black,
-            new Color(1.25f, 1.55f, 2.4f), night));
+            new Color(2.2f, 3.5f, 6f), night));
+        SetMaterialColor(moonHaloMaterial, Color.Lerp(
+            new Color(0.08f, 0.18f, 0.42f, 0f),
+            new Color(0.2f, 0.45f, 1f, 0.13f), night));
+        SetMaterialEmission(moonHaloMaterial, Color.Lerp(
+            Color.black, new Color(1.2f, 2.2f, 5f), night));
 
         if (sunLight != null)
         {
             sunLight.intensity = 1.15f * daylight;
             sunLight.color = Color.Lerp(
-                new Color(1f, 0.79f, 0.6f),
-                new Color(0.16f, 0.12f, 0.18f), night);
-            sunLight.transform.rotation = Quaternion.Euler(
-                28f + Mathf.Max(0f, Mathf.Sin(sunAngle)) * 54f,
-                -32f + time01 * 360f,
-                0f);
+                new Color(0.72f, 0.86f, 1f),
+                new Color(0.08f, 0.12f, 0.28f), night);
+            sunLight.transform.rotation = Quaternion.LookRotation(
+                (sunPosition - roomCenter).normalized, Vector3.up);
         }
         if (moonLight != null)
         {
             moonLight.intensity = 0.32f * night;
-            moonLight.transform.rotation = Quaternion.Euler(
-                35f + Mathf.Max(0f, Mathf.Sin(moonAngle)) * 35f,
-                148f + time01 * 360f,
-                0f);
+            moonLight.transform.rotation = Quaternion.LookRotation(
+                (moonPosition - roomCenter).normalized, Vector3.up);
         }
 
         // URP has one main directional light. Keep the day/night pair
@@ -330,11 +315,12 @@ public sealed class GymTimeOfDay : MonoBehaviour
         }
 
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-        RenderSettings.ambientSkyColor = Color.Lerp(dayAmbientSky, new Color(0.012f, 0.02f, 0.06f), night);
-        RenderSettings.ambientEquatorColor = Color.Lerp(dayAmbientEquator, new Color(0.018f, 0.022f, 0.045f), night);
-        RenderSettings.ambientGroundColor = Color.Lerp(dayAmbientGround, new Color(0.006f, 0.008f, 0.018f), night);
-        RenderSettings.ambientIntensity = Mathf.Lerp(1.12f, 0.38f, night);
+        RenderSettings.ambientSkyColor = Color.Lerp(dayAmbientSky, new Color(0.012f, 0.025f, 0.09f), night);
+        RenderSettings.ambientEquatorColor = Color.Lerp(dayAmbientEquator, new Color(0.012f, 0.03f, 0.08f), night);
+        RenderSettings.ambientGroundColor = Color.Lerp(dayAmbientGround, new Color(0.006f, 0.014f, 0.04f), night);
+        RenderSettings.ambientIntensity = Mathf.Lerp(1.08f, 0.38f, night);
         RenderSettings.sun = useSun ? sunLight : moonLight;
+        UpdateProceduralSkybox(night);
 
         if (!loggedLighting || lastUsingSun != useSun)
         {
@@ -357,6 +343,79 @@ public sealed class GymTimeOfDay : MonoBehaviour
             loggedNight = true;
             Debug.Log($"GYMCHAOS_NIGHT_VISIBLE day={currentDay} time={time01:F3}", this);
         }
+    }
+
+    private void EnsureProceduralSkybox()
+    {
+        if (proceduralSkyboxMaterial != null)
+        {
+            return;
+        }
+
+        Shader shader = Shader.Find("Skybox/Procedural");
+        if (shader == null)
+        {
+            Debug.LogWarning("Gym exterior could not create the procedural skybox because Skybox/Procedural is missing.", this);
+            return;
+        }
+
+        previousSkyboxMaterial = RenderSettings.skybox;
+        proceduralSkyboxMaterial = new Material(shader);
+        proceduralSkyboxMaterial.name = "Gym Exterior Procedural Sky";
+        proceduralSkyboxMaterial.SetFloat("_SunSize", 0.035f);
+        proceduralSkyboxMaterial.SetFloat("_SunSizeConvergence", 5f);
+        proceduralSkyboxMaterial.SetFloat("_AtmosphereThickness", 1.1f);
+        proceduralSkyboxMaterial.SetFloat("_Exposure", 1f);
+        if (proceduralSkyboxMaterial.HasProperty("_SunDisk"))
+        {
+            proceduralSkyboxMaterial.SetFloat("_SunDisk", 1f);
+        }
+
+        RenderSettings.skybox = proceduralSkyboxMaterial;
+        ownsProceduralSkybox = true;
+    }
+
+    private void UpdateProceduralSkybox(float night)
+    {
+        if (proceduralSkyboxMaterial == null)
+        {
+            return;
+        }
+
+        SetSkyboxColor(
+            proceduralSkyboxMaterial,
+            "_SkyTint",
+            Color.Lerp(new Color(0.42f, 0.62f, 0.9f), new Color(0.018f, 0.04f, 0.14f), night));
+        SetSkyboxColor(
+            proceduralSkyboxMaterial,
+            "_GroundColor",
+            Color.Lerp(new Color(0.1f, 0.18f, 0.28f), new Color(0.008f, 0.016f, 0.04f), night));
+        SetSkyboxColor(
+            proceduralSkyboxMaterial,
+            "_SunColor",
+            Color.Lerp(new Color(0.88f, 0.96f, 1f), new Color(0.06f, 0.12f, 0.34f), night));
+        proceduralSkyboxMaterial.SetFloat(
+            "_AtmosphereThickness", Mathf.Lerp(1.15f, 0.78f, night));
+        proceduralSkyboxMaterial.SetFloat(
+            "_Exposure", Mathf.Lerp(1.04f, 0.62f, night));
+        proceduralSkyboxMaterial.SetFloat("_SunSize", Mathf.Lerp(0.045f, 0.028f, night));
+        proceduralSkyboxMaterial.SetFloat("_SunSizeConvergence", 5f);
+        if (proceduralSkyboxMaterial.HasProperty("_SunDisk"))
+        {
+            // RenderSettings.sun points at the active moon after the night
+            // hand-off. Hide the procedural disk then so the 3D moon is the
+            // only visible celestial source instead of a duplicate disk.
+            proceduralSkyboxMaterial.SetFloat("_SunDisk", night > 0.5f ? 0f : 1f);
+        }
+    }
+
+    private static Vector3 GetCelestialPosition(Vector3 center, float angle, float radius)
+    {
+        Vector3 direction = new Vector3(
+            Mathf.Cos(angle) * 0.62f,
+            0.34f + Mathf.Sin(angle) * 0.48f,
+            0.74f);
+        return center + direction.normalized * radius;
     }
 
     private static float CalculateDaylight(float value01)
@@ -414,6 +473,14 @@ public sealed class GymTimeOfDay : MonoBehaviour
         if (material.HasProperty("_EmissionColor"))
         {
             material.SetColor("_EmissionColor", color);
+        }
+    }
+
+    private static void SetSkyboxColor(Material material, string propertyName, Color color)
+    {
+        if (material != null && material.HasProperty(propertyName))
+        {
+            material.SetColor(propertyName, color);
         }
     }
 }

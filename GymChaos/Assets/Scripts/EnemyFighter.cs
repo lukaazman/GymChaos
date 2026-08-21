@@ -3201,6 +3201,10 @@ public class EnemyFighter : MonoBehaviour
         externalBodyAnimator?.SetPunchDirection(direction);
         externalBodyAnimator?.SetPunchTarget(
             currentTarget != null ? currentTarget.position : transform.position + direction);
+        GymAudio.Play(
+            GymSoundEffect.PunchAction,
+            transform.position + Vector3.up * 1.1f + direction * 0.35f,
+            0.58f);
         body.AddForce(direction * 0.65f, ForceMode.Impulse);
         if (IsGoku())
         {
@@ -3239,6 +3243,10 @@ public class EnemyFighter : MonoBehaviour
             bool rightHit = IsPunchHandTouchingTarget(rightHand, currentTarget);
             if (leftHit || rightHit)
             {
+                Vector3 feedbackPosition = currentTarget != null
+                    ? currentTarget.position
+                    : transform.position;
+                GymAudio.Play(GymSoundEffect.PunchFeedback, feedbackPosition, 1f);
                 Vector3 direction = currentTarget != null
                     ? Vector3.ProjectOnPlane(currentTarget.position - transform.position, Vector3.up).normalized
                     : transform.forward;
@@ -3899,6 +3907,7 @@ public class EnemyFighter : MonoBehaviour
         ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
         Vector3 bloodPoint = collision.contactCount > 0 ? contact.point : transform.position + Vector3.up;
         Vector3 bloodNormal = collision.contactCount > 0 ? contact.normal : -collision.relativeVelocity.normalized;
+        GymAudio.Play(GymSoundEffect.ThrownEnemyImpact, bloodPoint, 0.9f);
         BloodSplatter.SpawnOnBody(
             this, bloodPoint, bloodNormal,
             BloodSplatter.GetThrownScale(item.ItemType, item.BaseMass),

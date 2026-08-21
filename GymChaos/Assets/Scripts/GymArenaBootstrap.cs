@@ -37,8 +37,12 @@ public class GymArenaBootstrap : MonoBehaviour
     private int webGlPickupFallbackCount;
 
     private PlayerMovement player;
+    private GymRadio radio;
+    private bool gameplayStarted;
 
     private static bool IsWebGlPlayer => Application.platform == RuntimePlatform.WebGLPlayer;
+
+    public static bool IsGameplayStarted => instance != null && instance.gameplayStarted;
 
     public static void EnsureExists(PlayerMovement player)
     {
@@ -192,18 +196,63 @@ public class GymArenaBootstrap : MonoBehaviour
         }
     }
 
+    public void BeginGameplay()
+    {
+        if (gameplayStarted)
+        {
+            return;
+        }
+
+        gameplayStarted = true;
+        if (player != null)
+        {
+            Transform playerRig = player.transform.Find("PlayerAvatarRig");
+            if (playerRig != null)
+            {
+                playerRig.gameObject.SetActive(true);
+            }
+
+            player.enabled = true;
+        }
+
+        SpawnNeutralReceptionNpc();
+        SpawnEnemies();
+        GymVisitorDirector.CreateForScene(player);
+        if (radio != null)
+        {
+            radio.BeginPlayback();
+        }
+        Debug.Log("GYMCHAOS_GAMEPLAY_READY", this);
+    }
+
     private void Initialize(PlayerMovement targetPlayer)
     {
         player = targetPlayer;
         GymInteriorBuilder.Build(player);
+        GymOutdoorBuilder.Build(player);
         EquipmentMaterialRestorer.ApplyToScene();
         EnsureSceneColliders();
         MarkSpatiallyMountedWeightCandidates();
         EnsureWeightGameplayObjects();
+        GymAudio.CreateForScene();
+        radio = GymRadio.CreateForScene();
         GymExerciseStation.CreateForScene();
-        SpawnNeutralReceptionNpc();
-        SpawnEnemies();
-        GymVisitorDirector.CreateForScene(player);
+
+        if (Application.isBatchMode)
+        {
+            // Existing headless verifiers do not have a UI click to press.
+            // Keep their runtime contract intact while the player-facing
+            // editor/WebGL boot path still opens on the start screen.
+            BeginGameplay();
+        }
+        else
+        {
+            GymStartScreen startScreen = GymStartScreen.CreateForScene(this, player);
+            if (startScreen == null)
+            {
+                BeginGameplay();
+            }
+        }
     }
 
     private bool ShouldIgnoreRenderer(Transform target)
@@ -229,11 +278,37 @@ public class GymArenaBootstrap : MonoBehaviour
             return true;
         }
 
+        // GymOutdoorBuilder owns its colliders for the continuous courtyard,
+        // slabs and perimeter. Decorative paint, lamp heads and foliage do
+        // not need fallback mesh/box colliders; registering those renderers
+        // would create invisible snags on the walking surface.
+        for (Transform current = target; current != null; current = current.parent)
+        {
+            if (current.name == "Gym Exterior (Runtime)")
+            {
+                return true;
+            }
+        }
+
         // The source scene contains a large Plane at y=0. The generated
         // Rubber Floor is the gameplay floor; registering the source Plane as
         // a static obstacle makes every spawn capsule overlap the whole room.
-        if (lowerName == "plane" || lowerName.StartsWith("plane("))
+        // Its renderer must also be disabled: it sits above the generated
+        // floor at runtime and otherwise covers the procedural parking lot.
+        if (lowerName == "plane" || lowerName.StartsWith("plane(") || lowerName.StartsWith("plane ("))
         {
+            Renderer sourceRenderer = target.GetComponent<Renderer>();
+            if (sourceRenderer != null)
+            {
+                sourceRenderer.enabled = false;
+            }
+
+            Collider sourceCollider = target.GetComponent<Collider>();
+            if (sourceCollider != null)
+            {
+                sourceCollider.enabled = false;
+            }
+
             return true;
         }
 

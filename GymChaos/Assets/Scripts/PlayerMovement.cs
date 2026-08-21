@@ -86,6 +86,7 @@ public class PlayerMovement : MonoBehaviour
     private PickupItem heldItem;
     private Collider[] playerColliders;
     private GymExerciseStation nearbyExerciseStation;
+    private GymRadio nearbyRadio;
     private GymExerciseStation activeExerciseStation;
     private GymExerciseStation pendingWeightStation;
     private Vector3 positionBeforeExercise;
@@ -129,6 +130,29 @@ public class PlayerMovement : MonoBehaviour
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
     public bool IsDead { get; private set; }
 
+    public void CaptureCursorForGameplay()
+    {
+        if (playerCamera == null || IsDead)
+        {
+            return;
+        }
+
+        // PLAY is already a trusted user gesture. Capture the cursor here so
+        // the first gameplay frame is immediately ready for mouse look, while
+        // suppressing the same click from becoming a punch or shove.
+        suppressGameplayInputThisFrame = true;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // The WebGL canvas mousedown handler requests pointer lock directly
+        // from the browser gesture before Unity invokes this callback.
+        bool webGlCaptured = IsCursorCaptured;
+        Cursor.visible = !webGlCaptured;
+        showCursor = !webGlCaptured;
+#else
+        LockCursor(true);
+#endif
+        Debug.Log("GYMCHAOS_CURSOR_CAPTURED_AFTER_PLAY", this);
+    }
+
     private void Start()
     {
         maxHealth = 200f;
@@ -165,7 +189,11 @@ public class PlayerMovement : MonoBehaviour
         // Browsers only permit pointer lock from a focused user gesture.
         // Do not request it during WebGL startup; TryCaptureCursor() retries
         // the lock from the first real click on the game canvas instead.
-        if (Application.platform == RuntimePlatform.WebGLPlayer)
+        if (!GymArenaBootstrap.IsGameplayStarted)
+        {
+            LockCursor(false);
+        }
+        else if (Application.platform == RuntimePlatform.WebGLPlayer)
         {
             LockCursor(false);
         }
@@ -225,6 +253,13 @@ public class PlayerMovement : MonoBehaviour
         }
 
         nearbyExerciseStation = GymExerciseStation.FindClosest(transform.position, 3.15f);
+        nearbyRadio = GymRadio.FindClosest(transform.position, 3.1f);
+        if (nearbyRadio != null && ReadRadioTogglePressed())
+        {
+            nearbyRadio.ToggleMusic();
+            return;
+        }
+
         if (nearbyExerciseStation != null && ReadExerciseStartPressed())
         {
             if (nearbyExerciseStation.RequiresWeightSelection)
@@ -456,6 +491,11 @@ public class PlayerMovement : MonoBehaviour
 
     private void PerformPunch()
     {
+        Vector3 punchSoundPosition = transform.position +
+            Vector3.up * (characterController.height * 0.58f) +
+            transform.forward * 0.42f;
+        GymAudio.Play(GymSoundEffect.PunchAction, punchSoundPosition, 0.58f);
+
         if (handRig != null)
         {
             handRig.TriggerPunch(useRightHandNext);
@@ -479,6 +519,7 @@ public class PlayerMovement : MonoBehaviour
         }
         if (enemy != null)
         {
+            GymAudio.Play(GymSoundEffect.PunchFeedback, hit.point, 1f);
             enemy.TakeMeleeHit(impulse, 5f, punchStun);
             BloodSplatter.SpawnOnBody(enemy, hit.point, hit.normal, 0.82f, hit.collider.transform);
         }
@@ -1304,6 +1345,13 @@ public class PlayerMovement : MonoBehaviour
 
     private void OnGUI()
     {
+        // The fullscreen start screen owns the frame until Play is selected.
+        // Keep the legacy IMGUI HUD from leaking through the cinematic menu.
+        if (GymStartScreen.IsMenuVisible)
+        {
+            return;
+        }
+
         if (IsDead)
         {
             DrawDeathOverlay();
@@ -1341,7 +1389,7 @@ public class PlayerMovement : MonoBehaviour
 
         string heldText = heldItem == null ? "Hands free" : $"Holding: {heldItem.DisplayName}";
         string hud = $"Gym Chaos  |  Opponents: {EnemyFighter.ActiveCount}\n" +
-                     $"LMB punch / throw   RMB shove   E pick up / drop   F exercise   Shift sprint   C crouch   Space jump\n" +
+                     $"LMB punch / throw   RMB shove   E pick up / drop   F exercise   R radio   Shift sprint   C crouch   Space jump\n" +
                      $"{heldText}";
         GUI.Label(new Rect(16f, 16f, 940f, 60f), hud, hudStyle);
 
@@ -1360,10 +1408,26 @@ public class PlayerMovement : MonoBehaviour
             GUI.Label(captureRect, "CLICK THE GAME TO LOOK AROUND\nESC releases the cursor", captureStyle);
         }
 
+        float promptBottom = Screen.height - 105f;
+        if (nearbyRadio != null)
+        {
+            float width = 440f;
+            Rect radioPromptRect = new Rect(
+                (Screen.width - width) * 0.5f, promptBottom, width, 54f);
+            GUI.Box(radioPromptRect, string.Empty);
+            GUIStyle radioPromptStyle = new GUIStyle(GUI.skin.label);
+            radioPromptStyle.alignment = TextAnchor.MiddleCenter;
+            radioPromptStyle.fontSize = 20;
+            radioPromptStyle.fontStyle = FontStyle.Bold;
+            radioPromptStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
+            GUI.Label(radioPromptRect, nearbyRadio.GetInteractionPrompt(), radioPromptStyle);
+            promptBottom -= 64f;
+        }
+
         if (nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer)
         {
             float width = 440f;
-            Rect promptRect = new Rect((Screen.width - width) * 0.5f, Screen.height - 105f, width, 54f);
+            Rect promptRect = new Rect((Screen.width - width) * 0.5f, promptBottom, width, 54f);
             GUI.Box(promptRect, string.Empty);
             GUIStyle promptStyle = new GUIStyle(GUI.skin.label);
             promptStyle.alignment = TextAnchor.MiddleCenter;
@@ -1562,6 +1626,15 @@ public class PlayerMovement : MonoBehaviour
         return Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame;
 #else
         return Input.GetKeyDown(KeyCode.E);
+#endif
+    }
+
+    private bool ReadRadioTogglePressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.R);
 #endif
     }
 

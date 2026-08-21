@@ -24,6 +24,7 @@ public class PickupItem : MonoBehaviour
     private Collider[] itemColliders;
     private Coroutine collisionRestoreRoutine;
     private bool wasThrown;
+    private bool thrownImpactSoundPlayed;
 
     public bool IsHeld { get; private set; }
     public bool IsThrowableWeapon => weightType != WeightType.None;
@@ -88,6 +89,7 @@ public class PickupItem : MonoBehaviour
 
         IsHeld = true;
         wasThrown = false;
+        thrownImpactSoundPlayed = false;
         transform.rotation = Quaternion.LookRotation(viewForward, Vector3.up);
 
         body.isKinematic = false;
@@ -158,6 +160,7 @@ public class PickupItem : MonoBehaviour
     public void Throw(Vector3 impulse, Collider[] playerColliders, float restoreDelay, bool allowSpin)
     {
         wasThrown = true;
+        thrownImpactSoundPlayed = false;
         Release(playerColliders, restoreDelay);
         if (body != null)
         {
@@ -185,6 +188,7 @@ public class PickupItem : MonoBehaviour
     public void MarkAsMeleePushed()
     {
         wasThrown = false;
+        thrownImpactSoundPlayed = false;
     }
 
     public bool TryConsumeThrownHit()
@@ -195,6 +199,47 @@ public class PickupItem : MonoBehaviour
         }
         wasThrown = false;
         return true;
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (!wasThrown || thrownImpactSoundPlayed || !IsThrowableWeapon || collision == null ||
+            collision.collider == null)
+        {
+            return;
+        }
+
+        Collider target = collision.collider;
+        if (target.GetComponentInParent<GlassShatterPanel>() != null ||
+            target.GetComponentInParent<EnemyFighter>() != null ||
+            target.GetComponentInParent<PickupItem>() == this)
+        {
+            // GlassShatterPanel and EnemyFighter own their authenticated hit
+            // handling, so this object must not consume their thrown flag first.
+            return;
+        }
+
+        float impactSpeed = collision.relativeVelocity.magnitude;
+        float minimumImpactSpeed = ItemType == WeightType.Barbell || ItemType == WeightType.EzBar
+            ? 0.8f
+            : 2.5f;
+        if (impactSpeed < minimumImpactSpeed)
+        {
+            return;
+        }
+
+        ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
+        Vector3 impactPoint = collision.contactCount > 0
+            ? contact.point
+            : transform.position;
+        GymSoundEffect effect = GymAudio.ResolveThrownImpact(this, target);
+        if (effect == GymSoundEffect.None)
+        {
+            return;
+        }
+
+        thrownImpactSoundPlayed = true;
+        GymAudio.Play(effect, impactPoint, 0.88f);
     }
 
     public float GetImpactDamage(float impactSpeed)

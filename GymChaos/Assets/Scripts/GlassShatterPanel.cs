@@ -101,6 +101,10 @@ public sealed class GlassShatterPanel : MonoBehaviour
         }
 
         hasShattered = true;
+        Vector3 shatterSoundPosition = panelRenderer != null
+            ? panelRenderer.bounds.center
+            : transform.position;
+        GymAudio.Play(GymSoundEffect.GlassShatter, shatterSoundPosition, 1f);
         Vector3 panelCenter = panelRenderer != null ? panelRenderer.bounds.center : transform.position;
         Vector3 panelRight = transform.right.normalized;
         Vector3 panelUp = transform.up.normalized;
