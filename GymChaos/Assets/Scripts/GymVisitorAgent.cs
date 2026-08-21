@@ -15,6 +15,9 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private const float WorkoutReleaseStallTimeout = 2.4f;
     private const float WorkoutReleaseTimeout = 8f;
     private const float WorkoutReleaseDistance = 3.35f;
+    private const float DoorwayClearance = 1.35f;
+    private const float DoorwayBodyRadius = 0.58f;
+    private const float DoorwayExitStallTimeout = 4f;
 
     public enum VisitorState
     {
@@ -41,10 +44,17 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private bool leftGym;
     private bool hasSuccessfulEntry;
     private bool completedDoorExit;
+    private bool entryRoomClearPointPending;
+    private bool exitRoomClearPointPending;
+    private bool doorOpenRequestHeld;
+    private Vector3 doorwayClearPoint;
+    private bool hasDoorwayClearPoint;
     private int completedWorkoutVersion;
     private float postWorkoutFreeRoamUntil;
     private float roomTravelStalledSeconds;
     private float lastRoomTravelDistance = float.PositiveInfinity;
+    private float doorwayExitStalledSeconds;
+    private float lastDoorwayExitDistance = float.PositiveInfinity;
     private float workoutApproachStartedAt;
     private float workoutApproachStalledSeconds;
     private float lastWorkoutApproachDistance = float.PositiveInfinity;
@@ -57,6 +67,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private bool applicationQuitting;
     private readonly List<GymExerciseStation> attemptedWorkoutStations =
         new List<GymExerciseStation>(3);
+    private readonly Collider[] doorwayPointHits = new Collider[32];
 
     public VisitorState State => state;
     public bool IsInsideGym => enteredGym && !leftGym && state != VisitorState.Dormant &&
@@ -102,6 +113,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
     public void MarkInitialInside()
     {
+        ReleaseDoorOpenRequest();
         EndWorkoutStationRelease();
         ReleasePendingStationApproach();
         state = VisitorState.FreeRoaming;
@@ -110,8 +122,12 @@ public sealed class GymVisitorAgent : MonoBehaviour
         hasSuccessfulEntry = true;
         completedDoorExit = false;
         doorway = GymDoorway.Instance;
+        hasDoorwayClearPoint = false;
         pendingStation = null;
         squatStartPending = false;
+        entryRoomClearPointPending = false;
+        exitRoomClearPointPending = false;
+        ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
         roomTravelStalledSeconds = 0f;
         lastRoomTravelDistance = float.PositiveInfinity;
@@ -132,7 +148,8 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
         EndWorkoutStationRelease();
         doorway = door;
-        doorway.RequestOpen();
+        hasDoorwayClearPoint = false;
+        HoldDoorOpenRequest();
         roomTarget = GetDoorwayRoomStagingTarget(destinationInside);
         travelTarget = doorway.InteriorPoint;
         state = VisitorState.EnteringDoor;
@@ -140,6 +157,9 @@ public sealed class GymVisitorAgent : MonoBehaviour
         leftGym = false;
         hasSuccessfulEntry = false;
         completedDoorExit = false;
+        entryRoomClearPointPending = false;
+        exitRoomClearPointPending = false;
+        ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
         roomTravelStalledSeconds = 0f;
         lastRoomTravelDistance = float.PositiveInfinity;
@@ -205,9 +225,13 @@ public sealed class GymVisitorAgent : MonoBehaviour
         }
 
         doorway = door;
-        doorway.RequestOpen();
+        hasDoorwayClearPoint = false;
+        HoldDoorOpenRequest();
         pendingStation = null;
-        travelTarget = doorway.InteriorPoint;
+        entryRoomClearPointPending = false;
+        exitRoomClearPointPending = true;
+        travelTarget = GetDoorwayClearPoint();
+        ResetDoorwayExitTracking();
         state = VisitorState.ExitingDoor;
         fighter.StopVisitorMovement();
     }
@@ -220,17 +244,34 @@ public sealed class GymVisitorAgent : MonoBehaviour
         }
 
         doorway = door;
-        doorway.RequestOpen();
+        hasDoorwayClearPoint = false;
+        HoldDoorOpenRequest();
         pendingStation = null;
         enteredGym = false;
         leftGym = false;
         hasSuccessfulEntry = false;
         completedDoorExit = false;
-        // Route even a stalled incoming visitor through the same authored
-        // interior and exterior points. It must never disappear at the
-        // doorway because a navigation timeout fired.
-        travelTarget = doorway.InteriorPoint;
-        state = VisitorState.ExitingDoor;
+        entryRoomClearPointPending = false;
+        // If the visitor has not reached the interior side yet, it is still
+        // outside the gym. Finish at the authored exterior handoff instead of
+        // asking it to cross the door and immediately cross back again.
+        if (state == VisitorState.EnteringDoor)
+        {
+            exitRoomClearPointPending = false;
+            travelTarget = doorway.ExteriorPoint;
+            state = VisitorState.LeavingGym;
+            ResetDoorwayExitTracking();
+        }
+        else
+        {
+            // A stalled visitor already on the room side must leave through
+            // the same clear waypoint used by normal exits. It must never
+            // disappear at the doorway because a navigation timeout fired.
+            exitRoomClearPointPending = true;
+            travelTarget = GetDoorwayClearPoint();
+            state = VisitorState.ExitingDoor;
+            ResetDoorwayExitTracking();
+        }
         fighter.StopVisitorMovement();
         Debug.LogWarning(
             $"GYMCHAOS_VISITOR_ENTRY_ABORT_RETURNING enemy={fighter.Identity}",
@@ -244,13 +285,16 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return;
         }
 
-        doorway?.ReleaseOpen();
+        ReleaseDoorOpenRequest();
         state = VisitorState.Dormant;
         enteredGym = false;
         leftGym = true;
         hasSuccessfulEntry = false;
         completedDoorExit = false;
         pendingStation = null;
+        entryRoomClearPointPending = false;
+        exitRoomClearPointPending = false;
+        ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
         if (fighter != null)
         {
@@ -269,6 +313,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return;
         }
 
+        ReleaseDoorOpenRequest();
         EndWorkoutStationRelease();
         ReleasePendingStationApproach();
         if (squatController != null && squatController.IsActive)
@@ -280,6 +325,9 @@ public sealed class GymVisitorAgent : MonoBehaviour
         leftGym = true;
         completedDoorExit = completedDoorExit || hasSuccessfulEntry;
         pendingStation = null;
+        entryRoomClearPointPending = false;
+        exitRoomClearPointPending = false;
+        ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
         if (fighter != null)
         {
@@ -291,6 +339,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
     public void CancelForCombat()
     {
+        ReleaseDoorOpenRequest();
         squatStartPending = false;
         if (squatController != null && squatController.IsActive)
         {
@@ -309,6 +358,9 @@ public sealed class GymVisitorAgent : MonoBehaviour
         ReleasePendingStationApproach();
         state = enteredGym ? VisitorState.FreeRoaming : VisitorState.Dormant;
         pendingStation = null;
+        entryRoomClearPointPending = false;
+        exitRoomClearPointPending = false;
+        ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
     }
 
@@ -335,9 +387,14 @@ public sealed class GymVisitorAgent : MonoBehaviour
             case VisitorState.EnteringDoor:
                 if (fighter.MoveVisitorTo(travelTarget, 2.2f, true))
                 {
-                    doorway?.ReleaseOpen();
                     state = VisitorState.EnteringRoom;
-                    travelTarget = roomTarget;
+                    Vector3 clearPoint = GetDoorwayClearPoint();
+                    entryRoomClearPointPending =
+                        Vector3.ProjectOnPlane(
+                            clearPoint - fighter.transform.position, Vector3.up).sqrMagnitude > 0.08f;
+                    travelTarget = entryRoomClearPointPending
+                        ? clearPoint
+                        : roomTarget;
                     roomTravelStalledSeconds = 0f;
                     lastRoomTravelDistance = Vector3.ProjectOnPlane(
                         travelTarget - fighter.transform.position, Vector3.up).magnitude;
@@ -353,6 +410,20 @@ public sealed class GymVisitorAgent : MonoBehaviour
                     travelTarget - fighter.transform.position, Vector3.up).magnitude;
                 if (fighter.MoveVisitorTo(travelTarget, 2.15f, false))
                 {
+                    if (entryRoomClearPointPending)
+                    {
+                        // The reception desk sits immediately behind the
+                        // doorway. First clear its footprint laterally, then
+                        // continue to the authored inside staging point.
+                        entryRoomClearPointPending = false;
+                        travelTarget = roomTarget;
+                        roomTravelStalledSeconds = 0f;
+                        lastRoomTravelDistance = Vector3.ProjectOnPlane(
+                            travelTarget - fighter.transform.position, Vector3.up).magnitude;
+                        return true;
+                    }
+
+                    ReleaseDoorOpenRequest();
                     state = VisitorState.FreeRoaming;
                     enteredGym = true;
                     leftGym = false;
@@ -360,6 +431,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
                     completedDoorExit = false;
                     roomTravelStalledSeconds = 0f;
                     lastRoomTravelDistance = 0f;
+                    fighter.ResumeVisitorRoaming();
                     Debug.Log($"GYMCHAOS_VISITOR_ENTERED enemy={fighter.Identity}", this);
                 }
                 else if (roomDistance < lastRoomTravelDistance - 0.025f)
@@ -376,8 +448,10 @@ public sealed class GymVisitorAgent : MonoBehaviour
                             doorway.InteriorPoint - doorway.ExteriorPoint, Vector3.up);
                         if (inward.sqrMagnitude > 0.01f)
                         {
-                            travelTarget = doorway.InteriorPoint +
-                                inward.normalized * 3.6f;
+                            Vector3 fallbackTarget = entryRoomClearPointPending
+                                ? GetDoorwayClearPoint()
+                                : GetDoorwayClearPoint() + inward.normalized * 3.6f;
+                            travelTarget = fallbackTarget;
                             travelTarget.y = fighter.transform.position.y;
                             lastRoomTravelDistance = Vector3.ProjectOnPlane(
                                 travelTarget - fighter.transform.position, Vector3.up).magnitude;
@@ -475,17 +549,36 @@ public sealed class GymVisitorAgent : MonoBehaviour
                 return true;
 
             case VisitorState.ExitingDoor:
-                if (fighter.MoveVisitorTo(travelTarget, 2.2f, true))
+                if (fighter.MoveVisitorTo(travelTarget, 2.2f, false))
                 {
+                    if (exitRoomClearPointPending)
+                    {
+                        // Approach the door from the clear side of the
+                        // reception desk before taking the straight doorway
+                        // segment. This avoids routing the capsule through the
+                        // desk when the visitor is leaving the gym.
+                        exitRoomClearPointPending = false;
+                        travelTarget = doorway != null
+                            ? doorway.InteriorPoint
+                            : travelTarget;
+                        ResetDoorwayExitTracking();
+                        return true;
+                    }
+
                     state = VisitorState.LeavingGym;
                     travelTarget = doorway != null ? doorway.ExteriorPoint : travelTarget;
+                    ResetDoorwayExitTracking();
+                }
+                else
+                {
+                    TryRecoverStalledDoorExit();
                 }
                 return true;
 
             case VisitorState.LeavingGym:
                 if (fighter.MoveVisitorTo(travelTarget, 2.2f, true))
                 {
-                    doorway?.ReleaseOpen();
+                    ReleaseDoorOpenRequest();
                     state = VisitorState.Dormant;
                     enteredGym = false;
                     leftGym = true;
@@ -493,6 +586,10 @@ public sealed class GymVisitorAgent : MonoBehaviour
                     pendingStation = null;
                     fighter.StopVisitorMovement();
                     Debug.Log($"GYMCHAOS_VISITOR_EXITED enemy={fighter.Identity}", this);
+                }
+                else
+                {
+                    TryRecoverStalledDoorExit();
                 }
                 return true;
 
@@ -744,19 +841,260 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return requestedTarget;
         }
 
-        // Confirm entry through a short authored segment inside the room.
-        // A random point across the gym is not a reliable navigation target
-        // for the lightweight collision-probe mover and could leave an enemy
-        // circling at the threshold indefinitely. Once this point is reached,
-        // the normal free-roam planner takes over and can choose any room
-        // interest without creating a second enemy instance.
-        Vector3 stagingTarget = doorway.InteriorPoint + inward.normalized * 3.6f;
+        // Confirm entry through a short authored segment inside the room. The
+        // door is aligned with reception, so the direct line can pass through
+        // the desk. Move to a clear lateral point first, then continue inward
+        // on the desk-free side of the doorway.
+        Vector3 stagingTarget = GetDoorwayClearPoint() + inward.normalized * 3.6f;
         stagingTarget.y = requestedTarget.y;
         return stagingTarget;
     }
 
+    private Vector3 GetDoorwayClearPoint()
+    {
+        if (doorway == null)
+        {
+            return fighter != null ? fighter.transform.position : transform.position;
+        }
+
+        if (hasDoorwayClearPoint)
+        {
+            return doorwayClearPoint;
+        }
+
+        Vector3 inside = doorway.InteriorPoint;
+        Vector3 inward = Vector3.ProjectOnPlane(
+            doorway.InteriorPoint - doorway.ExteriorPoint, Vector3.up);
+        if (inward.sqrMagnitude < 0.01f)
+        {
+            doorwayClearPoint = inside;
+            hasDoorwayClearPoint = true;
+            return inside;
+        }
+
+        inward.Normalize();
+        Vector3 lateral = Vector3.Cross(Vector3.up, inward).normalized;
+        if (lateral.sqrMagnitude < 0.01f)
+        {
+            lateral = Vector3.forward;
+        }
+
+        Bounds deskBounds;
+        bool hasDeskBounds = TryGetReceptionDeskBounds(out deskBounds);
+        float deskLateralOffset = hasDeskBounds
+            ? Vector3.Dot(deskBounds.center - inside, lateral)
+            : 0f;
+        float deskLateralExtent = hasDeskBounds
+            ? Mathf.Abs(lateral.x) * deskBounds.extents.x +
+              Mathf.Abs(lateral.z) * deskBounds.extents.z
+            : 0f;
+        float lateralOffset = Mathf.Max(
+            DoorwayClearance,
+            Mathf.Abs(deskLateralOffset) + deskLateralExtent + 0.3f);
+        float preferredSide = deskLateralOffset > 0.05f ? -1f : 1f;
+
+        Vector3 first = inside + lateral * (lateralOffset * preferredSide);
+        Vector3 second = inside - lateral * (lateralOffset * preferredSide);
+        if (IsDoorwayPointClear(first))
+        {
+            doorwayClearPoint = first;
+            hasDoorwayClearPoint = true;
+            return first;
+        }
+        if (IsDoorwayPointClear(second))
+        {
+            doorwayClearPoint = second;
+            hasDoorwayClearPoint = true;
+            return second;
+        }
+
+        // Keep a deterministic authored fallback even when a player has
+        // temporarily parked an object beside reception. The movement probe
+        // can then retry the route instead of returning a zero direction at
+        // the door forever.
+        doorwayClearPoint = first;
+        hasDoorwayClearPoint = true;
+        return first;
+    }
+
+    private bool IsDoorwayPointClear(Vector3 point)
+    {
+        if (fighter == null)
+        {
+            return true;
+        }
+
+        Vector3 lower = point + Vector3.up * 0.55f;
+        Vector3 upper = point + Vector3.up * 1.85f;
+        int count = Physics.OverlapCapsuleNonAlloc(
+            lower, upper, DoorwayBodyRadius, doorwayPointHits,
+            ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = doorwayPointHits[i];
+            if (hit == null || hit.transform == transform || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            if (hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null ||
+                hit.GetComponentInParent<GymDoorway>() != null ||
+                HasRoomFloorInHierarchy(hit.transform) ||
+                IsWalkableFloorSurface(hit))
+            {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetReceptionDeskBounds(out Bounds bounds)
+    {
+        GameObject desk = GameObject.Find("Reception desk");
+        Renderer[] renderers = desk != null
+            ? desk.GetComponentsInChildren<Renderer>(true)
+            : null;
+        bool found = false;
+        bounds = default;
+        if (renderers == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            if (!found)
+            {
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+
+        return found;
+    }
+
+    private void HoldDoorOpenRequest()
+    {
+        if (doorway != null && !doorOpenRequestHeld)
+        {
+            doorway.RequestOpen();
+            doorOpenRequestHeld = true;
+        }
+    }
+
+    private void ReleaseDoorOpenRequest()
+    {
+        if (doorway != null && doorOpenRequestHeld)
+        {
+            doorway.ReleaseOpen();
+            doorOpenRequestHeld = false;
+        }
+    }
+
+    private void ResetDoorwayExitTracking()
+    {
+        doorwayExitStalledSeconds = 0f;
+        lastDoorwayExitDistance = float.PositiveInfinity;
+    }
+
+    private void TryRecoverStalledDoorExit()
+    {
+        if (fighter == null || doorway == null)
+        {
+            return;
+        }
+
+        float distance = Vector3.ProjectOnPlane(
+            travelTarget - fighter.transform.position, Vector3.up).magnitude;
+        if (distance < lastDoorwayExitDistance - 0.025f)
+        {
+            lastDoorwayExitDistance = distance;
+            doorwayExitStalledSeconds = 0f;
+            return;
+        }
+
+        doorwayExitStalledSeconds += Time.fixedDeltaTime;
+        if (doorwayExitStalledSeconds <= DoorwayExitStallTimeout)
+        {
+            return;
+        }
+
+        Vector3 direction = Vector3.ProjectOnPlane(
+            travelTarget - fighter.transform.position, Vector3.up);
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            direction = doorway.ExteriorPoint - doorway.InteriorPoint;
+        }
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            direction = Vector3.forward;
+        }
+
+        // This is only a last-resort handoff after a real stalled physics
+        // route. The target is always one of the authored clear/interior/
+        // exterior doorway points, so the visitor cannot remain trapped at
+        // the threshold indefinitely.
+        fighter.SetVisitorSpawnPose(
+            travelTarget,
+            Quaternion.LookRotation(direction.normalized, Vector3.up));
+        fighter.StopVisitorMovement();
+        Debug.LogWarning(
+            $"GYMCHAOS_VISITOR_EXIT_ROUTE_FALLBACK enemy={fighter.Identity} " +
+            $"state={state} target={travelTarget}",
+            this);
+        ResetDoorwayExitTracking();
+    }
+
+    private static bool HasRoomFloorInHierarchy(Transform target)
+    {
+        for (Transform current = target; current != null; current = current.parent)
+        {
+            string lowerName = current.name.ToLowerInvariant();
+            if (lowerName.Contains("rubber floor") ||
+                lowerName == "plane" || lowerName.StartsWith("plane("))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsWalkableFloorSurface(Collider collider)
+    {
+        if (collider == null)
+        {
+            return false;
+        }
+
+        for (Transform current = collider.transform; current != null; current = current.parent)
+        {
+            string lowerName = current.name.ToLowerInvariant();
+            if (lowerName.Contains("mat") || lowerName.Contains("carpet") ||
+                lowerName.Contains("rug"))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void OnDisable()
     {
+        ReleaseDoorOpenRequest();
         squatStartPending = false;
         if (Application.isPlaying && !applicationQuitting &&
             enteredGym && !completedDoorExit)
