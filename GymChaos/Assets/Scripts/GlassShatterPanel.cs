@@ -88,6 +88,19 @@ public sealed class GlassShatterPanel : MonoBehaviour
         return true;
     }
 
+    public bool ShatterFromPowerImpact(
+        Vector3 impactPoint, Vector3 impactNormal, Vector3 punchImpulse)
+    {
+        if (hasShattered)
+        {
+            return false;
+        }
+
+        float impactSpeed = Mathf.Clamp(punchImpulse.magnitude * 0.9f, 7f, 26f);
+        Shatter(impactPoint, impactNormal, punchImpulse, impactSpeed, 1.35f);
+        return true;
+    }
+
     private void Shatter(
         Vector3 impactPoint,
         Vector3 impactNormal,
@@ -101,6 +114,7 @@ public sealed class GlassShatterPanel : MonoBehaviour
         }
 
         hasShattered = true;
+        GymExperienceService.Active?.RegisterMirrorBreak(name);
         Vector3 shatterSoundPosition = panelRenderer != null
             ? panelRenderer.bounds.center
             : transform.position;

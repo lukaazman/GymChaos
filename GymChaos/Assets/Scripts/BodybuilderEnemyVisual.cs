@@ -1294,28 +1294,48 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         // different scan cannot move the bar up into the forehead.
         Vector3 headLocal = visualRoot.InverseTransformPoint(head.position);
         float importedEyeOffset = 0f;
+        float faceDepthScale = 1f;
+        float faceCenterOffset = 0f;
         switch (identity)
         {
-            // These are small asset-specific corrections from the visible
-            // FBX face proportions. Keep them local to the imported profile;
-            // the old large offsets moved the bars below the face.
+            // Every imported asset gets its own eye-line and face-depth
+            // calibration. The bar is still placed from the baked visible
+            // mesh below; these values never use the enemy collider.
             case BodybuilderIdentity.Cbum:
                 importedEyeOffset = -0.040f;
                 break;
-            case BodybuilderIdentity.Zyzz:
-                importedEyeOffset = -0.022f;
-                break;
             case BodybuilderIdentity.Arnold:
-                importedEyeOffset = -0.033f;
+                importedEyeOffset = -0.037f;
+                faceDepthScale = 0.96f;
+                faceCenterOffset = -0.002f;
+                break;
+            case BodybuilderIdentity.Zyzz:
+                // The scan's visible eyes sit below the authored head-bone
+                // baseline used by the first pass; keep the bar on the eye
+                // band instead of across the upper forehead.
+                importedEyeOffset = -0.062f;
+                faceDepthScale = 1.03f;
+                faceCenterOffset = 0.0015f;
                 break;
             case BodybuilderIdentity.Ronnie:
-                importedEyeOffset = -0.017f;
+                importedEyeOffset = -0.058f;
+                faceDepthScale = 1.08f;
+                faceCenterOffset = localHeight * 0.0095f;
+                break;
+            case BodybuilderIdentity.Manwithsuit1:
+                importedEyeOffset = -0.031f;
+                faceDepthScale = 0.94f;
+                faceCenterOffset = -0.0035f;
                 break;
             case BodybuilderIdentity.JayCutler:
-                importedEyeOffset = -0.025f;
+                importedEyeOffset = -0.064f;
+                faceDepthScale = 1.0f;
+                faceCenterOffset = -0.0015f;
                 break;
             case BodybuilderIdentity.Goku:
-                importedEyeOffset = -0.020f;
+                importedEyeOffset = -0.064f;
+                faceDepthScale = 0.92f;
+                faceCenterOffset = 0.0005f;
                 break;
         }
         float eyeY = headLocal.y + localHeight *
@@ -1326,6 +1346,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         float coverage;
         switch (identity)
         {
+            case BodybuilderIdentity.Arnold:
+                size = new Vector2(height * 0.130f, height * 0.0295f);
+                coverage = 69f;
+                break;
             case BodybuilderIdentity.Cbum:
                 size = new Vector2(height * 0.125f, height * 0.028f);
                 coverage = 68f;
@@ -1336,6 +1360,14 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 break;
             case BodybuilderIdentity.Ronnie:
                 size = new Vector2(height * 0.128f, height * 0.029f);
+                coverage = 69f;
+                break;
+            case BodybuilderIdentity.Manwithsuit1:
+                size = new Vector2(height * 0.122f, height * 0.027f);
+                coverage = 67f;
+                break;
+            case BodybuilderIdentity.JayCutler:
+                size = new Vector2(height * 0.130f, height * 0.029f);
                 coverage = 69f;
                 break;
             case BodybuilderIdentity.Goku:
@@ -1351,16 +1383,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         // Keep the lateral correction in the asset's model space, but sample
         // depth in the actual head frame. This handles identities whose head
         // sits farther forward/back or tilts relative to the body root.
-        float faceCenterX = headLocal.x;
-        switch (identity)
-        {
-            case BodybuilderIdentity.Ronnie:
-                faceCenterX += localHeight * 0.0095f;
-                break;
-            case BodybuilderIdentity.Zyzz:
-                faceCenterX += 0.001f;
-                break;
-        }
+        float faceCenterX = headLocal.x + faceCenterOffset;
 
         Vector3 faceDirectionWorld = head.forward;
         if (faceDirectionWorld.sqrMagnitude < 0.0001f)
@@ -1430,12 +1453,16 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             backDepth = frontDepth - localHeight * 0.01f;
         }
 
-        Vector3 faceSurfaceWorld = eyeAnchorWorld + faceDirectionWorld * frontDepth;
+        // Zero is intentional: the depth plane is the first visible face
+        // vertex at the eye line, with no collider-based or arbitrary gap.
+        const float faceSurfaceOffset = 0f;
+        Vector3 faceSurfaceWorld = eyeAnchorWorld +
+            faceDirectionWorld * (frontDepth + faceSurfaceOffset);
         float faceSurfaceZ = visualRoot.InverseTransformPoint(faceSurfaceWorld).z;
         float faceSpread = Mathf.Max(0f, frontDepth - backDepth);
         float arcDrop = 1f - Mathf.Cos(Mathf.Clamp(coverage, 55f, 82f) * Mathf.Deg2Rad);
         float faceDepth = Mathf.Clamp(
-            faceSpread / Mathf.Max(0.2f, arcDrop),
+            faceSpread * faceDepthScale / Mathf.Max(0.2f, arcDrop),
             height * 0.0015f,
             height * 0.08f);
 
@@ -1454,7 +1481,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             $"head={head.position} headForward={head.forward} localBounds={bounds.min}/{bounds.max} " +
             $"eyeLocal={eyeY:F3} surfaceLocalZ={faceSurfaceZ:F3} surfaceWorld={faceSurfaceWorld} " +
             $"frontDepth={frontDepth:F4} backDepth={backDepth:F4} " +
-            $"faceDepth={faceDepth:F4} barOrigin={barOriginWorld} profileLocal={localPosition}");
+            $"faceDepth={faceDepth:F4} depthOffset={faceSurfaceOffset:F4} " +
+            $"barOrigin={barOriginWorld} profileLocal={localPosition}");
         return new FaceCensorProfile(
             localPosition, faceRotation.eulerAngles, size, faceDepth, coverage, Color.black);
     }
@@ -1470,11 +1498,20 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             case BodybuilderIdentity.Cbum:
                 eyeY += height * 0.035f;
                 break;
+            case BodybuilderIdentity.Arnold:
+                eyeY += height * 0.043f;
+                break;
             case BodybuilderIdentity.Zyzz:
                 eyeY += height * 0.00575f;
                 break;
             case BodybuilderIdentity.Ronnie:
                 eyeY += height * 0.035f;
+                break;
+            case BodybuilderIdentity.Manwithsuit1:
+                eyeY += height * 0.032f;
+                break;
+            case BodybuilderIdentity.JayCutler:
+                eyeY += height * 0.044f;
                 break;
             case BodybuilderIdentity.Goku:
                 // Goku's scan uses a lower eye line than the generic head
@@ -1501,16 +1538,23 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             faceSurfaceZ = bounds.max.z;
         }
 
+        // Cbum keeps the legacy calibration unchanged. Other fallback
+        // profiles use the sampled visible face vertex directly, with zero
+        // extra depth gap and no collider-derived placement.
+        float faceSurfaceOffset = identity == BodybuilderIdentity.Cbum ? 0.0015f : 0f;
         Vector3 faceCenter = new Vector3(
             bounds.center.x,
             eyeY,
-            faceSurfaceZ + 0.0015f);
+            faceSurfaceZ + faceSurfaceOffset);
         Vector3 localPosition = head.InverseTransformPoint(visualRoot.TransformPoint(faceCenter));
         switch (identity)
         {
             case BodybuilderIdentity.Cbum:
                 return new FaceCensorProfile(localPosition + new Vector3(0f, 0f, -height * 0.019f), Vector3.zero,
                     new Vector2(height * 0.125f, height * 0.028f), height * 0.019f, 68f, Color.black);
+            case BodybuilderIdentity.Arnold:
+                return new FaceCensorProfile(localPosition + new Vector3(-height * 0.002f, 0f, -height * 0.0205f), Vector3.zero,
+                    new Vector2(height * 0.130f, height * 0.0295f), height * 0.0205f, 69f, Color.black);
             case BodybuilderIdentity.Zyzz:
                 return new FaceCensorProfile(localPosition + new Vector3(0.001f, 0f, -height * 0.017f), new Vector3(0f, -1f, 0f),
                     new Vector2(height * 0.135f, height * 0.028f), height * 0.017f, 70f, Color.black);
@@ -1519,6 +1563,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 // to model-right of the full-mesh bounds center at eye level.
                 return new FaceCensorProfile(localPosition + new Vector3(height * 0.0095f, 0f, -height * 0.02f), Vector3.zero,
                     new Vector2(height * 0.128f, height * 0.029f), height * 0.02f, 69f, Color.black);
+            case BodybuilderIdentity.Manwithsuit1:
+                return new FaceCensorProfile(localPosition + new Vector3(-height * 0.0035f, 0f, -height * 0.018f), new Vector3(0f, 1f, 0f),
+                    new Vector2(height * 0.122f, height * 0.027f), height * 0.018f, 67f, Color.black);
+            case BodybuilderIdentity.JayCutler:
+                return new FaceCensorProfile(localPosition + new Vector3(-height * 0.0015f, 0f, -height * 0.019f), new Vector3(0f, 1f, 0f),
+                    new Vector2(height * 0.130f, height * 0.029f), height * 0.019f, 69f, Color.black);
             case BodybuilderIdentity.Goku:
                 // Goku's scan places the visible eyes lower than the generic
                 // head profile. Make his censor wider/taller and lower it onto

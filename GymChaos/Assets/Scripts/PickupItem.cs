@@ -9,7 +9,13 @@ public enum WeightType
     Plate,
     Plate5,
     Plate10,
-    Plate20
+    Plate20,
+    Ball,
+    FoamRoller,
+    PaperTowel,
+    StepPlatform,
+    YogaMat,
+    Radio
 }
 
 [RequireComponent(typeof(Rigidbody))]
@@ -19,6 +25,7 @@ public class PickupItem : MonoBehaviour
     [SerializeField] private WeightType weightType = WeightType.None;
     [SerializeField] private float baseMass = 5f;
     [SerializeField] private float impactMultiplier = 1f;
+    [SerializeField] private bool canBePickedUp = true;
 
     private Rigidbody body;
     private Collider[] itemColliders;
@@ -27,19 +34,30 @@ public class PickupItem : MonoBehaviour
     private bool thrownImpactSoundPlayed;
 
     public bool IsHeld { get; private set; }
-    public bool IsThrowableWeapon => weightType != WeightType.None;
+    public bool IsThrowableWeapon => canBePickedUp && weightType != WeightType.None;
     public string DisplayName => displayName;
     public WeightType ItemType => weightType;
     public float BaseMass => baseMass;
     public float ImpactMultiplier => impactMultiplier;
     public bool WasThrownRecently => wasThrown;
+    public bool CanBePickedUp => canBePickedUp;
 
     public void Configure(Rigidbody targetBody, WeightType type, Collider[] colliders)
+    {
+        Configure(targetBody, type, colliders, true, null);
+    }
+
+    public void Configure(
+        Rigidbody targetBody, WeightType type, Collider[] colliders,
+        bool pickable, string configuredDisplayName)
     {
         body = targetBody;
         itemColliders = colliders;
         weightType = type;
-        displayName = gameObject.name;
+        canBePickedUp = pickable;
+        displayName = string.IsNullOrWhiteSpace(configuredDisplayName)
+            ? gameObject.name
+            : configuredDisplayName;
         baseMass = GetMassForType(type);
         impactMultiplier = GetImpactMultiplier(type);
 
@@ -220,9 +238,7 @@ public class PickupItem : MonoBehaviour
         }
 
         float impactSpeed = collision.relativeVelocity.magnitude;
-        float minimumImpactSpeed = ItemType == WeightType.Barbell || ItemType == WeightType.EzBar
-            ? 0.8f
-            : 2.5f;
+        float minimumImpactSpeed = GetMinimumImpactSpeed(ItemType);
         if (impactSpeed < minimumImpactSpeed)
         {
             return;
@@ -251,7 +267,24 @@ public class PickupItem : MonoBehaviour
         {
             return baseMass * 1.25f;
         }
-        return weightType == WeightType.Barbell ? 30f : 5f;
+
+        switch (weightType)
+        {
+            case WeightType.Barbell:
+                return 30f;
+            case WeightType.EzBar:
+                return 18f;
+            case WeightType.Ball:
+                return 7f;
+            case WeightType.FoamRoller:
+                return 5f;
+            case WeightType.PaperTowel:
+                return 1.5f;
+            case WeightType.Radio:
+                return 8f;
+            default:
+                return 5f;
+        }
     }
 
     private void Release(Collider[] playerColliders, float restoreDelay)
@@ -325,6 +358,18 @@ public class PickupItem : MonoBehaviour
                 return 8f;
             case WeightType.Plate5:
                 return 5f;
+            case WeightType.Ball:
+                return 0.5f;
+            case WeightType.FoamRoller:
+                return 1.4f;
+            case WeightType.PaperTowel:
+                return 0.25f;
+            case WeightType.StepPlatform:
+                return 4f;
+            case WeightType.YogaMat:
+                return 1.6f;
+            case WeightType.Radio:
+                return 1.8f;
             default:
                 return 5f;
         }
@@ -352,8 +397,36 @@ public class PickupItem : MonoBehaviour
                 return 1.5f;
             case WeightType.Plate5:
                 return 1.25f;
+            case WeightType.Ball:
+                return 0.72f;
+            case WeightType.FoamRoller:
+                return 0.9f;
+            case WeightType.PaperTowel:
+                return 0.22f;
+            case WeightType.Radio:
+                return 1.15f;
             default:
                 return 1f;
+        }
+    }
+
+    private static float GetMinimumImpactSpeed(WeightType type)
+    {
+        switch (type)
+        {
+            case WeightType.Barbell:
+            case WeightType.EzBar:
+                return 0.8f;
+            case WeightType.Ball:
+                return 1.25f;
+            case WeightType.FoamRoller:
+                return 1.6f;
+            case WeightType.PaperTowel:
+                return 1.1f;
+            case WeightType.Radio:
+                return 1f;
+            default:
+                return 2.5f;
         }
     }
 }

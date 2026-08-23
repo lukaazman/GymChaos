@@ -177,7 +177,7 @@ public sealed class GymRadio : MonoBehaviour
 
     public string GetInteractionPrompt()
     {
-        return musicEnabled ? "[R] Turn music off" : "[R] Turn music on";
+        return musicEnabled ? "[F] Turn music off" : "[F] Turn music on";
     }
 
     public void ToggleMusic()
@@ -193,7 +193,10 @@ public sealed class GymRadio : MonoBehaviour
         audioSource = gameObject.AddComponent<AudioSource>();
         audioSource.playOnAwake = false;
         audioSource.loop = false;
-        audioSource.spatialBlend = 0.82f;
+        // The source lives on the physical radio root. Full 3D spatialisation
+        // keeps the playlist anchored to the radio after it is carried or
+        // thrown instead of making it sound like a global gym track.
+        audioSource.spatialBlend = 1f;
         audioSource.volume = BaseRadioVolume * UserVolumeScale;
         audioSource.rolloffMode = AudioRolloffMode.Custom;
         audioSource.minDistance = 2.5f;
@@ -344,9 +347,62 @@ public sealed class GymRadio : MonoBehaviour
         renderer.receiveShadows = true;
 
         PlaceModelOnDesk(renderer);
+        EnsurePickupPhysics(renderer);
         Debug.Log(
             $"GYMCHAOS_RADIO_PLACED edge=front-north position={transform.position} " +
             $"size={renderer.bounds.size} deskTop={deskBounds.max.y:F3}", this);
+    }
+
+    private void EnsurePickupPhysics(Renderer renderer)
+    {
+        if (renderer == null)
+        {
+            return;
+        }
+
+        Physics.SyncTransforms();
+        Rigidbody body = GetComponent<Rigidbody>();
+        if (body == null)
+        {
+            body = gameObject.AddComponent<Rigidbody>();
+        }
+
+        BoxCollider boxCollider = GetComponent<BoxCollider>();
+        if (boxCollider == null)
+        {
+            boxCollider = gameObject.AddComponent<BoxCollider>();
+        }
+        boxCollider.isTrigger = false;
+        ApplyRendererBoundsToBox(transform, renderer, boxCollider);
+
+        PickupItem pickup = GetComponent<PickupItem>();
+        if (pickup == null)
+        {
+            pickup = gameObject.AddComponent<PickupItem>();
+        }
+        pickup.Configure(
+            body,
+            WeightType.Radio,
+            new Collider[] { boxCollider },
+            true,
+            "Radio");
+
+        Debug.Log(
+            $"GYMCHAOS_RADIO_PICKUP_READY mass={body.mass:F1} " +
+            $"collider={boxCollider.size} audioRoot={audioSource != null}",
+            this);
+    }
+
+    private static void ApplyRendererBoundsToBox(
+        Transform target, Renderer renderer, BoxCollider boxCollider)
+    {
+        Vector3 localCenter = target.InverseTransformPoint(renderer.bounds.center);
+        Vector3 lossy = target.lossyScale;
+        boxCollider.center = localCenter;
+        boxCollider.size = new Vector3(
+            renderer.bounds.size.x / Mathf.Max(Mathf.Abs(lossy.x), 0.0001f),
+            renderer.bounds.size.y / Mathf.Max(Mathf.Abs(lossy.y), 0.0001f),
+            renderer.bounds.size.z / Mathf.Max(Mathf.Abs(lossy.z), 0.0001f));
     }
 
     private void PlaceModelOnDesk(Renderer renderer)

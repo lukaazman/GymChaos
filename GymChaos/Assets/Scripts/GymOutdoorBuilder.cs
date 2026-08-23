@@ -18,6 +18,7 @@ public static class GymOutdoorBuilder
     private const float EntranceFenceStartOffset = 3.25f;
     private const float EntranceFenceEndInset = 0.2f;
     private const float InnerBoundaryWallOffset = 0.42f;
+    private const float ExteriorWallFaceOffset = 0.2f;
     private const float ParkingSurfaceOffset = 0.01f;
     private const float ParkingLightBaseHeight = 0.22f;
     private const float ParkingLightPoleHeight = 5.4f;
@@ -28,6 +29,11 @@ public static class GymOutdoorBuilder
 
     public static bool IsPlayerOutsideGym(Vector3 position)
     {
+        if (GymBackRoomBuilder.IsInsideRoom(position))
+        {
+            return false;
+        }
+
         GameObject floorObject = GameObject.Find("Rubber Floor");
         Renderer floorRenderer = floorObject != null
             ? floorObject.GetComponent<Renderer>()
@@ -79,6 +85,7 @@ public static class GymOutdoorBuilder
         float pathNorthZ = parkingCenterZ + ParkingDepth * 0.5f + 0.55f;
         float pathLength = Mathf.Max(0.5f, parkingCenterZ - doorZ);
         float outerPathX = pathCenterX + PathWidth * 0.5f + 0.55f;
+        float exteriorWallX = roomEast + ExteriorWallFaceOffset;
         // Keep the inner guard flush with the building's exterior face. The
         // old path-derived position left a wide walkable gap beside the wall.
         float innerPathX = roomEast + InnerBoundaryWallOffset;
@@ -184,30 +191,35 @@ public static class GymOutdoorBuilder
             new Vector3(parkingWidth, 0.24f, ParkingDepth),
             asphalt,
             true);
-        CreateBox(
+        GameObject doorPath = CreateBox(
             "Path from Gym Door",
             root.transform,
             new Vector3(pathCenterX, floorY - 0.11f, doorZ + pathLength * 0.5f),
             new Vector3(PathWidth, 0.24f, pathLength + 0.8f),
             pathMaterial,
             true);
+        doorPath.AddComponent<GymExteriorOnlyVisual>();
 
         float horizontalMinX = parkingMaxX - 0.9f;
         float horizontalMaxX = outerPathX;
-        CreateBox(
+        GameObject parkingTurn = CreateBox(
             "Parking Path Turn",
             root.transform,
             new Vector3((horizontalMinX + horizontalMaxX) * 0.5f, floorY - 0.11f, parkingCenterZ),
             new Vector3(horizontalMaxX - horizontalMinX, 0.24f, PathWidth),
             pathMaterial,
             true);
-        CreateBox(
+        parkingTurn.AddComponent<GymExteriorOnlyVisual>();
+
+        float doorLandingMaxX = outerPathX + 0.4f;
+        GameObject doorLanding = CreateBox(
             "Black Door Landing",
             root.transform,
-            new Vector3((roomEast + outerPathX) * 0.5f, floorY - 0.11f, doorZ),
-            new Vector3(outerPathX - roomEast + 0.8f, 0.24f, 6.2f),
+            new Vector3((exteriorWallX + doorLandingMaxX) * 0.5f, floorY - 0.11f, doorZ),
+            new Vector3(doorLandingMaxX - exteriorWallX, 0.24f, 6.2f),
             pathMaterial,
             true);
+        doorLanding.AddComponent<GymExteriorOnlyVisual>();
 
         CreateParkingMarkings(root.transform, floorY, parkingMinX, parkingMaxX, parkingCenterZ, markingMaterial);
         CreatePathEdge(root.transform, floorY, pathCenterX, doorZ, parkingCenterZ, markingMaterial);
@@ -325,11 +337,14 @@ public static class GymOutdoorBuilder
                 new Vector3(0.5f, BoundaryHeight, innerEndZ - innerStartZ));
         }
 
+        float pathSouthMinX = exteriorWallX;
+        float pathSouthMaxX = outerPathX + 0.4f;
         CreateBoundary(
             "Outdoor Boundary - Path South",
             root.transform,
-            new Vector3((roomEast + outerPathX) * 0.5f, floorY + BoundaryHeight * 0.5f, pathSouthZ),
-            new Vector3(outerPathX - roomEast + 0.8f, BoundaryHeight, 0.5f));
+            new Vector3((pathSouthMinX + pathSouthMaxX) * 0.5f,
+                floorY + BoundaryHeight * 0.5f, pathSouthZ),
+            new Vector3(pathSouthMaxX - pathSouthMinX, BoundaryHeight, 0.5f));
 
         CreateBoundaryVisuals(
             root.transform,
@@ -986,7 +1001,8 @@ public static class GymOutdoorBuilder
             floorY,
             boundaryMaterial,
             boundaryTrimMaterial,
-            boundaryRibMaterial);
+            boundaryRibMaterial,
+            exteriorOnly: true);
 
         if (innerEndZ > innerStartZ)
         {
@@ -999,19 +1015,23 @@ public static class GymOutdoorBuilder
                 floorY,
                 boundaryMaterial,
                 boundaryTrimMaterial,
-                boundaryRibMaterial);
+                boundaryRibMaterial,
+                exteriorOnly: true);
         }
 
+        float pathSouthMinX = roomEast + ExteriorWallFaceOffset;
+        float pathSouthMaxX = outerPathX + 0.4f;
         CreateVisibleBoundary(
             "Path South Boundary Wall",
             parent,
-            new Vector3((roomEast + outerPathX) * 0.5f, boundaryY, pathSouthZ),
-            new Vector3(outerPathX - roomEast + 0.8f, BoundaryHeight, 0.5f),
+            new Vector3((pathSouthMinX + pathSouthMaxX) * 0.5f, boundaryY, pathSouthZ),
+            new Vector3(pathSouthMaxX - pathSouthMinX, BoundaryHeight, 0.5f),
             BoundaryHeight,
             floorY,
             boundaryMaterial,
             boundaryTrimMaterial,
-            boundaryRibMaterial);
+            boundaryRibMaterial,
+            exteriorOnly: true);
     }
 
     private static void CreateVisibleBoundary(
@@ -1023,20 +1043,29 @@ public static class GymOutdoorBuilder
         float floorY,
         Material boundaryMaterial,
         Material boundaryTrimMaterial,
-        Material boundaryRibMaterial)
+        Material boundaryRibMaterial,
+        bool exteriorOnly = false)
     {
         float wallHeight = Mathf.Clamp(visualHeight, 0.8f, size.y);
         Vector3 wallPosition = new Vector3(position.x, floorY + wallHeight * 0.5f, position.z);
         Vector3 wallSize = new Vector3(size.x, wallHeight, size.z);
-        CreateBox(name, parent, wallPosition, wallSize, boundaryMaterial, false);
+        GameObject wall = CreateBox(name, parent, wallPosition, wallSize, boundaryMaterial, false);
+        if (exteriorOnly)
+        {
+            wall.AddComponent<GymExteriorOnlyVisual>();
+        }
 
-        CreateBox(
+        GameObject coping = CreateBox(
             name + " Coping",
             parent,
             new Vector3(position.x, floorY + wallHeight + 0.08f, position.z),
             new Vector3(size.x + 0.16f, 0.16f, size.z + 0.16f),
             boundaryTrimMaterial,
             false);
+        if (exteriorOnly)
+        {
+            coping.AddComponent<GymExteriorOnlyVisual>();
+        }
 
         bool runsAlongX = size.x >= size.z;
         float runLength = runsAlongX ? size.x : size.z;
@@ -1051,7 +1080,12 @@ public static class GymOutdoorBuilder
                 ? new Vector3(0.11f, Mathf.Max(0.55f, wallHeight - 0.22f), size.z + 0.025f)
                 : new Vector3(size.x + 0.025f, Mathf.Max(0.55f, wallHeight - 0.22f), 0.11f);
             ribPosition.y = floorY + wallHeight * 0.5f;
-            CreateBox(name + " Vertical Rib", parent, ribPosition, ribSize, boundaryRibMaterial, false);
+            GameObject rib = CreateBox(
+                name + " Vertical Rib", parent, ribPosition, ribSize, boundaryRibMaterial, false);
+            if (exteriorOnly)
+            {
+                rib.AddComponent<GymExteriorOnlyVisual>();
+            }
         }
     }
 

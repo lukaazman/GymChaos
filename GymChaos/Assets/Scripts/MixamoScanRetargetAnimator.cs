@@ -306,6 +306,33 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
     }
 
+#if UNITY_EDITOR
+    public void ResetToVerificationIdlePose()
+    {
+        if (sourceModel == null || pairs == null)
+        {
+            return;
+        }
+
+        moving = false;
+        flying = false;
+        celebrating = false;
+        downed = false;
+        attackTime = -1f;
+        punchContactSent = false;
+        idleTime = 0f;
+        runTime = 0f;
+        flightTime = 0f;
+        RestoreTargetRest();
+        if (!workoutPoseLocked && idleClip != null)
+        {
+            SampleAndApply(idleClip, 0f, 1f);
+        }
+        ClampIdleGrounding();
+        lastMotionState = MotionState.Idle;
+    }
+#endif
+
     private void LateUpdate()
     {
         if (sourceModel == null || pairs == null)

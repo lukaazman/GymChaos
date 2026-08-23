@@ -20,11 +20,16 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         public Transform end;
         public Transform hitbox;
         public CapsuleCollider collider;
+        public float baseRadius;
+        public bool keepsLegGapOpen;
     }
 
     private readonly List<Segment> segments = new List<Segment>();
+    private readonly HashSet<Collider> combatColliders = new HashSet<Collider>();
     private SkinnedMeshRenderer bodyRenderer;
     private Mesh bakedSurface;
+    private Transform leftThighAnchor;
+    private Transform rightThighAnchor;
 
     public static EnemyMeshHitboxRig Configure(
         GameObject owner, BodybuilderEnemyVisual.Rig rig, SkinnedMeshRenderer renderer)
@@ -42,6 +47,10 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
     {
         bodyRenderer = renderer;
         float height = Mathf.Max(1f, renderer.bounds.size.y);
+        segments.Clear();
+        combatColliders.Clear();
+        leftThighAnchor = rig.LeftThigh;
+        rightThighAnchor = rig.RightThigh;
 
         CapsuleCollider[] broadColliders = GetComponents<CapsuleCollider>();
         for (int i = 0; i < broadColliders.Length; i++)
@@ -49,8 +58,11 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
             broadColliders[i].enabled = false;
         }
 
-        AddSegment("Pelvis hitbox", rig.Hips, rig.Spine, height * 0.085f);
-        AddSegment("Chest hitbox", rig.Spine, rig.Head, height * 0.095f);
+        // Keep the space between the thighs physically open. A single
+        // hips-to-spine capsule creates a hidden bridge through the crotch,
+        // so the lower torso is represented by the separate leg colliders
+        // and the upper torso begins at the authored chest bone.
+        AddSegment("Chest hitbox", rig.Chest, rig.Head, height * 0.095f);
         AddSegment("Left shoulder hitbox", rig.LeftShoulder, rig.LeftUpperArm, height * 0.05f);
         AddSegment("Left upper arm hitbox", rig.LeftUpperArm, rig.LeftForearm, height * 0.045f);
         AddSegment("Left forearm hitbox", rig.LeftForearm, rig.LeftHand, height * 0.038f);
@@ -105,8 +117,11 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
             start = start,
             end = end,
             hitbox = hitboxObject.transform,
-            collider = capsule
+            collider = capsule,
+            baseRadius = radius,
+            keepsLegGapOpen = objectName.IndexOf("thigh", System.StringComparison.OrdinalIgnoreCase) >= 0
         });
+        combatColliders.Add(capsule);
     }
 
     private void AddSphere(string objectName, Transform anchor, float radius, Vector3 worldOffset)
@@ -123,6 +138,13 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         SphereCollider sphere = hitboxObject.AddComponent<SphereCollider>();
         sphere.radius = radius;
         sphere.isTrigger = false;
+        combatColliders.Add(sphere);
+    }
+
+    public bool IsTightCombatSurface(Collider collider)
+    {
+        return collider != null && collider.enabled && !collider.isTrigger &&
+               combatColliders.Contains(collider);
     }
 
     private void LateUpdate()
@@ -142,7 +164,18 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
             }
 
             Vector3 delta = segment.end.position - segment.start.position;
-            float length = Mathf.Max(segment.collider.radius * 2f, delta.magnitude);
+            float radius = segment.baseRadius;
+            if (segment.keepsLegGapOpen && leftThighAnchor != null && rightThighAnchor != null)
+            {
+                // In a punch/landing pose the knees can rotate inward. Keep
+                // each thigh capsule tight to its own side so the midpoint
+                // between the thighs never becomes an invisible body bridge.
+                float halfThighSeparation =
+                    Vector3.Distance(leftThighAnchor.position, rightThighAnchor.position) * 0.5f;
+                radius = Mathf.Min(radius, Mathf.Max(0.008f, halfThighSeparation * 0.68f));
+            }
+            segment.collider.radius = radius;
+            float length = Mathf.Max(radius * 2f, delta.magnitude);
             segment.hitbox.SetPositionAndRotation(
                 (segment.start.position + segment.end.position) * 0.5f,
                 delta.sqrMagnitude > 0.000001f

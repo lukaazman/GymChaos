@@ -69,6 +69,7 @@ public class EnemyFighter : MonoBehaviour
     private bool isPolice;
     private bool isPassive;
     private bool isAggressive;
+    private bool dialogueLocked;
     private bool isDead;
     private bool celebratingPlayerKill;
     private bool punchInProgress;
@@ -179,9 +180,10 @@ public class EnemyFighter : MonoBehaviour
     public bool IsCelebratingPlayerKill => celebratingPlayerKill;
     public bool IsPolice => isPolice;
     public bool IsAggressive => isAggressive;
-    public bool IsRoaming => !isPassive && !isDead && !isAggressive &&
+    public bool IsDialogueLocked => dialogueLocked;
+    public bool IsRoaming => !dialogueLocked && !isPassive && !isDead && !isAggressive &&
         currentTarget == null && treadmillStation == null;
-    public bool HasRoamDestination => !isPassive && !isDead && !isAggressive &&
+    public bool HasRoamDestination => !dialogueLocked && !isPassive && !isDead && !isAggressive &&
         hasRoamTarget;
     public float CurrentRoamTargetDistance => hasRoamTarget
         ? Vector3.ProjectOnPlane(roamTarget - transform.position, Vector3.up).magnitude
@@ -256,6 +258,32 @@ public class EnemyFighter : MonoBehaviour
             }
 
             return false;
+        }
+    }
+
+    public static void ReleaseNonCombatTargetLocks(PlayerMovement target)
+    {
+        if (target == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < Fighters.Count; i++)
+        {
+            EnemyFighter fighter = Fighters[i];
+            if (fighter == null || fighter.isDead || fighter.isAggressive)
+            {
+                continue;
+            }
+
+            if (fighter.currentTarget == target.transform ||
+                fighter.currentTarget == null)
+            {
+                fighter.currentTarget = null;
+                fighter.currentFighterTarget = null;
+                fighter.targetLockedUntil = 0f;
+                fighter.nextTargetRefreshTime = Time.time + 1.25f;
+            }
         }
     }
 
@@ -414,6 +442,13 @@ public class EnemyFighter : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (dialogueLocked && !isDead)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            return;
+        }
+
         ProcessPunchContact();
 
         if (isDead)
@@ -459,6 +494,21 @@ public class EnemyFighter : MonoBehaviour
         if (playerTarget == null)
         {
             playerTarget = FindFirstObjectByType<PlayerMovement>();
+        }
+
+        GymExperienceService progression = GymExperienceService.Active;
+        if (progression != null && progression.ShouldSuppressEnemyAutoTarget(this) &&
+            !isAggressive)
+        {
+            currentTarget = null;
+            currentFighterTarget = null;
+            TickRoaming();
+            return;
+        }
+        if (progression != null && progression.ShouldForceNegativeAutoTarget(this) &&
+            !isAggressive)
+        {
+            BecomeAggressive(playerTarget);
         }
 
         if (isPolice)
@@ -613,7 +663,7 @@ public class EnemyFighter : MonoBehaviour
 
     public void BecomeAggressive(PlayerMovement source = null)
     {
-        if (isDead || isPassive)
+        if (isDead || isPassive || dialogueLocked)
         {
             return;
         }
@@ -664,6 +714,39 @@ public class EnemyFighter : MonoBehaviour
         roamDirectionHoldUntil = 0f;
 
         Debug.Log($"GYMCHAOS_ENEMY_AGGRO identity={identity} source=player", this);
+    }
+
+    public void SetDialogueLocked(bool locked, Transform conversationPartner = null)
+    {
+        if (dialogueLocked == locked)
+        {
+            return;
+        }
+
+        dialogueLocked = locked;
+        StopMovingPhysicsImmediately();
+        SetAnimatedMovement(false);
+
+        if (locked)
+        {
+            if (conversationPartner != null)
+            {
+                Vector3 direction = Vector3.ProjectOnPlane(
+                    conversationPartner.position - transform.position, Vector3.up);
+                if (direction.sqrMagnitude > 0.001f)
+                {
+                    transform.rotation = Quaternion.LookRotation(direction, Vector3.up);
+                }
+            }
+            return;
+        }
+
+        if (!isDead && !isAggressive && !isPassive)
+        {
+            roamState = RoamState.Idle;
+            roamIdleUntil = Time.time + 0.35f;
+            stalledRoamTime = 0f;
+        }
     }
 
     public void AttachVisitorAgent(GymVisitorAgent agent)
@@ -3894,7 +3977,8 @@ public class EnemyFighter : MonoBehaviour
         }
 
         float impactSpeed = collision.relativeVelocity.magnitude;
-        float minimumImpactSpeed = item.ItemType == WeightType.Barbell || item.ItemType == WeightType.EzBar
+        float minimumImpactSpeed = item.ItemType == WeightType.Barbell ||
+            item.ItemType == WeightType.EzBar || item.ItemType == WeightType.Radio
             ? 0.8f : 3f;
         if (impactSpeed < minimumImpactSpeed || !item.TryConsumeThrownHit())
         {
@@ -3921,6 +4005,11 @@ public class EnemyFighter : MonoBehaviour
         else
         {
             TakeThrowableHit(impulse, damage, 0f, false);
+            GymExperienceService.Active?.RegisterCombatHit(this);
+            if (IsDead)
+            {
+                GymExperienceService.Active?.RegisterEnemyDefeat(this);
+            }
         }
     }
 }

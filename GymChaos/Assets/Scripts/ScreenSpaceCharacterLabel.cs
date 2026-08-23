@@ -21,7 +21,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
 
     private void OnGUI()
     {
-        if (bodyRenderer == null)
+        if (bodyRenderer == null || GymDialogueDirector.IsDialogueActive)
         {
             return;
         }

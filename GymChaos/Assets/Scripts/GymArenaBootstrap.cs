@@ -230,6 +230,7 @@ public class GymArenaBootstrap : MonoBehaviour
         player = targetPlayer;
         GymInteriorBuilder.Build(player);
         GymOutdoorBuilder.Build(player);
+        GymLooseItemSpawner.CreateForScene(player);
         EquipmentMaterialRestorer.ApplyToScene();
         EnsureSceneColliders();
         MarkSpatiallyMountedWeightCandidates();
@@ -237,6 +238,8 @@ public class GymArenaBootstrap : MonoBehaviour
         GymAudio.CreateForScene();
         radio = GymRadio.CreateForScene();
         GymExerciseStation.CreateForScene();
+        GymExperienceService.CreateForScene(targetPlayer);
+        GymDialogueDirector.CreateForScene(targetPlayer);
 
         if (Application.isBatchMode)
         {

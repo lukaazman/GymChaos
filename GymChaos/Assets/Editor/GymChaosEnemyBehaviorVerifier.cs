@@ -9,9 +9,16 @@ public static class GymChaosEnemyBehaviorVerifier
 {
     private const string VerificationRequestedKey =
         "GymChaos.EnemyBehaviorVerificationRequested";
+    private const string OriginalSaveKey =
+        "GymChaos.EnemyBehaviorVerificationOriginalSave";
+    private const string OriginalSavePresentKey =
+        "GymChaos.EnemyBehaviorVerificationOriginalSavePresent";
+    private const string ProgressionSaveKey = "GymChaos.Progression.v1";
 
     private static double enteredPlayTime;
     private static bool behaviorSetup;
+    private static bool verificationCompleted;
+    private static bool verificationFailed;
     private static bool treadmillPending;
     private static bool treadmillRunningObserved;
     private static bool observedIdle;
@@ -60,6 +67,17 @@ public static class GymChaosEnemyBehaviorVerifier
     [MenuItem("Tools/GymChaos/Run Enemy Behavior Verification")]
     public static void Run()
     {
+        string originalSave = PlayerPrefs.GetString(ProgressionSaveKey, string.Empty);
+        EditorPrefs.SetBool(OriginalSavePresentKey,
+            PlayerPrefs.HasKey(ProgressionSaveKey));
+        EditorPrefs.SetString(OriginalSaveKey, originalSave);
+        // Combat verification must start from neutral reputation. A player's
+        // negative-reputation save intentionally auto-targets enemies, which
+        // would make a neutral-roaming test fail before it can apply its own
+        // player-caused hit.
+        PlayerPrefs.DeleteKey(ProgressionSaveKey);
+        PlayerPrefs.Save();
+
         ResetState();
         EditorPrefs.SetBool(VerificationRequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
@@ -72,6 +90,8 @@ public static class GymChaosEnemyBehaviorVerifier
     {
         enteredPlayTime = 0d;
         behaviorSetup = false;
+        verificationCompleted = false;
+        verificationFailed = false;
         treadmillPending = false;
         treadmillRunningObserved = false;
         observedIdle = false;
@@ -118,12 +138,13 @@ public static class GymChaosEnemyBehaviorVerifier
         }
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
+            RestoreOriginalProgressionSave();
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.update -= Tick;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             if (Application.isBatchMode)
             {
-                EditorApplication.Exit(0);
+                EditorApplication.Exit(verificationCompleted && !verificationFailed ? 0 : 1);
             }
         }
     }
@@ -181,6 +202,8 @@ public static class GymChaosEnemyBehaviorVerifier
         catch (Exception exception)
         {
             Debug.LogException(exception);
+            verificationFailed = true;
+            verificationCompleted = true;
             EditorApplication.update -= Tick;
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.isPlaying = false;
@@ -609,7 +632,25 @@ public static class GymChaosEnemyBehaviorVerifier
             $"earlyRunning={FormatIdentities(earlyRunningIdentities)} " +
             $"earlyIdle={FormatIdentities(earlyIdleIdentities)} " +
             $"earlyMoved={FormatIdentities(earlyMovedIdentities)}");
+        verificationCompleted = true;
         EditorApplication.isPlaying = false;
+    }
+
+    private static void RestoreOriginalProgressionSave()
+    {
+        bool hadOriginalSave = EditorPrefs.GetBool(OriginalSavePresentKey, false);
+        string originalSave = EditorPrefs.GetString(OriginalSaveKey, string.Empty);
+        if (hadOriginalSave)
+        {
+            PlayerPrefs.SetString(ProgressionSaveKey, originalSave);
+        }
+        else
+        {
+            PlayerPrefs.DeleteKey(ProgressionSaveKey);
+        }
+        PlayerPrefs.Save();
+        EditorPrefs.DeleteKey(OriginalSaveKey);
+        EditorPrefs.DeleteKey(OriginalSavePresentKey);
     }
 
     private static string FormatIdentities(HashSet<BodybuilderIdentity> identities)

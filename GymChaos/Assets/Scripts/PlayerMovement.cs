@@ -75,12 +75,22 @@ public class PlayerMovement : MonoBehaviour
     private float lastGroundedTime = -999f;
     private float heldBarShoveTimer;
     private Vector3 heldItemShoveDirection = Vector3.zero;
+    private float sprintEnergy = 100f;
     private bool showCursor;
+    private bool cinematicLock;
     private bool suppressGameplayInputThisFrame;
     private bool useRightHandNext = true;
     private float crouchAmount;
     private Vector3 cameraBaseLocalPosition;
     private const float PlayerPunchAimLift = 0.16f;
+
+    private GUIStyle hudShadowStyle;
+    private GUIStyle hudTitleStyle;
+    private GUIStyle hudBodyStyle;
+    private GUIStyle hudMetricStyle;
+    private GUIStyle hudHintStyle;
+    private GUIStyle hudAccentStyle;
+    private GUIStyle hudPromptStyle;
 
     private Transform carryAnchor;
     private PickupItem heldItem;
@@ -128,7 +138,71 @@ public class PlayerMovement : MonoBehaviour
     public float MaxHealth => maxHealth;
     public float CurrentHealth => currentHealth;
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
+    public float SprintEnergy => sprintEnergy;
     public bool IsDead { get; private set; }
+    public bool IsCinematicLocked => cinematicLock;
+    public bool CursorCaptured => IsCursorCaptured;
+    public Vector3 StandingCameraLocalPosition => cameraBaseLocalPosition;
+
+    public void SetCinematicLock(bool locked)
+    {
+        cinematicLock = locked;
+        if (locked)
+        {
+            planarVelocity = Vector3.zero;
+            impactVelocity = Vector3.zero;
+            verticalVelocity = 0f;
+        }
+    }
+
+    public void SetCursorCaptured(bool captured)
+    {
+        LockCursor(captured);
+    }
+
+    public void SetCinematicPose(
+        Vector3 worldPosition, Quaternion worldRotation,
+        Vector3 cameraLocalPosition, Quaternion cameraLocalRotation)
+    {
+        if (playerCamera == null)
+        {
+            return;
+        }
+
+        if (characterController != null)
+        {
+            characterController.enabled = false;
+        }
+
+        transform.SetPositionAndRotation(worldPosition, worldRotation);
+        playerCamera.transform.localPosition = cameraLocalPosition;
+        playerCamera.transform.localRotation = cameraLocalRotation;
+        rotationX = NormalizeCameraPitch(cameraLocalRotation.eulerAngles.x);
+        planarVelocity = Vector3.zero;
+        impactVelocity = Vector3.zero;
+        verticalVelocity = 0f;
+    }
+
+    public void RestoreCinematicPose(
+        Vector3 worldPosition, Quaternion worldRotation,
+        Vector3 cameraLocalPosition, Quaternion cameraLocalRotation)
+    {
+        SetCinematicPose(worldPosition, worldRotation, cameraLocalPosition, cameraLocalRotation);
+        if (characterController != null)
+        {
+            characterController.enabled = true;
+        }
+    }
+
+    private static float NormalizeCameraPitch(float angle)
+    {
+        if (angle > 180f)
+        {
+            angle -= 360f;
+        }
+
+        return angle;
+    }
 
     public void CaptureCursorForGameplay()
     {
@@ -158,6 +232,7 @@ public class PlayerMovement : MonoBehaviour
         maxHealth = 200f;
         currentHealth = maxHealth;
         IsDead = false;
+        sprintEnergy = 100f;
         characterController = GetComponent<CharacterController>();
 
         if (playerCamera == null)
@@ -212,6 +287,26 @@ public class PlayerMovement : MonoBehaviour
 
         suppressGameplayInputThisFrame = false;
 
+        if (GymDialogueDirector.IsDialogueActive)
+        {
+            GymDialogueDirector.TickActiveInput(
+                this,
+                ReadExerciseActionPressed(),
+                ReadPauseToggle());
+            return;
+        }
+
+        if (GymExperienceService.Active != null &&
+            GymExperienceService.Active.IsBlockingPlayerInput)
+        {
+            return;
+        }
+
+        if (cinematicLock)
+        {
+            return;
+        }
+
         // Browsers reject the initial lock request because Start is not a
         // user gesture. Wait for a real click, then retry the same request so
         // the deployed build behaves like the editor without stealing the
@@ -254,6 +349,14 @@ public class PlayerMovement : MonoBehaviour
 
         nearbyExerciseStation = GymExerciseStation.FindClosest(transform.position, 3.15f);
         nearbyRadio = GymRadio.FindClosest(transform.position, 3.1f);
+        if (GymDialogueDirector.TryStartNearby(this, ReadInteractPressed()))
+        {
+            return;
+        }
+        if (GymExperienceService.TryHandlePlayerInteraction(this, ReadInteractPressed()))
+        {
+            return;
+        }
         if (nearbyRadio != null && ReadRadioTogglePressed())
         {
             nearbyRadio.ToggleMusic();
@@ -338,13 +441,39 @@ public class PlayerMovement : MonoBehaviour
         crouchAmount = Mathf.MoveTowards(crouchAmount, crouchHeld ? 1f : 0f, 10f * Time.deltaTime);
         bool jumpPressed = ReadJumpPressed();
 
+        GymExperienceService progression = GymExperienceService.Active;
+        float sprintCapacity = progression != null
+            ? progression.GetSprintCapacity()
+            : 100f;
+        sprintEnergy = Mathf.Clamp(sprintEnergy, 0f, sprintCapacity);
+        bool sprinting = sprintHeld && !crouchHeld && sprintEnergy > 0.01f;
+        if (sprinting && moveInput.sqrMagnitude > 0.01f)
+        {
+            float drain = progression != null
+                ? progression.GetSprintDrainPerSecond()
+                : 18f;
+            sprintEnergy = Mathf.Max(0f, sprintEnergy - drain * Time.deltaTime);
+        }
+        else
+        {
+            float recovery = progression != null
+                ? progression.GetSprintRecoveryPerSecond()
+                : 14f;
+            sprintEnergy = Mathf.Min(
+                sprintCapacity, sprintEnergy + recovery * Time.deltaTime);
+        }
+
         bool grounded = characterController.isGrounded;
         if (grounded)
         {
             lastGroundedTime = Time.time;
         }
 
-        float targetSpeed = crouchHeld ? crouchSpeed : (sprintHeld ? runSpeed : walkSpeed);
+        float runMultiplier = sprinting && progression != null
+            ? progression.GetSprintMultiplier()
+            : 1f;
+        float targetSpeed = crouchHeld ? crouchSpeed :
+            (sprinting ? runSpeed * runMultiplier : walkSpeed);
         Vector3 wishDirection = (transform.forward * moveInput.y) + (transform.right * moveInput.x);
         wishDirection = Vector3.ClampMagnitude(wishDirection, 1f);
         Vector3 desiredVelocity = wishDirection * targetSpeed;
@@ -510,7 +639,12 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        Vector3 impulse = direction * punchForce + Vector3.up * 1.2f;
+        GymExperienceService progression = GymExperienceService.Active;
+        float strengthForce = progression != null
+            ? progression.GetStrengthForceMultiplier()
+            : 1f;
+        Vector3 impulse = direction * punchForce * strengthForce +
+            Vector3.up * (1.2f * strengthForce);
 
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (!IsTightEnemySurface(enemy, hit.collider))
@@ -520,8 +654,27 @@ public class PlayerMovement : MonoBehaviour
         if (enemy != null)
         {
             GymAudio.Play(GymSoundEffect.PunchFeedback, hit.point, 1f);
-            enemy.TakeMeleeHit(impulse, 5f, punchStun);
+            bool onePunch = progression != null &&
+                progression.StrengthUltimateApplies(enemy);
+            float damage = onePunch ? enemy.CurrentHealth :
+                (progression != null
+                    ? progression.ScaleStrengthDamage(5f)
+                    : 5f);
+            enemy.TakeMeleeHit(impulse, damage, punchStun);
+            progression?.RegisterCombatHit(enemy);
+            if (enemy.IsDead)
+            {
+                progression?.RegisterEnemyDefeat(enemy);
+            }
             BloodSplatter.SpawnOnBody(enemy, hit.point, hit.normal, 0.82f, hit.collider.transform);
+        }
+
+        GymExperienceService service = progression;
+        GlassShatterPanel unarmedPanel = hit.collider.GetComponentInParent<GlassShatterPanel>();
+        if (service != null && service.HasStrengthUltimate && unarmedPanel != null &&
+            unarmedPanel.ShatterFromPowerImpact(hit.point, hit.normal, impulse))
+        {
+            Debug.Log("GYMCHAOS_STRENGTH_MIRROR_BREAK", unarmedPanel);
         }
 
         PickupItem pickup = hit.collider.GetComponentInParent<PickupItem>();
@@ -542,7 +695,8 @@ public class PlayerMovement : MonoBehaviour
 
     private void PerformShove()
     {
-        if (heldItem != null && (heldItem.ItemType == WeightType.Barbell || heldItem.ItemType == WeightType.EzBar))
+        if (heldItem != null && (heldItem.ItemType == WeightType.Barbell ||
+            heldItem.ItemType == WeightType.EzBar || heldItem.ItemType == WeightType.Radio))
         {
             handRig?.TriggerHeldShove(GetHeldShoveVisualReach(), heldBarShoveDuration);
             PerformHeldBarShove();
@@ -560,7 +714,12 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 origin = transform.position + Vector3.up * (characterController.height * 0.45f);
         int hitCount = Physics.OverlapSphereNonAlloc(origin + transform.forward * 1.05f, 1.1f, overlapHits, ~0, QueryTriggerInteraction.Collide);
-        Vector3 impulse = transform.forward * shoveForce + Vector3.up * 0.75f;
+        GymExperienceService progression = GymExperienceService.Active;
+        float strengthForce = progression != null
+            ? progression.GetStrengthForceMultiplier()
+            : 1f;
+        Vector3 impulse = transform.forward * shoveForce * strengthForce +
+            Vector3.up * (0.75f * strengthForce);
         HashSet<EnemyFighter> damagedFighters = new HashSet<EnemyFighter>();
 
         for (int i = 0; i < hitCount; i++)
@@ -578,7 +737,15 @@ public class PlayerMovement : MonoBehaviour
             }
             if (enemy != null && damagedFighters.Add(enemy))
             {
-                enemy.TakeMeleeHit(impulse, 2f, shoveStun);
+                float damage = GymExperienceService.Active != null
+                    ? GymExperienceService.Active.ScaleStrengthDamage(2f)
+                    : 2f;
+                enemy.TakeMeleeHit(impulse, damage, shoveStun);
+                GymExperienceService.Active?.RegisterCombatHit(enemy);
+                if (enemy.IsDead)
+                {
+                    GymExperienceService.Active?.RegisterEnemyDefeat(enemy);
+                }
             }
 
             PickupItem pickup = hit.GetComponentInParent<PickupItem>();
@@ -608,7 +775,12 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        Vector3 impulse = direction * heldBarShoveForce + Vector3.up * 0.6f;
+        GymExperienceService progression = GymExperienceService.Active;
+        float strengthForce = progression != null
+            ? progression.GetStrengthForceMultiplier()
+            : 1f;
+        Vector3 impulse = direction * heldBarShoveForce * strengthForce +
+            Vector3.up * (0.6f * strengthForce);
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (!IsTightEnemySurface(enemy, hit.collider))
         {
@@ -616,8 +788,20 @@ public class PlayerMovement : MonoBehaviour
         }
         if (enemy != null)
         {
-            float damage = heldItem.ItemType == WeightType.Barbell ? 15f : 5f;
+            float baseDamage = heldItem.ItemType == WeightType.Barbell
+                ? 15f
+                : heldItem.ItemType == WeightType.Radio
+                    ? heldItem.GetImpactDamage(heldBarShoveForce) * 0.7f
+                    : 5f;
+            float damage = progression != null
+                ? progression.ScaleStrengthDamage(baseDamage)
+                : baseDamage;
             enemy.TakeMeleeHit(impulse, damage, shoveStun);
+            progression?.RegisterCombatHit(enemy);
+            if (enemy.IsDead)
+            {
+                progression?.RegisterEnemyDefeat(enemy);
+            }
             BloodSplatter.SpawnOnBody(
                 enemy, hit.point, hit.normal,
                 BloodSplatter.GetHeldShoveScale(heldItem.ItemType, heldItem.BaseMass),
@@ -652,7 +836,11 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        Vector3 impulse = direction * heldPlateShoveForce;
+        GymExperienceService progression = GymExperienceService.Active;
+        float strengthForce = progression != null
+            ? progression.GetStrengthForceMultiplier()
+            : 1f;
+        Vector3 impulse = direction * heldPlateShoveForce * strengthForce;
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (!IsTightEnemySurface(enemy, hit.collider))
         {
@@ -660,7 +848,15 @@ public class PlayerMovement : MonoBehaviour
         }
         if (enemy != null)
         {
-            enemy.TakeMeleeHit(impulse, heldItem.BaseMass * 0.75f, shoveStun);
+            float damage = progression != null
+                ? progression.ScaleStrengthDamage(heldItem.BaseMass * 0.75f)
+                : heldItem.BaseMass * 0.75f;
+            enemy.TakeMeleeHit(impulse, damage, shoveStun);
+            progression?.RegisterCombatHit(enemy);
+            if (enemy.IsDead)
+            {
+                progression?.RegisterEnemyDefeat(enemy);
+            }
             BloodSplatter.SpawnOnBody(
                 enemy, hit.point, hit.normal,
                 BloodSplatter.GetHeldShoveScale(heldItem.ItemType, heldItem.BaseMass),
@@ -742,10 +938,15 @@ public class PlayerMovement : MonoBehaviour
                             heldItem.ItemType == WeightType.Plate10 || heldItem.ItemType == WeightType.Plate20;
         bool allowSpin = !isPlateThrow;
         Vector3 throwDirection = isPlateThrow ? GetFlatThrowDirection() : (playerCamera.transform.forward + Vector3.up * 0.12f).normalized;
-        float scaledThrowForce = throwForce + heldItem.BaseMass * 0.9f;
+        GymExperienceService progression = GymExperienceService.Active;
+        float strengthForce = progression != null
+            ? progression.GetStrengthForceMultiplier()
+            : 1f;
+        float scaledThrowForce = (throwForce + heldItem.BaseMass * 0.9f) * strengthForce;
         Vector3 throwImpulse = isPlateThrow
             ? GetPlateThrowImpulse(throwDirection, heldItem.BaseMass)
-            : throwDirection * scaledThrowForce + Vector3.up * upwardThrowForce;
+            : throwDirection * scaledThrowForce +
+              Vector3.up * (upwardThrowForce * strengthForce);
 
         heldItem.Throw(throwImpulse, playerColliders, collisionRestoreDelay, allowSpin);
         heldItem = null;
@@ -766,7 +967,8 @@ public class PlayerMovement : MonoBehaviour
 
         float shoveOffset = 0f;
         Quaternion targetRotation = carryAnchor.rotation;
-        if (heldBarShoveTimer > 0f && (heldItem.ItemType == WeightType.Barbell || heldItem.ItemType == WeightType.EzBar))
+        if (heldBarShoveTimer > 0f && (heldItem.ItemType == WeightType.Barbell ||
+            heldItem.ItemType == WeightType.EzBar || heldItem.ItemType == WeightType.Radio))
         {
             float normalized = 1f - (heldBarShoveTimer / heldBarShoveDuration);
             shoveOffset = Mathf.Sin(normalized * Mathf.PI) * GetHeldShoveVisualReach();
@@ -831,12 +1033,25 @@ public class PlayerMovement : MonoBehaviour
             return false;
         }
 
-        // The animated compound rig is the preferred contact surface, but a
-        // WebGL build can briefly receive the broad root capsule while the
-        // external character finishes loading. Accept every collider owned by
-        // the enemy, including that root fallback, so punches and shoves are
-        // never silently discarded during that handoff.
-        return hitCollider.transform == enemy.transform ||
+        if (!hitCollider.enabled || hitCollider.isTrigger)
+        {
+            return false;
+        }
+
+        EnemyMeshHitboxRig hitboxRig = enemy.GetComponent<EnemyMeshHitboxRig>();
+        if (hitboxRig != null)
+        {
+            // Once the animated rig exists, only its moving body-part
+            // colliders are valid combat surfaces. The broad root capsule is
+            // deliberately disabled and must never become a hidden damage
+            // volume during external-model loading or animation handoff.
+            return hitboxRig.IsTightCombatSurface(hitCollider);
+        }
+
+        // Keep the temporary fallback for enemies that have not produced an
+        // animated rig yet, but never accept a collider on an unrelated
+        // hierarchy or a disabled root.
+        return hitCollider.transform != enemy.transform &&
                hitCollider.transform.IsChildOf(enemy.transform);
     }
 
@@ -847,7 +1062,10 @@ public class PlayerMovement : MonoBehaviour
         float mass01 = Mathf.InverseLerp(5f, 20f, plateMass);
         float distanceScale = Mathf.Lerp(1f, 0.90f, mass01);
         float downwardSpeed = Mathf.Lerp(0f, 0.65f, mass01);
-        float plate5Speed = throwForce + 5f * 0.9f + 8f;
+        float strengthForce = GymExperienceService.Active != null
+            ? GymExperienceService.Active.GetStrengthForceMultiplier()
+            : 1f;
+        float plate5Speed = (throwForce + 5f * 0.9f + 8f) * strengthForce;
         return direction * (plate5Speed * distanceScale) + Vector3.down * downwardSpeed;
     }
 
@@ -982,6 +1200,12 @@ public class PlayerMovement : MonoBehaviour
     {
         if (station == null || activeExerciseStation != null ||
             pullUpMountTransitionActive)
+        {
+            return;
+        }
+
+        if (GymExperienceService.Active != null &&
+            !GymExperienceService.Active.CanStartWorkout())
         {
             return;
         }
@@ -1358,11 +1582,13 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (GymDialogueDirector.IsDialogueActive)
+        {
+            return;
+        }
+
         DrawBloodyOverlay();
-        GUI.color = Color.white;
-        GUIStyle hudStyle = new GUIStyle(GUI.skin.label);
-        hudStyle.fontSize = 17;
-        hudStyle.normal.textColor = Color.white;
+        EnsureHudStyles();
 
         if (pendingWeightStation != null)
         {
@@ -1372,70 +1598,141 @@ public class PlayerMovement : MonoBehaviour
 
         if (pullUpMountTransitionActive)
         {
-            GUI.Box(new Rect(14f, 14f, 780f, 82f), string.Empty);
-            GUI.Label(
-                new Rect(27f, 24f, 750f, 65f),
-                "PULL UPS  |  MOUNTING BAR...\n[Q] cancel",
-                hudStyle);
+            DrawHudText(
+                new Rect(24f, 20f, 780f, 28f),
+                "PULL UPS",
+                hudTitleStyle);
+            DrawHudText(
+                new Rect(24f, 49f, 780f, 28f),
+                "MOUNTING BAR...   [Q] CANCEL",
+                hudHintStyle);
             return;
         }
 
         if (activeExerciseStation != null)
         {
-            GUI.Box(new Rect(14f, 14f, 780f, 82f), string.Empty);
-            GUI.Label(new Rect(27f, 24f, 750f, 65f), activeExerciseStation.GetSessionHud(), hudStyle);
+            DrawHudText(
+                new Rect(24f, 20f, 780f, 70f),
+                activeExerciseStation.GetSessionHud(),
+                hudBodyStyle);
+            if (activeExerciseStation.TechniqueCheck != null &&
+                activeExerciseStation.TechniqueCheck.IsActive)
+            {
+                Rect ringRect = new Rect(
+                    Screen.width * 0.5f - 118f,
+                    Screen.height * 0.5f - 118f,
+                    236f,
+                    236f);
+                activeExerciseStation.TechniqueCheck.DrawGUI(ringRect);
+            }
             return;
         }
 
         string heldText = heldItem == null ? "Hands free" : $"Holding: {heldItem.DisplayName}";
-        string hud = $"Gym Chaos  |  Opponents: {EnemyFighter.ActiveCount}\n" +
-                     $"LMB punch / throw   RMB shove   E pick up / drop   F exercise   R radio   Shift sprint   C crouch   Space jump\n" +
-                     $"{heldText}";
-        GUI.Label(new Rect(16f, 16f, 940f, 60f), hud, hudStyle);
+        float sprintCapacity = GymExperienceService.Active != null
+            ? GymExperienceService.Active.GetSprintCapacity()
+            : 100f;
+        DrawHudText(new Rect(24f, 18f, 320f, 28f), "GYM CHAOS", hudTitleStyle);
+        DrawHudText(
+            new Rect(24f, 47f, 320f, 24f),
+            $"OPPONENTS  {EnemyFighter.ActiveCount:00}",
+            hudMetricStyle);
+        DrawHudText(
+            new Rect(24f, 78f, 940f, 22f),
+            "LMB PUNCH / THROW   RMB SHOVE   E PICK UP / DROP",
+            hudHintStyle);
+        DrawHudText(
+            new Rect(24f, 100f, 940f, 22f),
+            "F EXERCISE / RADIO   SHIFT SPRINT   C CROUCH   SPACE JUMP",
+            hudHintStyle);
+        DrawHudText(
+            new Rect(24f, 128f, 560f, 24f),
+            $"{heldText.ToUpperInvariant()}   ·   SPRINT {sprintEnergy:0}/{sprintCapacity:0}",
+            hudAccentStyle);
 
-        if (!IsCursorCaptured)
+        bool lockerAppearanceOpen = GymExperienceService.Active != null &&
+            GymExperienceService.Active.IsLockerMenuOpen;
+        if (!lockerAppearanceOpen && !IsCursorCaptured)
         {
             float width = Mathf.Min(520f, Screen.width - 32f);
             Rect captureRect = new Rect((Screen.width - width) * 0.5f, Screen.height * 0.5f - 38f, width, 76f);
-            GUI.Box(captureRect, string.Empty);
-            GUIStyle captureStyle = new GUIStyle(hudStyle)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 18,
-                fontStyle = FontStyle.Bold
-            };
-            captureStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
-            GUI.Label(captureRect, "CLICK THE GAME TO LOOK AROUND\nESC releases the cursor", captureStyle);
+            DrawHudText(
+                captureRect,
+                "CLICK THE GAME TO LOOK AROUND\nESC RELEASES THE CURSOR",
+                hudPromptStyle);
         }
 
         float promptBottom = Screen.height - 105f;
         if (nearbyRadio != null)
         {
-            float width = 440f;
-            Rect radioPromptRect = new Rect(
-                (Screen.width - width) * 0.5f, promptBottom, width, 54f);
-            GUI.Box(radioPromptRect, string.Empty);
-            GUIStyle radioPromptStyle = new GUIStyle(GUI.skin.label);
-            radioPromptStyle.alignment = TextAnchor.MiddleCenter;
-            radioPromptStyle.fontSize = 20;
-            radioPromptStyle.fontStyle = FontStyle.Bold;
-            radioPromptStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
-            GUI.Label(radioPromptRect, nearbyRadio.GetInteractionPrompt(), radioPromptStyle);
-            promptBottom -= 64f;
+            Rect radioPromptRect = new Rect(16f, promptBottom, Screen.width - 32f, 32f);
+            DrawHudText(radioPromptRect, nearbyRadio.GetInteractionPrompt(), hudPromptStyle);
+            promptBottom -= 42f;
         }
 
         if (nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer)
         {
-            float width = 440f;
-            Rect promptRect = new Rect((Screen.width - width) * 0.5f, promptBottom, width, 54f);
-            GUI.Box(promptRect, string.Empty);
-            GUIStyle promptStyle = new GUIStyle(GUI.skin.label);
-            promptStyle.alignment = TextAnchor.MiddleCenter;
-            promptStyle.fontSize = 20;
-            promptStyle.fontStyle = FontStyle.Bold;
-            promptStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
-            GUI.Label(promptRect, nearbyExerciseStation.GetInteractionPrompt(), promptStyle);
+            Rect promptRect = new Rect(16f, promptBottom, Screen.width - 32f, 32f);
+            DrawHudText(promptRect, nearbyExerciseStation.GetInteractionPrompt(), hudPromptStyle);
         }
+    }
+
+    private void EnsureHudStyles()
+    {
+        if (hudTitleStyle != null)
+        {
+            return;
+        }
+
+        hudShadowStyle = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.UpperLeft,
+            fontSize = 16,
+            fontStyle = FontStyle.Bold,
+            padding = new RectOffset(0, 0, 0, 0)
+        };
+        hudShadowStyle.normal.textColor = new Color(0f, 0f, 0f, 0.82f);
+
+        hudTitleStyle = CreateHudStyle(20, FontStyle.Bold, TextAnchor.UpperLeft);
+        hudTitleStyle.normal.textColor = Color.white;
+        hudBodyStyle = CreateHudStyle(16, FontStyle.Bold, TextAnchor.UpperLeft);
+        hudBodyStyle.normal.textColor = Color.white;
+        hudMetricStyle = CreateHudStyle(15, FontStyle.Bold, TextAnchor.UpperLeft);
+        hudMetricStyle.normal.textColor = new Color(0.72f, 0.84f, 1f);
+        hudHintStyle = CreateHudStyle(13, FontStyle.Normal, TextAnchor.UpperLeft);
+        hudHintStyle.normal.textColor = new Color(0.86f, 0.9f, 0.96f);
+        hudAccentStyle = CreateHudStyle(14, FontStyle.Bold, TextAnchor.UpperLeft);
+        hudAccentStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
+        hudPromptStyle = CreateHudStyle(17, FontStyle.Bold, TextAnchor.MiddleCenter);
+        hudPromptStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
+    }
+
+    private static GUIStyle CreateHudStyle(
+        int fontSize, FontStyle fontStyle, TextAnchor alignment)
+    {
+        GUIStyle style = new GUIStyle(GUI.skin.label)
+        {
+            alignment = alignment,
+            fontSize = fontSize,
+            fontStyle = fontStyle,
+            padding = new RectOffset(0, 0, 0, 0),
+            wordWrap = true
+        };
+        style.normal.background = null;
+        style.hover.background = null;
+        style.active.background = null;
+        style.focused.background = null;
+        return style;
+    }
+
+    private void DrawHudText(Rect rect, string text, GUIStyle style)
+    {
+        hudShadowStyle.fontSize = style.fontSize;
+        hudShadowStyle.fontStyle = style.fontStyle;
+        hudShadowStyle.alignment = style.alignment;
+        hudShadowStyle.wordWrap = style.wordWrap;
+        GUI.Label(new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height), text, hudShadowStyle);
+        GUI.Label(rect, text, style);
     }
 
     private void DrawBloodyOverlay()
@@ -1631,11 +1928,8 @@ public class PlayerMovement : MonoBehaviour
 
     private bool ReadRadioTogglePressed()
     {
-#if ENABLE_INPUT_SYSTEM
-        return Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.R);
-#endif
+        // Radio uses the same contextual interaction key as exercise stations.
+        return ReadExerciseStartPressed();
     }
 
     private bool ReadJumpPressed()

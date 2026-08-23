@@ -9,8 +9,15 @@ public static class GymChaosVisitorVerifier
 {
     private const string VerificationRequestedKey =
         "GymChaos.VisitorVerificationRequested";
+    private const string OriginalSaveKey =
+        "GymChaos.VisitorVerificationOriginalSave";
+    private const string OriginalSavePresentKey =
+        "GymChaos.VisitorVerificationOriginalSavePresent";
+    private const string ProgressionSaveKey = "GymChaos.Progression.v1";
 
     private static double enteredPlayTime;
+    private static bool verificationCompleted;
+    private static bool verificationFailed;
     private static bool sceneValidated;
     private static bool entryRequested;
     private static bool entryMoved;
@@ -51,6 +58,16 @@ public static class GymChaosVisitorVerifier
     [MenuItem("Tools/GymChaos/Run Visitor and Time Verification")]
     public static void Run()
     {
+        string originalSave = PlayerPrefs.GetString(ProgressionSaveKey, string.Empty);
+        EditorPrefs.SetBool(OriginalSavePresentKey,
+            PlayerPrefs.HasKey(ProgressionSaveKey));
+        EditorPrefs.SetString(OriginalSaveKey, originalSave);
+        // Visitor verification expects the roster to remain neutral until the
+        // test explicitly asks one visitor to enter. Do not let a player's
+        // negative-reputation auto-target rule cancel the roster first.
+        PlayerPrefs.DeleteKey(ProgressionSaveKey);
+        PlayerPrefs.Save();
+
         ResetState();
         EditorPrefs.SetBool(VerificationRequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
@@ -62,6 +79,8 @@ public static class GymChaosVisitorVerifier
     private static void ResetState()
     {
         enteredPlayTime = 0d;
+        verificationCompleted = false;
+        verificationFailed = false;
         sceneValidated = false;
         entryRequested = false;
         entryMoved = false;
@@ -110,12 +129,13 @@ public static class GymChaosVisitorVerifier
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
             Time.timeScale = 1f;
+            RestoreOriginalProgressionSave();
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.update -= Tick;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             if (Application.isBatchMode)
             {
-                EditorApplication.Exit(0);
+                EditorApplication.Exit(verificationCompleted && !verificationFailed ? 0 : 1);
             }
         }
     }
@@ -395,6 +415,7 @@ public static class GymChaosVisitorVerifier
                     $"GYMCHAOS_VISITOR_VERIFICATION_OK entryMoved={entryMoved} " +
                     $"entryConfirmed={entryConfirmed} workoutMoved={workoutMoved} " +
                     $"workoutStarted={workoutStarted} workoutCompleted={workoutCompleted}");
+                verificationCompleted = true;
                 EditorApplication.isPlaying = false;
                 return;
             }
@@ -411,10 +432,29 @@ public static class GymChaosVisitorVerifier
         catch (Exception exception)
         {
             Debug.LogException(exception);
+            verificationFailed = true;
+            verificationCompleted = true;
             EditorApplication.update -= Tick;
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.isPlaying = false;
         }
+    }
+
+    private static void RestoreOriginalProgressionSave()
+    {
+        bool hadOriginalSave = EditorPrefs.GetBool(OriginalSavePresentKey, false);
+        string originalSave = EditorPrefs.GetString(OriginalSaveKey, string.Empty);
+        if (hadOriginalSave)
+        {
+            PlayerPrefs.SetString(ProgressionSaveKey, originalSave);
+        }
+        else
+        {
+            PlayerPrefs.DeleteKey(ProgressionSaveKey);
+        }
+        PlayerPrefs.Save();
+        EditorPrefs.DeleteKey(OriginalSaveKey);
+        EditorPrefs.DeleteKey(OriginalSavePresentKey);
     }
 
     private static void ValidateScene(

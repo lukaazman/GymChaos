@@ -32,6 +32,7 @@ public sealed class PlayerHandRig : MonoBehaviour
 
     private readonly Dictionary<Transform, Quaternion> restRotations = new Dictionary<Transform, Quaternion>();
     private readonly Dictionary<Transform, Vector3> restPositions = new Dictionary<Transform, Vector3>();
+    private readonly Dictionary<Transform, Vector3> restScales = new Dictionary<Transform, Vector3>();
     private readonly List<BakedRenderProxy> bakedRenderProxies = new List<BakedRenderProxy>();
     private readonly List<Mesh> runtimeMeshes = new List<Mesh>();
     private AnimationClip jabClip;
@@ -269,7 +270,38 @@ public sealed class PlayerHandRig : MonoBehaviour
         RestoreAnimatedBones();
         bool sampled = SampleLocomotion();
         UpdateBakedRenderers();
+        // Keep the one-frame run sample observable to the verifier, then
+        // return to the authored rest pose. Leaving moveAmount at 1 here
+        // makes every later bounds check measure a compressed stride AABB
+        // instead of the model's actual gameplay height.
+        moveAmount = 0f;
+        locomotionElapsed = 0f;
+        RestoreAnimatedBones();
+        RestoreVerificationModelTransform();
+        UpdateBakedRenderers();
         return sampled;
+    }
+
+    public void ResetToVerificationIdlePose()
+    {
+        moveAmount = 0f;
+        crouchAmount = 0f;
+        locomotionElapsed = 0f;
+        isHolding = false;
+        activeAttackClip = null;
+        activeAttackElapsed = 0f;
+        leftPunchTimer = 0f;
+        rightPunchTimer = 0f;
+        shoveTimer = 0f;
+        leftThrowTimer = 0f;
+        rightThrowTimer = 0f;
+        heldShoveElapsed = heldShoveDuration;
+        heldShoveReach = 0f;
+        RestoreAnimatedBones();
+        RestoreVerificationModelTransform();
+        RefitVerificationMirrorBody();
+        AnimateArms();
+        UpdateBakedRenderers();
     }
 
     public bool SampleCrouchForVerification(float normalizedTime)
@@ -287,6 +319,37 @@ public sealed class PlayerHandRig : MonoBehaviour
         bool sampled = SampleLocomotion();
         UpdateBakedRenderers();
         return sampled;
+    }
+#endif
+
+    private void RestoreVerificationModelTransform()
+    {
+        if (modelRoot == null)
+        {
+            return;
+        }
+
+        // SampleAnimation can write root scale/position keys as well as bone
+        // rotations. Restore the authored gameplay transform before any
+        // verifier bounds or mirror checks run.
+        modelRoot.transform.SetLocalPositionAndRotation(
+            baseModelLocalPosition, Quaternion.identity);
+        modelRoot.transform.localScale = baseModelLocalScale;
+    }
+
+#if UNITY_EDITOR
+    private void RefitVerificationMirrorBody()
+    {
+        if (modelRoot == null)
+        {
+            return;
+        }
+
+        SkinnedMeshRenderer[] bodyRenderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
+            .Where(renderer => renderer != null &&
+                renderer.gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
+            .ToArray();
+        ScaleMirrorBodyToTarget(bodyRenderers, MirrorFallbackTargetHeight);
     }
 #endif
 
@@ -526,9 +589,9 @@ public sealed class PlayerHandRig : MonoBehaviour
         float rightThrow = AttackCurve(rightThrowTimer, 0.32f);
 
         Vector3 leftTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(-0.28f, -0.22f + bob, 0.9f) : new Vector3(-0.38f, -0.32f + bob, 0.82f));
+            isHolding ? new Vector3(-0.28f, -0.22f + bob, 0.9f) : new Vector3(-0.38f, -0.54f + bob, 0.82f));
         Vector3 rightTarget = playerCamera.transform.TransformPoint(
-            isHolding ? new Vector3(0.35f, -0.24f - bob, 0.92f) : new Vector3(0.42f, -0.34f - bob, 0.84f));
+            isHolding ? new Vector3(0.35f, -0.24f - bob, 0.92f) : new Vector3(0.42f, -0.56f - bob, 0.84f));
 
         leftTarget += playerCamera.transform.forward * (leftPunch * 0.82f + shove * 0.46f + leftThrow * 0.62f);
         rightTarget += playerCamera.transform.forward * (rightPunch * 0.82f + shove * 0.46f + rightThrow * 0.62f);
@@ -646,6 +709,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             {
                 restRotations.Add(bone, bone.localRotation);
                 restPositions.Add(bone, bone.localPosition);
+                restScales.Add(bone, bone.localScale);
             }
         }
     }
@@ -660,6 +724,10 @@ public sealed class PlayerHandRig : MonoBehaviour
                 if (restPositions.TryGetValue(pair.Key, out Vector3 position))
                 {
                     pair.Key.localPosition = position;
+                }
+                if (restScales.TryGetValue(pair.Key, out Vector3 scale))
+                {
+                    pair.Key.localScale = scale;
                 }
             }
         }

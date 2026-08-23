@@ -17,6 +17,18 @@ public sealed class PlanarGymMirror : MonoBehaviour
     private Vector3 planePoint;
     private Vector3 planeNormal;
     private bool invertCulling;
+    private bool continuousRefresh;
+
+    public bool ReflectionIncludesPlayerLayer => reflectionCamera != null &&
+        (reflectionCamera.cullingMask & (1 << MirrorPlayerLayer)) != 0;
+    public Camera ReflectionCamera => reflectionCamera;
+    public RenderTexture ReflectionTexture => reflectionTexture;
+    public Vector3 PlaneNormal => planeNormal;
+    public bool ContinuousRefresh
+    {
+        get => continuousRefresh;
+        set => continuousRefresh = value;
+    }
 
     public static void Create(
         Transform parent, Camera playerCamera, Renderer[] mirrorRenderers,
@@ -40,7 +52,12 @@ public sealed class PlanarGymMirror : MonoBehaviour
         sourceCamera = playerCamera;
         planePoint = pointOnPlane;
         planeNormal = normal.normalized;
-        int reflectionCullingMask = sourceCamera.cullingMask;
+        // A previous mirror removes MirrorPlayerLayer from the gameplay
+        // camera. Locker-room mirrors are created after the gym mirrors, so
+        // deriving this mask directly from sourceCamera would make the later
+        // reflection camera silently omit the player and outfit overlays.
+        int reflectionCullingMask =
+            sourceCamera.cullingMask | (1 << MirrorPlayerLayer);
 
         // Keep the player body out of the gameplay camera even if a platform
         // strips the custom mirror shader. Without this guard WebGL can fall
@@ -102,6 +119,10 @@ public sealed class PlanarGymMirror : MonoBehaviour
         RenderPipelineManager.beginCameraRendering += BeginCameraRendering;
         RenderPipelineManager.endCameraRendering += EndCameraRendering;
         UpdateReflectionCamera();
+        Debug.Log(
+            $"GYMCHAOS_PLANAR_MIRROR_READY normal={planeNormal} " +
+            $"playerLayer={(reflectionCamera.cullingMask & (1 << MirrorPlayerLayer)) != 0}",
+            this);
     }
 
     private void LateUpdate()
@@ -109,7 +130,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         UpdateReflectionCamera();
         if (reflectionCamera != null)
         {
-            reflectionCamera.enabled = (Time.frameCount & 1) == 0;
+            reflectionCamera.enabled = continuousRefresh || (Time.frameCount & 1) == 0;
         }
     }
 

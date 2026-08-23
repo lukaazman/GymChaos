@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 public enum GymExerciseType
 {
@@ -34,6 +36,7 @@ public class GymExerciseStation : MonoBehaviour
     private float repTimer = -1f;
     private float repDuration = 1.8f;
     private int repetitions;
+    private float sessionElapsed;
     private int selectedWeight;
     private float currentSpeed;
     private float targetSpeed;
@@ -49,6 +52,10 @@ public class GymExerciseStation : MonoBehaviour
     private readonly List<Transform> bikeMovingParts = new List<Transform>();
     private readonly List<Quaternion> bikeMovingPartRotations = new List<Quaternion>();
     private float cardioPhase;
+    private float cardioBeatTimer;
+    private readonly TechniqueSkillCheck techniqueSkillCheck = new TechniqueSkillCheck();
+    private WorkoutResult lastWorkoutResult = WorkoutResult.None;
+    private int comboMultiplier = 1;
     private Transform sceneBar;
     private Transform sceneBarOriginalParent;
     private Vector3 sceneBarOriginalLocalPosition;
@@ -194,6 +201,12 @@ public class GymExerciseStation : MonoBehaviour
                                            exerciseType == GymExerciseType.LatPulldown;
     public int[] WeightOptions => GetWeightOptions(exerciseType);
     public int SelectedWeight => selectedWeight;
+    public int Repetitions => repetitions;
+    public float CardioDistanceMetres => distance;
+    public float SessionElapsed => sessionElapsed;
+    public TechniqueSkillCheck TechniqueCheck => techniqueSkillCheck;
+    public WorkoutResult LastWorkoutResult => lastWorkoutResult;
+    public int ComboMultiplier => comboMultiplier;
     public int EmptyBarWeight => exerciseType == GymExerciseType.PreacherCurl ? 10 :
                                  (exerciseType == GymExerciseType.LatPulldown ? 0 : (RequiresWeightSelection ? 20 : 0));
 
@@ -672,12 +685,14 @@ public class GymExerciseStation : MonoBehaviour
     {
         if (exerciseType == GymExerciseType.Treadmill)
         {
-            return $"TREADMILL  |  speed {currentSpeed:0.0} km/h  |  distance {distance / 1000f:0.00} km\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
+            string cadence = techniqueSkillCheck.IsActive ? "  |  CADENCE CHECK" : string.Empty;
+            return $"TREADMILL  |  speed {currentSpeed:0.0} km/h  |  distance {distance / 1000f:0.00} km{cadence}\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
         }
 
         if (exerciseType == GymExerciseType.ExerciseBike)
         {
-            return $"EXERCISE BIKE  |  pace {currentSpeed:0.0}  |  distance {distance / 1000f:0.00} km\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
+            string cadence = techniqueSkillCheck.IsActive ? "  |  CADENCE CHECK" : string.Empty;
+            return $"EXERCISE BIKE  |  pace {currentSpeed:0.0}  |  distance {distance / 1000f:0.00} km{cadence}\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
         }
 
         if (exerciseType == GymExerciseType.PullUps)
@@ -686,13 +701,14 @@ public class GymExerciseStation : MonoBehaviour
             return $"PULL UPS  |  BODYWEIGHT  |  reps: {repetitions}  |  {pullUpState}\n[SPACE] perform rep   [Q] exit";
         }
 
-        string repState = repTimer >= 0f ? "rep in progress" : "ready";
+        string repState = techniqueSkillCheck.IsActive ? "TIMING CHECK" :
+            repTimer >= 0f ? "rep in progress" : "ready";
         if (!RequiresWeightSelection)
         {
-            return $"{displayName.ToUpperInvariant()}  |  reps: {repetitions}  |  {repState}\n[SPACE] perform rep   [Q] exit";
+            return $"{displayName.ToUpperInvariant()}  |  reps: {repetitions}  |  combo x{comboMultiplier}  |  {repState}\n[SPACE] start / hit timing   [Q] exit";
         }
 
-        return $"{displayName.ToUpperInvariant()}  |  {selectedWeight} kg  |  reps: {repetitions}  |  {repState}\n[SPACE] perform rep   [Q] exit";
+        return $"{displayName.ToUpperInvariant()}  |  {selectedWeight} kg  |  reps: {repetitions}  |  combo x{comboMultiplier}  |  {repState}\n[SPACE] start / hit timing   [Q] exit";
     }
 
     public void BeginSession(Transform cameraTransform)
@@ -700,8 +716,12 @@ public class GymExerciseStation : MonoBehaviour
         sessionActive = true;
         repTimer = -1f;
         repetitions = 0;
+        sessionElapsed = 0f;
         distance = 0f;
         cardioPhase = 0f;
+        cardioBeatTimer = 4.2f;
+        lastWorkoutResult = WorkoutResult.None;
+        comboMultiplier = 1;
         if (RequiresWeightSelection && selectedWeight <= 0)
         {
             SelectWeight(WeightOptions[0]);
@@ -713,8 +733,13 @@ public class GymExerciseStation : MonoBehaviour
 
     public void EndSession()
     {
+        if (sessionActive && IsCardio && distance > 0.1f)
+        {
+            GymExperienceService.Active?.RegisterCardio(distance, sessionElapsed);
+        }
         sessionActive = false;
         repTimer = -1f;
+        techniqueSkillCheck.Resolve();
         targetSpeed = 0f;
         currentSpeed = 0f;
         playerOccupant = null;
@@ -859,6 +884,7 @@ public class GymExerciseStation : MonoBehaviour
                 "visitor squats are disabled for this station.",
                 this);
         }
+
         if (type == GymExerciseType.BarbellSquat)
         {
             squatBarRackParent = sceneBar != null ? sceneBar.parent : null;
@@ -1318,9 +1344,37 @@ public class GymExerciseStation : MonoBehaviour
 
     private void TickStrength(float deltaTime, bool actionPressed)
     {
-        if (actionPressed && repTimer < 0f)
+        GymExperienceService progression = GymExperienceService.Active;
+        bool autoPerfect = progression != null && progression.HasTechniqueUltimate;
+        bool startedThisFrame = false;
+        if (repTimer < 0f && !techniqueSkillCheck.IsActive && actionPressed)
         {
-            repTimer = 0f;
+            if (autoPerfect)
+            {
+                CompleteRep(WorkoutResult.AutoPerfect);
+            }
+            else
+            {
+                int rank = progression != null ? progression.GetStatRank(GymStat.Technique) : 0;
+                float weightDifficulty = RequiresWeightSelection
+                    ? Mathf.Lerp(0.88f, 1.3f, Mathf.InverseLerp(20f, 140f, selectedWeight))
+                    : 1f;
+                if (progression != null)
+                {
+                    weightDifficulty = progression.GetTechniqueDifficultyScale(weightDifficulty);
+                }
+                techniqueSkillCheck.Begin(rank, weightDifficulty);
+                startedThisFrame = true;
+            }
+        }
+
+        if (techniqueSkillCheck.IsActive && !startedThisFrame)
+        {
+            WorkoutResult result = techniqueSkillCheck.Tick(deltaTime, actionPressed);
+            if (result != WorkoutResult.None)
+            {
+                CompleteRep(result);
+            }
         }
 
         if (repTimer < 0f)
@@ -1336,9 +1390,42 @@ public class GymExerciseStation : MonoBehaviour
         }
     }
 
+    private void CompleteRep(WorkoutResult result)
+    {
+        lastWorkoutResult = result;
+        if (result == WorkoutResult.Perfect || result == WorkoutResult.AutoPerfect)
+        {
+            int comboCap = GymExperienceService.Active != null
+                ? GymExperienceService.Active.GetTechniqueComboCap()
+                : 5;
+            comboMultiplier = Mathf.Min(comboCap, comboMultiplier + 1);
+            Debug.Log(
+                $"GYMCHAOS_TECHNIQUE_PERFECT exercise={exerciseType} combo={comboMultiplier}",
+                this);
+        }
+        else if (result == WorkoutResult.Good)
+        {
+            comboMultiplier = Mathf.Max(1, comboMultiplier);
+        }
+        else if (result == WorkoutResult.Miss)
+        {
+            comboMultiplier = 1;
+        }
+
+        repTimer = 0f;
+        GymExperienceService.Active?.RegisterWorkoutRep(
+            result, exerciseType, selectedWeight, comboMultiplier);
+    }
+
     private void TickCardio(float deltaTime, bool actionPressed, bool increasePressed, bool decreasePressed)
     {
+        bool cadenceCheckWasActive = techniqueSkillCheck.IsActive;
         float maximum = exerciseType == GymExerciseType.Treadmill ? 18f : 14f;
+        if (GymExperienceService.Active != null)
+        {
+            maximum *= GymExperienceService.Active.GetCardioCapacityMultiplier();
+        }
+        maximum = Mathf.Max(1f, maximum);
         if (increasePressed)
         {
             targetSpeed = Mathf.Min(maximum, Mathf.Max(1f, targetSpeed + 1f));
@@ -1354,7 +1441,7 @@ public class GymExerciseStation : MonoBehaviour
             }
         }
 
-        if (actionPressed)
+        if (actionPressed && !cadenceCheckWasActive)
         {
             if (targetSpeed > 0f || currentSpeed > 0.15f)
             {
@@ -1375,6 +1462,35 @@ public class GymExerciseStation : MonoBehaviour
         distance += currentSpeed / 3.6f * deltaTime;
         cardioPhase += currentSpeed * deltaTime * (exerciseType == GymExerciseType.Treadmill ? 1.35f : 0.9f);
         AnimateActualCardioParts(deltaTime);
+
+        if (techniqueSkillCheck.IsActive)
+        {
+            WorkoutResult cadenceResult = techniqueSkillCheck.Tick(deltaTime, actionPressed);
+            if (cadenceResult != WorkoutResult.None)
+            {
+                lastWorkoutResult = cadenceResult;
+                if (cadenceResult == WorkoutResult.Perfect)
+                {
+                    targetSpeed = Mathf.Min(maximum, targetSpeed + 0.5f);
+                    Debug.Log($"GYMCHAOS_TECHNIQUE_PERFECT cardio={exerciseType}", this);
+                }
+                GymExperienceService.Active?.RegisterWorkoutRep(cadenceResult, exerciseType, 0);
+            }
+        }
+        else if (currentSpeed > 0.25f)
+        {
+            cardioBeatTimer -= deltaTime;
+            if (cardioBeatTimer <= 0f)
+            {
+                int rank = GymExperienceService.Active != null
+                    ? GymExperienceService.Active.GetStatRank(GymStat.Technique) : 0;
+                float cadenceDifficulty = GymExperienceService.Active != null
+                    ? GymExperienceService.Active.GetTechniqueDifficultyScale(1.08f)
+                    : 1.08f;
+                techniqueSkillCheck.Begin(rank, cadenceDifficulty);
+                cardioBeatTimer = 5.5f;
+            }
+        }
     }
 
     private void ConfigureActualCardioParts(Transform equipment)
@@ -2285,15 +2401,33 @@ public class GymExerciseStation : MonoBehaviour
 
     private static int[] GetWeightOptions(GymExerciseType type)
     {
+        int[] baseOptions;
         switch (type)
         {
-            case GymExerciseType.FlatBenchPress: return FlatBenchWeights;
-            case GymExerciseType.InclineBenchPress: return InclineBenchWeights;
-            case GymExerciseType.BarbellSquat: return SquatWeights;
-            case GymExerciseType.PreacherCurl: return PreacherWeights;
-            case GymExerciseType.LatPulldown: return LatPulldownWeights;
-            default: return new int[0];
+            case GymExerciseType.FlatBenchPress: baseOptions = FlatBenchWeights; break;
+            case GymExerciseType.InclineBenchPress: baseOptions = InclineBenchWeights; break;
+            case GymExerciseType.BarbellSquat: baseOptions = SquatWeights; break;
+            case GymExerciseType.PreacherCurl: baseOptions = PreacherWeights; break;
+            case GymExerciseType.LatPulldown: baseOptions = LatPulldownWeights; break;
+            default: return Array.Empty<int>();
         }
+
+        int extraOptions = GymExperienceService.Active != null
+            ? GymExperienceService.Active.GetStatRank(GymStat.Strength)
+            : 0;
+        if (extraOptions <= 0)
+        {
+            return baseOptions;
+        }
+
+        int[] options = new int[baseOptions.Length + extraOptions];
+        Array.Copy(baseOptions, options, baseOptions.Length);
+        int lastWeight = baseOptions[baseOptions.Length - 1];
+        for (int i = 0; i < extraOptions; i++)
+        {
+            options[baseOptions.Length + i] = lastWeight + (i + 1) * 10;
+        }
+        return options;
     }
 
     private static Vector3 GetPlayerOffset(GymExerciseType type, Vector3 forward)

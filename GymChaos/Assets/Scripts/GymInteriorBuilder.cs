@@ -5,6 +5,30 @@ public static class GymInteriorBuilder
 {
     private const string RootName = "Gym Interior (Runtime)";
 
+    private struct PosterDefinition
+    {
+        public string ResourcePath;
+
+        public PosterDefinition(string resourcePath)
+        {
+            ResourcePath = resourcePath;
+        }
+    }
+
+    private static readonly PosterDefinition[] MeccaPosters =
+    {
+        new PosterDefinition("Environment/Posters/Flex_Wheeler_Reddit"),
+        new PosterDefinition("Environment/Posters/Dorian_Yates_IronCompany"),
+        new PosterDefinition("Environment/Posters/Frank_Zane_Squarespace"),
+        new PosterDefinition("Environment/Posters/Phil_Heath_Google"),
+        new PosterDefinition("Environment/Posters/Tom_Platz_Pinimg"),
+        new PosterDefinition("Environment/Posters/Lee_Priest_Reddit"),
+        new PosterDefinition("Environment/Posters/Lou_Ferrigno_Reddit"),
+        new PosterDefinition("Environment/Posters/Markus_Ruhl_Google"),
+        new PosterDefinition("Environment/Posters/Ronnie_Coleman_Pinimg"),
+        new PosterDefinition("Environment/Posters/Kevin_Levrone_Pinimg")
+    };
+
     public static void Build(PlayerMovement player)
     {
         RemoveLegacyExteriorHorizon();
@@ -35,7 +59,7 @@ public static class GymInteriorBuilder
 
         CreateBox("Rubber Floor", root.transform, center + Vector3.down * 0.12f, new Vector3(width, 0.24f, depth), floor, true);
         CreateBox("Ceiling", root.transform, center + Vector3.up * height, new Vector3(width, 0.24f, depth), ceiling, true);
-        CreateBox("South Wall", root.transform, center + new Vector3(0f, height * 0.5f, -depth * 0.5f), new Vector3(width, height, 0.32f), wall, true);
+        CreateSouthWallWithBackRoomDoor(root.transform, center, width, depth, height, wall, accent);
         CreateBox("West Wall", root.transform, center + new Vector3(-width * 0.5f, height * 0.5f, 0f), new Vector3(0.32f, height, depth), wall, true);
         CreateEastWallWithDoor(root.transform, center, width, depth, height, wall, trim, accent);
 
@@ -51,7 +75,8 @@ public static class GymInteriorBuilder
         CreateMirrors(root.transform, center, width, depth, mirror, trim, player != null ? player.playerCamera : null);
         CreateCeilingGrid(root.transform, center, width, depth, height, trim);
         CreateLighting(root.transform, center, width, depth, height, lightMaterial);
-        CreateRoomDetails(root.transform, center, width, depth, accent, trim, wall);
+        CreateRoomDetails(root.transform, center, width, depth, height, accent, trim, wall);
+        GymBackRoomBuilder.Build(root.transform, center, width, depth, height, player);
         ConfigureAmbientLighting(center, width, depth, height);
         GymTimeOfDay.CreateForScene(root.transform, center, width, depth, 2.05f, 7.05f);
     }
@@ -67,15 +92,19 @@ public static class GymInteriorBuilder
 
     private static void RemoveLegacyVisibleSun()
     {
+        GameObject runtimeRoot = GameObject.Find(RootName);
         string[] legacySunObjects =
         {
             "Exterior visible sun",
-            "Exterior sun halo"
+            "Exterior sun halo",
+            "Exterior visible moon",
+            "Exterior moon halo"
         };
         for (int i = 0; i < legacySunObjects.Length; i++)
         {
             GameObject legacySun = GameObject.Find(legacySunObjects[i]);
-            if (legacySun != null)
+            if (legacySun != null &&
+                (runtimeRoot == null || !legacySun.transform.IsChildOf(runtimeRoot.transform)))
             {
                 Object.Destroy(legacySun);
             }
@@ -267,6 +296,11 @@ public static class GymInteriorBuilder
             new Vector3(0.12f, doorHeight, doorWidth),
             frame,
             false);
+        // The panel is still available from the courtyard side, but it must
+        // not read as a black wall inside the gym. GymExteriorOnlyVisual keeps
+        // the doorway geometry available for the visitor route while hiding
+        // the panel whenever the player is on the interior side.
+        panel.AddComponent<GymExteriorOnlyVisual>();
         panel.transform.localRotation = Quaternion.identity;
         panel.transform.localPosition = Vector3.zero;
 
@@ -295,6 +329,58 @@ public static class GymInteriorBuilder
         Vector3 interiorPoint = new Vector3(wallX - 1.45f, center.y, doorZ);
         Vector3 exteriorPoint = new Vector3(wallX + 3.25f, center.y, doorZ);
         doorway.Configure(doorCenter, interiorPoint, exteriorPoint, panel.transform);
+    }
+
+    private static void CreateSouthWallWithBackRoomDoor(
+        Transform parent,
+        Vector3 center,
+        float width,
+        float depth,
+        float height,
+        Material wall,
+        Material accent)
+    {
+        const float doorWidth = 2.8f;
+        const float doorHeight = 3.6f;
+        float wallZ = center.z - depth * 0.5f;
+        float minX = center.x - width * 0.5f;
+        float maxX = center.x + width * 0.5f;
+        float doorMinX = center.x - doorWidth * 0.5f;
+        float doorMaxX = center.x + doorWidth * 0.5f;
+        float leftLength = doorMinX - minX;
+        float rightLength = maxX - doorMaxX;
+
+        if (leftLength > 0.1f)
+        {
+            CreateBox(
+                "South Wall West of Locker Room",
+                parent,
+                new Vector3(minX + leftLength * 0.5f, center.y + height * 0.5f, wallZ),
+                new Vector3(leftLength, height, 0.32f), wall, true);
+        }
+        if (rightLength > 0.1f)
+        {
+            CreateBox(
+                "South Wall East of Locker Room",
+                parent,
+                new Vector3(doorMaxX + rightLength * 0.5f, center.y + height * 0.5f, wallZ),
+                new Vector3(rightLength, height, 0.32f), wall, true);
+        }
+        CreateBox(
+            "South Wall Above Locker Room Door",
+            parent,
+            new Vector3(center.x, center.y + doorHeight + (height - doorHeight) * 0.5f, wallZ),
+            new Vector3(doorWidth, height - doorHeight, 0.32f), wall, true);
+        CreateBox(
+            "Locker Room Door Frame Left",
+            parent,
+            new Vector3(doorMinX, center.y + doorHeight * 0.5f, wallZ - 0.08f),
+            new Vector3(0.18f, doorHeight + 0.12f, 0.18f), accent, false);
+        CreateBox(
+            "Locker Room Door Frame Right",
+            parent,
+            new Vector3(doorMaxX, center.y + doorHeight * 0.5f, wallZ - 0.08f),
+            new Vector3(0.18f, doorHeight + 0.12f, 0.18f), accent, false);
     }
 
     private static float GetReceptionDoorZ(Vector3 center, float depth, float doorWidth)
@@ -342,19 +428,27 @@ public static class GymInteriorBuilder
         Transform parent, Vector3 center, float width, float depth, float openingBottom, float openingTop)
     {
         float exteriorZ = center.z + depth * 0.5f + 8f;
+        Material sunMaterial = CreateMaterial(
+            "Visible sun singular yellow glow", new Color(1f, 0.84f, 0.12f), 0f, 0.08f);
+        SetEmission(sunMaterial, new Color(10f, 7.2f, 0.8f));
         Material moonMaterial = CreateMaterial(
-            "Visible moon core", new Color(0.68f, 0.82f, 1f), 0f, 0.12f);
-        SetEmission(moonMaterial, new Color(2.2f, 3.5f, 6f));
-        Material moonHaloMaterial = CreateTransparentMaterial(
-            "Visible moon halo", new Color(0.2f, 0.45f, 1f, 0.13f), 0.02f);
-        SetEmission(moonHaloMaterial, new Color(1.2f, 2.2f, 5f));
+            "Visible moon singular white glow", Color.white, 0f, 0.12f);
+        SetEmission(moonMaterial, new Color(8f, 8f, 8f));
 
         Vector3 moonStart = new Vector3(
             center.x - Mathf.Min(width * 0.24f, 8f),
             center.y + openingBottom + 2.6f,
             exteriorZ - 0.45f);
-        CreateCelestialSphere(parent, "Exterior visible moon", moonStart, 3.8f, moonMaterial);
-        CreateCelestialSphere(parent, "Exterior moon halo", moonStart, 13f, moonHaloMaterial);
+        Vector3 sunStart = new Vector3(
+            center.x + Mathf.Min(width * 0.24f, 8f),
+            center.y + openingBottom + 2.9f,
+            exteriorZ - 0.6f);
+        CreateCelestialSphere(parent, "Exterior visible sun", sunStart, 4.6f, sunMaterial);
+        CreateCelestialSphere(parent, "Exterior visible moon", moonStart, 5f, moonMaterial);
+        CreateCelestialGlowLight(
+            parent, "Exterior sun glow", sunStart, new Color(1f, 0.84f, 0.12f), 8f, 32f);
+        CreateCelestialGlowLight(
+            parent, "Exterior moon glow", moonStart, Color.white, 4f, 30f);
 
         for (int i = -2; i <= 2; i++)
         {
@@ -411,7 +505,9 @@ public static class GymInteriorBuilder
         float visitorDoorWidth)
     {
         CreateBox("North wall stripe", parent, center + new Vector3(0f, y, depth * 0.5f - 0.19f), new Vector3(width - 0.5f, thickness, 0.05f), material, false);
-        CreateBox("South wall stripe", parent, center + new Vector3(0f, y, -depth * 0.5f + 0.19f), new Vector3(width - 0.5f, thickness, 0.05f), material, false);
+        CreateInterruptedSouthWallStripe(
+            parent, center, width, depth, y, thickness, material,
+            center.x, 2.8f);
         CreateInterruptedEastWallStripe(
             parent, center, width, depth, y, thickness, material,
             visitorDoorZ, visitorDoorWidth);
@@ -458,6 +554,51 @@ public static class GymInteriorBuilder
                 parent,
                 new Vector3(stripeX, center.y + y, northStart + northLength * 0.5f),
                 new Vector3(0.05f, thickness, northLength),
+                material,
+                false);
+        }
+    }
+
+    private static void CreateInterruptedSouthWallStripe(
+        Transform parent,
+        Vector3 center,
+        float width,
+        float depth,
+        float y,
+        float thickness,
+        Material material,
+        float lockerDoorX,
+        float lockerDoorWidth)
+    {
+        float stripeMinX = center.x - width * 0.5f + 0.25f;
+        float stripeMaxX = center.x + width * 0.5f - 0.25f;
+        // Keep the accent line clear of the locker-room door frame, matching
+        // the intentional interruption at the gym entry.
+        float openingHalfWidth = lockerDoorWidth * 0.5f + 0.25f;
+        float westEnd = lockerDoorX - openingHalfWidth;
+        float eastStart = lockerDoorX + openingHalfWidth;
+        float stripeZ = center.z - depth * 0.5f + 0.19f;
+
+        float westLength = westEnd - stripeMinX;
+        if (westLength > 0.05f)
+        {
+            CreateBox(
+                "South wall stripe West of locker room door",
+                parent,
+                new Vector3(stripeMinX + westLength * 0.5f, center.y + y, stripeZ),
+                new Vector3(westLength, thickness, 0.05f),
+                material,
+                false);
+        }
+
+        float eastLength = stripeMaxX - eastStart;
+        if (eastLength > 0.05f)
+        {
+            CreateBox(
+                "South wall stripe East of locker room door",
+                parent,
+                new Vector3(eastStart + eastLength * 0.5f, center.y + y, stripeZ),
+                new Vector3(eastLength, thickness, 0.05f),
                 material,
                 false);
         }
@@ -546,7 +687,7 @@ public static class GymInteriorBuilder
             foundDirectional = true;
             existingLights[i].name = "Warm exterior sun";
             existingLights[i].intensity = 1.15f;
-            existingLights[i].color = new Color(0.72f, 0.86f, 1f);
+            existingLights[i].color = new Color(1f, 0.84f, 0.12f);
             existingLights[i].transform.rotation = Quaternion.Euler(42f, -32f, 0f);
             existingLights[i].shadows = LightShadows.Soft;
             existingLights[i].shadowStrength = 0.78f;
@@ -559,7 +700,7 @@ public static class GymInteriorBuilder
             sunObject.transform.rotation = Quaternion.Euler(42f, -32f, 0f);
             Light sun = sunObject.AddComponent<Light>();
             sun.type = LightType.Directional;
-            sun.color = new Color(0.72f, 0.86f, 1f);
+            sun.color = new Color(1f, 0.84f, 0.12f);
             sun.intensity = 1.15f;
             sun.shadows = LightShadows.Soft;
             sun.shadowStrength = 0.78f;
@@ -592,7 +733,9 @@ public static class GymInteriorBuilder
         }
     }
 
-    private static void CreateRoomDetails(Transform parent, Vector3 center, float width, float depth, Material accent, Material trim, Material wall)
+    private static void CreateRoomDetails(
+        Transform parent, Vector3 center, float width, float depth, float height,
+        Material accent, Material trim, Material wall)
     {
         // Keep reception in the far north-east corner. The old south-west
         // placement put the desk directly in the player's starting sightline
@@ -610,29 +753,115 @@ public static class GymInteriorBuilder
             CreateBox("Locker handle", parent, lockerPosition + new Vector3(-0.39f, 0f, -0.42f), new Vector3(0.05f, 0.25f, 0.05f), accent, false);
         }
 
-        string[] posterResources =
+        CreateMeccaPosterWall(parent, center, width, depth, height, trim, wall);
+    }
+
+    private static void CreateMeccaPosterWall(
+        Transform parent, Vector3 center, float width, float depth, float height,
+        Material trim, Material wall)
+    {
+        const float lockerDoorWidth = 2.8f;
+        const float wallInset = 0.25f;
+        const float posterGap = 0.16f;
+        const int postersPerSide = 5;
+
+        float southWallZ = center.z - depth * 0.5f;
+        float doorMinX = center.x - lockerDoorWidth * 0.5f;
+        float doorMaxX = center.x + lockerDoorWidth * 0.5f;
+        float wallMinX = center.x - width * 0.5f + wallInset;
+        float wallMaxX = center.x + width * 0.5f - wallInset;
+        float westMinX = wallMinX;
+        float westMaxX = doorMinX - wallInset;
+        float eastMinX = doorMaxX + wallInset;
+        float eastMaxX = wallMaxX;
+
+        Material yellow = CreateMaterial(
+            "Mecca mustard yellow wall", new Color(0.82f, 0.61f, 0.035f), 0.02f, 0.3f);
+        Material cream = CreateMaterial(
+            "Mecca warm white header", new Color(0.9f, 0.88f, 0.77f), 0f, 0.24f);
+
+        float lowerHeight = Mathf.Min(5.45f, Mathf.Max(4.2f, height - 2.1f));
+        float lowerCenterY = center.y + lowerHeight * 0.5f;
+        CreateBox(
+            "Mecca yellow wall west", parent,
+            new Vector3((westMinX + westMaxX) * 0.5f, lowerCenterY, southWallZ + 0.18f),
+            new Vector3(Mathf.Max(0.2f, westMaxX - westMinX), lowerHeight, 0.08f),
+            yellow, false);
+        CreateBox(
+            "Mecca yellow wall east", parent,
+            new Vector3((eastMinX + eastMaxX) * 0.5f, lowerCenterY, southWallZ + 0.18f),
+            new Vector3(Mathf.Max(0.2f, eastMaxX - eastMinX), lowerHeight, 0.08f),
+            yellow, false);
+
+        float posterBottom = center.y + 0.92f;
+        float posterTop = center.y + lowerHeight - 0.42f;
+        float headerBottom = posterTop + 0.22f;
+        float headerTop = center.y + height - 0.35f;
+        float headerHeight = Mathf.Clamp(headerTop - headerBottom, 0.9f, 2.1f);
+        float headerY = headerBottom + headerHeight * 0.5f;
+        CreateBox(
+            "Mecca white header", parent,
+            new Vector3(center.x, headerY, southWallZ + 0.18f),
+            new Vector3(width - 0.5f, headerHeight, 0.08f),
+            cream, false);
+        CreateWorldText(
+            "FITNES KING", parent,
+            new Vector3(center.x, headerY + 0.02f, southWallZ + 0.245f),
+            Mathf.Clamp(
+                Mathf.Min(headerHeight * 0.38f, Mathf.Max(1f, width - 0.9f) / 11.5f),
+                0.3f, 0.7f),
+            new Color(0.012f, 0.012f, 0.012f),
+            Quaternion.Euler(0f, 180f, 0f));
+
+        float posterHeight = Mathf.Min(3.75f, posterTop - posterBottom);
+        float posterCenterY = (posterBottom + posterTop) * 0.5f;
+        float posterZ = southWallZ + 0.22f;
+
+        float westSideWidth = westMaxX - westMinX;
+        float eastSideWidth = eastMaxX - eastMinX;
+        float westPosterWidth = (westSideWidth - posterGap * (postersPerSide - 1) - 0.34f) / postersPerSide;
+        float eastPosterWidth = (eastSideWidth - posterGap * (postersPerSide - 1) - 0.34f) / postersPerSide;
+        float westPadding = 0.17f;
+        float eastPadding = 0.17f;
+
+        for (int i = 0; i < postersPerSide; i++)
         {
-            "Environment/Posters/Tom_Platz_1995",
-            "Environment/Posters/Lee_Priest_Pec_Fly",
-            "Environment/Posters/Flex_Wheeler_2023",
-            "Environment/Posters/Kevin_Levrone_2013",
-            "Environment/Posters/Markus_Ruhl_2004",
-            "Environment/Posters/Phil_Heath_2012"
-        };
-        float posterWidth = Mathf.Min(4.0f, (width - 5f) / posterResources.Length);
-        float posterHeight = 4.9f;
-        float posterGap = 0.38f;
-        for (int i = 0; i < posterResources.Length; i++)
-        {
-            float x = (i - (posterResources.Length - 1) * 0.5f) * (posterWidth + posterGap);
-            Vector3 posterPosition = center + new Vector3(x, 5.25f, -depth * 0.5f + 0.185f);
-            Material poster = CreatePosterMaterial(posterResources[i], i);
-            CreateBox("Golden era bodybuilder poster", parent, posterPosition, new Vector3(posterWidth, posterHeight, 0.055f), poster, false);
-            CreateBox("Golden poster frame", parent, posterPosition + Vector3.forward * 0.035f,
-                new Vector3(posterWidth + 0.18f, posterHeight + 0.18f, 0.035f), trim, false);
-            CreateBox("Golden era bodybuilder poster", parent, posterPosition + Vector3.forward * 0.075f,
-                new Vector3(posterWidth, posterHeight, 0.025f), poster, false);
+            float westX = westMinX + westPadding + westPosterWidth * 0.5f +
+                i * (westPosterWidth + posterGap);
+            float eastX = eastMinX + eastPadding + eastPosterWidth * 0.5f +
+                i * (eastPosterWidth + posterGap);
+            CreatePersonalityPoster(
+                parent, MeccaPosters[i],
+                new Vector3(westX, posterCenterY, posterZ),
+                Mathf.Max(0.5f, westPosterWidth), posterHeight, i, trim);
+            CreatePersonalityPoster(
+                parent, MeccaPosters[i + postersPerSide],
+                new Vector3(eastX, posterCenterY, posterZ),
+                Mathf.Max(0.5f, eastPosterWidth), posterHeight, i + postersPerSide, trim);
         }
+
+        Debug.Log(
+            "GYMCHAOS_MECCA_POSTERS_OK posters=10 west=5 east=5 " +
+            "lockerDoorGap=2.8 yellowLower=1 whiteHeader=1 " +
+            "textures=10 labels=0 title=FITNES_KING");
+    }
+
+    private static void CreatePersonalityPoster(
+        Transform parent, PosterDefinition definition, Vector3 position,
+        float width, float height, int index, Material trim)
+    {
+        Material poster = CreatePosterMaterial(definition.ResourcePath, index);
+        CreateBox(
+            "Mecca personality poster print", parent, position,
+            new Vector3(width, height, 0.055f), poster, false);
+        CreateBox(
+            "Mecca personality poster frame", parent,
+            position + Vector3.forward * 0.035f,
+            new Vector3(width + 0.14f, height + 0.14f, 0.035f), trim, false);
+        CreateBox(
+            "Mecca personality poster face", parent,
+            position + Vector3.forward * 0.075f,
+            new Vector3(width, height, 0.025f), poster, false);
     }
 
     private static void ConfigureAmbientLighting(Vector3 center, float width, float depth, float height)
@@ -665,6 +894,13 @@ public static class GymInteriorBuilder
     {
         Material material = CreateMaterial(
             $"Golden era poster {index + 1}", Color.white, 0f, 0.3f);
+        if (string.IsNullOrWhiteSpace(resourcePath))
+        {
+            Debug.LogError($"Poster texture path is missing for poster {index + 1}.");
+            material.color = new Color(0.64f, 0.47f, 0.25f);
+            return material;
+        }
+
         Texture2D texture = Resources.Load<Texture2D>(resourcePath);
         if (texture == null)
         {
@@ -679,6 +915,72 @@ public static class GymInteriorBuilder
         material.SetColor("_BaseColor", Color.white);
         material.SetColor("_Color", Color.white);
         return material;
+    }
+
+    private static void CreateWorldText(
+        string text, Transform parent, Vector3 position, float characterSize, Color color,
+        Quaternion rotation)
+    {
+        GameObject labelObject = new GameObject("Gym wall lettering");
+        labelObject.transform.SetParent(parent, true);
+        labelObject.transform.SetPositionAndRotation(position, rotation);
+        TextMesh label = labelObject.AddComponent<TextMesh>();
+        label.text = text;
+        label.characterSize = characterSize;
+        label.fontSize = 72;
+        label.fontStyle = FontStyle.Bold;
+        label.anchor = TextAnchor.MiddleCenter;
+        label.alignment = TextAlignment.Center;
+        label.color = color;
+        MeshRenderer renderer = labelObject.GetComponent<MeshRenderer>();
+        if (renderer != null)
+        {
+            // TextMesh's built-in GUI material can use an always-pass depth
+            // test, which makes the lettering leak through the opaque gym
+            // walls. Rebind the font atlas to a normal transparent sprite
+            // shader so opaque walls occlude it while transparent windows do
+            // not add a second artificial barrier.
+            Material sourceMaterial = renderer.sharedMaterial;
+            Shader depthTestedShader = Shader.Find("Sprites/Default");
+            if (sourceMaterial != null && depthTestedShader != null)
+            {
+                Material depthTestedMaterial = new Material(depthTestedShader)
+                {
+                    name = "Gym wall lettering depth-tested",
+                    color = color,
+                    renderQueue = (int)RenderQueue.Transparent
+                };
+                if (sourceMaterial.mainTexture != null)
+                {
+                    depthTestedMaterial.mainTexture = sourceMaterial.mainTexture;
+                }
+                if (depthTestedMaterial.HasProperty("_ZTest"))
+                {
+                    depthTestedMaterial.SetFloat(
+                        "_ZTest", (float)CompareFunction.LessEqual);
+                }
+                renderer.sharedMaterial = depthTestedMaterial;
+            }
+
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+        }
+    }
+
+    private static Light CreateCelestialGlowLight(
+        Transform parent, string name, Vector3 position, Color color,
+        float intensity, float range)
+    {
+        GameObject glowObject = new GameObject(name);
+        glowObject.transform.SetParent(parent, true);
+        glowObject.transform.position = position;
+        Light glow = glowObject.AddComponent<Light>();
+        glow.type = LightType.Point;
+        glow.color = color;
+        glow.intensity = intensity;
+        glow.range = range;
+        glow.shadows = LightShadows.None;
+        return glow;
     }
 
     private static Material CreateTransparentMaterial(

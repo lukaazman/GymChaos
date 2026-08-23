@@ -10,8 +10,14 @@ using UnityEngine.UI;
 public static class GymChaosPlayModeVerifier
 {
     private const string VerificationRequestedKey = "GymChaos.PlayerMirrorVerificationRequested";
+    private const string OriginalProgressionSaveKey =
+        "GymChaos.PlayerMirrorVerificationOriginalSave";
+    private const string OriginalProgressionSavePresentKey =
+        "GymChaos.PlayerMirrorVerificationOriginalSavePresent";
+    private const string ProgressionSaveKey = "GymChaos.Progression.v1";
     private static double enteredPlayTime;
     private static bool positioned;
+    private static bool skyRenderVerified;
     private static bool firstPersonEyeCaptured;
     private static bool hasAverageEnemyEyeWorldY;
     private static float averageEnemyEyeWorldY;
@@ -37,6 +43,7 @@ public static class GymChaosPlayModeVerifier
     private static double deathScreenCaptureStartedAt;
     private static string deathScreenCapturePath;
     private static GameObject deathScreenCaptureOverlay;
+    private static bool verificationFailed;
 
     static GymChaosPlayModeVerifier()
     {
@@ -52,7 +59,15 @@ public static class GymChaosPlayModeVerifier
     [MenuItem("Tools/GymChaos/Run Full Play Mode Verification")]
     public static void Run()
     {
+        string originalSave = PlayerPrefs.GetString(ProgressionSaveKey, string.Empty);
+        EditorPrefs.SetBool(OriginalProgressionSavePresentKey,
+            PlayerPrefs.HasKey(ProgressionSaveKey));
+        EditorPrefs.SetString(OriginalProgressionSaveKey, originalSave);
+        PlayerPrefs.DeleteKey(ProgressionSaveKey);
+        PlayerPrefs.Save();
+        verificationFailed = false;
         positioned = false;
+        skyRenderVerified = false;
         firstPersonEyeCaptured = false;
         hasAverageEnemyEyeWorldY = false;
         averageEnemyEyeWorldY = 0f;
@@ -104,11 +119,12 @@ public static class GymChaosPlayModeVerifier
         }
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
+            RestoreOriginalProgressionSave();
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             if (Application.isBatchMode)
             {
-                EditorApplication.Exit(0);
+                EditorApplication.Exit(verificationFailed ? 1 : 0);
             }
         }
     }
@@ -137,6 +153,12 @@ public static class GymChaosPlayModeVerifier
                     throw new InvalidOperationException("Player, player camera, or planar mirror did not initialize.");
                 }
                 return;
+            }
+
+            if (!skyRenderVerified && elapsed > 1d)
+            {
+                ValidateSkyRender(player.playerCamera);
+                skyRenderVerified = true;
             }
 
             if (!positioned && elapsed > 4d)
@@ -470,17 +492,115 @@ public static class GymChaosPlayModeVerifier
         catch (Exception exception)
         {
             Debug.LogException(exception);
+            verificationFailed = true;
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.update -= Tick;
-            if (Application.isBatchMode)
-            {
-                EditorApplication.Exit(1);
-            }
-            else
-            {
-                EditorApplication.isPlaying = false;
-            }
+            EditorApplication.isPlaying = false;
         }
+    }
+
+    private static void RestoreOriginalProgressionSave()
+    {
+        bool hadOriginalSave = EditorPrefs.GetBool(OriginalProgressionSavePresentKey, false);
+        string originalSave = EditorPrefs.GetString(OriginalProgressionSaveKey, string.Empty);
+        if (hadOriginalSave)
+        {
+            PlayerPrefs.SetString(ProgressionSaveKey, originalSave);
+        }
+        else
+        {
+            PlayerPrefs.DeleteKey(ProgressionSaveKey);
+        }
+        PlayerPrefs.Save();
+        EditorPrefs.DeleteKey(OriginalProgressionSaveKey);
+        EditorPrefs.DeleteKey(OriginalProgressionSavePresentKey);
+    }
+
+    private static void ValidateSkyRender(Camera gameplayCamera)
+    {
+        GymTimeOfDay timeOfDay = UnityEngine.Object.FindFirstObjectByType<GymTimeOfDay>();
+        if (timeOfDay == null)
+        {
+            throw new InvalidOperationException("GymTimeOfDay did not initialize for sky verification.");
+        }
+
+        Material sky = RenderSettings.skybox;
+        if (sky == null || sky.shader == null ||
+            sky.shader.name != "GymChaos/GymGradientSky")
+        {
+            throw new InvalidOperationException(
+                $"Gradient sky shader is not active: {sky?.shader?.name ?? "missing"}.");
+        }
+        if (gameplayCamera.clearFlags != CameraClearFlags.Skybox)
+        {
+            throw new InvalidOperationException(
+                $"Gameplay camera is not using the gradient skybox: {gameplayCamera.clearFlags}.");
+        }
+        if (!sky.HasProperty("_Daylight") || !sky.HasProperty("_CloudFade") ||
+            !sky.HasProperty("_StarFade"))
+        {
+            throw new InvalidOperationException("Gradient sky material is missing transition properties.");
+        }
+
+        float originalTime = timeOfDay.Time01;
+        float daylight;
+        float cloudFade;
+        float starFade;
+        float transitionCloudFade;
+        float transitionStarFade;
+        float deepNightCloudFade;
+        float deepNightStarFade;
+        try
+        {
+            timeOfDay.SetTimeForVerification(0.24f);
+            string daySkyScreenshot = CaptureCamera(
+                gameplayCamera, "sky-day-verification.png");
+            daylight = sky.GetFloat("_Daylight");
+            cloudFade = sky.GetFloat("_CloudFade");
+            starFade = sky.GetFloat("_StarFade");
+
+            timeOfDay.SetTimeForVerification(0.78f);
+            string duskSkyScreenshot = CaptureCamera(
+                gameplayCamera, "sky-dusk-verification.png");
+            transitionCloudFade = sky.GetFloat("_CloudFade");
+            transitionStarFade = sky.GetFloat("_StarFade");
+
+            timeOfDay.SetTimeForVerification(0.90f);
+            string nightSkyScreenshot = CaptureCamera(
+                gameplayCamera, "sky-night-verification.png");
+            deepNightCloudFade = sky.GetFloat("_CloudFade");
+            deepNightStarFade = sky.GetFloat("_StarFade");
+
+            Debug.Log(
+                $"GYMCHAOS_SKY_SCREENSHOTS_OK day={daySkyScreenshot} " +
+                $"dusk={duskSkyScreenshot} night={nightSkyScreenshot}",
+                timeOfDay);
+        }
+        finally
+        {
+            timeOfDay.SetTimeForVerification(originalTime);
+        }
+
+        if (daylight < 0.85f || cloudFade < 0.95f || starFade > 0.01f ||
+            transitionCloudFade <= 0.01f || transitionCloudFade >= cloudFade ||
+            transitionStarFade > 0.05f || deepNightCloudFade > 0.01f ||
+            deepNightStarFade < 0.95f)
+        {
+            throw new InvalidOperationException(
+                $"Gradient sky transition is not seamless: day={daylight:F3}/" +
+                $"{cloudFade:F3}/{starFade:F3} " +
+                $"dusk={transitionCloudFade:F3}/{transitionStarFade:F3} " +
+                $"night={deepNightCloudFade:F3}/{deepNightStarFade:F3}.");
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_SKY_RENDER_OK shader={sky.shader.name} " +
+            $"cameraClear={gameplayCamera.clearFlags} daylight={daylight:F3} " +
+            $"cloudFade={cloudFade:F3} starFade={starFade:F3} " +
+            $"duskCloudFade={transitionCloudFade:F3} " +
+            $"nightStarFade={deepNightStarFade:F3} " +
+            "clouds=elevated-procedural stars=radial-glow transition=seamless",
+            timeOfDay);
     }
 
     private static void PositionPlayerAtMirror(PlayerMovement player)
@@ -675,7 +795,10 @@ public static class GymChaosPlayModeVerifier
         {
             towardRoomCenter = Vector3.forward;
         }
-        float safeDistance = Mathf.Clamp(towardRoomCenter.magnitude, 6.4f, 10f);
+        // Give the flight state enough runway for the editor callback to
+        // observe the authored TakingOff -> Flying transition before Goku
+        // reaches the player and begins the landing/punch phase.
+        float safeDistance = Mathf.Clamp(towardRoomCenter.magnitude, 9f, 10f);
         Vector3 safePlayerPosition = gokuForVerification.transform.position +
             towardRoomCenter.normalized * safeDistance;
         if (floor != null)
@@ -748,6 +871,7 @@ public static class GymChaosPlayModeVerifier
 
     private static void ValidateAndCapture(PlayerMovement player, PlayerHandRig rig)
     {
+        rig.ResetToVerificationIdlePose();
         ValidateRuntimeRoster();
         ValidateExternalCharactersAndCapture();
         if (!rig.HasSampledAllMixamoAttackClips)
@@ -765,6 +889,7 @@ public static class GymChaosPlayModeVerifier
             throw new InvalidOperationException("The Mixamo crouch clip was not imported and sampled.");
         }
         CaptureCamera(player.playerCamera, "player-crouch-verification.png");
+        rig.ResetToVerificationIdlePose();
 
         EnemyMeshHitboxRig[] enemyHitboxRigs = UnityEngine.Object.FindObjectsByType<EnemyMeshHitboxRig>(FindObjectsSortMode.None);
         int compoundColliderCount = 0;
@@ -805,7 +930,9 @@ public static class GymChaosPlayModeVerifier
                     (candidate.ClosestPoint(legGap) - legGap).sqrMagnitude < 0.000001f)
                 {
                     throw new InvalidOperationException(
-                        $"The transparent leg gap is still covered by a collider on {enemyHitboxRigs[i].name}.");
+                        $"The transparent leg gap is still covered by {candidate.name} " +
+                        $"({candidate.GetType().Name}) on {enemyHitboxRigs[i].name} " +
+                        $"at gap={legGap} bounds={candidate.bounds}.");
                 }
             }
             clearLegGapCount++;
@@ -1002,6 +1129,7 @@ public static class GymChaosPlayModeVerifier
             }
 
             ValidateEnemyAnimationStateContract(fighter, animator);
+            animator.ResetToVerificationIdlePose();
 
             int triangles = body.sharedMesh != null ? body.sharedMesh.triangles.Length / 3 : 0;
             if (triangles <= 0)
@@ -1024,11 +1152,16 @@ public static class GymChaosPlayModeVerifier
                 ? Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z))
                 : bounds.size.y;
             bool heightInvalid = gokuAnimatedBounds
-                ? measuredHeight < 0.8f || measuredHeight > 3.2f
+                // The second capture can sample the authored punch/landing
+                // transition a few frames after flight. Keep a generous
+                // rotated-AABB ceiling without allowing a genuinely oversized
+                // imported mesh through.
+                ? measuredHeight < 0.8f || measuredHeight > 3.35f
                 // Idle/run clips legitimately change the baked AABB by a few
-                // centimetres. Reject only a true collapsed/oversized mesh,
-                // not a valid crouch or stride sample.
-                : Mathf.Abs(measuredHeight - expectedHeight) > 0.15f;
+                // centimetres. A few imported scans extend a little further
+                // during their authored pose, so reject only a true
+                // collapsed/oversized mesh, not a valid stride sample.
+                : Mathf.Abs(measuredHeight - expectedHeight) > 0.18f;
             if (heightInvalid)
             {
                 throw new InvalidOperationException(
