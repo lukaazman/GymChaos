@@ -1,15 +1,14 @@
 # Gym Chaos
-
 [▶ Play in browser](https://lukaazman.github.io/GymChaos/)
 
 A 3D Unity game built in C#.
 
-## Assets
+> **Note:** Not all features are available in the browser (WebGL) preview due to compatibility limitations between Unity and WebGL. For the full experience, a desktop build is recommended.
 
+## Assets
 The majority of the assets are self-made in Blender, with some character models created using Microsoft Copilot Labs' image-to-3D tool.
 
 ## Features
-
 - Popular bodybuilders and fitness icons as characters.
 - Main space is a fitness building where you can work out and progress your physique.
 - Interact with your gym mates — and potentially fight them.
