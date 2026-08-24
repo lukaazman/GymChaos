@@ -8,6 +8,7 @@ public enum GymExerciseType
     FlatBenchPress,
     InclineBenchPress,
     BarbellSquat,
+    Deadlift,
     PreacherCurl,
     Dips,
     PullUps,
@@ -24,6 +25,19 @@ public class GymExerciseStation : MonoBehaviour
     private static readonly int[] InclineBenchWeights = { 20, 40, 50, 60, 70, 80, 90, 100 };
     private static readonly int[] PreacherWeights = { 10, 20, 30, 40, 50 };
     private static readonly int[] LatPulldownWeights = { 20, 40, 50, 60, 70, 80, 90, 100, 115, 130 };
+    private static readonly int[] DeadliftWeights = { 60, 80, 100, 140, 180, 200, 300, 400 };
+    private const int DeadliftBarWeight = 20;
+    private const int DeadliftStartingLoad = 60;
+    public const float DeadliftBarVisualMajorSize = 4.15f;
+    // The 4.15 m normalized bar has its loading sleeve in the outer quarter
+    // of each half. The old .98 value landed on the grip/inner shaft instead
+    // of the sleeve shown by the incline-bar reference. Keep the 20 kg pair
+    // on the sleeve's inner edge and append selected plates outward from it.
+    public const float DeadliftLoadingSleeveInset = 0.16f;
+    public const float DeadliftLoadedPlateCenter = 1.915f;
+    private const float DeadliftExtraPlateSpacing = 0.055f;
+    private const float DeadliftLoadedPlateThickness = 0.12f;
+    private const float DeadliftPlateClearance = 0.004f;
 
     private GymExerciseType exerciseType;
     private string displayName;
@@ -68,6 +82,24 @@ public class GymExerciseStation : MonoBehaviour
     private bool sceneBarWasKinematic;
     private bool sceneBarUsedGravity;
     private Transform loadedPlatesRoot;
+    private Vector3 deadliftBarBaseCameraLocalPosition;
+    private bool deadliftBarCameraTargetCaptured;
+    private Vector3 deadliftCameraWorldDirection = Vector3.forward;
+    private sealed class DeadliftLoosePlateState
+    {
+        public Rigidbody Body;
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public Vector3 LinearVelocity;
+        public Vector3 AngularVelocity;
+        public bool IsKinematic;
+        public bool UseGravity;
+        public bool DetectCollisions;
+        public RigidbodyInterpolation Interpolation;
+    }
+
+    private readonly List<DeadliftLoosePlateState> deadliftLoosePlateStates =
+        new List<DeadliftLoosePlateState>();
     private float squatMotion;
     private Transform squatBarOriginalParent;
     private Vector3 squatBarOriginalLocalPosition;
@@ -120,6 +152,7 @@ public class GymExerciseStation : MonoBehaviour
     public Quaternion PlayerRotation => playerRotation;
     public bool IsTreadmill => exerciseType == GymExerciseType.Treadmill;
     public bool IsSquat => exerciseType == GymExerciseType.BarbellSquat;
+    public bool IsDeadlift => exerciseType == GymExerciseType.Deadlift;
     public bool IsOccupied => playerOccupant != null || enemyOccupant != null ||
         enemySquatReleaseOccupant != null;
     public bool IsOccupiedByEnemy => enemyOccupant != null || enemySquatReleaseOccupant != null;
@@ -131,6 +164,7 @@ public class GymExerciseStation : MonoBehaviour
     public Vector3 EnemyPosition => playerPosition;
     public Quaternion EnemyRotation => playerRotation;
     public float CurrentTreadmillSpeed => currentSpeed;
+    public bool IsSessionActive => sessionActive;
     public string EquipmentName => equipmentRoot != null ? equipmentRoot.name : string.Empty;
     public Transform EquipmentRoot => equipmentRoot;
     public bool IsEnemySquatBarAttached => enemyOccupant != null && sceneBar != null &&
@@ -198,7 +232,8 @@ public class GymExerciseStation : MonoBehaviour
     public bool RequiresWeightSelection => exerciseType == GymExerciseType.FlatBenchPress ||
                                            exerciseType == GymExerciseType.InclineBenchPress ||
                                            exerciseType == GymExerciseType.PreacherCurl ||
-                                           exerciseType == GymExerciseType.LatPulldown;
+                                           exerciseType == GymExerciseType.LatPulldown ||
+                                           exerciseType == GymExerciseType.Deadlift;
     public int[] WeightOptions => GetWeightOptions(exerciseType);
     public int SelectedWeight => selectedWeight;
     public int Repetitions => repetitions;
@@ -208,7 +243,58 @@ public class GymExerciseStation : MonoBehaviour
     public WorkoutResult LastWorkoutResult => lastWorkoutResult;
     public int ComboMultiplier => comboMultiplier;
     public int EmptyBarWeight => exerciseType == GymExerciseType.PreacherCurl ? 10 :
-                                 (exerciseType == GymExerciseType.LatPulldown ? 0 : (RequiresWeightSelection ? 20 : 0));
+                                 (exerciseType == GymExerciseType.LatPulldown ? 0 :
+                                  exerciseType == GymExerciseType.Deadlift ? DeadliftBarWeight :
+                                  (RequiresWeightSelection ? 20 : 0));
+
+    public static Transform FindInclineReferenceBarTemplate()
+    {
+        Transform[] transforms = Object.FindObjectsByType<Transform>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate == null || candidate.GetComponentInParent<PlayerMovement>() != null)
+            {
+                continue;
+            }
+
+            string normalizedName = NormalizeWeightName(candidate.name);
+            if (normalizedName != "bench2" && !normalizedName.Contains("inclinebench"))
+            {
+                continue;
+            }
+
+            Transform[] descendants = candidate.GetComponentsInChildren<Transform>(true);
+            for (int descendantIndex = 0; descendantIndex < descendants.Length; descendantIndex++)
+            {
+                Transform descendant = descendants[descendantIndex];
+                if (descendant == null || descendant == candidate ||
+                    !NormalizeWeightName(descendant.name).StartsWith("barbell") ||
+                    descendant.GetComponentInChildren<Renderer>(true) == null)
+                {
+                    continue;
+                }
+
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+
+    public static float GetSceneMatchedLoadedPlateCenter(
+        Transform barRoot, float fallback)
+    {
+        float halfLength = GetBarHalfExtent(barRoot);
+        if (halfLength <= 0.12f)
+        {
+            return fallback;
+        }
+
+        return Mathf.Max(
+            0.12f, halfLength * GetInclinePlateCenterRatio());
+    }
 
     public static void CreateForScene()
     {
@@ -246,11 +332,12 @@ public class GymExerciseStation : MonoBehaviour
             {
                 continue;
             }
-            if (type == GymExerciseType.BarbellSquat &&
+            if ((type == GymExerciseType.BarbellSquat || type == GymExerciseType.Deadlift) &&
                 FindNearestSceneWeight(candidate, bounds, "barbell") == null)
             {
-                // A visitor squat must use the bar already authored in this
-                // cage/smith rack. Never create a substitute bar at runtime.
+                // Barbell exercises must use the real loaded bar already
+                // registered in the scene. Never create a substitute bar at
+                // runtime when the physical pickup is missing.
                 continue;
             }
 
@@ -788,6 +875,25 @@ public class GymExerciseStation : MonoBehaviour
                 localPosition = new Vector3(0f, 1.66f - motion * 0.54f, -0.34f);
                 localRotation = Quaternion.Euler(2f + motion * 7f, 0f, 0f);
                 break;
+            case GymExerciseType.Deadlift:
+                // Start in the hinged setup position and rise with the bar;
+                // the camera follows the bar's centre through the same
+                // controlled range instead of looking along the shaft.
+                localPosition = new Vector3(0f, 1.22f + motion * 0.46f, -0.38f);
+                if (deadliftBarCameraTargetCaptured)
+                {
+                    Vector3 barLocalPosition = deadliftBarBaseCameraLocalPosition +
+                        Vector3.up * motion * 0.72f + Vector3.forward * (-motion * 0.08f);
+                    Vector3 aim = barLocalPosition - localPosition;
+                    localRotation = aim.sqrMagnitude > 0.0001f
+                        ? Quaternion.LookRotation(aim.normalized, Vector3.up)
+                        : Quaternion.Euler(19f - motion * 13f, 0f, 0f);
+                }
+                else
+                {
+                    localRotation = Quaternion.Euler(19f - motion * 13f, 0f, 0f);
+                }
+                break;
             case GymExerciseType.PreacherCurl:
                 localPosition = new Vector3(0f, 1.67f - motion * 0.025f, 0.18f);
                 localRotation = Quaternion.Euler(16f - motion * 4f, 0f, 0f);
@@ -875,7 +981,8 @@ public class GymExerciseStation : MonoBehaviour
         displayName = GetDisplayName(type);
         equipmentRoot = equipment;
         sceneBar = type == GymExerciseType.PreacherCurl ? FindNearestSceneWeight(equipment, bounds, "ezbar") :
-                   ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress || type == GymExerciseType.BarbellSquat)
+                   ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress ||
+                     type == GymExerciseType.BarbellSquat || type == GymExerciseType.Deadlift)
                        ? FindNearestSceneWeight(equipment, bounds, "barbell") : null);
         if (type == GymExerciseType.BarbellSquat && sceneBar == null)
         {
@@ -904,6 +1011,54 @@ public class GymExerciseStation : MonoBehaviour
             stagingBounds.center.x + offset.x,
             floorY,
             stagingBounds.center.z + offset.z);
+        if (type == GymExerciseType.Deadlift)
+        {
+            // A deadlift camera must be perpendicular to the shaft and point
+            // at the mirror side of the platform. Projecting the authored
+            // mirror-facing direction against the real bar axis removes the
+            // old sideways/end-on view even when the imported bar root is
+            // rotated differently from the platform object.
+            Vector3 mirrorFacingDirection = Vector3.ProjectOnPlane(
+                stagingBounds.center - playerPosition, Vector3.up);
+            if (mirrorFacingDirection.sqrMagnitude < 0.01f)
+            {
+                mirrorFacingDirection = -forward;
+            }
+            mirrorFacingDirection.Normalize();
+
+            Vector3 barAxis = Vector3.ProjectOnPlane(
+                GetBarAxis(sceneBar), Vector3.up);
+            if (barAxis.sqrMagnitude < 0.01f)
+            {
+                barAxis = Vector3.right;
+            }
+            barAxis.Normalize();
+
+            Vector3 cameraDirection = Vector3.ProjectOnPlane(
+                mirrorFacingDirection, barAxis);
+            if (cameraDirection.sqrMagnitude < 0.01f)
+            {
+                cameraDirection = Vector3.Cross(Vector3.up, barAxis);
+            }
+            if (cameraDirection.sqrMagnitude < 0.01f)
+            {
+                cameraDirection = mirrorFacingDirection;
+            }
+            cameraDirection.Normalize();
+            if (Vector3.Dot(cameraDirection, mirrorFacingDirection) < 0f)
+            {
+                cameraDirection = -cameraDirection;
+            }
+
+            Vector3 barCenter = sceneBar != null
+                ? GetCombinedBounds(sceneBar.GetComponentsInChildren<Renderer>(true)).center
+                : stagingBounds.center;
+            playerPosition = new Vector3(
+                barCenter.x - cameraDirection.x * 0.92f,
+                floorY,
+                barCenter.z - cameraDirection.z * 0.92f);
+            deadliftCameraWorldDirection = cameraDirection;
+        }
         if (type == GymExerciseType.PullUps)
         {
             pullUpBarTarget = new Vector3(
@@ -918,6 +1073,15 @@ public class GymExerciseStation : MonoBehaviour
                 $"GYMCHAOS_SQUAT_STAGING_CENTER station={equipment.name} " +
                 $"bar={sceneBar?.name ?? "missing"} " +
                 $"center={playerPosition} frameBoundsCenter={stagingBounds.center}",
+                this);
+        }
+        if (type == GymExerciseType.Deadlift)
+        {
+            selectedWeight = WeightOptions[0];
+            Debug.Log(
+                $"GYMCHAOS_DEADLIFT_CONFIG station={equipment.name} " +
+                $"bar={sceneBar?.name ?? "missing"} load={selectedWeight}kg " +
+                $"startingLoad={DeadliftStartingLoad}kg bar={DeadliftBarWeight}kg fixedLoadedBar=true",
                 this);
         }
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
@@ -938,6 +1102,14 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         playerRotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up) * GetFacingCorrection(type);
+        if (type == GymExerciseType.Deadlift)
+        {
+            playerRotation = Quaternion.LookRotation(
+                deadliftCameraWorldDirection, Vector3.up);
+            Debug.Log(
+                $"GYMCHAOS_DEADLIFT_CAMERA_READY direction={deadliftCameraWorldDirection} " +
+                $"barAxis={GetBarAxis(sceneBar)} player={playerPosition}", this);
+        }
         if (type == GymExerciseType.PullUps)
         {
             pullUpLookDirection = GetPullUpLookDirection(
@@ -1226,6 +1398,168 @@ public class GymExerciseStation : MonoBehaviour
         squatBarPickup = null;
     }
 
+    private static float inclinePlateCenterRatio = -1f;
+    private static bool inclinePlateReferenceLogged;
+
+    private static float GetInclinePlateCenterRatio()
+    {
+        if (inclinePlateCenterRatio > 0f)
+        {
+            return inclinePlateCenterRatio;
+        }
+
+        Transform referenceBar = FindInclineReferenceBarTemplate();
+        Renderer[] referenceRenderers = referenceBar != null
+            ? referenceBar.GetComponentsInChildren<Renderer>(true)
+            : new Renderer[0];
+        if (referenceBar != null && referenceRenderers.Length > 0)
+        {
+            Vector3 referenceAxis = GetBarAxis(referenceBar).normalized;
+            float referenceCenter;
+            float referenceHalfLength;
+            if (TryGetProjectedBounds(
+                    referenceRenderers, referenceAxis,
+                    out referenceCenter, out referenceHalfLength) &&
+                referenceHalfLength > 0.12f)
+            {
+                Transform[] children = referenceBar.GetComponentsInChildren<Transform>(true);
+                float plateCenterSum = 0f;
+                int plateCount = 0;
+                for (int i = 0; i < children.Length; i++)
+                {
+                    Transform child = children[i];
+                    if (child == null || child.parent != referenceBar ||
+                        !IsPlateTransformName(child.name))
+                    {
+                        continue;
+                    }
+
+                    Renderer[] plateRenderers = child.GetComponentsInChildren<Renderer>(true);
+                    float plateCenter;
+                    float plateHalfLength;
+                    if (!TryGetProjectedBounds(
+                            plateRenderers, referenceAxis,
+                            out plateCenter, out plateHalfLength))
+                    {
+                        continue;
+                    }
+
+                    float distanceFromBarCenter = Mathf.Abs(
+                        plateCenter - referenceCenter);
+                    if (distanceFromBarCenter > 0.01f &&
+                        distanceFromBarCenter <= referenceHalfLength * 1.25f)
+                    {
+                        plateCenterSum += distanceFromBarCenter;
+                        plateCount++;
+                    }
+                }
+
+                if (plateCount > 0)
+                {
+                    inclinePlateCenterRatio = Mathf.Clamp(
+                        (plateCenterSum / plateCount) / referenceHalfLength,
+                        0.1f, 0.98f);
+                    if (!inclinePlateReferenceLogged)
+                    {
+                        Debug.Log(
+                            $"GYMCHAOS_INCLINE_PLATE_REFERENCE bar={referenceBar.name} " +
+                            $"half={referenceHalfLength:F3} " +
+                            $"plateCenter={plateCenterSum / plateCount:F3} " +
+                            $"ratio={inclinePlateCenterRatio:F3}",
+                            referenceBar);
+                        inclinePlateReferenceLogged = true;
+                    }
+                    return inclinePlateCenterRatio;
+                }
+            }
+        }
+
+        inclinePlateCenterRatio = Mathf.Clamp(
+            DeadliftLoadedPlateCenter / (DeadliftBarVisualMajorSize * 0.5f),
+            0.1f, 0.98f);
+        if (!inclinePlateReferenceLogged)
+        {
+            Debug.LogWarning(
+                $"GYMCHAOS_INCLINE_PLATE_REFERENCE_FALLBACK ratio={inclinePlateCenterRatio:F3}");
+            inclinePlateReferenceLogged = true;
+        }
+        return inclinePlateCenterRatio;
+    }
+
+    private static bool IsPlateTransformName(string name)
+    {
+        return !string.IsNullOrEmpty(name) &&
+            NormalizeWeightName(name).StartsWith("plate");
+    }
+
+    private static float GetBarHalfExtent(Transform barRoot)
+    {
+        if (barRoot == null)
+        {
+            return 0f;
+        }
+
+        Renderer[] renderers = barRoot.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            return 0f;
+        }
+
+        float center;
+        float halfLength;
+        return TryGetProjectedBounds(
+            renderers, GetBarAxis(barRoot).normalized,
+            out center, out halfLength) ? halfLength : 0f;
+    }
+
+    private static bool TryGetProjectedBounds(
+        Renderer[] renderers, Vector3 axis, out float center, out float halfLength)
+    {
+        center = 0f;
+        halfLength = 0f;
+        if (renderers == null || renderers.Length == 0 || axis.sqrMagnitude < 0.0001f)
+        {
+            return false;
+        }
+
+        axis.Normalize();
+        float minimum = float.PositiveInfinity;
+        float maximum = float.NegativeInfinity;
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            Renderer renderer = renderers[rendererIndex];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            Bounds bounds = renderer.bounds;
+            Vector3 min = bounds.min;
+            Vector3 max = bounds.max;
+            for (int x = 0; x <= 1; x++)
+            for (int y = 0; y <= 1; y++)
+            for (int z = 0; z <= 1; z++)
+            {
+                Vector3 point = new Vector3(
+                    x == 0 ? min.x : max.x,
+                    y == 0 ? min.y : max.y,
+                    z == 0 ? min.z : max.z);
+                float projection = Vector3.Dot(point, axis);
+                minimum = Mathf.Min(minimum, projection);
+                maximum = Mathf.Max(maximum, projection);
+            }
+        }
+
+        if (float.IsInfinity(minimum) || float.IsInfinity(maximum))
+        {
+            return false;
+        }
+
+        center = (minimum + maximum) * 0.5f;
+        halfLength = Mathf.Max(0f, (maximum - minimum) * 0.5f);
+        return halfLength > 0.0001f;
+    }
+
     private static Vector3 GetBarAxis(Transform bar)
     {
         Renderer[] renderers = bar != null ? bar.GetComponentsInChildren<Renderer>(true) : new Renderer[0];
@@ -1357,7 +1691,12 @@ public class GymExerciseStation : MonoBehaviour
             {
                 int rank = progression != null ? progression.GetStatRank(GymStat.Technique) : 0;
                 float weightDifficulty = RequiresWeightSelection
-                    ? Mathf.Lerp(0.88f, 1.3f, Mathf.InverseLerp(20f, 140f, selectedWeight))
+                    ? Mathf.Lerp(
+                        0.88f,
+                        1.3f,
+                        exerciseType == GymExerciseType.Deadlift
+                            ? Mathf.InverseLerp(60f, 400f, selectedWeight)
+                            : Mathf.InverseLerp(20f, 140f, selectedWeight))
                     : 1f;
                 if (progression != null)
                 {
@@ -1672,6 +2011,20 @@ public class GymExerciseStation : MonoBehaviour
                 Vector3 desiredBarCenter = playerPosition + Vector3.up * 1.45f - playerForward * 0.2f;
                 sceneBarExercisePosition = desiredBarCenter + sceneBarRendererCenterOffset;
             }
+            else if (exerciseType == GymExerciseType.Deadlift)
+            {
+                // The loaded bar begins just above the platform and travels
+                // toward the hips during the concentric phase. The player
+                // stands on the mirror-facing side of the bar.
+                Vector3 desiredBarCenter = playerPosition +
+                    playerForward * 0.92f + Vector3.up * 0.38f;
+                sceneBarExercisePosition = desiredBarCenter + sceneBarRendererCenterOffset;
+                Vector3 deadliftBarVisualCenter = sceneBarExercisePosition -
+                    sceneBarRendererCenterOffset;
+                deadliftBarBaseCameraLocalPosition = Quaternion.Inverse(playerRotation) *
+                    (deadliftBarVisualCenter - playerPosition);
+                deadliftBarCameraTargetCaptured = true;
+            }
             else if (exerciseType == GymExerciseType.PreacherCurl)
             {
                 Vector3 desiredBarCenter = playerPosition + Vector3.up * 1.1f + playerForward * 0.82f;
@@ -1679,6 +2032,10 @@ public class GymExerciseStation : MonoBehaviour
             }
 
             BuildPlatesOnSceneBar();
+            if (exerciseType == GymExerciseType.Deadlift)
+            {
+                FreezeDeadliftLoosePlates();
+            }
         }
 
         if (latPulldownBar != null)
@@ -1712,6 +2069,14 @@ public class GymExerciseStation : MonoBehaviour
             {
                 sceneBar.SetPositionAndRotation(sceneBarExercisePosition + Vector3.down * motion * 0.54f, sceneBarExerciseRotation);
             }
+            else if (exerciseType == GymExerciseType.Deadlift)
+            {
+                Vector3 playerForward = playerRotation * Vector3.forward;
+                sceneBar.SetPositionAndRotation(
+                    sceneBarExercisePosition + Vector3.up * motion * 0.72f -
+                    playerForward * motion * 0.08f,
+                    sceneBarExerciseRotation);
+            }
             else if (exerciseType == GymExerciseType.FlatBenchPress)
             {
                 Vector3 playerForward = playerRotation * Vector3.forward;
@@ -1731,6 +2096,10 @@ public class GymExerciseStation : MonoBehaviour
             {
                 loadedPlatesRoot.SetPositionAndRotation(sceneBar.position, sceneBar.rotation);
             }
+            if (exerciseType == GymExerciseType.Deadlift)
+            {
+                SyncDeadliftMountedChildBodies();
+            }
         }
 
         if (exerciseType == GymExerciseType.LatPulldown)
@@ -1746,6 +2115,31 @@ public class GymExerciseStation : MonoBehaviour
             }
             UpdateLatPulldownWeightStack(motion);
         }
+    }
+
+    private void SyncDeadliftMountedChildBodies()
+    {
+        if (sceneBar == null)
+        {
+            return;
+        }
+
+        Rigidbody[] mountedBodies = sceneBar.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < mountedBodies.Length; i++)
+        {
+            Rigidbody mountedBody = mountedBodies[i];
+            if (mountedBody == null || mountedBody == sceneBarBody ||
+                !mountedBody.isKinematic)
+            {
+                continue;
+            }
+
+            mountedBody.position = mountedBody.transform.position;
+            mountedBody.rotation = mountedBody.transform.rotation;
+            mountedBody.linearVelocity = Vector3.zero;
+            mountedBody.angularVelocity = Vector3.zero;
+        }
+        Physics.SyncTransforms();
     }
 
     private void RestoreSceneEquipment()
@@ -1774,6 +2168,9 @@ public class GymExerciseStation : MonoBehaviour
             loadedPlatesRoot = null;
         }
 
+        RestoreDeadliftLoosePlates();
+        deadliftBarCameraTargetCaptured = false;
+
         if (latPulldownBar != null)
         {
             latPulldownBar.localPosition = latBarOriginalLocalPosition;
@@ -1798,24 +2195,151 @@ public class GymExerciseStation : MonoBehaviour
         Vector3 size = barBounds.size;
         Vector3 worldAxis = size.x >= size.y && size.x >= size.z ? Vector3.right : (size.y >= size.z ? Vector3.up : Vector3.forward);
         float halfLength = worldAxis == Vector3.right ? size.x * 0.5f : (worldAxis == Vector3.up ? size.y * 0.5f : size.z * 0.5f);
+        float deadliftLoadedPlateCenter = DeadliftLoadedPlateCenter;
+        if (exerciseType == GymExerciseType.Deadlift)
+        {
+            // Match the authored incline bar by ratio, using the complete
+            // normalized bar-and-plate extent instead of a deadlift-only
+            // absolute sleeve offset.
+            deadliftLoadedPlateCenter =
+                GetSceneMatchedLoadedPlateCenter(
+                    sceneBar, DeadliftLoadedPlateCenter);
+        }
 
         GameObject platesObject = new GameObject("Exercise Loaded Plates");
         loadedPlatesRoot = platesObject.transform;
         loadedPlatesRoot.SetPositionAndRotation(sceneBar.position, sceneBar.rotation);
-        Vector3 localAxis = loadedPlatesRoot.InverseTransformDirection(worldAxis).normalized;
+        Vector3 localAxis = exerciseType == GymExerciseType.Deadlift
+            ? Vector3.right
+            : loadedPlatesRoot.InverseTransformDirection(worldAxis).normalized;
         const float spacing = 0.065f;
         for (int side = -1; side <= 1; side += 2)
         {
+            float deadliftStackCursor = deadliftLoadedPlateCenter +
+                DeadliftLoadedPlateThickness * 0.5f + DeadliftPlateClearance;
             for (int i = 0; i < platesPerSide.Count; i++)
             {
                 int weight = platesPerSide[i];
                 float diameter = weight == 20 ? 0.45f : (weight == 10 ? 0.38f : 0.32f);
-                Vector3 worldPosition = barBounds.center + worldAxis * side * (Mathf.Max(0.12f, halfLength - 0.16f) + i * spacing);
-                Vector3 localPosition = loadedPlatesRoot.InverseTransformPoint(worldPosition);
+                Vector3 localPosition;
+                if (exerciseType == GymExerciseType.Deadlift)
+                {
+                    // The authored 20 kg plate is the inner plate. Measure
+                    // each selected visual's real post-normalization
+                    // thickness and append it directly to that plate, so a
+                    // 400 kg stack stays on the sleeve without either an
+                    // outward AABB guess or overlapping rings.
+                    localPosition = Vector3.zero;
+                }
+                else
+                {
+                    Vector3 worldPosition = barBounds.center + worldAxis * side *
+                        (Mathf.Max(0.12f, halfLength - 0.16f) + i * spacing);
+                    localPosition = loadedPlatesRoot.InverseTransformPoint(worldPosition);
+                }
                 Transform plate = CreateNormalizedAssetVisual($"Plate{weight}", loadedPlatesRoot, localPosition, diameter, false, $"Plate {weight}kg");
-                if (plate != null) plate.localRotation = Quaternion.FromToRotation(Vector3.right, localAxis) * plate.localRotation;
+                if (plate == null)
+                {
+                    continue;
+                }
+
+                plate.localRotation = Quaternion.FromToRotation(
+                    Vector3.right, localAxis) * plate.localRotation;
+                if (exerciseType == GymExerciseType.Deadlift)
+                {
+                    Renderer[] plateRenderers = plate.GetComponentsInChildren<Renderer>(true);
+                    if (plateRenderers.Length > 0)
+                    {
+                        Bounds plateBounds = GetBoundsRelativeTo(
+                            loadedPlatesRoot, plateRenderers);
+                        float halfThickness = Mathf.Max(
+                            0.012f, plateBounds.extents.x);
+                        float stackCenter = deadliftStackCursor + halfThickness;
+                        plate.localPosition = Vector3.right * (side * stackCenter);
+                        deadliftStackCursor = stackCenter + halfThickness +
+                            DeadliftPlateClearance;
+                    }
+                    else
+                    {
+                        float stackCenter = deadliftStackCursor + 0.025f;
+                        plate.localPosition = Vector3.right * (side * stackCenter);
+                        deadliftStackCursor = stackCenter +
+                            DeadliftExtraPlateSpacing;
+                    }
+                }
             }
         }
+    }
+
+    private void FreezeDeadliftLoosePlates()
+    {
+        RestoreDeadliftLoosePlates();
+        PickupItem[] pickups = Object.FindObjectsByType<PickupItem>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < pickups.Length; i++)
+        {
+            PickupItem pickup = pickups[i];
+            if (pickup == null || pickup.gameObject.name.IndexOf(
+                    "Freeweight Loose", System.StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            Rigidbody body = pickup.GetComponent<Rigidbody>();
+            if (body == null)
+            {
+                continue;
+            }
+
+            deadliftLoosePlateStates.Add(new DeadliftLoosePlateState
+            {
+                Body = body,
+                Position = body.position,
+                Rotation = body.rotation,
+                LinearVelocity = body.linearVelocity,
+                AngularVelocity = body.angularVelocity,
+                IsKinematic = body.isKinematic,
+                UseGravity = body.useGravity,
+                DetectCollisions = body.detectCollisions,
+                Interpolation = body.interpolation
+            });
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+            body.interpolation = RigidbodyInterpolation.None;
+            body.isKinematic = true;
+            body.useGravity = false;
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_DEADLIFT_LOOSE_PLATES_LOCKED count={deadliftLoosePlateStates.Count}",
+            this);
+    }
+
+    private void RestoreDeadliftLoosePlates()
+    {
+        for (int i = 0; i < deadliftLoosePlateStates.Count; i++)
+        {
+            DeadliftLoosePlateState state = deadliftLoosePlateStates[i];
+            if (state == null || state.Body == null)
+            {
+                continue;
+            }
+
+            Rigidbody body = state.Body;
+            body.position = state.Position;
+            body.rotation = state.Rotation;
+            body.isKinematic = state.IsKinematic;
+            body.useGravity = state.UseGravity;
+            body.detectCollisions = state.DetectCollisions;
+            body.interpolation = state.Interpolation;
+            body.linearVelocity = state.IsKinematic ? Vector3.zero : state.LinearVelocity;
+            body.angularVelocity = state.IsKinematic ? Vector3.zero : state.AngularVelocity;
+        }
+        if (deadliftLoosePlateStates.Count > 0)
+        {
+            Physics.SyncTransforms();
+        }
+        deadliftLoosePlateStates.Clear();
     }
 
     private void BuildLoadedAssetBar(Transform parent, string barAssetName, Vector3 position, float barWidth, float plateEdge)
@@ -1838,7 +2362,10 @@ public class GymExerciseStation : MonoBehaviour
     private List<int> GetPlatesPerSide()
     {
         List<int> plates = new List<int>();
-        int remaining = Mathf.Max(0, selectedWeight - EmptyBarWeight) / 2;
+        int authoredLoad = exerciseType == GymExerciseType.Deadlift
+            ? DeadliftStartingLoad
+            : EmptyBarWeight;
+        int remaining = Mathf.Max(0, selectedWeight - authoredLoad) / 2;
         int[] available = { 20, 10, 5 };
         for (int i = 0; i < available.Length; i++)
         {
@@ -2407,6 +2934,7 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.FlatBenchPress: baseOptions = FlatBenchWeights; break;
             case GymExerciseType.InclineBenchPress: baseOptions = InclineBenchWeights; break;
             case GymExerciseType.BarbellSquat: baseOptions = SquatWeights; break;
+            case GymExerciseType.Deadlift: return DeadliftWeights;
             case GymExerciseType.PreacherCurl: baseOptions = PreacherWeights; break;
             case GymExerciseType.LatPulldown: baseOptions = LatPulldownWeights; break;
             default: return Array.Empty<int>();
@@ -2443,6 +2971,7 @@ public class GymExerciseStation : MonoBehaviour
             // A forward offset puts the character at the front edge instead
             // of under the rack, especially on imported cages with deep feet.
             case GymExerciseType.BarbellSquat: return Vector3.zero;
+            case GymExerciseType.Deadlift: return forward * 0.92f;
             case GymExerciseType.LatPulldown: return -forward * 0.3f;
             default: return -forward * 0.55f;
         }
@@ -2481,6 +3010,8 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.InclineBenchPress:
             case GymExerciseType.BarbellSquat:
                 return Quaternion.Euler(0f, 180f, 0f);
+            case GymExerciseType.Deadlift:
+                return Quaternion.identity;
             case GymExerciseType.Treadmill:
                 return Quaternion.Euler(0f, 180f, 0f);
             case GymExerciseType.ExerciseBike:
@@ -2502,6 +3033,7 @@ public class GymExerciseStation : MonoBehaviour
         switch (type)
         {
             case GymExerciseType.BarbellSquat: return 2.35f;
+            case GymExerciseType.Deadlift: return 2.6f;
             case GymExerciseType.Dips: return 1.65f;
             case GymExerciseType.PullUps: return 1.8f;
             case GymExerciseType.PreacherCurl: return 1.9f;
@@ -2521,6 +3053,7 @@ public class GymExerciseStation : MonoBehaviour
         if (lower.Contains("pullup") || lower.Contains("pullups") || lower.Contains("chinup") ||
             lower.Contains("monkeybar") || lower.Contains("monkeybars") ||
             lower.Contains("calisthenics")) { type = GymExerciseType.PullUps; return true; }
+        if (lower.Contains("deadlift")) { type = GymExerciseType.Deadlift; return true; }
         if (lower.Contains("cage") || lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("smithmachine")) { type = GymExerciseType.BarbellSquat; return true; }
         if (lower.Contains("inclinebench") || lower.Contains("bench2")) { type = GymExerciseType.InclineBenchPress; return true; }
         if (lower.Contains("bench") && !lower.Contains("preacher")) { type = GymExerciseType.FlatBenchPress; return true; }
@@ -2535,6 +3068,7 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.FlatBenchPress: return "Flat barbell bench press";
             case GymExerciseType.InclineBenchPress: return "Incline barbell bench press";
             case GymExerciseType.BarbellSquat: return "Barbell squat";
+            case GymExerciseType.Deadlift: return "Deadlift";
             case GymExerciseType.PreacherCurl: return "Preacher curls";
             case GymExerciseType.Dips: return "Dips";
             case GymExerciseType.PullUps: return "Pull ups";

@@ -12,9 +12,9 @@ public sealed class GymExperienceService : MonoBehaviour
     public const int MaxStatRank = 10;
     private const string SaveKey = "GymChaos.Progression.v1";
     // Bump this migration whenever the requested launch baseline changes.
-    // v6 resets an existing local save once, while later reputation changes
+    // v7 resets an existing local save once, while later reputation changes
     // still persist normally instead of being wiped on every launch.
-    private const string InitialReputationResetKey = "GymChaos.InitialReputationReset.v6";
+    private const string InitialReputationResetKey = "GymChaos.InitialReputationReset.v7";
     private const float SkillChoiceTimeScale = 0.08f;
 
     private static GymExperienceService instance;
@@ -37,6 +37,8 @@ public sealed class GymExperienceService : MonoBehaviour
     private float statImpactUntil;
     private string statImpactText;
     private bool levelChoiceVisible;
+    private bool levelChoiceWasCursorCaptured;
+    private bool levelChoiceCursorReleased;
     private bool lockerMenuOpen;
     private bool lockerMenuWasCursorCaptured;
     private PlayerMovement lockerMenuPlayer;
@@ -61,7 +63,7 @@ public sealed class GymExperienceService : MonoBehaviour
     private GUIStyle progressHudGoalStyle;
     private GUIStyle progressHudFeedbackStyle;
     private GUIStyle progressHudImpactStyle;
-    private GUIStyle progressHudPromptStyle;
+
 
     public static GymExperienceService Active => instance;
     public GymProgressionState State => state;
@@ -172,6 +174,18 @@ public sealed class GymExperienceService : MonoBehaviour
         {
             Time.timeScale = SkillChoiceTimeScale;
             timeScaleChanged = true;
+        }
+
+        if (levelChoiceVisible && !EnemyFighter.IsFightActive &&
+            !GymDialogueDirector.IsDialogueActive && !levelChoiceCursorReleased &&
+            player != null)
+        {
+            // PlayerMovement intentionally stops consuming gameplay input while
+            // this overlay is open. Release the gameplay pointer here as well,
+            // otherwise IMGUI can draw clickable buttons but the locked cursor
+            // never reaches them.
+            player.SetCursorCaptured(false);
+            levelChoiceCursorReleased = true;
         }
 
         if (Time.unscaledTime >= feedbackUntil)
@@ -353,6 +367,8 @@ public sealed class GymExperienceService : MonoBehaviour
         if (leveled)
         {
             levelChoiceVisible = true;
+            levelChoiceWasCursorCaptured = player != null && player.CursorCaptured;
+            levelChoiceCursorReleased = false;
             Debug.Log(
                 $"GYMCHAOS_LEVEL_UP level={state.level} skillPoints={state.skillPoints}",
                 this);
@@ -396,6 +412,11 @@ public sealed class GymExperienceService : MonoBehaviour
         {
             levelChoiceVisible = false;
             RestoreTimeScale();
+            if (player != null)
+            {
+                player.SetCursorCaptured(levelChoiceWasCursorCaptured);
+            }
+            levelChoiceCursorReleased = false;
         }
 
         EnsureCosmetics();
@@ -978,7 +999,7 @@ public sealed class GymExperienceService : MonoBehaviour
 
     private void OnGUI()
     {
-        if (state == null || GymStartScreen.IsMenuVisible)
+        if (state == null || GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible)
         {
             return;
         }
@@ -991,10 +1012,7 @@ public sealed class GymExperienceService : MonoBehaviour
         EnsureProgressHudStyles();
         DrawProgressHud();
         DrawDailyGoals();
-        if (!lockerMenuOpen && !levelChoiceVisible && !GymDialogueDirector.IsDialogueActive)
-        {
-            DrawBackRoomPrompt();
-        }
+
         if (lockerMenuOpen)
         {
             DrawLockerMenu();
@@ -1006,51 +1024,43 @@ public sealed class GymExperienceService : MonoBehaviour
         }
     }
 
-    private void DrawBackRoomPrompt()
-    {
-        if (player == null)
-        {
-            return;
-        }
-
-        GymBackRoomInteractable nearby =
-            FindNearbyInteractable(player.transform.position, 3.1f);
-        if (nearby == null)
-        {
-            return;
-        }
-
-        DrawProgressHudText(
-            new Rect(16f, Screen.height - 108f, Screen.width - 32f, 36f),
-            $"[E] {nearby.DisplayName}",
-            progressHudPromptStyle);
-    }
 
     private void DrawProgressHud()
     {
-        float width = Mathf.Min(370f, Screen.width - 32f);
+        float width = Mathf.Min(360f, Screen.width - 32f);
         float x = Mathf.Max(16f, Screen.width - width - 16f);
+        bool hasImpact = !string.IsNullOrEmpty(statImpactText);
+        float panelHeight = hasImpact ? 136f : 112f;
+        float y = 18f;
+        Rect panel = new Rect(x, y, width, panelHeight);
+        DrawProgressHudRect(panel, new Color(0.018f, 0.025f, 0.055f, 0.9f));
+        DrawProgressHudRect(
+            new Rect(x, y, 3f, panelHeight),
+            new Color(0.95f, 0.2f, 0.08f, 0.9f));
+
+        int xpToNextLevel = Mathf.Max(1, GetExperienceToNextLevel(state.level));
+        float xpProgress = Mathf.Clamp01(state.experience / (float)xpToNextLevel);
         DrawProgressHudText(
-            new Rect(x, 20f, width, 24f),
-            $"LEVEL {state.level}   XP {state.experience}/{GetExperienceToNextLevel(state.level)}",
+            new Rect(x + 14f, y + 8f, width - 28f, 20f),
+            $"LEVEL {state.level}   XP {state.experience}/{xpToNextLevel}",
             progressHudTitleStyle);
+        DrawProgressHudBar(
+            new Rect(x + 14f, y + 34f, width - 28f, 8f),
+            xpProgress,
+            new Color(1f, 0.82f, 0.35f, 0.95f));
         DrawProgressHudText(
-            new Rect(x, 45f, width, 22f),
-            $"STR {state.strengthRank}   END {state.enduranceRank}   TECH {state.techniqueRank}",
+            new Rect(x + 14f, y + 49f, width - 28f, 18f),
+            $"STR {state.strengthRank}  END {state.enduranceRank}  TECH {state.techniqueRank}",
             progressHudBodyStyle);
         DrawProgressHudText(
-            new Rect(x, 68f, width, 22f),
-            $"REP {state.reputationRank} ({state.reputation:+#;-#;0})   POINTS {state.skillPoints}",
-            progressHudBodyStyle);
-        DrawProgressHudText(
-            new Rect(x, 91f, width, 22f),
-            $"MASTERY {state.masteryRank}   {MasteryTitle}",
+            new Rect(x + 14f, y + 69f, width - 28f, 18f),
+            $"REP {state.reputation:+#;-#;0}  MASTERY {state.masteryRank}",
             progressHudBodyStyle);
 
-        if (!string.IsNullOrEmpty(statImpactText))
+        if (hasImpact)
         {
             DrawProgressHudText(
-                new Rect(x, 115f, width, 24f),
+                new Rect(x + 14f, y + 93f, width - 28f, 22f),
                 statImpactText,
                 progressHudImpactStyle);
         }
@@ -1071,21 +1081,73 @@ public sealed class GymExperienceService : MonoBehaviour
 
     private void DrawDailyGoals()
     {
-        float width = Mathf.Min(370f, Screen.width - 32f);
+        float width = Mathf.Min(360f, Screen.width - 32f);
         float x = Mathf.Max(16f, Screen.width - width - 16f);
-        float top = string.IsNullOrEmpty(statImpactText) ? 132f : 148f;
+        float top = string.IsNullOrEmpty(statImpactText) ? 140f : 164f;
+        const float panelHeight = 88f;
+        Rect panel = new Rect(x, top, width, panelHeight);
+        DrawProgressHudRect(panel, new Color(0.018f, 0.025f, 0.055f, 0.86f));
+        DrawProgressHudRect(
+            new Rect(x, top, 3f, panelHeight),
+            new Color(0.48f, 0.86f, 1f, 0.9f));
         DrawProgressHudText(
-            new Rect(x, top, width, 20f),
-            $"DAY {state.gymDay}   ·   TODAY",
+            new Rect(x + 14f, top + 8f, width - 28f, 18f),
+            $"DAY {state.gymDay}   GOALS",
             progressHudTitleStyle);
+
         for (int i = 0; i < DailyGoalLabels.Length; i++)
         {
-            string marker = state.dailyCompleted[i] ? "DONE" :
-                $"{state.dailyProgress[i]}/{DailyGoalTargets[i]}";
+            float rowY = top + 31f + i * 17f;
+            float progress = Mathf.Clamp01(
+                state.dailyProgress[i] / (float)Mathf.Max(1, DailyGoalTargets[i]));
+            string marker = state.dailyCompleted[i]
+                ? "OK"
+                : $"{state.dailyProgress[i]}/{DailyGoalTargets[i]}";
             DrawProgressHudText(
-                new Rect(x, top + 23f + i * 19f, width, 20f),
-                $"{marker}   {DailyGoalLabels[i]}",
+                new Rect(x + 14f, rowY - 2f, 52f, 16f),
+                GetDailyGoalShortLabel(i),
                 progressHudGoalStyle);
+            DrawProgressHudBar(
+                new Rect(x + 72f, rowY + 2f, width - 128f, 7f),
+                progress,
+                state.dailyCompleted[i]
+                    ? new Color(1f, 0.82f, 0.35f, 0.95f)
+                    : new Color(0.48f, 0.86f, 1f, 0.9f));
+            DrawProgressHudText(
+                new Rect(x + width - 48f, rowY - 2f, 34f, 16f),
+                marker,
+                progressHudGoalStyle);
+        }
+    }
+
+    private static string GetDailyGoalShortLabel(int index)
+    {
+        switch (index)
+        {
+            case 0: return "REPS";
+            case 1: return "SOCIAL";
+            case 2: return "CHAOS";
+            default: return "GOAL";
+        }
+    }
+
+    private static void DrawProgressHudRect(Rect rect, Color color)
+    {
+        Color previousColor = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previousColor;
+    }
+
+    private static void DrawProgressHudBar(Rect rect, float progress, Color fillColor)
+    {
+        DrawProgressHudRect(rect, new Color(0f, 0f, 0f, 0.5f));
+        float fillWidth = rect.width * Mathf.Clamp01(progress);
+        if (fillWidth > 0.5f)
+        {
+            DrawProgressHudRect(
+                new Rect(rect.x, rect.y, fillWidth, rect.height),
+                fillColor);
         }
     }
 
@@ -1115,8 +1177,7 @@ public sealed class GymExperienceService : MonoBehaviour
         progressHudFeedbackStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
         progressHudImpactStyle = CreateProgressHudStyle(12, FontStyle.Bold, TextAnchor.UpperLeft);
         progressHudImpactStyle.normal.textColor = new Color(0.48f, 0.86f, 1f);
-        progressHudPromptStyle = CreateProgressHudStyle(17, FontStyle.Bold, TextAnchor.MiddleCenter);
-        progressHudPromptStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
+
     }
 
     private static GUIStyle CreateProgressHudStyle(
@@ -1181,11 +1242,16 @@ public sealed class GymExperienceService : MonoBehaviour
 
         string[] choices = { "1  STRENGTH", "2  ENDURANCE", "3  TECHNIQUE", "4  REPUTATION" };
         GymStat[] stats = { GymStat.Strength, GymStat.Endurance, GymStat.Technique, GymStat.Reputation };
+        GUIStyle choiceStyle = CreateProgressHudStyle(15, FontStyle.Bold, TextAnchor.MiddleCenter);
+        choiceStyle.normal.textColor = new Color(0.9f, 0.94f, 1f);
+        choiceStyle.hover.textColor = Color.white;
+        choiceStyle.active.textColor = Color.white;
+        choiceStyle.focused.textColor = Color.white;
         for (int i = 0; i < choices.Length; i++)
         {
             Rect button = new Rect(panel.x + 44f + (i % 2) * (panel.width * 0.5f - 56f),
                 panel.y + 136f + (i / 2) * 72f, panel.width * 0.5f - 66f, 54f);
-            if (GUI.Button(button, choices[i]))
+            if (DrawSkillChoiceButton(button, choices[i], choiceStyle))
             {
                 AllocateSkill(stats[i]);
             }
@@ -1203,13 +1269,56 @@ public sealed class GymExperienceService : MonoBehaviour
         Event current = Event.current;
         if (current.type == EventType.KeyDown && !EnemyFighter.IsFightActive)
         {
-            if (current.keyCode == KeyCode.Alpha1) AllocateSkill(GymStat.Strength);
-            else if (current.keyCode == KeyCode.Alpha2) AllocateSkill(GymStat.Endurance);
-            else if (current.keyCode == KeyCode.Alpha3) AllocateSkill(GymStat.Technique);
-            else if (current.keyCode == KeyCode.Alpha4) AllocateSkill(GymStat.Reputation);
+            GymStat stat;
+            bool hasStat = true;
+            switch (current.keyCode)
+            {
+                case KeyCode.Alpha1:
+                case KeyCode.Keypad1:
+                    stat = GymStat.Strength;
+                    break;
+                case KeyCode.Alpha2:
+                case KeyCode.Keypad2:
+                    stat = GymStat.Endurance;
+                    break;
+                case KeyCode.Alpha3:
+                case KeyCode.Keypad3:
+                    stat = GymStat.Technique;
+                    break;
+                case KeyCode.Alpha4:
+                case KeyCode.Keypad4:
+                    stat = GymStat.Reputation;
+                    break;
+                default:
+                    stat = GymStat.Strength;
+                    hasStat = false;
+                    break;
+            }
+
+            if (hasStat)
+            {
+                AllocateSkill(stat);
+                current.Use();
+            }
         }
     }
 
+    private static bool DrawSkillChoiceButton(
+        Rect rect, string label, GUIStyle style)
+    {
+        bool hovered = rect.Contains(Event.current.mousePosition);
+        DrawProgressHudRect(
+            rect,
+            hovered
+                ? new Color(0.11f, 0.16f, 0.23f, 0.98f)
+                : new Color(0.055f, 0.08f, 0.12f, 0.98f));
+        DrawProgressHudRect(
+            new Rect(rect.x, rect.y, 3f, rect.height),
+            hovered
+                ? new Color(1f, 0.82f, 0.35f, 1f)
+                : new Color(0.48f, 0.86f, 1f, 0.78f));
+        return GUI.Button(rect, label, style);
+    }
     private void EnsureLockerStyles()
     {
         if (lockerTitleStyle != null)
@@ -1241,7 +1350,7 @@ public sealed class GymExperienceService : MonoBehaviour
         };
         lockerBodyStyle.normal.textColor = new Color(0.82f, 0.87f, 0.96f);
 
-        lockerButtonStyle = new GUIStyle(GUI.skin.button)
+        lockerButtonStyle = new GUIStyle(GUI.skin.label)
         {
             alignment = TextAnchor.MiddleCenter,
             fontSize = 12,
@@ -1249,6 +1358,12 @@ public sealed class GymExperienceService : MonoBehaviour
             padding = new RectOffset(6, 6, 4, 4)
         };
         lockerButtonStyle.normal.textColor = new Color(0.88f, 0.92f, 1f);
+        lockerButtonStyle.hover.textColor = Color.white;
+        lockerButtonStyle.active.textColor = Color.white;
+        lockerButtonStyle.normal.background = null;
+        lockerButtonStyle.hover.background = null;
+        lockerButtonStyle.active.background = null;
+        lockerButtonStyle.focused.background = null;
 
         lockerSelectedButtonStyle = new GUIStyle(lockerButtonStyle);
         lockerSelectedButtonStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
@@ -1262,6 +1377,21 @@ public sealed class GymExperienceService : MonoBehaviour
         lockerFooterStyle.normal.textColor = new Color(0.68f, 0.78f, 0.93f);
     }
 
+    private static bool DrawLockerButton(
+        Rect rect, string label, GUIStyle style, bool selected)
+    {
+        DrawProgressHudRect(
+            rect,
+            selected
+                ? new Color(0.11f, 0.075f, 0.04f, 0.98f)
+                : new Color(0.055f, 0.08f, 0.12f, 0.98f));
+        DrawProgressHudRect(
+            new Rect(rect.x, rect.y, 2f, rect.height),
+            selected
+                ? new Color(1f, 0.82f, 0.35f, 1f)
+                : new Color(0.48f, 0.86f, 1f, 0.72f));
+        return GUI.Button(rect, label, style);
+    }
     private void DrawLockerMenu()
     {
         EnsureLockerStyles();
@@ -1316,8 +1446,8 @@ public sealed class GymExperienceService : MonoBehaviour
                 buttonTop + row * (buttonHeight + gap),
                 buttonWidth,
                 buttonHeight);
-            if (GUI.Button(buttonRect, label,
-                    selected ? lockerSelectedButtonStyle : lockerButtonStyle))
+            if (DrawLockerButton(buttonRect, label,
+                    selected ? lockerSelectedButtonStyle : lockerButtonStyle, selected))
             {
                 EquipShirt(shirt);
             }
@@ -1347,8 +1477,8 @@ public sealed class GymExperienceService : MonoBehaviour
                 headwearTop + row * (buttonHeight + gap),
                 buttonWidth,
                 buttonHeight);
-            if (GUI.Button(buttonRect, label,
-                    selected ? lockerSelectedButtonStyle : lockerButtonStyle))
+            if (DrawLockerButton(buttonRect, label,
+                    selected ? lockerSelectedButtonStyle : lockerButtonStyle, selected))
             {
                 EquipHeadwear(item);
             }
@@ -1359,8 +1489,8 @@ public sealed class GymExperienceService : MonoBehaviour
         GUI.Label(new Rect(panel.x + left, panel.y + 372f, panel.width - left * 2f, 22f),
             MasteryChallengeLabel, lockerFooterStyle);
 
-        if (GUI.Button(new Rect(panel.x + panel.width - 138f, panel.y + 402f, 114f, 32f),
-                "DONE  [ESC]", lockerButtonStyle))
+        Rect doneRect = new Rect(panel.x + panel.width - 138f, panel.y + 402f, 114f, 32f);
+        if (DrawLockerButton(doneRect, "DONE  [ESC]", lockerButtonStyle, false))
         {
             CloseLockerMenu();
         }

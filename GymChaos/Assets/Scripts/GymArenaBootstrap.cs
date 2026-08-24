@@ -186,6 +186,12 @@ public class GymArenaBootstrap : MonoBehaviour
             }
 
             pickup.Configure(body, entry.Value, enabledColliders.ToArray());
+            GymMountedWeightMarker mountedMarker =
+                item.GetComponent<GymMountedWeightMarker>();
+            if (mountedMarker != null && mountedMarker.MassOverride > 0f)
+            {
+                pickup.SetMassOverride(mountedMarker.MassOverride);
+            }
             if (spatiallyMountedWeightRoots.Contains(entry.Key))
             {
                 body.linearVelocity = Vector3.zero;
@@ -222,6 +228,10 @@ public class GymArenaBootstrap : MonoBehaviour
         {
             radio.BeginPlayback();
         }
+        if (!Application.isBatchMode)
+        {
+            GymPauseMenu.CreateForScene(player);
+        }
         Debug.Log("GYMCHAOS_GAMEPLAY_READY", this);
     }
 
@@ -235,6 +245,7 @@ public class GymArenaBootstrap : MonoBehaviour
         EnsureSceneColliders();
         MarkSpatiallyMountedWeightCandidates();
         EnsureWeightGameplayObjects();
+        GymLooseItemSpawner.RegisterDeadliftStationColliders();
         GymAudio.CreateForScene();
         radio = GymRadio.CreateForScene();
         GymExerciseStation.CreateForScene();
@@ -364,6 +375,11 @@ public class GymArenaBootstrap : MonoBehaviour
         Transform current = target;
         while (current != null)
         {
+            if (current.GetComponent<GymMountedWeightMarker>() != null)
+            {
+                return current;
+            }
+
             string lower = current.name.ToLowerInvariant().Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
             if (lower.Contains("bench") || lower.Contains("cage") || lower.Contains("smithmachine") ||
                 lower.Contains("powerrack") || lower.Contains("squatrack") || lower.Contains("preacher") ||
@@ -440,7 +456,9 @@ public class GymArenaBootstrap : MonoBehaviour
         List<Bounds> equipmentBounds = new List<Bounds>();
         for (int i = 0; i < transforms.Length; i++)
         {
-            if (transforms[i] == null || !IsMountedEquipmentName(transforms[i].name))
+            if (transforms[i] == null ||
+                (transforms[i].GetComponent<GymMountedWeightMarker>() == null &&
+                 !IsMountedEquipmentName(transforms[i].name)))
             {
                 continue;
             }
@@ -725,6 +743,15 @@ public class GymArenaBootstrap : MonoBehaviour
 
         EnemyFighter[] existingFighters =
             FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        // Scene-authored enemies can already exist when the runtime roster is
+        // reconciled. Apply the same deadlift-station collision exemption to
+        // them as to enemies created below, otherwise a pre-placed Ronnie can
+        // still wedge its capsule into the platform before its first route.
+        for (int existingIndex = 0; existingIndex < existingFighters.Length; existingIndex++)
+        {
+            GymLooseItemSpawner.IgnoreDeadliftStationForEnemy(
+                existingFighters[existingIndex]);
+        }
         for (int i = 0; i < EnemyRoster.Length; i++)
         {
             bool alreadySpawned = false;
@@ -1188,6 +1215,15 @@ public class GymArenaBootstrap : MonoBehaviour
                 continue;
             }
 
+            if (hit.GetComponentInParent<GymDeadliftStationMarker>() != null ||
+                GymLooseItemSpawner.IsDeadliftStationCollider(hit))
+            {
+                // The deadlift is a player-only station. Do not let its
+                // physical bar/plates make an otherwise open spawn route look
+                // blocked to the enemy roster.
+                continue;
+            }
+
             return false;
         }
 
@@ -1369,6 +1405,7 @@ public class GymArenaBootstrap : MonoBehaviour
             : identity == BodybuilderIdentity.Ronnie || identity == BodybuilderIdentity.JayCutler ? 100f
             : identity == BodybuilderIdentity.Zyzz ? 45f : 60f;
         fighter.Configure(identity, player, health, identity == BodybuilderIdentity.Ronnie);
+        GymLooseItemSpawner.IgnoreDeadliftStationForEnemy(fighter);
     }
 
 }

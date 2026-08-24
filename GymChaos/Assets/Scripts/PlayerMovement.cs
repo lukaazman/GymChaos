@@ -97,6 +97,8 @@ public class PlayerMovement : MonoBehaviour
     private Collider[] playerColliders;
     private GymExerciseStation nearbyExerciseStation;
     private GymRadio nearbyRadio;
+    private PickupItem nearbyPickup;
+    private float nextPickupPromptScanTime;
     private GymExerciseStation activeExerciseStation;
     private GymExerciseStation pendingWeightStation;
     private Vector3 positionBeforeExercise;
@@ -296,6 +298,12 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (GymPauseMenu.IsVisible)
+        {
+            GymPauseMenu.HandlePauseInput();
+            return;
+        }
+
         if (GymExperienceService.Active != null &&
             GymExperienceService.Active.IsBlockingPlayerInput)
         {
@@ -349,6 +357,11 @@ public class PlayerMovement : MonoBehaviour
 
         nearbyExerciseStation = GymExerciseStation.FindClosest(transform.position, 3.15f);
         nearbyRadio = GymRadio.FindClosest(transform.position, 3.1f);
+        if (Time.unscaledTime >= nextPickupPromptScanTime)
+        {
+            nearbyPickup = heldItem == null ? FindBestPickup() : null;
+            nextPickupPromptScanTime = Time.unscaledTime + 0.12f;
+        }
         if (GymDialogueDirector.TryStartNearby(this, ReadInteractPressed()))
         {
             return;
@@ -1088,6 +1101,7 @@ public class PlayerMovement : MonoBehaviour
             }
 
             PickupItem item = candidateCollider.GetComponentInParent<PickupItem>();
+            item = ResolveMountedPickup(item);
             if (item == null || item.IsHeld || !item.IsThrowableWeapon || !inspectedItems.Add(item))
             {
                 continue;
@@ -1127,6 +1141,23 @@ public class PlayerMovement : MonoBehaviour
         }
 
         return bestItem;
+    }
+
+    private static PickupItem ResolveMountedPickup(PickupItem candidate)
+    {
+        if (candidate == null || !IsPlateType(candidate.ItemType))
+        {
+            return candidate;
+        }
+
+        GymMountedWeightMarker mountedMarker =
+            candidate.GetComponentInParent<GymMountedWeightMarker>();
+        PickupItem mountedBar = mountedMarker != null
+            ? mountedMarker.GetComponent<PickupItem>()
+            : null;
+        return mountedBar != null && mountedBar.IsThrowableWeapon
+            ? mountedBar
+            : candidate;
     }
 
     private static bool IsWeightStandPlate(PickupItem item)
@@ -1190,10 +1221,33 @@ public class PlayerMovement : MonoBehaviour
 
     private void HandleCursorToggle()
     {
-        if (ReadPauseToggle() && IsCursorCaptured)
+        if (!ReadPauseToggle() || GymPauseMenu.IsVisible)
+        {
+            return;
+        }
+
+        if (IsDead)
+        {
+            if (IsCursorCaptured)
+            {
+                LockCursor(false);
+            }
+            return;
+        }
+
+        if (activeExerciseStation != null || pendingWeightStation != null ||
+            pullUpMountTransitionActive ||
+            (GymExperienceService.Active != null &&
+             GymExperienceService.Active.IsBlockingPlayerInput))
+        {
+            return;
+        }
+
+        if (IsCursorCaptured)
         {
             LockCursor(false);
         }
+        GymPauseMenu.Open(this);
     }
 
     private void BeginExercise(GymExerciseStation station)
@@ -1571,7 +1625,7 @@ public class PlayerMovement : MonoBehaviour
     {
         // The fullscreen start screen owns the frame until Play is selected.
         // Keep the legacy IMGUI HUD from leaking through the cinematic menu.
-        if (GymStartScreen.IsMenuVisible)
+        if (GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible)
         {
             return;
         }
@@ -1611,10 +1665,7 @@ public class PlayerMovement : MonoBehaviour
 
         if (activeExerciseStation != null)
         {
-            DrawHudText(
-                new Rect(24f, 20f, 780f, 70f),
-                activeExerciseStation.GetSessionHud(),
-                hudBodyStyle);
+            DrawActiveExerciseHud();
             if (activeExerciseStation.TechniqueCheck != null &&
                 activeExerciseStation.TechniqueCheck.IsActive)
             {
@@ -1628,55 +1679,132 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        string heldText = heldItem == null ? "Hands free" : $"Holding: {heldItem.DisplayName}";
         float sprintCapacity = GymExperienceService.Active != null
             ? GymExperienceService.Active.GetSprintCapacity()
             : 100f;
-        DrawHudText(new Rect(24f, 18f, 320f, 28f), "GYM CHAOS", hudTitleStyle);
+        const float hudLeft = 24f;
+        const float barX = 108f;
+        const float barWidth = 190f;
+        const float valueX = barX + barWidth + 14f;
+        DrawHudText(new Rect(hudLeft, 18f, 76f, 20f), "HP", hudMetricStyle);
+        DrawHudText(new Rect(hudLeft, 45f, 76f, 20f), "SPRINT", hudMetricStyle);
+        DrawHudBar(
+            new Rect(barX, 23f, barWidth, 8f),
+            currentHealth / Mathf.Max(1f, maxHealth),
+            new Color(0.84f, 0.24f, 0.18f, 1f));
+        DrawHudBar(
+            new Rect(barX, 50f, barWidth, 8f),
+            sprintEnergy / Mathf.Max(1f, sprintCapacity),
+            new Color(0.95f, 0.62f, 0.16f, 1f));
         DrawHudText(
-            new Rect(24f, 47f, 320f, 24f),
-            $"OPPONENTS  {EnemyFighter.ActiveCount:00}",
+            new Rect(valueX, 15f, 74f, 22f),
+            $"{Mathf.CeilToInt(currentHealth):0}",
             hudMetricStyle);
         DrawHudText(
-            new Rect(24f, 78f, 940f, 22f),
-            "LMB PUNCH / THROW   RMB SHOVE   E PICK UP / DROP",
-            hudHintStyle);
+            new Rect(valueX, 42f, 74f, 22f),
+            $"{Mathf.CeilToInt(sprintEnergy):0}",
+            hudMetricStyle);
         DrawHudText(
-            new Rect(24f, 100f, 940f, 22f),
-            "F EXERCISE / RADIO   SHIFT SPRINT   C CROUCH   SPACE JUMP",
+            new Rect(hudLeft, 77f, 300f, 20f),
+            $"MEMBERS  {EnemyFighter.ActiveCount:00}",
             hudHintStyle);
-        DrawHudText(
-            new Rect(24f, 128f, 560f, 24f),
-            $"{heldText.ToUpperInvariant()}   ·   SPRINT {sprintEnergy:0}/{sprintCapacity:0}",
-            hudAccentStyle);
+        if (heldItem != null)
+        {
+            DrawHudText(
+                new Rect(hudLeft, 101f, 520f, 22f),
+                $"HELD  {heldItem.DisplayName.ToUpperInvariant()}",
+                hudAccentStyle);
+        }
 
         bool lockerAppearanceOpen = GymExperienceService.Active != null &&
             GymExperienceService.Active.IsLockerMenuOpen;
         if (!lockerAppearanceOpen && !IsCursorCaptured)
         {
-            float width = Mathf.Min(520f, Screen.width - 32f);
-            Rect captureRect = new Rect((Screen.width - width) * 0.5f, Screen.height * 0.5f - 38f, width, 76f);
-            DrawHudText(
-                captureRect,
-                "CLICK THE GAME TO LOOK AROUND\nESC RELEASES THE CURSOR",
-                hudPromptStyle);
+            float width = Mathf.Min(360f, Screen.width - 32f);
+            Rect captureRect = new Rect(
+                (Screen.width - width) * 0.5f,
+                Screen.height * 0.5f - 26f,
+                width,
+                52f);
+            DrawHudPrompt(captureRect, "LMB", "CLICK TO LOOK AROUND");
         }
 
-        float promptBottom = Screen.height - 105f;
-        if (nearbyRadio != null)
-        {
-            Rect radioPromptRect = new Rect(16f, promptBottom, Screen.width - 32f, 32f);
-            DrawHudText(radioPromptRect, nearbyRadio.GetInteractionPrompt(), hudPromptStyle);
-            promptBottom -= 42f;
-        }
-
+        float promptBottom = Screen.height - 78f;
+        float promptWidth = Mathf.Min(360f, Screen.width - 32f);
+        Rect promptRect = new Rect(
+            (Screen.width - promptWidth) * 0.5f,
+            promptBottom,
+            promptWidth,
+            54f);
         if (nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer)
         {
-            Rect promptRect = new Rect(16f, promptBottom, Screen.width - 32f, 32f);
-            DrawHudText(promptRect, nearbyExerciseStation.GetInteractionPrompt(), hudPromptStyle);
+            DrawHudPrompt(
+                promptRect,
+                "F",
+                StripPromptKey(nearbyExerciseStation.GetInteractionPrompt()));
+        }
+        else if (nearbyRadio != null)
+        {
+            DrawHudPrompt(
+                promptRect,
+                "F",
+                StripPromptKey(nearbyRadio.GetInteractionPrompt()));
         }
     }
+    private static string StripPromptKey(string prompt)
+    {
+        if (string.IsNullOrEmpty(prompt))
+        {
+            return string.Empty;
+        }
 
+        return prompt.StartsWith("[F] ")
+            ? prompt.Substring(4)
+            : prompt;
+    }
+
+    private static void DrawHudPanel(Rect rect)
+    {
+        Color previousColor = GUI.color;
+        GUI.color = new Color(0.012f, 0.022f, 0.04f, 0.86f);
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = new Color(0.98f, 0.34f, 0.13f, 0.95f);
+        GUI.DrawTexture(new Rect(rect.x, rect.y, 3f, rect.height), Texture2D.whiteTexture);
+        GUI.color = previousColor;
+    }
+
+    private void DrawHudBar(Rect rect, float value, Color fillColor)
+    {
+        Color previousColor = GUI.color;
+        GUI.color = new Color(0.08f, 0.11f, 0.16f, 0.9f);
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = fillColor;
+        GUI.DrawTexture(
+            new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(value), rect.height),
+            Texture2D.whiteTexture);
+        GUI.color = previousColor;
+    }
+
+    private void DrawHudPrompt(Rect rect, string key, string message)
+    {
+        DrawHudPanel(rect);
+        float keyWidth = Mathf.Min(74f, rect.width * 0.2f);
+        Color previousColor = GUI.color;
+        GUI.color = new Color(0.95f, 0.62f, 0.16f, 0.95f);
+        GUI.DrawTexture(
+            new Rect(rect.x + 12f, rect.y + 10f, keyWidth, rect.height - 20f),
+            Texture2D.whiteTexture);
+        GUI.color = previousColor;
+        DrawHudText(
+            new Rect(rect.x + 12f, rect.y + 10f, keyWidth, rect.height - 20f),
+            key,
+            hudPromptStyle);
+        DrawHudText(
+            new Rect(rect.x + keyWidth + 28f, rect.y + 10f,
+                rect.width - keyWidth - 44f, rect.height - 20f),
+            message,
+            hudBodyStyle);
+    }
     private void EnsureHudStyles()
     {
         if (hudTitleStyle != null)
@@ -1771,34 +1899,158 @@ public class PlayerMovement : MonoBehaviour
         GUI.Label(new Rect(0f, Screen.height * 0.38f, Screen.width, 100f), "YOU DIED", deathStyle);
     }
 
+    private void DrawActiveExerciseHud()
+    {
+        GymExerciseStation station = activeExerciseStation;
+        if (station == null)
+        {
+            return;
+        }
+
+        float panelWidth = Mathf.Min(460f, Screen.width - 40f);
+        Rect panel = new Rect(20f, 20f, panelWidth, 122f);
+        DrawHudPanel(panel);
+        DrawHudText(
+            new Rect(panel.x + 22f, panel.y + 14f, panel.width - 44f, 24f),
+            station.DisplayName.ToUpperInvariant(),
+            hudTitleStyle);
+
+        if (station.IsCardio)
+        {
+            DrawHudText(
+                new Rect(panel.x + 22f, panel.y + 48f, 58f, 20f),
+                "PACE",
+                hudHintStyle);
+            DrawHudText(
+                new Rect(panel.x + 86f, panel.y + 45f, 92f, 26f),
+                $"{station.CurrentTreadmillSpeed:0.0}",
+                hudTitleStyle);
+            DrawHudText(
+                new Rect(panel.x + 180f, panel.y + 50f, 36f, 18f),
+                "KM/H",
+                hudHintStyle);
+            DrawHudText(
+                new Rect(panel.x + 236f, panel.y + 48f, panel.width - 258f, 20f),
+                $"DIST  {station.CardioDistanceMetres / 1000f:0.00} KM",
+                hudMetricStyle);
+            DrawHudBar(
+                new Rect(panel.x + 22f, panel.y + 80f, panel.width - 44f, 5f),
+                station.TreadmillSpeed01(station.CurrentTreadmillSpeed),
+                new Color(0.95f, 0.62f, 0.16f, 1f));
+            DrawHudText(
+                new Rect(panel.x + 22f, panel.y + 98f, panel.width - 44f, 16f),
+                "W / S  SPEED     SPACE  START / STOP     Q  EXIT",
+                hudHintStyle);
+            return;
+        }
+
+        string load = station.SelectedWeight > 0
+            ? $"{station.SelectedWeight} KG"
+            : "BODYWEIGHT";
+        DrawHudText(
+            new Rect(panel.x + 22f, panel.y + 48f, 58f, 20f),
+            "REPS",
+            hudHintStyle);
+        DrawHudText(
+            new Rect(panel.x + 86f, panel.y + 45f, 76f, 26f),
+            $"{station.Repetitions:00}",
+            hudTitleStyle);
+        DrawHudText(
+            new Rect(panel.x + 190f, panel.y + 48f, 58f, 20f),
+            "LOAD",
+            hudHintStyle);
+        DrawHudText(
+            new Rect(panel.x + 252f, panel.y + 48f, panel.width - 274f, 20f),
+            load,
+            hudMetricStyle);
+        DrawHudText(
+            new Rect(panel.x + 22f, panel.y + 73f, 68f, 18f),
+            "COMBO",
+            hudHintStyle);
+        DrawHudText(
+            new Rect(panel.x + 96f, panel.y + 70f, 72f, 22f),
+            $"x{station.ComboMultiplier:0}",
+            hudAccentStyle);
+        DrawHudBar(
+            new Rect(panel.x + 190f, panel.y + 80f, panel.width - 212f, 5f),
+            Mathf.Clamp01(station.ComboMultiplier / 5f),
+            new Color(1f, 0.82f, 0.35f, 1f));
+        DrawHudText(
+            new Rect(panel.x + 22f, panel.y + 98f, panel.width - 44f, 16f),
+            station.TechniqueCheck != null && station.TechniqueCheck.IsActive
+                ? "SPACE  HIT TIMING     Q  EXIT"
+                : "SPACE  START REP     Q  EXIT",
+            hudHintStyle);
+    }
+
+    private bool DrawWeightChoiceButton(Rect rect, string label, GUIStyle style)
+    {
+        bool hovered = rect.Contains(Event.current.mousePosition);
+        Color previousColor = GUI.color;
+        GUI.color = hovered
+            ? new Color(0.12f, 0.16f, 0.22f, 0.96f)
+            : new Color(0.05f, 0.075f, 0.11f, 0.96f);
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = hovered
+            ? new Color(0.98f, 0.34f, 0.13f, 1f)
+            : new Color(0.34f, 0.48f, 0.64f, 0.9f);
+        GUI.DrawTexture(new Rect(rect.x, rect.y, 3f, rect.height), Texture2D.whiteTexture);
+        GUI.color = previousColor;
+        return GUI.Button(rect, label, style);
+    }
+
     private void DrawWeightSelection()
     {
         int[] options = pendingWeightStation.WeightOptions;
+        if (options == null || options.Length == 0)
+        {
+            return;
+        }
+
         const int columns = 3;
         const float buttonWidth = 138f;
         const float buttonHeight = 58f;
         const float gap = 12f;
+        const float headerHeight = 124f;
         int rows = Mathf.CeilToInt(options.Length / (float)columns);
         float panelWidth = columns * buttonWidth + (columns + 1) * gap;
-        float panelHeight = 138f + rows * buttonHeight + (rows + 1) * gap;
-        Rect panel = new Rect((Screen.width - panelWidth) * 0.5f, (Screen.height - panelHeight) * 0.5f, panelWidth, panelHeight);
-        GUI.Box(panel, string.Empty);
+        float panelHeight = headerHeight + rows * buttonHeight + (rows + 1) * gap;
+        Rect panel = new Rect(
+            (Screen.width - panelWidth) * 0.5f,
+            (Screen.height - panelHeight) * 0.5f,
+            panelWidth,
+            panelHeight);
+        DrawHudPanel(panel);
 
-        GUIStyle titleStyle = new GUIStyle(GUI.skin.label);
-        titleStyle.alignment = TextAnchor.MiddleCenter;
-        titleStyle.fontSize = 23;
-        titleStyle.fontStyle = FontStyle.Bold;
-        titleStyle.normal.textColor = Color.white;
-        GUI.Label(new Rect(panel.x + 16f, panel.y + 12f, panel.width - 32f, 38f), pendingWeightStation.DisplayName, titleStyle);
-
-        GUIStyle infoStyle = new GUIStyle(titleStyle);
-        infoStyle.fontSize = 16;
-        infoStyle.fontStyle = FontStyle.Normal;
-        infoStyle.normal.textColor = new Color(0.95f, 0.82f, 0.25f);
+        DrawHudText(
+            new Rect(panel.x + 20f, panel.y + 14f, panel.width - 40f, 26f),
+            pendingWeightStation.DisplayName.ToUpperInvariant(),
+            hudTitleStyle);
+        DrawHudText(
+            new Rect(panel.x + 20f, panel.y + 47f, panel.width - 40f, 22f),
+            "SELECT LOAD",
+            hudAccentStyle);
         string weightInfo = pendingWeightStation.EmptyBarWeight > 0
-            ? $"Select total weight (empty bar: {pendingWeightStation.EmptyBarWeight} kg)"
-            : "Select weight stack (heavier setting = more plates)";
-        GUI.Label(new Rect(panel.x + 16f, panel.y + 50f, panel.width - 32f, 52f), $"{weightInfo}\n[Q], [E] or [ESC] to cancel", infoStyle);
+            ? $"BAR  {pendingWeightStation.EmptyBarWeight} KG"
+            : "WEIGHT STACK";
+        DrawHudText(
+            new Rect(panel.x + 20f, panel.y + 72f, panel.width - 40f, 18f),
+            weightInfo,
+            hudHintStyle);
+        DrawHudBar(
+            new Rect(panel.x + 20f, panel.y + 100f, panel.width - 40f, 2f),
+            1f,
+            new Color(0.95f, 0.62f, 0.16f, 0.85f));
+        DrawHudText(
+            new Rect(panel.x + 20f, panel.y + 104f, panel.width - 40f, 16f),
+            "Q / E / ESC  CANCEL",
+            hudHintStyle);
+
+        GUIStyle choiceStyle = CreateHudStyle(19, FontStyle.Bold, TextAnchor.MiddleCenter);
+        choiceStyle.normal.textColor = Color.white;
+        choiceStyle.hover.textColor = new Color(1f, 0.82f, 0.35f);
+        choiceStyle.active.textColor = new Color(0.98f, 0.34f, 0.13f);
+        choiceStyle.focused.textColor = Color.white;
 
         for (int i = 0; i < options.Length; i++)
         {
@@ -1806,16 +2058,15 @@ public class PlayerMovement : MonoBehaviour
             int column = i % columns;
             Rect button = new Rect(
                 panel.x + gap + column * (buttonWidth + gap),
-                panel.y + 112f + gap + row * (buttonHeight + gap),
+                panel.y + headerHeight + gap + row * (buttonHeight + gap),
                 buttonWidth,
                 buttonHeight);
-            if (GUI.Button(button, $"{options[i]} kg"))
+            if (DrawWeightChoiceButton(button, $"{options[i]} KG", choiceStyle))
             {
                 SelectWeightAndBegin(options[i]);
             }
         }
     }
-
     private bool ReadExerciseActionPressed()
     {
 #if ENABLE_INPUT_SYSTEM

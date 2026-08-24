@@ -1,8 +1,6 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.Rendering;
-using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
 #if UNITY_EDITOR
 using UnityEditor;
@@ -21,8 +19,6 @@ public sealed class GymStartScreen : MonoBehaviour
     private GymArenaBootstrap bootstrap;
     private PlayerMovement player;
     private CanvasGroup canvasGroup;
-    private Volume backgroundVolume;
-    private VolumeProfile backgroundVolumeProfile;
     private Button playButton;
     private bool closing;
 
@@ -66,20 +62,6 @@ public sealed class GymStartScreen : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (backgroundVolumeProfile != null)
-        {
-            if (Application.isPlaying)
-            {
-                Destroy(backgroundVolumeProfile);
-            }
-            else
-            {
-                DestroyImmediate(backgroundVolumeProfile);
-            }
-
-            backgroundVolumeProfile = null;
-        }
-
         if (instance == this)
         {
             instance = null;
@@ -103,7 +85,6 @@ public sealed class GymStartScreen : MonoBehaviour
         gameObject.AddComponent<GraphicRaycaster>();
         canvasGroup = gameObject.AddComponent<CanvasGroup>();
 
-        CreateBackgroundTreatment();
 
         // Unity 6 removed Arial.ttf from the valid built-in runtime font list.
         // LegacyRuntime.ttf is the supported built-in UGUI font for editor,
@@ -119,44 +100,32 @@ public sealed class GymStartScreen : MonoBehaviour
 
         // The room remains the hero image. This overlay only creates the calm,
         // high-contrast moment needed for a readable start screen.
-        Image veil = CreateImage("Atmosphere Veil", transform, new Color(0.008f, 0.018f, 0.038f, 0.34f));
+        Image veil = CreateImage("Atmosphere Veil", transform, new Color(0.008f, 0.018f, 0.038f, 0.28f));
         Stretch(veil.rectTransform);
         veil.raycastTarget = false;
 
-        // A restrained cinematic frame gives the menu a designed edge without
-        // covering the gym with another card or fake browser-like chrome.
-        Image topBand = CreateImage("Cinematic Top Band", transform, new Color(0.004f, 0.01f, 0.022f, 0.26f));
-        SetAnchors(topBand.rectTransform, new Vector2(0f, 0.88f), Vector2.one);
-        topBand.raycastTarget = false;
-        Image bottomBand = CreateImage("Cinematic Bottom Band", transform, new Color(0.004f, 0.01f, 0.022f, 0.3f));
-        SetAnchors(bottomBand.rectTransform, Vector2.zero, new Vector2(1f, 0.13f));
-        bottomBand.raycastTarget = false;
-        CreateFrame(transform);
-
-        CreateText(
-            "Boot Context",
+        // Keep the boot composition quiet and centered over the room.
+        CreateFrameLine(
+            "Menu Baseline",
             transform,
-            font,
-            "GYMCHAOS  /  START SCREEN",
-            14,
-            MutedInk,
-            FontStyle.Bold,
-            TextAnchor.MiddleCenter,
-            new Vector2(0.25f, 0.8f),
-            new Vector2(0.75f, 0.85f));
+            new Vector2(0.31f, 0.18f),
+            new Vector2(0.69f, 0.18f),
+            Frame);
+
+
         CreateText(
             "Title",
             transform,
             font,
             "GYMCHAOS",
-            116,
+            82,
             Ink,
             FontStyle.Bold,
             TextAnchor.MiddleCenter,
-            new Vector2(0.16f, 0.58f),
-            new Vector2(0.84f, 0.76f));
+            new Vector2(0.28f, 0.6f),
+            new Vector2(0.72f, 0.74f));
         Image titleRule = CreateImage("Title Accent Rule", transform, Accent);
-        SetAnchors(titleRule.rectTransform, new Vector2(0.41f, 0.55f), new Vector2(0.59f, 0.55f), 0f, -1f, 0f, -1f);
+        SetAnchors(titleRule.rectTransform, new Vector2(0.42f, 0.575f), new Vector2(0.58f, 0.575f), 0f, -1f, 0f, -1f);
         titleRule.raycastTarget = false;
         CreateText(
             "Subtitle",
@@ -167,8 +136,8 @@ public sealed class GymStartScreen : MonoBehaviour
             MutedInk,
             FontStyle.Normal,
             TextAnchor.MiddleCenter,
-            new Vector2(0.3f, 0.47f),
-            new Vector2(0.7f, 0.52f));
+            new Vector2(0.3f, 0.51f),
+            new Vector2(0.7f, 0.55f));
 
         playButton = CreateButton(
             "Play Button",
@@ -176,8 +145,8 @@ public sealed class GymStartScreen : MonoBehaviour
             font,
             "PLAY",
             Accent,
-            new Vector2(0.34f, 0.31f),
-            new Vector2(0.66f, 0.405f),
+            new Vector2(0.4f, 0.36f),
+            new Vector2(0.6f, 0.45f),
             BeginPlay);
         CreateButton(
             "Exit Button",
@@ -185,45 +154,16 @@ public sealed class GymStartScreen : MonoBehaviour
             font,
             "EXIT",
             RaisedInk,
-            new Vector2(0.34f, 0.19f),
-            new Vector2(0.66f, 0.285f),
+            new Vector2(0.4f, 0.24f),
+            new Vector2(0.6f, 0.33f),
             ExitGame);
 
-        CreateText(
-            "Footer",
-            transform,
-            font,
-            "SELECT AN OPTION TO ENTER",
-            12,
-            MutedInk,
-            FontStyle.Normal,
-            TextAnchor.MiddleCenter,
-            new Vector2(0.31f, 0.14f),
-            new Vector2(0.69f, 0.18f));
+
 
         if (EventSystem.current != null && playButton != null)
         {
             EventSystem.current.SetSelectedGameObject(playButton.gameObject);
         }
-    }
-
-    private void CreateBackgroundTreatment()
-    {
-        // URP keeps this treatment behind the ScreenSpaceOverlay canvas, so the
-        // gym is softened while the title and controls stay crisp and readable.
-        backgroundVolume = gameObject.AddComponent<Volume>();
-        backgroundVolume.isGlobal = true;
-        backgroundVolume.priority = 100f;
-        backgroundVolume.weight = 1f;
-        backgroundVolumeProfile = ScriptableObject.CreateInstance<VolumeProfile>();
-
-        DepthOfField depthOfField = backgroundVolumeProfile.Add<DepthOfField>(true);
-        depthOfField.active = true;
-        depthOfField.mode.Override(DepthOfFieldMode.Gaussian);
-        depthOfField.gaussianStart.Override(0f);
-        depthOfField.gaussianEnd.Override(100f);
-        depthOfField.gaussianMaxRadius.Override(0.7f);
-        backgroundVolume.sharedProfile = backgroundVolumeProfile;
     }
 
     private static void CreateFrame(Transform parent)
@@ -368,17 +308,14 @@ public sealed class GymStartScreen : MonoBehaviour
         button.colors = new ColorBlock
         {
             normalColor = normalColor,
-            highlightedColor = Color.Lerp(normalColor, Ink, 0.16f),
-            pressedColor = Color.Lerp(normalColor, new Color(0.01f, 0.02f, 0.04f, 1f), 0.2f),
-            selectedColor = Color.Lerp(normalColor, Ink, 0.12f),
+            highlightedColor = Color.Lerp(normalColor, Ink, 0.22f),
+            pressedColor = Color.Lerp(normalColor, new Color(0.01f, 0.02f, 0.04f, 1f), 0.24f),
+            selectedColor = Color.Lerp(normalColor, Ink, 0.28f),
             disabledColor = new Color(normalColor.r, normalColor.g, normalColor.b, 0.35f),
             colorMultiplier = 1f,
-            fadeDuration = 0.12f
+            fadeDuration = 0.1f
         };
 
-        Outline outline = buttonObject.AddComponent<Outline>();
-        outline.effectColor = new Color(Accent.r, Accent.g, Accent.b, 0.8f);
-        outline.effectDistance = new Vector2(1.5f, 1.5f);
 
         Text text = CreateText(
             "Label",

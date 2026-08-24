@@ -49,16 +49,16 @@ public class PickupItem : MonoBehaviour
 
     public void Configure(
         Rigidbody targetBody, WeightType type, Collider[] colliders,
-        bool pickable, string configuredDisplayName)
+        bool pickable, string configuredDisplayName, float massOverride = -1f)
     {
         body = targetBody;
-        itemColliders = colliders;
+        itemColliders = GetOwnedColliders(colliders);
         weightType = type;
         canBePickedUp = pickable;
         displayName = string.IsNullOrWhiteSpace(configuredDisplayName)
             ? gameObject.name
             : configuredDisplayName;
-        baseMass = GetMassForType(type);
+        baseMass = massOverride > 0f ? massOverride : GetMassForType(type);
         impactMultiplier = GetImpactMultiplier(type);
 
         body.mass = baseMass;
@@ -67,6 +67,20 @@ public class PickupItem : MonoBehaviour
         body.useGravity = true;
         body.interpolation = RigidbodyInterpolation.Interpolate;
         body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+    }
+
+    public void SetMassOverride(float mass)
+    {
+        if (mass <= 0f)
+        {
+            return;
+        }
+
+        baseMass = mass;
+        if (body != null)
+        {
+            body.mass = mass;
+        }
     }
 
     private void Awake()
@@ -78,7 +92,7 @@ public class PickupItem : MonoBehaviour
 
         if (itemColliders == null || itemColliders.Length == 0)
         {
-            itemColliders = GetComponentsInChildren<Collider>(true);
+            itemColliders = GetOwnedColliders(GetComponentsInChildren<Collider>(true));
         }
 
         if (string.IsNullOrWhiteSpace(displayName))
@@ -94,7 +108,33 @@ public class PickupItem : MonoBehaviour
             return;
         }
 
-        if (weightType == WeightType.Barbell || weightType == WeightType.EzBar)
+        if (IsPlateType(weightType) &&
+            GetComponentInParent<GymMountedWeightMarker>() != null)
+        {
+            // A mounted plate is its own pickup item. Detach it before
+            // carrying so a direct plate pickup cannot remain parented to the
+            // bar's rigidbody and so it can slide/fall independently.
+            GymMountedWeightMarker mountedMarker =
+                GetComponentInParent<GymMountedWeightMarker>();
+            PickupItem mountedBar = mountedMarker != null
+                ? mountedMarker.GetComponent<PickupItem>()
+                : null;
+            if (mountedBar != null)
+            {
+                float remainingMass = Mathf.Max(
+                    GetBareMountedMass(mountedBar.weightType),
+                    mountedBar.BaseMass - baseMass);
+                mountedMarker.SetMassOverride(remainingMass);
+                mountedBar.SetMassOverride(remainingMass);
+                // The runtime plate collider is a solid disk proxy rather
+                // than a mesh with a hole. Once detached, ignore the bar
+                // shaft pair so gravity can make the plate slide off instead
+                // of trapping it against that proxy collider.
+                IgnoreCollisionsWith(mountedBar, true);
+            }
+            DetachFromMountedParent();
+        }
+        else if (weightType == WeightType.Barbell || weightType == WeightType.EzBar)
         {
             DetachMountedPlateChildren();
         }
@@ -124,6 +164,8 @@ public class PickupItem : MonoBehaviour
     private void DetachMountedPlateChildren()
     {
         PickupItem[] children = GetComponentsInChildren<PickupItem>(true);
+        bool deadliftMount = GetComponent<GymMountedWeightMarker>() != null;
+        bool detachedAny = false;
         for (int i = 0; i < children.Length; i++)
         {
             PickupItem child = children[i];
@@ -132,7 +174,160 @@ public class PickupItem : MonoBehaviour
                 continue;
             }
 
+            child.IgnoreCollisionsWith(this, true);
             child.DetachFromMountedParent();
+            if (deadliftMount)
+            {
+                DropMountedPlateToFloor(child);
+            }
+            detachedAny = true;
+        }
+
+        if (detachedAny)
+        {
+            // The plates are now independent dynamic bodies; the carried bar
+            // should no longer keep the full mounted-load mass.
+            float bareMass = GetBareMountedMass(weightType);
+            GymMountedWeightMarker mountedMarker =
+                GetComponent<GymMountedWeightMarker>();
+            if (mountedMarker != null)
+            {
+                mountedMarker.SetMassOverride(bareMass);
+            }
+            SetMassOverride(bareMass);
+            Physics.SyncTransforms();
+            Debug.Log(
+                $"GYMCHAOS_MOUNTED_BAR_PICKUP loadDetached=true " +
+                $"bar={displayName} remainingMass={bareMass:0.##} " +
+                $"floorDrop={deadliftMount}", this);
+        }
+    }
+
+    private void DropMountedPlateToFloor(PickupItem plate)
+    {
+        if (plate == null || plate.body == null || plate.itemColliders == null ||
+            plate.itemColliders.Length == 0)
+        {
+            return;
+        }
+
+        RaycastHit[] hits = Physics.RaycastAll(
+            plate.body.position + Vector3.up * 1.25f,
+            Vector3.down,
+            6f,
+            ~0,
+            QueryTriggerInteraction.Ignore);
+        bool foundFloor = false;
+        RaycastHit floorHit = default;
+        float nearestDistance = float.MaxValue;
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+            if (hitCollider == null)
+            {
+                continue;
+            }
+
+            Transform hitTransform = hitCollider.transform;
+            if (hitTransform == plate.transform || hitTransform.IsChildOf(plate.transform) ||
+                hitTransform == transform || hitTransform.IsChildOf(transform) ||
+                hitTransform.GetComponentInParent<PlayerMovement>() != null ||
+                hitCollider.GetComponentInParent<PickupItem>() != null)
+            {
+                continue;
+            }
+
+            if (hits[i].distance < nearestDistance)
+            {
+                nearestDistance = hits[i].distance;
+                floorHit = hits[i];
+                foundFloor = true;
+            }
+        }
+
+        if (foundFloor)
+        {
+            Bounds occupied = plate.itemColliders[0].bounds;
+            for (int i = 1; i < plate.itemColliders.Length; i++)
+            {
+                if (plate.itemColliders[i] != null)
+                {
+                    occupied.Encapsulate(plate.itemColliders[i].bounds);
+                }
+            }
+
+            float lift = floorHit.point.y + 0.01f - occupied.min.y;
+            plate.body.position += Vector3.up * lift;
+        }
+
+        Vector3 outward = Vector3.ProjectOnPlane(
+            plate.body.position - body.position, Vector3.up);
+        if (outward.sqrMagnitude > 0.001f)
+        {
+            outward.Normalize();
+            plate.body.linearVelocity = outward * 0.28f + Vector3.down * 0.25f;
+            plate.body.angularVelocity =
+                Vector3.Cross(Vector3.up, outward) * 2.1f;
+        }
+
+        plate.body.WakeUp();
+        Physics.SyncTransforms();
+    }
+    private Collider[] GetOwnedColliders(Collider[] colliders)
+    {
+        if (colliders == null || colliders.Length == 0)
+        {
+            return new Collider[0];
+        }
+
+        System.Collections.Generic.List<Collider> owned =
+            new System.Collections.Generic.List<Collider>(colliders.Length);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            Collider collider = colliders[i];
+            if (collider == null)
+            {
+                continue;
+            }
+
+            PickupItem owner = collider.GetComponentInParent<PickupItem>();
+            if (owner != null && owner != this)
+            {
+                continue;
+            }
+
+            if (!owned.Contains(collider))
+            {
+                owned.Add(collider);
+            }
+        }
+
+        return owned.ToArray();
+    }
+
+    private void IgnoreCollisionsWith(PickupItem other, bool ignore)
+    {
+        if (other == null || itemColliders == null || other.itemColliders == null)
+        {
+            return;
+        }
+
+        for (int itemIndex = 0; itemIndex < itemColliders.Length; itemIndex++)
+        {
+            Collider itemCollider = itemColliders[itemIndex];
+            if (itemCollider == null)
+            {
+                continue;
+            }
+
+            for (int otherIndex = 0; otherIndex < other.itemColliders.Length; otherIndex++)
+            {
+                Collider otherCollider = other.itemColliders[otherIndex];
+                if (otherCollider != null)
+                {
+                    Physics.IgnoreCollision(itemCollider, otherCollider, ignore);
+                }
+            }
         }
     }
 
@@ -146,11 +341,13 @@ public class PickupItem : MonoBehaviour
 
         body.isKinematic = false;
         body.useGravity = true;
+        body.detectCollisions = true;
         body.linearDamping = 0.35f;
         body.angularDamping = 0.15f;
         body.linearVelocity = Vector3.zero;
         body.angularVelocity = Vector3.zero;
         body.WakeUp();
+        Physics.SyncTransforms();
     }
 
     public void FollowCarryAnchor(Vector3 targetPosition, Quaternion targetRotation, float smoothness)
@@ -347,7 +544,7 @@ public class PickupItem : MonoBehaviour
         switch (type)
         {
             case WeightType.Barbell:
-                return 18f;
+                return 20f;
             case WeightType.EzBar:
                 return 12f;
             case WeightType.Plate20:
@@ -407,6 +604,19 @@ public class PickupItem : MonoBehaviour
                 return 1.15f;
             default:
                 return 1f;
+        }
+    }
+
+    private static float GetBareMountedMass(WeightType type)
+    {
+        switch (type)
+        {
+            case WeightType.Barbell:
+                return 20f;
+            case WeightType.EzBar:
+                return 12f;
+            default:
+                return GetMassForType(type);
         }
     }
 

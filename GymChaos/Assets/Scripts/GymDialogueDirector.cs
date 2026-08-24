@@ -19,7 +19,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
     private GUIStyle dialogueBodyStyle;
     private GUIStyle dialogueChoiceStyle;
     private GUIStyle dialogueHintStyle;
-    private GUIStyle dialoguePromptStyle;
+
 
     public static GymDialogueDirector Active => instance;
     public static bool IsDialogueActive => instance != null && instance.target != null;
@@ -234,30 +234,6 @@ public sealed class GymDialogueDirector : MonoBehaviour
         GUI.color = Color.white;
     }
 
-    public void DrawNearbyPrompt(PlayerMovement targetPlayer)
-    {
-        if (IsDialogueActive || targetPlayer == null)
-        {
-            return;
-        }
-
-        EnemyFighter nearby = FindNearbyTalkTarget(targetPlayer.transform.position);
-        if (nearby == null)
-        {
-            return;
-        }
-
-        EnsureDialogueStyles();
-        dialoguePromptStyle.fontSize = Mathf.Clamp(Screen.height / 38, 16, 20);
-        float width = Mathf.Min(520f, Screen.width - 36f);
-        Rect promptRect = new Rect(
-            (Screen.width - width) * 0.5f, Screen.height - 106f, width, 48f);
-        GUI.color = new Color(0.015f, 0.022f, 0.045f, 0.88f);
-        GUI.DrawTexture(promptRect, Texture2D.whiteTexture);
-        GUI.color = Color.white;
-        GUI.Label(new Rect(promptRect.x, promptRect.y + 5f, promptRect.width, 38f),
-            $"[E] Talk to {GetDisplayName(nearby)}", dialoguePromptStyle);
-    }
 
     private void Open(PlayerMovement targetPlayer, EnemyFighter fighter)
     {
@@ -439,7 +415,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
     private void OnGUI()
     {
-        if (GymStartScreen.IsMenuVisible || dialogueUi == null)
+        if (GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible || dialogueUi == null)
         {
             return;
         }
@@ -447,10 +423,6 @@ public sealed class GymDialogueDirector : MonoBehaviour
         if (IsDialogueActive)
         {
             DrawDialogueUI();
-        }
-        else
-        {
-            DrawNearbyPrompt(player != null ? player : FindFirstObjectByType<PlayerMovement>());
         }
     }
 
@@ -521,13 +493,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
         };
         dialogueHintStyle.normal.textColor = new Color(0.63f, 0.7f, 0.84f);
 
-        dialoguePromptStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontStyle = FontStyle.Bold,
-            padding = new RectOffset(0, 0, 0, 0)
-        };
-        dialoguePromptStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
+
     }
 
     private static Texture2D CreateDialogueTexture(Color color, string textureName)

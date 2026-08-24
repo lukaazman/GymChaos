@@ -7,6 +7,320 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.Rendering;
 
+public sealed class GymMountedWeightMarker : MonoBehaviour
+{
+    public float MassOverride { get; private set; }
+
+    public void SetMassOverride(float mass)
+    {
+        MassOverride = Mathf.Max(0f, mass);
+    }
+}
+
+public sealed class GymDeadliftStationMarker : MonoBehaviour
+{
+    private readonly List<Collider> stationColliders = new List<Collider>();
+
+    public void RegisterCollider(Collider collider)
+    {
+        if (collider != null && !stationColliders.Contains(collider))
+        {
+            stationColliders.Add(collider);
+        }
+    }
+
+    public void RegisterHierarchyColliders(Transform root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        Collider[] colliders = root.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            RegisterCollider(colliders[i]);
+        }
+    }
+
+    public bool ContainsCollider(Collider collider)
+    {
+        return collider != null && stationColliders.Contains(collider);
+    }
+
+    public bool ContainsObject(Transform target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        if (target == transform || target.IsChildOf(transform))
+        {
+            return true;
+        }
+
+        for (int i = 0; i < stationColliders.Count; i++)
+        {
+            Collider stationCollider = stationColliders[i];
+            if (stationCollider == null)
+            {
+                continue;
+            }
+
+            Transform colliderRoot = stationCollider.transform;
+            if (target == colliderRoot || target.IsChildOf(colliderRoot) ||
+                colliderRoot.IsChildOf(target))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool AreEnemyCollisionsIgnored(EnemyFighter enemy)
+    {
+        if (enemy == null)
+        {
+            return false;
+        }
+
+        Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
+        bool comparedAny = false;
+        for (int enemyIndex = 0; enemyIndex < enemyColliders.Length; enemyIndex++)
+        {
+            Collider enemyCollider = enemyColliders[enemyIndex];
+            if (enemyCollider == null || !enemyCollider.enabled ||
+                !enemyCollider.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            for (int stationIndex = 0; stationIndex < stationColliders.Count; stationIndex++)
+            {
+                Collider stationCollider = stationColliders[stationIndex];
+                if (stationCollider == null || !stationCollider.enabled ||
+                    !stationCollider.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                comparedAny = true;
+                if (!Physics.GetIgnoreCollision(enemyCollider, stationCollider))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return comparedAny;
+    }
+
+    public void IgnoreEnemy(EnemyFighter enemy, bool ignore)
+    {
+        if (enemy == null)
+        {
+            return;
+        }
+
+        Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
+        for (int enemyIndex = 0; enemyIndex < enemyColliders.Length; enemyIndex++)
+        {
+            Collider enemyCollider = enemyColliders[enemyIndex];
+            if (enemyCollider == null || !enemyCollider.enabled ||
+                !enemyCollider.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            for (int stationIndex = 0; stationIndex < stationColliders.Count; stationIndex++)
+            {
+                Collider stationCollider = stationColliders[stationIndex];
+                if (stationCollider != null && stationCollider.enabled &&
+                    stationCollider.gameObject.activeInHierarchy)
+                {
+                    Physics.IgnoreCollision(enemyCollider, stationCollider, ignore);
+                }
+            }
+        }
+    }
+
+    public bool TryGetEscapePoint(
+        Vector3 worldPosition, float margin, out Vector3 escapePoint)
+    {
+        escapePoint = worldPosition;
+        if (!TryGetLocalFootprint(out Bounds localFootprint))
+        {
+            return false;
+        }
+
+        Vector3 localPosition = transform.InverseTransformPoint(worldPosition);
+        bool inside = localPosition.x >= localFootprint.min.x &&
+            localPosition.x <= localFootprint.max.x &&
+            localPosition.z >= localFootprint.min.z &&
+            localPosition.z <= localFootprint.max.z;
+        if (!inside)
+        {
+            return false;
+        }
+
+        float left = localPosition.x - localFootprint.min.x;
+        float right = localFootprint.max.x - localPosition.x;
+        float front = localPosition.z - localFootprint.min.z;
+        float back = localFootprint.max.z - localPosition.z;
+        float nearest = Mathf.Min(Mathf.Min(left, right), Mathf.Min(front, back));
+        float safeMargin = Mathf.Max(0.75f, margin);
+        if (nearest == left)
+        {
+            localPosition.x = localFootprint.min.x - safeMargin;
+        }
+        else if (nearest == right)
+        {
+            localPosition.x = localFootprint.max.x + safeMargin;
+        }
+        else if (nearest == front)
+        {
+            localPosition.z = localFootprint.min.z - safeMargin;
+        }
+        else
+        {
+            localPosition.z = localFootprint.max.z + safeMargin;
+        }
+
+        localPosition.y = transform.InverseTransformPoint(worldPosition).y;
+        escapePoint = transform.TransformPoint(localPosition);
+        escapePoint.y = worldPosition.y;
+        return true;
+    }
+
+    public bool TryGetEscapePointForEnemy(
+        EnemyFighter enemy, float margin, out Vector3 escapePoint)
+    {
+        escapePoint = enemy != null ? enemy.transform.position : Vector3.zero;
+        if (enemy == null || !TryGetLocalFootprint(out Bounds localFootprint))
+        {
+            return false;
+        }
+
+        Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
+        Bounds enemyFootprint = default;
+        bool hasEnemyFootprint = false;
+        for (int i = 0; i < enemyColliders.Length; i++)
+        {
+            Collider collider = enemyColliders[i];
+            if (collider == null || !collider.enabled ||
+                !collider.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            Bounds worldBounds = collider.bounds;
+            Vector3 min = worldBounds.min;
+            Vector3 max = worldBounds.max;
+            for (int x = 0; x <= 1; x++)
+            for (int y = 0; y <= 1; y++)
+            for (int z = 0; z <= 1; z++)
+            {
+                Vector3 local = transform.InverseTransformPoint(new Vector3(
+                    x == 0 ? min.x : max.x,
+                    y == 0 ? min.y : max.y,
+                    z == 0 ? min.z : max.z));
+                if (!hasEnemyFootprint)
+                {
+                    enemyFootprint = new Bounds(local, Vector3.zero);
+                    hasEnemyFootprint = true;
+                }
+                else
+                {
+                    enemyFootprint.Encapsulate(local);
+                }
+            }
+        }
+
+        if (!hasEnemyFootprint ||
+            enemyFootprint.max.x < localFootprint.min.x ||
+            enemyFootprint.min.x > localFootprint.max.x ||
+            enemyFootprint.max.z < localFootprint.min.z ||
+            enemyFootprint.min.z > localFootprint.max.z)
+        {
+            return false;
+        }
+
+        float safeMargin = Mathf.Max(0.45f, margin);
+        Vector3 currentCenter = enemyFootprint.center;
+        Vector3 leftTarget = currentCenter;
+        leftTarget.x = localFootprint.min.x - safeMargin - enemyFootprint.extents.x;
+        Vector3 rightTarget = currentCenter;
+        rightTarget.x = localFootprint.max.x + safeMargin + enemyFootprint.extents.x;
+        Vector3 frontTarget = currentCenter;
+        frontTarget.z = localFootprint.min.z - safeMargin - enemyFootprint.extents.z;
+        Vector3 backTarget = currentCenter;
+        backTarget.z = localFootprint.max.z + safeMargin + enemyFootprint.extents.z;
+
+        Vector3 target = leftTarget;
+        float bestDistance = (leftTarget - currentCenter).sqrMagnitude;
+        Vector3[] candidates = { rightTarget, frontTarget, backTarget };
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            float distance = (candidates[i] - currentCenter).sqrMagnitude;
+            if (distance < bestDistance)
+            {
+                target = candidates[i];
+                bestDistance = distance;
+            }
+        }
+
+        Vector3 currentWorldCenter = transform.TransformPoint(currentCenter);
+        Vector3 targetWorldCenter = transform.TransformPoint(target);
+        Vector3 delta = targetWorldCenter - currentWorldCenter;
+        escapePoint = enemy.transform.position + delta;
+        escapePoint.y = enemy.transform.position.y;
+        return true;
+    }
+
+    private bool TryGetLocalFootprint(out Bounds localFootprint)
+    {
+        localFootprint = default;
+        bool hasFootprint = false;
+        for (int i = 0; i < stationColliders.Count; i++)
+        {
+            Collider collider = stationColliders[i];
+            if (collider == null || !collider.enabled ||
+                !collider.gameObject.activeInHierarchy ||
+                (collider.transform != transform &&
+                 !collider.transform.IsChildOf(transform)))
+            {
+                continue;
+            }
+
+            Bounds worldBounds = collider.bounds;
+            Vector3 min = worldBounds.min;
+            Vector3 max = worldBounds.max;
+            for (int x = 0; x <= 1; x++)
+            for (int y = 0; y <= 1; y++)
+            for (int z = 0; z <= 1; z++)
+            {
+                Vector3 local = transform.InverseTransformPoint(new Vector3(
+                    x == 0 ? min.x : max.x,
+                    y == 0 ? min.y : max.y,
+                    z == 0 ? min.z : max.z));
+                if (!hasFootprint)
+                {
+                    localFootprint = new Bounds(local, Vector3.zero);
+                    hasFootprint = true;
+                }
+                else
+                {
+                    localFootprint.Encapsulate(local);
+                }
+            }
+        }
+
+        return hasFootprint;
+    }
+}
+
 /// <summary>
 /// Loads the small GLB props from StreamingAssets and lays them out against
 /// the runtime-built gym. The source files live in Assets/BodyBuilders/items;
@@ -23,6 +337,9 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     private const float CurrentMedicineBallScale = 0.95f;
     private const float FoamRollerScale = CurrentFoamRollerScale * 0.75f;
     private const float MedicineBallScale = CurrentMedicineBallScale * 1.25f;
+    private const float DeadliftPlatformThickness = 0.12f;
+    private const float DeadliftLoadedPlateThickness = 0.12f;
+    private const float DeadliftLoadedPlateClearance = 0.002f;
 
     private static GymLooseItemSpawner instance;
 
@@ -35,6 +352,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     private Bounds yogaSurfaceBounds;
     private bool hasYogaSurfaceBounds;
     private readonly List<Bounds> yogaSurfaceItemBounds = new List<Bounds>();
+    private GymDeadliftStationMarker deadliftStationMarker;
 
     private enum ColliderKind
     {
@@ -70,6 +388,71 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     {
         public Vector3 Center;
         public float TopY;
+    }
+
+    private sealed class DeadliftLayout
+    {
+        public Vector3 Center;
+        public Quaternion Rotation;
+        public GymDeadliftStationMarker Marker;
+        public bool Created;
+    }
+
+    public static void IgnoreDeadliftStationForEnemy(EnemyFighter enemy)
+    {
+        EnsureDeadliftStationCollisionIgnore(enemy);
+    }
+
+    public static bool EnsureDeadliftStationCollisionIgnore(EnemyFighter enemy)
+    {
+        if (instance == null || enemy == null)
+        {
+            return false;
+        }
+
+        instance.RegisterDeadliftStationCollidersInternal();
+        if (instance.deadliftStationMarker == null)
+        {
+            return false;
+        }
+
+        instance.deadliftStationMarker.IgnoreEnemy(enemy, true);
+        return instance.deadliftStationMarker.AreEnemyCollisionsIgnored(enemy);
+    }
+
+    public static bool TryGetDeadliftEscapePoint(
+        Vector3 worldPosition, float margin, out Vector3 escapePoint)
+    {
+        escapePoint = worldPosition;
+        return instance != null && instance.deadliftStationMarker != null &&
+            instance.deadliftStationMarker.TryGetEscapePoint(
+                worldPosition, margin, out escapePoint);
+    }
+
+    public static bool TryGetDeadliftEscapePointForEnemy(
+        EnemyFighter enemy, float margin, out Vector3 escapePoint)
+    {
+        escapePoint = enemy != null ? enemy.transform.position : Vector3.zero;
+        return instance != null && instance.deadliftStationMarker != null &&
+            instance.deadliftStationMarker.TryGetEscapePointForEnemy(
+                enemy, margin, out escapePoint);
+    }
+
+    public static bool IsDeadliftStationCollider(Collider collider)
+    {
+        return instance != null && instance.deadliftStationMarker != null &&
+            instance.deadliftStationMarker.ContainsCollider(collider);
+    }
+
+    public static bool IsDeadliftStationObject(Transform target)
+    {
+        return instance != null && instance.deadliftStationMarker != null &&
+            instance.deadliftStationMarker.ContainsObject(target);
+    }
+
+    public static void RegisterDeadliftStationColliders()
+    {
+        instance?.RegisterDeadliftStationCollidersInternal();
     }
 
 #pragma warning disable 0649
@@ -145,6 +528,13 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
                 instance = existing.AddComponent<GymLooseItemSpawner>();
             }
 
+            if (instance.itemRoot == null)
+            {
+                instance.itemRoot = existing.transform;
+            }
+            instance.deadliftStationMarker = existing.GetComponentInChildren<
+                GymDeadliftStationMarker>(true);
+
             return instance;
         }
 
@@ -168,6 +558,72 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
     }
 
+    private void Start()
+    {
+        if (deadliftStationMarker == null)
+        {
+            deadliftStationMarker = GetComponentInChildren<GymDeadliftStationMarker>(true);
+        }
+
+        // Reapply the exemption after the bootstrap has finished spawning the
+        // roster. This covers scene-authored enemies and imported rigs whose
+        // child colliders are attached after their EnemyFighter component.
+        if (deadliftStationMarker == null)
+        {
+            return;
+        }
+
+        RegisterDeadliftStationCollidersInternal();
+
+        EnemyFighter[] enemies = FindObjectsByType<EnemyFighter>(
+            FindObjectsSortMode.None);
+        for (int i = 0; i < enemies.Length; i++)
+        {
+            deadliftStationMarker.IgnoreEnemy(enemies[i], true);
+        }
+    }
+
+    private void RegisterDeadliftStationCollidersInternal()
+    {
+        if (deadliftStationMarker == null)
+        {
+            deadliftStationMarker = GetComponentInChildren<GymDeadliftStationMarker>(true);
+        }
+
+        if (deadliftStationMarker == null)
+        {
+            return;
+        }
+
+        // EnsureSceneColliders can add a convex collider to a generated mesh
+        // visual after the station's own factory colliders were registered.
+        // Register the complete station hierarchy and every generated loose
+        // plate so enemy collision exemptions cover those runtime additions.
+        deadliftStationMarker.RegisterHierarchyColliders(
+            deadliftStationMarker.transform);
+
+        GameObject loadedBar = GameObject.Find("Barbell DeadliftStation Loaded");
+        if (loadedBar != null)
+        {
+            deadliftStationMarker.RegisterHierarchyColliders(loadedBar.transform);
+        }
+
+        Transform[] transforms = itemRoot != null
+            ? itemRoot.GetComponentsInChildren<Transform>(true)
+            : new Transform[0];
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform target = transforms[i];
+            if (target == null ||
+                target.name.IndexOf("Freeweight Loose", System.StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            deadliftStationMarker.RegisterHierarchyColliders(target);
+        }
+    }
+
     private void OnDestroy()
     {
         if (instance == this)
@@ -188,7 +644,8 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
 
         ShelfLayout shelf = CreatePaperTowelShelf();
-        List<ItemSpec> specs = CreateItemSpecs(shelf);
+        DeadliftLayout deadlift = CreateDeadliftSection(shelf);
+        List<ItemSpec> specs = CreateItemSpecs(shelf, deadlift);
         StartCoroutine(LoadAndSpawnItems(specs));
 
         Debug.Log(
@@ -249,7 +706,676 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         return box;
     }
 
-    private List<ItemSpec> CreateItemSpecs(ShelfLayout shelf)
+    private DeadliftLayout CreateDeadliftSection(ShelfLayout shelf)
+    {
+        float floorY = floorBounds.max.y;
+        Bounds cableBounds;
+        bool hasCable = TryFindNamedBounds(
+            new[] { "cablemachinedual", "cablemachine" }, out cableBounds);
+
+        Vector3 shelfFloorCenter = new Vector3(shelf.Center.x, floorY, shelf.Center.z);
+        Vector3 stationCenter;
+        if (hasCable)
+        {
+            Vector3 cableFloorCenter = cableBounds.center;
+            cableFloorCenter.y = floorY;
+            Vector3 between = shelfFloorCenter - cableFloorCenter;
+            stationCenter = between.sqrMagnitude > 0.04f
+                ? Vector3.Lerp(cableFloorCenter, shelfFloorCenter, 0.56f)
+                : shelfFloorCenter + Vector3.forward * 2.2f;
+        }
+        else
+        {
+            stationCenter = shelfFloorCenter + Vector3.forward * 2.2f;
+        }
+
+        stationCenter = ClampToFloor(stationCenter, new Vector3(2.65f, 0f, 1.85f));
+        Vector3 mirrorDirection = GetMirrorDirection(stationCenter);
+        Quaternion stationRotation = Quaternion.LookRotation(-mirrorDirection, Vector3.up);
+
+        GameObject stationObject = new GameObject("Freeweights Deadlift Station");
+        stationObject.transform.SetParent(itemRoot, true);
+        stationObject.transform.SetPositionAndRotation(stationCenter, stationRotation);
+        deadliftStationMarker = stationObject.AddComponent<GymDeadliftStationMarker>();
+
+        Material flooringMaterial = FindTemplateMaterial(
+            new[] { "flooringmats", "matt" });
+        if (flooringMaterial == null)
+        {
+            flooringMaterial = CreateSolidMaterial(
+                "Deadlift Flooring Mats material",
+                new Color(0.055f, 0.065f, 0.078f), 0.08f, 0.38f);
+        }
+
+        const int columns = 4;
+        const int rows = 2;
+        const float tileWidth = 1.14f;
+        const float tileDepth = 1.28f;
+        for (int row = 0; row < rows; row++)
+        {
+            for (int column = 0; column < columns; column++)
+            {
+                Vector3 localPosition = new Vector3(
+                    (column - (columns - 1) * 0.5f) * tileWidth,
+                    0.06f,
+                    (row - (rows - 1) * 0.5f) * tileDepth);
+                GameObject flooringMat = CreateStaticBox(
+                    $"Deadlift Flooring Mat {row * columns + column + 1}",
+                    stationObject.transform,
+                    localPosition,
+                    new Vector3(tileWidth - 0.025f, 0.12f, tileDepth - 0.025f),
+                    flooringMaterial);
+                deadliftStationMarker.RegisterCollider(flooringMat.GetComponent<Collider>());
+            }
+        }
+
+        CreateLoadedDeadliftBarbell(
+            stationCenter, stationRotation, deadliftStationMarker);
+
+        int[] loosePlateWeights = { 20, 10, 5, 20, 10, 5, 10 };
+        Vector3[] loosePlatePositions =
+        {
+            new Vector3(-1.55f, 0f, 1.78f),
+            new Vector3(-0.63f, 0f, 1.62f),
+            new Vector3(0.35f, 0f, 1.84f),
+            new Vector3(1.28f, 0f, 1.64f),
+            new Vector3(-1.15f, 0f, 2.24f),
+            new Vector3(0.12f, 0f, 2.28f),
+            new Vector3(1.08f, 0f, 2.18f)
+        };
+        for (int i = 0; i < loosePlateWeights.Length; i++)
+        {
+            CreateLooseDeadliftPlate(
+                stationCenter,
+                stationRotation,
+                loosePlateWeights[i],
+                loosePlatePositions[i],
+                (i % 2 == 0 ? -18f : 23f) + i * 7f,
+                floorY,
+                deadliftStationMarker);
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_DEADLIFT_STATION_OK center={stationCenter} " +
+            $"cableFound={hasCable} shelf={shelf.Center} " +
+            "platform=4x2 flooringMats loadedBar=20kgEachSide loosePlates=7 " +
+            "loadedPlates=outerSleeveInnerPin mountedRigidbodies floorSettled=rendererBounds " +
+            "pickup=E throw=LMB facing=mirrors",
+            stationObject);
+        return new DeadliftLayout
+        {
+            Center = stationCenter,
+            Rotation = stationRotation,
+            Marker = deadliftStationMarker,
+            Created = true
+        };
+    }
+
+    private static Vector3 GetMirrorDirection(Vector3 fromPosition)
+    {
+        GameObject mirrorObject = GameObject.Find("Mirror panel");
+        if (mirrorObject != null)
+        {
+            Renderer renderer = mirrorObject.GetComponent<Renderer>();
+            if (renderer != null)
+            {
+                Vector3 direction = Vector3.ProjectOnPlane(
+                    renderer.bounds.center - fromPosition, Vector3.up);
+                if (direction.sqrMagnitude > 0.04f)
+                {
+                    return direction.normalized;
+                }
+            }
+        }
+
+        // GymInteriorBuilder's mirror wall is the west wall; keep the station
+        // facing it even during a headless/bootstrap layout where the mirror
+        // renderer has not been registered yet.
+        return Vector3.left;
+    }
+
+    private void CreateLoadedDeadliftBarbell(
+        Vector3 stationCenter, Quaternion stationRotation,
+        GymDeadliftStationMarker stationMarker)
+    {
+        GameObject barObject = new GameObject("Barbell DeadliftStation Loaded");
+        barObject.transform.SetParent(itemRoot, true);
+        // Start high enough for the authored visual, then settle from its
+        // actual renderer bounds after the plate pair exists. This avoids a
+        // mesh-specific diameter/scale guess putting the largest plate
+        // through the platform.
+        barObject.transform.SetPositionAndRotation(
+            stationCenter + Vector3.up * 0.44f, stationRotation);
+
+        Transform barVisual = CreateNormalizedSceneVisual(
+            "barbell", barObject.transform, Vector3.zero,
+            GymExerciseStation.DeadliftBarVisualMajorSize, true,
+            "Deadlift Barbell Visual");
+        if (barVisual == null)
+        {
+            CreateFallbackBarVisual(barObject.transform);
+        }
+
+        float loadedPlateCenter = GetDeadliftLoadedPlateCenter(
+            barObject.transform, GymExerciseStation.DeadliftLoadedPlateCenter);
+        // Use the same authored bar/plate ratio as the incline reference. The
+        // 20 kg pair is the starting load and stays together on each side.
+        for (int side = -1; side <= 1; side += 2)
+        {
+            CreateLoadedDeadliftPlate(
+                barObject.transform, stationMarker, side,
+                loadedPlateCenter);
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_DEADLIFT_LOADING_PIN center={loadedPlateCenter:F3} " +
+            $"fallback={GymExerciseStation.DeadliftLoadedPlateCenter:F3}",
+            barObject);
+
+        BoxCollider collider = barObject.AddComponent<BoxCollider>();
+        collider.center = Vector3.zero;
+        // The plate disks have their own colliders. Keep the bar collider to
+        // the shaft instead of filling the entire plate diameter; otherwise
+        // a picked-up plate is deeply intersecting the bar and cannot slide
+        // off when the loaded bar is carried or tilted.
+        collider.size = new Vector3(4.45f, 0.14f, 0.14f);
+        collider.sharedMaterial = CreateDeadliftPhysicsMaterial(WeightType.Barbell);
+        stationMarker?.RegisterCollider(collider);
+
+        Rigidbody body = barObject.AddComponent<Rigidbody>();
+        GymMountedWeightMarker mountedMarker = barObject.AddComponent<GymMountedWeightMarker>();
+        mountedMarker.SetMassOverride(60f);
+        PickupItem pickup = barObject.AddComponent<PickupItem>();
+        pickup.Configure(body, WeightType.Barbell, new[] { collider }, true,
+            "Loaded deadlift barbell", 60f);
+        body.isKinematic = true;
+        body.useGravity = false;
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        body.WakeUp();
+        Physics.SyncTransforms();
+        SettleLoadedDeadliftBarbell(barObject, stationCenter);
+    }
+
+    private static void CreateLoadedDeadliftPlate(
+        Transform barRoot, GymDeadliftStationMarker stationMarker,
+        int side, float localCenterX)
+    {
+        GameObject plateObject = new GameObject(
+            $"Plate20 Deadlift Loaded Plate {side}");
+        plateObject.transform.SetParent(barRoot, false);
+        plateObject.transform.localPosition = new Vector3(localCenterX * side, 0f, 0f);
+        plateObject.transform.localRotation = Quaternion.identity;
+
+        Transform visual = CreateNormalizedSceneVisual(
+            "plate20", plateObject.transform, Vector3.zero, 0.56f, false,
+            $"Deadlift Loaded Plate Visual {side}");
+        if (visual == null)
+        {
+            CreateFallbackPlateVisual(
+                plateObject.transform, Vector3.zero, 0.56f, true);
+        }
+
+        BoxCollider collider = plateObject.AddComponent<BoxCollider>();
+        collider.center = Vector3.zero;
+        collider.size = new Vector3(
+            DeadliftLoadedPlateThickness, 0.56f, 0.56f);
+        collider.sharedMaterial = CreateDeadliftPhysicsMaterial(WeightType.Plate20);
+        stationMarker?.RegisterCollider(collider);
+
+        Rigidbody body = plateObject.AddComponent<Rigidbody>();
+        PickupItem pickup = plateObject.AddComponent<PickupItem>();
+        pickup.Configure(body, WeightType.Plate20, new[] { collider }, true,
+            "20kg loaded deadlift plate");
+        // Mounted plates are real rigidbodies, but stay fixed with the bar
+        // until the bar pickup explicitly detaches them. After detachment,
+        // PickupItem restores gravity and the plate can slide down the shaft.
+        body.isKinematic = true;
+        body.useGravity = false;
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+    }
+
+    private static float GetDeadliftLoadedPlateCenter(
+        Transform barRoot, float fallback)
+    {
+        if (barRoot == null)
+        {
+            return fallback;
+        }
+
+        Renderer[] renderers = barRoot.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            return fallback;
+        }
+
+        return GymExerciseStation.GetSceneMatchedLoadedPlateCenter(
+            barRoot, fallback);
+    }
+
+    private static void SettleLoadedDeadliftBarbell(
+        GameObject barObject, Vector3 stationCenter)
+    {
+        if (barObject == null)
+        {
+            return;
+        }
+
+        Physics.SyncTransforms();
+        Renderer[] renderers = barObject.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            return;
+        }
+
+        Bounds occupied = renderers[0].bounds;
+        for (int i = 1; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null)
+            {
+                occupied.Encapsulate(renderers[i].bounds);
+            }
+        }
+
+        // Keep the physical assembly clear as well as the visible largest
+        // plate. The bar root collider is slightly wider than the shaft, so
+        // renderer-only settling can still leave its lower edge inside the
+        // flooring mat.
+        Collider[] colliders = barObject.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            if (colliders[i] != null && colliders[i].enabled)
+            {
+                occupied.Encapsulate(colliders[i].bounds);
+            }
+        }
+
+        float platformTopY = stationCenter.y + DeadliftPlatformThickness;
+        float requiredLift = platformTopY + DeadliftLoadedPlateClearance - occupied.min.y;
+        if (Mathf.Abs(requiredLift) > 0.0001f)
+        {
+            barObject.transform.position += Vector3.up * requiredLift;
+        }
+
+        Rigidbody[] bodies = barObject.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < bodies.Length; i++)
+        {
+            if (bodies[i] == null)
+            {
+                continue;
+            }
+
+            bodies[i].position = bodies[i].transform.position;
+            bodies[i].linearVelocity = Vector3.zero;
+            bodies[i].angularVelocity = Vector3.zero;
+        }
+        Physics.SyncTransforms();
+
+        Debug.Log(
+            $"GYMCHAOS_DEADLIFT_BAR_SETTLED platformTopY={platformTopY:F3} " +
+            $"assemblyMinY={occupied.min.y + requiredLift:F3} " +
+            $"lift={requiredLift:F3}", barObject);
+    }
+
+    private void CreateLooseDeadliftPlate(
+        Vector3 stationCenter, Quaternion stationRotation, int weight,
+        Vector3 localPosition, float tilt, float floorY,
+        GymDeadliftStationMarker stationMarker)
+    {
+        WeightType itemType = weight >= 20
+            ? WeightType.Plate20
+            : weight >= 10 ? WeightType.Plate10 : WeightType.Plate5;
+        string assetPrefix = weight >= 20
+            ? "plate20"
+            : weight >= 10 ? "plate10" : "plate5";
+        float diameter = weight >= 20 ? 0.56f : weight >= 10 ? 0.48f : 0.4f;
+
+        GameObject plateObject = new GameObject(
+            $"Plate{weight} Freeweight Loose");
+        plateObject.transform.SetParent(itemRoot, true);
+        Vector3 worldPosition = stationCenter +
+            stationRotation * new Vector3(localPosition.x, 0.08f, localPosition.z);
+        plateObject.transform.SetPositionAndRotation(
+            new Vector3(worldPosition.x, floorY + 0.08f, worldPosition.z),
+            stationRotation * Quaternion.Euler(tilt * 0.35f, tilt, 0f));
+
+        Transform visual = CreateNormalizedSceneVisual(
+            assetPrefix, plateObject.transform, Vector3.zero, diameter, false,
+            $"Deadlift Loose Plate {weight}kg");
+        if (visual == null)
+        {
+            CreateFallbackPlateVisual(
+                plateObject.transform, Vector3.zero, diameter, false);
+        }
+        else
+        {
+            // The normalized plate visual is aligned with its thin dimension
+            // on local X for a loaded bar. Rotate that visual onto the floor
+            // for the loose, dropped plates without changing their pickup
+            // root or collider orientation.
+            visual.localRotation = Quaternion.Euler(0f, 0f, -90f) *
+                visual.localRotation;
+        }
+
+        BoxCollider collider = plateObject.AddComponent<BoxCollider>();
+        collider.center = Vector3.zero;
+        collider.size = new Vector3(diameter, 0.14f, diameter);
+        collider.sharedMaterial = CreateDeadliftPhysicsMaterial(itemType);
+        stationMarker?.RegisterCollider(collider);
+
+        Rigidbody body = plateObject.AddComponent<Rigidbody>();
+        PickupItem pickup = plateObject.AddComponent<PickupItem>();
+        pickup.Configure(body, itemType, new[] { collider }, true,
+            $"{weight}kg deadlift plate");
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        SettleDeadliftPlateOnFloor(plateObject, collider, floorY);
+    }
+
+    private static void SettleDeadliftPlateOnFloor(
+        GameObject plateObject, Collider collider, float floorY)
+    {
+        if (plateObject == null || collider == null)
+        {
+            return;
+        }
+
+        Physics.SyncTransforms();
+        Bounds occupied = collider.bounds;
+        Renderer[] renderers = plateObject.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null)
+            {
+                occupied.Encapsulate(renderers[i].bounds);
+            }
+        }
+
+        // Use the actual rotated renderer bounds, not the unrotated diameter
+        // guess. This keeps the 20 kg plate just above the floor even when a
+        // loose plate is tilted, without letting its mesh clip through it.
+        float clearance = 0.008f;
+        plateObject.transform.position += Vector3.up *
+            (floorY + clearance - occupied.min.y);
+        Physics.SyncTransforms();
+
+        Rigidbody body = plateObject.GetComponent<Rigidbody>();
+        if (body != null)
+        {
+            body.position = plateObject.transform.position;
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
+    }
+
+    private static GameObject CreateStaticBox(
+        string name, Transform parent, Vector3 localPosition,
+        Vector3 size, Material material)
+    {
+        GameObject box = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        box.name = name;
+        box.transform.SetParent(parent, false);
+        box.transform.localPosition = localPosition;
+        box.transform.localRotation = Quaternion.identity;
+        box.transform.localScale = size;
+        Renderer renderer = box.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.On;
+            renderer.receiveShadows = true;
+        }
+        return box;
+    }
+
+    private static Material FindTemplateMaterial(string[] keywords)
+    {
+        Transform[] transforms = UnityEngine.Object.FindObjectsByType<Transform>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate == null)
+            {
+                continue;
+            }
+
+            string normalized = Normalize(candidate.name);
+            bool matches = false;
+            for (int keywordIndex = 0; keywordIndex < keywords.Length; keywordIndex++)
+            {
+                if (normalized.Contains(Normalize(keywords[keywordIndex])))
+                {
+                    matches = true;
+                    break;
+                }
+            }
+            if (!matches)
+            {
+                continue;
+            }
+
+            Renderer[] renderers = candidate.GetComponentsInChildren<Renderer>(true);
+            for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            {
+                if (renderers[rendererIndex] != null &&
+                    renderers[rendererIndex].sharedMaterial != null)
+                {
+                    return renderers[rendererIndex].sharedMaterial;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static PhysicsMaterial CreateDeadliftPhysicsMaterial(WeightType itemType)
+    {
+        bool plate = itemType == WeightType.Plate || itemType == WeightType.Plate5 ||
+            itemType == WeightType.Plate10 || itemType == WeightType.Plate20;
+        return new PhysicsMaterial("Deadlift freeweight physics")
+        {
+            dynamicFriction = plate ? 0.68f : 0.54f,
+            staticFriction = plate ? 0.78f : 0.62f,
+            bounciness = 0.03f,
+            frictionCombine = PhysicsMaterialCombine.Average,
+            bounceCombine = PhysicsMaterialCombine.Minimum
+        };
+    }
+
+    private static Transform CreateNormalizedSceneVisual(
+        string assetPrefix, Transform parent, Vector3 localPosition,
+        float desiredMajorSize, bool alignLongestToX, string visualName)
+    {
+        Transform template = FindSceneTemplate(assetPrefix);
+        if (template == null)
+        {
+            return null;
+        }
+
+        GameObject wrapperObject = new GameObject(visualName);
+        Transform wrapper = wrapperObject.transform;
+        wrapper.SetParent(parent, false);
+        wrapper.localPosition = localPosition;
+
+        GameObject clone = UnityEngine.Object.Instantiate(template.gameObject);
+        clone.name = "Deadlift Visual Mesh " + assetPrefix;
+        clone.SetActive(true);
+        clone.transform.SetParent(wrapper, false);
+        clone.transform.localPosition = Vector3.zero;
+        clone.transform.localRotation = Quaternion.identity;
+        clone.transform.localScale = Vector3.one;
+        StripPhysics(clone);
+
+        Renderer[] renderers = clone.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            UnityEngine.Object.Destroy(wrapperObject);
+            return null;
+        }
+
+        Bounds localBounds = GetBoundsRelativeTo(wrapper, renderers);
+        clone.transform.localPosition -= localBounds.center;
+        Vector3 size = localBounds.size;
+        Quaternion alignment = Quaternion.identity;
+        if (alignLongestToX)
+        {
+            if (size.y >= size.x && size.y >= size.z)
+            {
+                alignment = Quaternion.Euler(0f, 0f, -90f);
+            }
+            else if (size.z >= size.x && size.z >= size.y)
+            {
+                alignment = Quaternion.Euler(0f, 90f, 0f);
+            }
+        }
+        else if (size.y <= size.x && size.y <= size.z)
+        {
+            alignment = Quaternion.Euler(0f, 0f, -90f);
+        }
+        else if (size.z <= size.x && size.z <= size.y)
+        {
+            alignment = Quaternion.Euler(0f, 90f, 0f);
+        }
+
+        wrapper.localRotation = alignment;
+        float major = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+        wrapper.localScale = Vector3.one *
+            (desiredMajorSize / Mathf.Max(major, 0.0001f));
+        return wrapper;
+    }
+
+    private static Transform FindSceneTemplate(string prefix)
+    {
+        Transform[] transforms = UnityEngine.Object.FindObjectsByType<Transform>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        string expected = Normalize(prefix);
+        if (expected == "barbell")
+        {
+            Transform inclineReference =
+                GymExerciseStation.FindInclineReferenceBarTemplate();
+            if (inclineReference != null)
+            {
+                return inclineReference;
+            }
+        }
+
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate == null || candidate.name.Contains("Asset Clone") ||
+                candidate.GetComponentInParent<PlayerMovement>() != null)
+            {
+                continue;
+            }
+
+            bool underRuntimeItems = candidate == instance?.itemRoot ||
+                (instance?.itemRoot != null && candidate.IsChildOf(instance.itemRoot));
+            if (underRuntimeItems)
+            {
+                continue;
+            }
+
+            if (Normalize(candidate.name).StartsWith(expected) &&
+                candidate.GetComponentInChildren<Renderer>(true) != null)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static void CreateFallbackBarVisual(Transform parent)
+    {
+        GameObject bar = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        bar.name = "Deadlift Fallback Bar";
+        bar.transform.SetParent(parent, false);
+        bar.transform.localPosition = Vector3.zero;
+        bar.transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+        bar.transform.localScale = new Vector3(0.055f, 2.05f, 0.055f);
+        UnityEngine.Object.Destroy(bar.GetComponent<Collider>());
+        Renderer renderer = bar.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.sharedMaterial = CreateSolidMaterial(
+                "Deadlift fallback bar material", new Color(0.38f, 0.42f, 0.47f),
+                0.82f, 0.58f);
+        }
+    }
+
+    private static void CreateFallbackPlateVisual(
+        Transform parent, Vector3 localPosition, float diameter, bool vertical)
+    {
+        GameObject plate = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        plate.name = "Deadlift Fallback Plate";
+        plate.transform.SetParent(parent, false);
+        plate.transform.localPosition = localPosition;
+        plate.transform.localRotation = vertical
+            ? Quaternion.Euler(0f, 0f, 90f)
+            : Quaternion.identity;
+        plate.transform.localScale = new Vector3(diameter * 0.5f, 0.06f, diameter * 0.5f);
+        UnityEngine.Object.Destroy(plate.GetComponent<Collider>());
+        Renderer renderer = plate.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            renderer.sharedMaterial = CreateSolidMaterial(
+                "Deadlift fallback plate material", new Color(0.06f, 0.07f, 0.085f),
+                0.7f, 0.38f);
+        }
+    }
+
+    private static void StripPhysics(GameObject clone)
+    {
+        Collider[] colliders = clone.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            colliders[i].enabled = false;
+            UnityEngine.Object.Destroy(colliders[i]);
+        }
+
+        Rigidbody[] bodies = clone.GetComponentsInChildren<Rigidbody>(true);
+        for (int i = 0; i < bodies.Length; i++)
+        {
+            bodies[i].linearVelocity = Vector3.zero;
+            bodies[i].angularVelocity = Vector3.zero;
+            bodies[i].useGravity = false;
+            bodies[i].isKinematic = true;
+            bodies[i].detectCollisions = false;
+        }
+
+        PickupItem[] pickups = clone.GetComponentsInChildren<PickupItem>(true);
+        for (int i = 0; i < pickups.Length; i++)
+        {
+            pickups[i].enabled = false;
+        }
+    }
+
+    private static Bounds GetBoundsRelativeTo(Transform relativeTo, Renderer[] renderers)
+    {
+        Bounds result = new Bounds(
+            relativeTo.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Bounds bounds = renderers[i].bounds;
+            Vector3 min = bounds.min;
+            Vector3 max = bounds.max;
+            for (int x = 0; x <= 1; x++)
+            for (int y = 0; y <= 1; y++)
+            for (int z = 0; z <= 1; z++)
+            {
+                result.Encapsulate(relativeTo.InverseTransformPoint(new Vector3(
+                    x == 0 ? min.x : max.x,
+                    y == 0 ? min.y : max.y,
+                    z == 0 ? min.z : max.z)));
+            }
+        }
+
+        return result;
+    }
+
+    private List<ItemSpec> CreateItemSpecs(ShelfLayout shelf, DeadliftLayout deadlift)
     {
         float floorY = floorBounds.max.y;
         Bounds yogaAnchor;
@@ -283,9 +1409,23 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         Vector3 rolledOutPosition = ClampToFloor(
             new Vector3(yogaAnchor.center.x - yogaSideOffset, floorY, yogaAnchor.center.z),
             new Vector3(0.58f, 0f, 0.78f));
+        Vector3 halfRolledWorldPosition = new Vector3(
+            yogaAnchor.center.x + yogaSideOffset, floorY, yogaAnchor.center.z);
+        if (deadlift != null && deadlift.Created)
+        {
+            // Keep both loose mats out of the calisthenics footprint and make
+            // the full-length mat the left-side companion of the deadlift
+            // platform. The half-rolled mat stays on the opposite side so the
+            // two props do not overlap or become a single floor pile.
+            rolledOutPosition = ClampToFloor(
+                deadlift.Center + deadlift.Rotation * new Vector3(-2.72f, 0f, 0.18f),
+                new Vector3(0.58f, 0f, 0.78f));
+            halfRolledWorldPosition = deadlift.Center +
+                deadlift.Rotation * new Vector3(2.72f, 0f, 0.18f);
+            halfRolledWorldPosition.y = floorY;
+        }
         Vector3 halfRolledPosition = ClampToFloor(
-            new Vector3(yogaAnchor.center.x + yogaSideOffset, floorY, yogaAnchor.center.z),
-            new Vector3(0.58f, 0f, 0.68f));
+            halfRolledWorldPosition, new Vector3(0.58f, 0f, 0.68f));
         Vector3 yogaArea = ClampToFloor(
             yogaAnchor.center + Vector3.forward * 0.15f,
             new Vector3(0.5f, 0f, 0.72f));
