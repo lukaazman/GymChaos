@@ -201,21 +201,64 @@ public static class GymBackRoomBuilder
         Transform parent, Vector3 center, float floorY, float minX, float maxX,
         Material metal, Material accent)
     {
-        for (int i = -2; i <= 2; i++)
+        CreateModernLockerBank(
+            parent, center.z, floorY, minX + 0.58f, -1, 5, 1.45f, metal, accent);
+        // The east (+X) wall belongs to the bathroom/toilet zone. Keeping a
+        // second full locker bank there intersected the divider, stall and
+        // toilet props, so lockers intentionally remain on the west wall only.
+    }
+
+    /// <summary>
+    /// Reuses the locker-room's current double-door/vented cabinet design for
+    /// another wall without duplicating an older single-box locker variant.
+    /// </summary>
+    public static void CreateModernLockerBank(
+        Transform parent,
+        float centerZ,
+        float floorY,
+        float lockerX,
+        int side,
+        int count,
+        float spacing,
+        Material metal,
+        Material accent)
+    {
+        side = side < 0 ? -1 : 1;
+        count = Mathf.Max(1, count);
+        Material door = CreateMaterial(
+            "Locker enamel", new Color(0.19f, 0.24f, 0.25f), 0.45f, 0.32f);
+        Material recess = CreateMaterial(
+            "Locker vents", new Color(0.022f, 0.029f, 0.03f), 0.1f, 0.2f);
+        float firstOffset = (count - 1) * 0.5f;
+        for (int i = 0; i < count; i++)
         {
-            float z = center.z + i * 1.45f;
-            CreateBox("Locker bay", parent,
-                new Vector3(minX + 0.58f, floorY + 1.15f, z),
+            float z = centerZ + (i - firstOffset) * spacing;
+            float front = lockerX - side * 0.37f;
+            CreateBox("Locker cabinet", parent,
+                new Vector3(lockerX, floorY + 1.15f, z),
                 new Vector3(0.7f, 2.3f, 1.16f), metal, true);
-            CreateBox("Locker bay handle", parent,
-                new Vector3(minX + 0.18f, floorY + 1.15f, z - 0.32f),
-                new Vector3(0.05f, 0.18f, 0.05f), accent, false);
-            CreateBox("Locker bay", parent,
-                new Vector3(maxX - 0.58f, floorY + 1.15f, z),
-                new Vector3(0.7f, 2.3f, 1.16f), metal, true);
-            CreateBox("Locker bay handle", parent,
-                new Vector3(maxX - 0.18f, floorY + 1.15f, z + 0.32f),
-                new Vector3(0.05f, 0.18f, 0.05f), accent, false);
+            for (int bay = -1; bay <= 1; bay += 2)
+            {
+                float doorZ = z + bay * 0.285f;
+                CreateBox("Inset locker door", parent,
+                    new Vector3(front, floorY + 1.2f, doorZ),
+                    new Vector3(0.035f, 2.08f, 0.545f), door, false);
+                CreateBox("Locker pull handle", parent,
+                    new Vector3(front - side * 0.055f,
+                        floorY + 1.2f, doorZ + 0.17f),
+                    new Vector3(0.06f, 0.18f, 0.035f), accent, false);
+                CreateBox("Locker number plate", parent,
+                    new Vector3(front - side * 0.023f,
+                        floorY + 1.85f, doorZ),
+                    new Vector3(0.015f, 0.09f, 0.13f), metal, false);
+                for (int vent = 0; vent < 3; vent++)
+                {
+                    CreateBox("Locker ventilation slot", parent,
+                        new Vector3(front - side * 0.025f,
+                            floorY + 0.34f + vent * 0.055f, doorZ),
+                        new Vector3(0.014f, 0.016f, 0.29f), recess, false);
+                }
+            }
         }
     }
 
@@ -249,12 +292,19 @@ public static class GymBackRoomBuilder
         for (int i = -1; i <= 1; i++)
         {
             float z = center.z - 1.9f + i * 1.45f;
-            CreateBox("Bathroom sink", parent,
-                new Vector3(center.x + 4.5f, floorY + 1.08f, z),
-                new Vector3(0.72f, 0.2f, 0.72f), metal, true);
-            CreateBox("Bathroom tap", parent,
-                new Vector3(center.x + 4.5f, floorY + 1.28f, z),
-                new Vector3(0.09f, 0.3f, 0.09f), accent, false);
+            Vector3 basin = new Vector3(center.x + 4.5f, floorY + 1.02f, z);
+            Material porcelain = CreateMaterial("Porcelain basin", new Color(0.87f, 0.87f, 0.82f), 0f, 0.7f);
+            CreateBox("Basin bottom", parent, basin, new Vector3(0.62f, 0.07f, 0.54f), porcelain, true);
+            for (int edge = -1; edge <= 1; edge += 2)
+            {
+                CreateBox("Basin rim", parent, basin + new Vector3(edge * 0.32f, 0.08f, 0f), new Vector3(0.07f, 0.17f, 0.65f), porcelain, false);
+                CreateBox("Basin rim", parent, basin + new Vector3(0f, 0.08f, edge * 0.29f), new Vector3(0.65f, 0.17f, 0.07f), porcelain, false);
+            }
+            CreateBox("Chrome drain", parent, basin + Vector3.up * 0.042f, new Vector3(0.07f, 0.01f, 0.07f), metal, false);
+            CreateBox("Tap stem", parent, basin + new Vector3(0.28f, 0.23f, 0f), new Vector3(0.045f, 0.29f, 0.045f), metal, false);
+            CreateBox("Tap spout", parent, basin + new Vector3(0.18f, 0.36f, 0f), new Vector3(0.24f, 0.04f, 0.045f), metal, false);
+            CreateBox("Waste pipe", parent, basin - Vector3.up * 0.32f, new Vector3(0.07f, 0.6f, 0.07f), metal, false);
+            CreateBox("Soap dispenser", parent, basin + new Vector3(0.28f, 0.19f, 0.22f), new Vector3(0.1f, 0.18f, 0.08f), accent, false);
         }
 
         CreateBox("Bathroom stall block", parent,
@@ -263,6 +313,20 @@ public static class GymBackRoomBuilder
         CreateBox("Bathroom stall side", parent,
             new Vector3(center.x + 5.4f, floorY + 1.25f, center.z + 1.25f),
             new Vector3(0.18f, 2.5f, 2.0f), tile, true);
+        Material ceramic = CreateMaterial("Toilet porcelain", new Color(0.86f, 0.86f, 0.8f), 0f, 0.6f);
+        Vector3 toilet = new Vector3(center.x + 4.5f, floorY, center.z + 1.2f);
+        CreateBox("Toilet cistern", parent, toilet + new Vector3(0f, 0.76f, 0.44f), new Vector3(0.58f, 0.7f, 0.22f), ceramic, true);
+        CreateBox("Toilet pedestal", parent, toilet + new Vector3(0f, 0.24f, 0f), new Vector3(0.3f, 0.48f, 0.4f), ceramic, true);
+        for (int side = -1; side <= 1; side += 2)
+            CreateBox("Toilet seat side", parent, toilet + new Vector3(side * 0.23f, 0.49f, 0f), new Vector3(0.1f, 0.08f, 0.63f), ceramic, false);
+        CreateBox("Toilet seat front", parent, toilet + new Vector3(0f, 0.49f, -0.29f), new Vector3(0.52f, 0.08f, 0.12f), ceramic, false);
+        CreateBox("Toilet seat back", parent, toilet + new Vector3(0f, 0.49f, 0.29f), new Vector3(0.52f, 0.08f, 0.12f), ceramic, false);
+        CreateBox("Stall door", parent, toilet + new Vector3(-0.76f, 1.3f, 0f), new Vector3(0.08f, 2.25f, 0.82f), metal, true);
+        CreateBox("Stall latch", parent, toilet + new Vector3(-0.82f, 1.25f, -0.24f), new Vector3(0.06f, 0.08f, 0.14f), accent, false);
+        CreateBox("Paper holder", parent, toilet + new Vector3(0.68f, 0.78f, 0f), new Vector3(0.14f, 0.14f, 0.24f), ceramic, false);
+        CreateBox("Bathroom towel shelf", parent, new Vector3(center.x + 3.8f, floorY + 1.48f, center.z - 3.3f), new Vector3(0.75f, 0.05f, 0.32f), metal, false);
+        for (int towel = 0; towel < 3; towel++)
+            CreateBox("Folded towel", parent, new Vector3(center.x + 3.8f, floorY + 1.54f + towel * 0.06f, center.z - 3.3f), new Vector3(0.48f, 0.055f, 0.27f), ceramic, false);
         CreateInteractable(parent, "Bathroom Cooldown",
             new Vector3(center.x + 4.15f, floorY + 1.0f, center.z - 0.85f),
             new Vector3(1.2f, 2f, 1.4f),

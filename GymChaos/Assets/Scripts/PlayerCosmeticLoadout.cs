@@ -1,47 +1,41 @@
 using System;
 using UnityEngine;
-using UnityEngine.Rendering;
 
 /// <summary>
-/// Adds a deliberately small first cosmetic set directly onto the player's
-/// runtime Mixamo rig. The overlays live on the mirror layer, so the same item
-/// is visible in third-person, dialogue close-ups and the realtime mirror.
+/// Applies shirt textures and supplied wearable GLBs to the animated player.
+/// Wearables are parented to the runtime head bone so they follow every pose
+/// and remain on the mirror player layer without procedural replacement meshes.
 /// </summary>
 public sealed class PlayerCosmeticLoadout : MonoBehaviour
 {
-    private PlayerMovement player;
-    private Transform shirtOverlay;
-    private Transform headwearOverlay;
-    private Material shirtMaterial;
+    private struct HeadwearFit
+    {
+        public float Width;
+        public float BottomOffset;
+        public float ForwardOffset;
+        public Vector3 EulerAngles;
+    }
+
     private GymShirtColor currentShirt = GymShirtColor.Black;
     private GymHeadwear currentHeadwear = GymHeadwear.None;
     private bool initialized;
+    private PlayerMovement player;
+    private GameObject headwearRoot;
+    private Texture currentTexture;
+    private bool visualReady;
+    private bool hasAppliedState;
+    private bool headwearLoading;
+    private int headwearRequestVersion;
 
     public GymShirtColor CurrentShirt => currentShirt;
     public GymHeadwear CurrentHeadwear => currentHeadwear;
     public Color CurrentShirtMaterialColor => GetShirtColor(currentShirt);
-    public Color RenderedShirtColor
-    {
-        get
-        {
-            Renderer renderer = shirtOverlay != null
-                ? shirtOverlay.GetComponent<Renderer>()
-                : null;
-            Material material = renderer != null ? renderer.sharedMaterial : null;
-            if (material == null)
-            {
-                return Color.clear;
-            }
-
-            return material.HasProperty("_BaseColor")
-                ? material.GetColor("_BaseColor")
-                : material.color;
-        }
-    }
-    public bool IsShirtVisualReady => shirtOverlay != null &&
-        shirtOverlay.gameObject.activeInHierarchy &&
-        shirtOverlay.GetComponent<Renderer>() != null &&
-        shirtOverlay.GetComponent<Renderer>().enabled;
+    public Color RenderedShirtColor => visualReady ? GetShirtColor(currentShirt) : Color.clear;
+    public bool IsShirtVisualReady => visualReady;
+    public bool IsHeadwearVisualReady =>
+        currentHeadwear == GymHeadwear.None ||
+        (!headwearLoading && HasVisibleHeadwearRenderer(headwearRoot));
+    public string CurrentHeadwearAssetPath => GetHeadwearAssetPath(currentHeadwear);
 
     public void Initialize(PlayerMovement targetPlayer)
     {
@@ -56,172 +50,355 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             return;
         }
 
-        if (Enum.TryParse(state.shirt, true, out GymShirtColor shirt))
+        GymShirtColor nextShirt = currentShirt;
+        GymHeadwear nextHeadwear = currentHeadwear;
+        Enum.TryParse(state.shirt, true, out nextShirt);
+        Enum.TryParse(state.headwear, true, out nextHeadwear);
+        bool changed = !hasAppliedState || nextShirt != currentShirt ||
+            nextHeadwear != currentHeadwear;
+        currentShirt = nextShirt;
+        currentHeadwear = nextHeadwear;
+        hasAppliedState = true;
+
+        if (changed)
         {
-            currentShirt = shirt;
-        }
-        if (Enum.TryParse(state.headwear, true, out GymHeadwear headwear))
-        {
-            currentHeadwear = headwear;
+            visualReady = false;
+            ClearHeadwear();
         }
 
-        RefreshVisuals();
+        bool headwearNeedsVisual = currentHeadwear != GymHeadwear.None &&
+            !headwearLoading && !HasVisibleHeadwearRenderer(headwearRoot);
+        if (changed || !visualReady || headwearNeedsVisual)
+        {
+            ApplyVisuals();
+            RequestMirrorRefresh();
+        }
     }
 
     private void LateUpdate()
     {
-        if (initialized && (shirtOverlay == null || headwearOverlay == null))
+        bool headwearNeedsVisual = currentHeadwear != GymHeadwear.None &&
+            !headwearLoading && !HasVisibleHeadwearRenderer(headwearRoot);
+        if (initialized && (!visualReady || headwearNeedsVisual) && !headwearLoading)
         {
-            RefreshVisuals();
+            ApplyVisuals();
         }
     }
 
-    private void RefreshVisuals()
+    private void ApplyVisuals()
     {
-        Transform rig = transform.Find("PlayerAvatarRig");
+        if (player == null)
+        {
+            return;
+        }
+
+        PlayerHandRig rig = player.GetComponentInChildren<PlayerHandRig>(true);
         if (rig == null)
         {
             return;
         }
 
-        Transform chest = FindBone(rig, "spine2", "spine1", "spine", "chest");
-        Transform head = FindBone(rig, "head");
-        if (chest != null && shirtOverlay == null)
-        {
-            shirtOverlay = CreateShirt(chest);
-        }
-        if (head != null && headwearOverlay == null)
-        {
-            headwearOverlay = CreateHeadwear(head);
-        }
-
-        if (shirtOverlay != null)
-        {
-            shirtOverlay.gameObject.SetActive(true);
-            Renderer[] shirtRenderers = shirtOverlay.GetComponentsInChildren<Renderer>(true);
-            for (int i = 0; i < shirtRenderers.Length; i++)
-            {
-                ApplyShirtMaterial(shirtRenderers[i], currentShirt);
-            }
-        }
-        if (headwearOverlay != null)
-        {
-            headwearOverlay.gameObject.SetActive(currentHeadwear != GymHeadwear.None);
-            ConfigureHeadwear(headwearOverlay, currentHeadwear);
-        }
-    }
-
-    private static Transform CreateShirt(Transform chest)
-    {
-        GameObject shirt = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        shirt.name = "Player Cosmetic Shirt";
-        shirt.transform.SetParent(chest, false);
-        shirt.transform.localPosition = new Vector3(0f, 0.025f, 0.015f);
-        shirt.transform.localRotation = Quaternion.identity;
-        shirt.transform.localScale = new Vector3(0.36f, 0.31f, 0.23f);
-        RemoveCollider(shirt);
-        CreateShirtPanel(shirt.transform, "Player Cosmetic Shirt Front", 0.5f);
-        CreateShirtPanel(shirt.transform, "Player Cosmetic Shirt Back", -0.5f);
-        SetLayerRecursively(shirt.transform, PlanarGymMirror.MirrorPlayerLayer);
-        return shirt.transform;
-    }
-
-    private static void CreateShirtPanel(Transform shirt, string name, float localZ)
-    {
-        GameObject panel = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        panel.name = name;
-        panel.transform.SetParent(shirt, false);
-        panel.transform.localPosition = new Vector3(0f, 0.02f, localZ);
-        panel.transform.localRotation = Quaternion.identity;
-        panel.transform.localScale = new Vector3(0.92f, 0.72f, 0.05f);
-        RemoveCollider(panel);
-    }
-
-    private static Transform CreateHeadwear(Transform head)
-    {
-        GameObject hat = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        hat.name = "Player Cosmetic Headwear";
-        hat.transform.SetParent(head, false);
-        hat.transform.localPosition = new Vector3(0f, 0.13f, 0f);
-        hat.transform.localRotation = Quaternion.identity;
-        hat.transform.localScale = new Vector3(0.22f, 0.07f, 0.22f);
-        RemoveCollider(hat);
-        SetLayerRecursively(hat.transform, PlanarGymMirror.MirrorPlayerLayer);
-        return hat.transform;
-    }
-
-    private static void ConfigureHeadwear(Transform overlay, GymHeadwear headwear)
-    {
-        if (overlay == null)
+        SkinnedMeshRenderer[] renderers =
+            rig.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        if (renderers.Length == 0)
         {
             return;
         }
 
-        Renderer renderer = overlay.GetComponent<Renderer>();
-        if (headwear == GymHeadwear.Cap)
+        currentTexture = Resources.Load<Texture2D>(
+            currentShirt == GymShirtColor.Black
+                ? "Characters/Textures/player_authored"
+                : "Player/Outfits/shirt_" +
+                    currentShirt.ToString().ToLowerInvariant());
+        if (currentTexture == null)
         {
-            overlay.localScale = new Vector3(0.23f, 0.07f, 0.27f);
-            overlay.localPosition = new Vector3(0f, 0.13f, 0.02f);
-            ApplyMaterial(renderer, new Color(0.035f, 0.045f, 0.065f), "Cap");
+            visualReady = false;
+            return;
         }
-        else if (headwear == GymHeadwear.Beanie)
+
+        for (int i = 0; i < renderers.Length; i++)
         {
-            overlay.localScale = new Vector3(0.24f, 0.13f, 0.24f);
-            overlay.localPosition = new Vector3(0f, 0.1f, 0f);
-            ApplyMaterial(renderer, new Color(0.55f, 0.08f, 0.045f), "Beanie");
+            SkinnedMeshRenderer renderer = renderers[i];
+            if (renderer == null ||
+                renderer.gameObject.layer == PlanarGymMirror.FirstPersonPlayerLayer)
+            {
+                // Shirt cosmetics belong to the mirror body. The first-person
+                // arm clone owns a stable skin material and must never inherit
+                // the outfit texture (blue shirts previously tinted the arms).
+                continue;
+            }
+
+            Material[] materials = renderer.sharedMaterials;
+            for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
+            {
+                Material material = materials[materialIndex];
+                if (material == null)
+                {
+                    continue;
+                }
+
+                if (material.HasProperty("_BaseMap"))
+                {
+                    material.SetTexture("_BaseMap", currentTexture);
+                }
+                if (material.HasProperty("_MainTex"))
+                {
+                    material.SetTexture("_MainTex", currentTexture);
+                }
+            }
         }
-        else if (headwear == GymHeadwear.Headband)
+
+        Transform head = rig.RuntimeHead;
+        if (head == null)
         {
-            overlay.localScale = new Vector3(0.245f, 0.035f, 0.245f);
-            overlay.localPosition = new Vector3(0f, 0.055f, 0f);
-            ApplyMaterial(renderer, new Color(0.92f, 0.68f, 0.12f), "Headband");
+            Transform[] bones = rig.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < bones.Length; i++)
+            {
+                if (bones[i] != null &&
+                    (bones[i].name == "DEF-spine.005" ||
+                        bones[i].name.Equals("head",
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    head = bones[i];
+                    break;
+                }
+            }
         }
-        else if (headwear == GymHeadwear.Visor)
+
+        if (head == null)
         {
-            overlay.localScale = new Vector3(0.265f, 0.045f, 0.31f);
-            overlay.localPosition = new Vector3(0f, 0.075f, 0.06f);
-            ApplyMaterial(renderer, new Color(0.1f, 0.8f, 0.78f), "Visor");
+            visualReady = false;
+            return;
         }
+
+        if (currentHeadwear != GymHeadwear.None &&
+            !headwearLoading && headwearRoot == null)
+        {
+            RequestHeadwear(head);
+        }
+
+        visualReady = true;
     }
 
-    private void ApplyShirtMaterial(Renderer renderer, GymShirtColor shirt)
+    private void RequestHeadwear(Transform head)
     {
-        if (renderer == null)
+        string assetPath = GetHeadwearAssetPath(currentHeadwear);
+        if (string.IsNullOrEmpty(assetPath))
         {
             return;
         }
 
-        Color color = GetShirtColor(shirt);
-        if (shirtMaterial == null)
-        {
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-            if (shader == null)
+        int requestVersion = ++headwearRequestVersion;
+        headwearLoading = true;
+        RuntimeGlbModelLoader.Request(
+            assetPath,
+            null,
+            head.position,
+            head.rotation,
+            Vector3.one,
+            "Equipped " + currentHeadwear,
+            PlanarGymMirror.MirrorPlayerLayer,
+            onLoaded: loaded =>
             {
-                return;
+                if (requestVersion != headwearRequestVersion ||
+                    head == null || this == null)
+                {
+                    if (loaded != null)
+                    {
+                        Destroy(loaded);
+                    }
+                    return;
+                }
+
+                if (loaded == null)
+                {
+                    headwearLoading = false;
+                    visualReady = false;
+                    Debug.LogError(
+                        $"GYMCHAOS_HEADWEAR_LOAD_FAILED type={currentHeadwear} " +
+                        $"asset={assetPath}", this);
+                    return;
+                }
+
+                loaded.transform.SetParent(head, false);
+                loaded.transform.localPosition = Vector3.zero;
+                loaded.transform.localRotation = Quaternion.identity;
+                loaded.transform.localScale = Vector3.one;
+                FitHeadwearToPlayerHead(loaded, head, currentHeadwear);
+                SetLayerRecursively(
+                    loaded.transform, PlanarGymMirror.MirrorPlayerLayer);
+                headwearRoot = loaded;
+                headwearLoading = false;
+                Debug.Log($"GYMCHAOS_HEADWEAR_READY type={currentHeadwear} asset={assetPath} parent={head.name} layer={loaded.layer}", loaded);
+                RequestMirrorRefresh();
+            });
+    }
+
+    private void ClearHeadwear()
+    {
+        ++headwearRequestVersion;
+        headwearLoading = false;
+        if (headwearRoot != null)
+        {
+            Destroy(headwearRoot);
+            headwearRoot = null;
+        }
+
+        GameObject[] pending = FindObjectsByType<GameObject>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < pending.Length; i++)
+        {
+            GameObject candidate = pending[i];
+            if (candidate != null &&
+                candidate.name == "Equipped " + currentHeadwear &&
+                candidate.GetComponent<MeshRenderer>() == null &&
+                candidate.transform.parent == null)
+            {
+                Destroy(candidate);
+            }
+        }
+    }
+
+    private static bool HasVisibleHeadwearRenderer(GameObject root)
+    {
+        if (root == null || !root.activeInHierarchy)
+        {
+            return false;
+        }
+
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null && renderers[i].enabled &&
+                renderers[i].gameObject.activeInHierarchy)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void FitHeadwearToPlayerHead(
+        GameObject loaded, Transform head, GymHeadwear headwear)
+    {
+        Renderer[] renderers = loaded.GetComponentsInChildren<Renderer>(true);
+        if (!TryGetRendererBounds(renderers, out Bounds sourceBounds))
+        {
+            return;
+        }
+
+        HeadwearFit fit = GetHeadwearFit(headwear);
+        float playerHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight;
+        float sourceWidth = Mathf.Max(0.001f,
+            Mathf.Max(sourceBounds.size.x, sourceBounds.size.z));
+        loaded.transform.localScale *= playerHeight * fit.Width / sourceWidth;
+        loaded.transform.localRotation = Quaternion.Euler(fit.EulerAngles);
+
+        if (!TryGetRendererBounds(renderers, out Bounds fittedBounds))
+        {
+            return;
+        }
+
+        Vector3 desiredBottomCenter = head.position +
+            head.up * (playerHeight * fit.BottomOffset) +
+            head.forward * (playerHeight * fit.ForwardOffset);
+        Vector3 currentBottomCenter = new Vector3(
+            fittedBounds.center.x, fittedBounds.min.y, fittedBounds.center.z);
+        loaded.transform.position += desiredBottomCenter - currentBottomCenter;
+    }
+
+    private static HeadwearFit GetHeadwearFit(GymHeadwear headwear)
+    {
+        switch (headwear)
+        {
+            case GymHeadwear.Beanie:
+                return new HeadwearFit { Width = 0.122f, BottomOffset = 0.018f,
+                    ForwardOffset = -0.002f, EulerAngles = Vector3.zero };
+            case GymHeadwear.Headband:
+                return new HeadwearFit { Width = 0.113f, BottomOffset = 0.025f,
+                    ForwardOffset = 0f, EulerAngles = Vector3.zero };
+            case GymHeadwear.Visor:
+                return new HeadwearFit { Width = 0.145f, BottomOffset = 0.032f,
+                    ForwardOffset = 0.004f, EulerAngles = Vector3.zero };
+            case GymHeadwear.Cap:
+            default:
+                return new HeadwearFit { Width = 0.142f, BottomOffset = 0.03f,
+                    ForwardOffset = 0.006f, EulerAngles = Vector3.zero };
+        }
+    }
+
+    private static bool TryGetRendererBounds(
+        Renderer[] renderers, out Bounds bounds)
+    {
+        bounds = default;
+        bool found = false;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled)
+            {
+                continue;
             }
 
-            // Keep a dedicated runtime material for the shirt. Reusing the
-            // primitive's shared package material can make an outfit change
-            // invisible or mutate the source asset used by other meshes.
-            shirtMaterial = new Material(shader)
+            if (!found)
             {
-                name = "Player Cosmetic Shirt"
-            };
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
         }
+        return found;
+    }
 
-        renderer.sharedMaterial = shirtMaterial;
-        shirtMaterial.name = "Player Cosmetic Shirt " + shirt;
-        shirtMaterial.color = color;
-        if (shirtMaterial.HasProperty("_BaseColor"))
+    private static string GetHeadwearAssetPath(GymHeadwear headwear)
+    {
+        switch (headwear)
         {
-            shirtMaterial.SetColor("_BaseColor", color);
+            case GymHeadwear.Cap:
+                return "BodyBuilders/wearables/baseball_cap.glb";
+            case GymHeadwear.Beanie:
+                return "BodyBuilders/wearables/beanie.glb";
+            case GymHeadwear.Headband:
+                return "BodyBuilders/wearables/headband.glb";
+            case GymHeadwear.Visor:
+                return "BodyBuilders/wearables/bucket_hat.glb";
+            default:
+                return string.Empty;
         }
-        if (shirtMaterial.HasProperty("_Color"))
+    }
+
+    private static void SetLayerRecursively(Transform root, int layer)
+    {
+        root.gameObject.layer = layer;
+        for (int i = 0; i < root.childCount; i++)
         {
-            shirtMaterial.SetColor("_Color", color);
+            SetLayerRecursively(root.GetChild(i), layer);
         }
-        renderer.shadowCastingMode = ShadowCastingMode.On;
-        renderer.receiveShadows = true;
+    }
+
+    private void OnDestroy()
+    {
+        ++headwearRequestVersion;
+        if (headwearRoot != null)
+        {
+            Destroy(headwearRoot);
+        }
+    }
+
+    private static void RequestMirrorRefresh()
+    {
+        PlanarGymMirror[] mirrors = UnityEngine.Object.FindObjectsByType<PlanarGymMirror>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < mirrors.Length; i++)
+        {
+            if (mirrors[i] != null)
+            {
+                mirrors[i].RequestImmediateRefresh();
+            }
+        }
     }
 
     private static Color GetShirtColor(GymShirtColor shirt)
@@ -235,85 +412,5 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                     : shirt == GymShirtColor.Blue
                         ? new Color(0.035f, 0.22f, 0.78f)
                         : new Color(0.92f, 0.58f, 0.08f);
-    }
-
-    private static void ApplyMaterial(Renderer renderer, Color color, string name)
-    {
-        if (renderer == null)
-        {
-            return;
-        }
-
-        Material material = renderer.sharedMaterial;
-        if (material == null ||
-            !material.name.StartsWith("Player Cosmetic ", StringComparison.Ordinal))
-        {
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-            if (shader == null)
-            {
-                return;
-            }
-            // Use a fresh shader material instead of copying the primitive's
-            // package-backed Lit.mat. The overlay must never mutate an asset.
-            material = new Material(shader);
-            renderer.sharedMaterial = material;
-        }
-        material.name = "Player Cosmetic " + name;
-        material.color = color;
-        if (material.HasProperty("_BaseColor"))
-        {
-            material.SetColor("_BaseColor", color);
-        }
-        if (material.HasProperty("_Color"))
-        {
-            material.SetColor("_Color", color);
-        }
-        renderer.shadowCastingMode = ShadowCastingMode.On;
-        renderer.receiveShadows = true;
-    }
-
-    private static Transform FindBone(Transform root, params string[] candidates)
-    {
-        Transform[] bones = root.GetComponentsInChildren<Transform>(true);
-        for (int i = 0; i < bones.Length; i++)
-        {
-            string normalized = Normalize(bones[i].name);
-            for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
-            {
-                string candidate = Normalize(candidates[candidateIndex]);
-                if (normalized == candidate || normalized.EndsWith(candidate, StringComparison.Ordinal))
-                {
-                    return bones[i];
-                }
-            }
-        }
-        return null;
-    }
-
-    private static string Normalize(string value)
-    {
-        return value.Replace("mixamorig:", string.Empty)
-            .Replace("mixamorig", string.Empty)
-            .Replace("_", string.Empty)
-            .Replace(" ", string.Empty)
-            .ToLowerInvariant();
-    }
-
-    private static void RemoveCollider(GameObject target)
-    {
-        Collider collider = target.GetComponent<Collider>();
-        if (collider != null)
-        {
-            UnityEngine.Object.Destroy(collider);
-        }
-    }
-
-    private static void SetLayerRecursively(Transform root, int layer)
-    {
-        root.gameObject.layer = layer;
-        for (int i = 0; i < root.childCount; i++)
-        {
-            SetLayerRecursively(root.GetChild(i), layer);
-        }
     }
 }

@@ -4,20 +4,7 @@ public sealed class PlayerModelImporter : AssetPostprocessor
 {
     private void OnPreprocessModel()
     {
-        if (assetPath.StartsWith("Assets/Resources/Player/Animations/", System.StringComparison.OrdinalIgnoreCase))
-        {
-            ModelImporter animationImporter = (ModelImporter)assetImporter;
-            animationImporter.importAnimation = true;
-            animationImporter.animationType = ModelImporterAnimationType.Generic;
-            animationImporter.avatarSetup = ModelImporterAvatarSetup.NoAvatar;
-            animationImporter.materialImportMode = ModelImporterMaterialImportMode.None;
-            animationImporter.importBlendShapes = false;
-            animationImporter.importCameras = false;
-            animationImporter.importLights = false;
-            return;
-        }
-
-        if (!assetPath.EndsWith("Resources/Player/player_mia_rigged.fbx", System.StringComparison.OrdinalIgnoreCase))
+        if (!assetPath.EndsWith("Resources/Player/player_authored.fbx", System.StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -31,8 +18,10 @@ public sealed class PlayerModelImporter : AssetPostprocessor
         importer.meshCompression = ModelImporterMeshCompression.Off;
         importer.generateMeshLods = false;
         importer.maximumMeshLod = -1;
-        importer.animationType = ModelImporterAnimationType.Human;
-        importer.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
+        // The source is a Rigify generic hierarchy, not the old Human-avatar
+        // player. Its baked curves must stay bound to this exact player rig.
+        importer.animationType = ModelImporterAnimationType.Generic;
+        importer.avatarSetup = ModelImporterAvatarSetup.NoAvatar;
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
     }
 }

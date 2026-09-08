@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEditor;
@@ -50,6 +51,9 @@ public static class GymChaosProgressionVerifier
     private static readonly string LockerReflectionCapturePath = Path.Combine(
         Directory.GetParent(Directory.GetParent(Application.dataPath).FullName).FullName,
         "codex-locker-reflection.png");
+    private static readonly string LockerPlayerReflectionCapturePath = Path.Combine(
+        Directory.GetParent(Directory.GetParent(Application.dataPath).FullName).FullName,
+        "codex-locker-player-reflection.png");
     private static Camera lockerPreviewCaptureCamera;
     private static RenderTexture lockerPreviewCaptureTarget;
     private static RenderTexture lockerPreviewPreviousTarget;
@@ -57,6 +61,7 @@ public static class GymChaosProgressionVerifier
     private static bool lockerPreviewPreviousCameraEnabled;
     private static int lockerPreviewCaptureAttempts;
     private static bool lockerReflectionCaptureVisible;
+    private static bool lockerPlayerReflectionVisible;
 
     static GymChaosProgressionVerifier()
     {
@@ -98,6 +103,7 @@ public static class GymChaosProgressionVerifier
         completed = false;
         lockerPreviewCaptureFrame = 0;
         lockerReflectionCaptureVisible = false;
+        lockerPlayerReflectionVisible = false;
         if (File.Exists(LockerPreviewCapturePath))
         {
             File.Delete(LockerPreviewCapturePath);
@@ -105,6 +111,10 @@ public static class GymChaosProgressionVerifier
         if (File.Exists(LockerReflectionCapturePath))
         {
             File.Delete(LockerReflectionCapturePath);
+        }
+        if (File.Exists(LockerPlayerReflectionCapturePath))
+        {
+            File.Delete(LockerPlayerReflectionCapturePath);
         }
         HookPlayModeEvents();
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
@@ -362,6 +372,22 @@ public static class GymChaosProgressionVerifier
                 progression.EquipShirt(GymShirtColor.Blue);
                 progression.EquipHeadwear(GymHeadwear.Visor);
 
+                // The GLB is loaded asynchronously. Do not capture the mirror
+                // until the selected wearable has a live renderer; otherwise
+                // a valid outfit can be falsely reported as invisible simply
+                // because the capture happened in the request frame.
+                if (loadout == null || !loadout.IsHeadwearVisualReady)
+                {
+                    if (elapsed > 45d)
+                    {
+                        Fail("Headwear asset did not become visible in the locker mirror.");
+                    }
+                    return;
+                }
+                Debug.Log(
+                    $"GYMCHAOS_HEADWEAR_VERIFIED type={loadout.CurrentHeadwear} " +
+                    $"asset={loadout.CurrentHeadwearAssetPath}", loadout);
+
                 if (lockerPreviewCaptureFrame == 0)
                 {
                     BeginLockerPreviewCapture();
@@ -388,7 +414,9 @@ public static class GymChaosProgressionVerifier
 
                 if (!File.Exists(LockerPreviewCapturePath) ||
                     !File.Exists(LockerReflectionCapturePath) ||
-                    !lockerReflectionCaptureVisible)
+                    !lockerReflectionCaptureVisible ||
+                    !File.Exists(LockerPlayerReflectionCapturePath) ||
+                    !lockerPlayerReflectionVisible)
                 {
                     lockerPreviewCaptureFrame++;
                     if (lockerPreviewCaptureFrame < 6)
@@ -424,17 +452,9 @@ public static class GymChaosProgressionVerifier
                     player.GetComponent<PlayerCosmeticLoadout>();
                 Transform shirt = FindDescendant(player.transform, "Player Cosmetic Shirt");
                 Transform headwear = FindDescendant(player.transform, "Player Cosmetic Headwear");
-                Renderer shirtRenderer = shirt != null ? shirt.GetComponent<Renderer>() : null;
-                if (loadout == null || shirt == null || headwear == null ||
-                    shirtRenderer == null || !shirtRenderer.enabled ||
-                    !headwear.gameObject.activeSelf ||
-                    shirt.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer ||
-                    headwear.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer)
+                if (loadout == null || shirt != null || headwear != null)
                 {
-                    if (elapsed > 12d)
-                    {
-                        Fail("Equipped shirt/headwear overlays were not visible on the player mirror layer.");
-                    }
+                    Fail("Procedural shirt/headwear primitives obscured the authored player mesh.");
                     return;
                 }
 
@@ -698,21 +718,35 @@ public static class GymChaosProgressionVerifier
             image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
             image.Apply(false, false);
             Color32[] pixels = image.GetPixels32();
-            bool hasRenderedPixels = false;
+            int minimumLuminance = 255;
+            int maximumLuminance = 0;
+            HashSet<int> colorBuckets = new HashSet<int>();
             for (int i = 0; i < pixels.Length; i++)
             {
-                if (pixels[i].r > 10 || pixels[i].g > 10 || pixels[i].b > 10)
-                {
-                    hasRenderedPixels = true;
-                    break;
-                }
+                Color32 pixel = pixels[i];
+                int luminance = (pixel.r * 3 + pixel.g * 6 + pixel.b) / 10;
+                minimumLuminance = Mathf.Min(minimumLuminance, luminance);
+                maximumLuminance = Mathf.Max(maximumLuminance, luminance);
+                colorBuckets.Add(
+                    ((pixel.r >> 5) << 6) |
+                    ((pixel.g >> 5) << 3) |
+                    (pixel.b >> 5));
             }
+
+            bool hasRenderedPixels = maximumLuminance > 10 &&
+                maximumLuminance - minimumLuminance > 30 &&
+                colorBuckets.Count >= 12;
 
             File.WriteAllBytes(LockerReflectionCapturePath, image.EncodeToPNG());
             lockerReflectionCaptureVisible = hasRenderedPixels;
+            lockerPlayerReflectionVisible =
+                CaptureLockerPlayerOnlyReflection(lockerMirror);
             Debug.Log(
                 "GYMCHAOS_LOCKER_REFLECTION_CAPTURE_WRITTEN path=" +
-                LockerReflectionCapturePath + " visible=" + hasRenderedPixels);
+                LockerReflectionCapturePath + " visible=" + hasRenderedPixels +
+                " luminanceRange=" + (maximumLuminance - minimumLuminance) +
+                " colorBuckets=" + colorBuckets.Count +
+                " playerVisible=" + lockerPlayerReflectionVisible);
         }
         catch (Exception exception)
         {
@@ -726,6 +760,88 @@ public static class GymChaosProgressionVerifier
             {
                 UnityEngine.Object.DestroyImmediate(image);
             }
+        }
+    }
+
+    private static bool CaptureLockerPlayerOnlyReflection(
+        PlanarGymMirror lockerMirror)
+    {
+        Camera camera = lockerMirror != null ? lockerMirror.ReflectionCamera : null;
+        RenderTexture texture = lockerMirror != null
+            ? lockerMirror.ReflectionTexture : null;
+        if (camera == null || texture == null)
+        {
+            return false;
+        }
+
+        int previousMask = camera.cullingMask;
+        CameraClearFlags previousClearFlags = camera.clearFlags;
+        Color previousBackground = camera.backgroundColor;
+        Texture2D image = null;
+        RenderTexture previousActive = RenderTexture.active;
+        try
+        {
+            int texturedPlayerRenderers = 0;
+            Renderer[] renderers = UnityEngine.Object.FindObjectsByType<Renderer>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (renderer == null ||
+                    renderer.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer)
+                {
+                    continue;
+                }
+                Material material = renderer.sharedMaterial;
+                Texture baseTexture = material != null && material.HasProperty("_BaseMap")
+                    ? material.GetTexture("_BaseMap") : null;
+                if (material != null && baseTexture != null &&
+                    material.renderQueue <= (int)RenderQueue.GeometryLast)
+                {
+                    texturedPlayerRenderers++;
+                }
+            }
+            if (texturedPlayerRenderers == 0)
+            {
+                return false;
+            }
+
+            camera.cullingMask = 1 << PlanarGymMirror.MirrorPlayerLayer;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = Color.black;
+            lockerMirror.RequestImmediateRefresh();
+            camera.Render();
+            RenderTexture.active = texture;
+            image = new Texture2D(
+                texture.width, texture.height, TextureFormat.RGB24, false);
+            image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
+            image.Apply(false, false);
+            Color32[] pixels = image.GetPixels32();
+            int visiblePixels = 0;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].r > 12 || pixels[i].g > 12 || pixels[i].b > 12)
+                {
+                    visiblePixels++;
+                }
+            }
+            File.WriteAllBytes(
+                LockerPlayerReflectionCapturePath, image.EncodeToPNG());
+            bool visible = visiblePixels >= 180;
+            Debug.Log(
+                $"GYMCHAOS_LOCKER_PLAYER_REFLECTION_OK visible={visible} " +
+                $"pixels={visiblePixels} texturedRenderers={texturedPlayerRenderers} " +
+                $"path={LockerPlayerReflectionCapturePath}");
+            return visible;
+        }
+        finally
+        {
+            camera.cullingMask = previousMask;
+            camera.clearFlags = previousClearFlags;
+            camera.backgroundColor = previousBackground;
+            RenderTexture.active = previousActive;
+            if (image != null) UnityEngine.Object.DestroyImmediate(image);
+            lockerMirror.RequestImmediateRefresh();
         }
     }
 
@@ -850,6 +966,7 @@ public static class GymChaosProgressionVerifier
         }
 
         if (!ValidatePickableItem("Loose Item - Foam roller", out failure) ||
+            !ValidatePickableItem("Loose Item - Step platform", out failure) ||
             !ValidatePickableItem("Loose Item - Red medicine ball", out failure) ||
             !ValidatePickableItem("Loose Item - Blue medicine ball", out failure) ||
             !ValidatePickableItem("Loose Item - Paper towel roll", out failure) ||
@@ -881,17 +998,40 @@ public static class GymChaosProgressionVerifier
             GameObject.Find("Loose Item - Half-rolled yoga mat").GetComponent<Renderer>();
         Renderer foamRenderer =
             GameObject.Find("Loose Item - Foam roller").GetComponent<Renderer>();
-        if (!IsBesideSurface(rolledOutRenderer.bounds, matBounds) ||
-            !IsBesideSurface(halfRolledRenderer.bounds, matBounds) ||
+        GameObject deadliftStation = GameObject.Find("Freeweights Deadlift Station");
+        bool matsAreBesideDeadlift = false;
+        if (deadliftStation != null &&
+            TryGetRendererBounds(deadliftStation.transform, out Bounds deadliftBounds))
+        {
+            Vector3 rolledOutLocal = deadliftStation.transform.InverseTransformPoint(
+                rolledOutRenderer.bounds.center);
+            Vector3 halfRolledLocal = deadliftStation.transform.InverseTransformPoint(
+                halfRolledRenderer.bounds.center);
+            matsAreBesideDeadlift = rolledOutLocal.x < -1.1f &&
+                halfRolledLocal.x > 1.1f &&
+                Mathf.Abs(rolledOutLocal.z - halfRolledLocal.z) < 1.35f &&
+                IsNearBounds(rolledOutRenderer.bounds.center, deadliftBounds, 0.9f) &&
+                IsNearBounds(halfRolledRenderer.bounds.center, deadliftBounds, 0.9f);
+        }
+
+        bool matsAreBesideAuthoredSurface =
+            IsBesideSurface(rolledOutRenderer.bounds, matBounds) &&
+            IsBesideSurface(halfRolledRenderer.bounds, matBounds);
+        if ((!matsAreBesideDeadlift && !matsAreBesideAuthoredSurface) ||
             !IsOnSurface(foamRenderer.bounds, matBounds))
         {
-            failure = "Both loose yoga mats are not beside the authored mat, or the foam roller left its surface.";
+            failure = "Loose yoga mats are neither beside the authored mat nor correctly split beside the deadlift platform, or the foam roller left its surface.";
             return false;
         }
 
         if (!HasHorizontalClearance(rolledOutRenderer.bounds, halfRolledRenderer.bounds))
         {
             failure = "The two loose yoga mats overlap beside the authored mat.";
+            return false;
+        }
+
+        if (!ValidateDeadliftSetup(out failure))
+        {
             return false;
         }
 
@@ -940,8 +1080,8 @@ public static class GymChaosProgressionVerifier
 
         Debug.Log(
             "GYMCHAOS_LOOSE_ITEMS_VERIFICATION_OK " +
-            "items=8 collisions=8 pickup=5 scales=foam0.6075 balls1.1875 " +
-            "matPlacement=beside surface=1 shelfPlacement=1 rackPlacement=1");
+            "items=8 collisions=8 pickup=6 scales=foam0.6075 balls1.1875 " +
+            "matPlacement=validated deadlift=1 shelfPlacement=1 rackPlacement=1");
         return true;
     }
 
@@ -957,6 +1097,319 @@ public static class GymChaosProgressionVerifier
 
         failure = string.Empty;
         return true;
+    }
+
+    private static bool ValidateDeadliftSetup(out string failure)
+    {
+        failure = string.Empty;
+        GameObject stationObject = GameObject.Find("Freeweights Deadlift Station");
+        GameObject barObject = GameObject.Find("Barbell DeadliftStation Loaded");
+        GameObject exerciseObject = GameObject.Find("Exercise Station - Deadlift");
+        if (stationObject == null || barObject == null || exerciseObject == null ||
+            stationObject.GetComponent<GymDeadliftStationMarker>() == null ||
+            stationObject.GetComponentsInChildren<Renderer>(true).Length < 8)
+        {
+            failure = "Deadlift platform, marker, flooring mats, or loaded bar is missing.";
+            return false;
+        }
+
+        GymDeadliftStationMarker stationMarker =
+            stationObject.GetComponent<GymDeadliftStationMarker>();
+        Collider[] loadedBarColliders = barObject.GetComponentsInChildren<Collider>(true);
+        for (int colliderIndex = 0; colliderIndex < loadedBarColliders.Length; colliderIndex++)
+        {
+            if (loadedBarColliders[colliderIndex] != null &&
+                !stationMarker.ContainsCollider(loadedBarColliders[colliderIndex]))
+            {
+                failure = "A loaded deadlift bar/plate collider is not registered with the station marker.";
+                return false;
+            }
+        }
+        EnemyFighter[] enemies = UnityEngine.Object.FindObjectsByType<EnemyFighter>(
+            FindObjectsSortMode.None);
+        for (int i = 0; i < enemies.Length; i++)
+        {
+            if (enemies[i] == null)
+            {
+                continue;
+            }
+
+            if (enemies[i].Identity == BodybuilderIdentity.Ronnie &&
+                !stationMarker.AreEnemyCollisionsIgnored(enemies[i]))
+            {
+                failure = "Ronnie still has an active collision with the deadlift station.";
+                return false;
+            }
+            if (GymLooseItemSpawner.TryGetDeadliftEscapePointForEnemy(
+                    enemies[i], 0.55f, out _))
+            {
+                failure = $"{enemies[i].Identity} is still inside the deadlift platform footprint.";
+                return false;
+            }
+            if (enemies[i].HasDeadliftRoamTarget)
+            {
+                failure = $"{enemies[i].Identity} still has a player-only deadlift roam target.";
+                return false;
+            }
+        }
+
+        GymExerciseStation station = exerciseObject.GetComponent<GymExerciseStation>();
+        PickupItem barPickup = barObject.GetComponent<PickupItem>();
+        Rigidbody barBody = barObject.GetComponent<Rigidbody>();
+        BoxCollider barShaftCollider = barObject.GetComponent<BoxCollider>();
+        int[] expectedDeadliftWeights = { 60, 80, 100, 140, 180, 200, 300, 400 };
+        bool hasExpectedDeadliftWeights = station != null && station.RequiresWeightSelection &&
+            station.WeightOptions.Length == expectedDeadliftWeights.Length;
+        if (hasExpectedDeadliftWeights)
+        {
+            for (int i = 0; i < expectedDeadliftWeights.Length; i++)
+            {
+                hasExpectedDeadliftWeights &= station.WeightOptions[i] == expectedDeadliftWeights[i];
+            }
+        }
+        if (station == null || !station.IsDeadlift || !hasExpectedDeadliftWeights ||
+            station.WeightOptions[0] != 60 || station.WeightOptions[station.WeightOptions.Length - 1] != 400 ||
+            barPickup == null ||
+            barPickup.ItemType != WeightType.Barbell || barBody == null ||
+            barShaftCollider == null || barShaftCollider.size.y > 0.3f ||
+            barShaftCollider.size.z > 0.3f ||
+            !barPickup.CanBePickedUp || Mathf.Abs(barBody.mass - 60f) > 0.01f)
+        {
+            failure = "Deadlift station is missing its 60-400 kg weight-selection grid or pickable loaded barbell.";
+            return false;
+        }
+
+        PickupItem[] mountedPickups = barObject.GetComponentsInChildren<PickupItem>(true);
+        Rigidbody[] mountedBodies = barObject.GetComponentsInChildren<Rigidbody>(true);
+        int mountedPlateCount = 0;
+        bool hasNegativeSide = false;
+        bool hasPositiveSide = false;
+        List<Collider> mountedPlateColliders = new List<Collider>();
+        for (int i = 0; i < mountedPickups.Length; i++)
+        {
+            PickupItem pickup = mountedPickups[i];
+            if (pickup == null || pickup == barPickup ||
+                (pickup.ItemType != WeightType.Plate20 &&
+                 pickup.ItemType != WeightType.Plate10 &&
+                 pickup.ItemType != WeightType.Plate5 &&
+                 pickup.ItemType != WeightType.Plate))
+            {
+                continue;
+            }
+
+            mountedPlateCount++;
+            hasNegativeSide |= pickup.transform.localPosition.x < -0.1f;
+            hasPositiveSide |= pickup.transform.localPosition.x > 0.1f;
+            Collider[] plateColliders = pickup.GetComponentsInChildren<Collider>(true);
+            for (int colliderIndex = 0; colliderIndex < plateColliders.Length; colliderIndex++)
+            {
+                if (plateColliders[colliderIndex] != null)
+                {
+                    mountedPlateColliders.Add(plateColliders[colliderIndex]);
+                }
+            }
+            if (Mathf.Abs(Mathf.Abs(pickup.transform.localPosition.x) -
+                    GymExerciseStation.DeadliftLoadedPlateCenter) > 0.08f)
+            {
+                failure = "Loaded deadlift plates are not tight to the outer loading sleeve's inner pin.";
+                return false;
+            }
+        }
+
+        for (int first = 0; first < mountedPlateColliders.Count; first++)
+        {
+            for (int second = first + 1; second < mountedPlateColliders.Count; second++)
+            {
+                if (Physics.ComputePenetration(
+                    mountedPlateColliders[first], mountedPlateColliders[first].transform.position,
+                    mountedPlateColliders[first].transform.rotation,
+                    mountedPlateColliders[second], mountedPlateColliders[second].transform.position,
+                    mountedPlateColliders[second].transform.rotation,
+                    out _, out _))
+                {
+                    failure = "Loaded deadlift plates overlap instead of sitting tightly on the loading sleeve.";
+                    return false;
+                }
+            }
+        }
+
+        if (mountedBodies.Length < 3 || mountedPlateCount < 2 ||
+            !hasNegativeSide || !hasPositiveSide)
+        {
+            failure = "Loaded deadlift bar is missing independent pickup rigidbodies on both sides.";
+            return false;
+        }
+
+        if (TryFindFloorBounds(out Bounds floorBounds) &&
+            TryGetRendererBounds(barObject.transform, out Bounds barBounds) &&
+            barBounds.min.y < floorBounds.max.y - 0.04f)
+        {
+            failure = "Loaded deadlift bar or its largest plate intersects the floor.";
+            return false;
+        }
+
+        if (TryGetRendererBounds(stationObject.transform, out Bounds platformBounds) &&
+            TryGetRendererBounds(barObject.transform, out barBounds) &&
+            Mathf.Abs(barBounds.min.y - platformBounds.max.y) > 0.035f)
+        {
+            failure = "The largest loaded deadlift plate is not resting on the platform surface.";
+            return false;
+        }
+
+        PickupItem[] allPickups = UnityEngine.Object.FindObjectsByType<PickupItem>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        int loosePlateCount = 0;
+        for (int i = 0; i < allPickups.Length; i++)
+        {
+            if (allPickups[i] != null &&
+                allPickups[i].gameObject.name.Contains("Freeweight Loose"))
+            {
+                loosePlateCount++;
+                Collider[] looseColliders =
+                    allPickups[i].GetComponentsInChildren<Collider>(true);
+                for (int colliderIndex = 0; colliderIndex < looseColliders.Length; colliderIndex++)
+                {
+                    if (looseColliders[colliderIndex] != null &&
+                        !stationMarker.ContainsCollider(looseColliders[colliderIndex]))
+                    {
+                        failure = "A loose deadlift plate collider is not registered with the station marker.";
+                        return false;
+                    }
+                }
+                if (TryFindFloorBounds(out floorBounds) &&
+                    TryGetRendererBounds(allPickups[i].transform, out Bounds looseBounds) &&
+                    (looseBounds.min.y < floorBounds.max.y - 0.025f ||
+                     looseBounds.min.y > floorBounds.max.y + 0.16f))
+                {
+                    failure = "A loose deadlift plate is not settled just above the floor.";
+                    return false;
+                }
+            }
+        }
+
+        if (loosePlateCount < 7)
+        {
+            failure = "Deadlift platform is missing the spread loose plate set.";
+            return false;
+        }
+
+        if (!ValidateDeadliftExerciseRuntime(station, out failure))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateDeadliftExerciseRuntime(
+        GymExerciseStation station, out string failure)
+    {
+        failure = string.Empty;
+        if (station == null || player == null || player.playerCamera == null)
+        {
+            failure = "Deadlift runtime smoke test has no station, player, or camera.";
+            return false;
+        }
+
+        bool began = false;
+        Dictionary<Transform, Vector3> loosePlatePositions =
+            new Dictionary<Transform, Vector3>();
+        PickupItem[] loosePlatePickups = UnityEngine.Object.FindObjectsByType<PickupItem>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < loosePlatePickups.Length; i++)
+        {
+            PickupItem pickup = loosePlatePickups[i];
+            if (pickup == null || pickup.gameObject.name.IndexOf(
+                    "Freeweight Loose", System.StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            Rigidbody body = pickup.GetComponent<Rigidbody>();
+            if (body != null)
+            {
+                loosePlatePositions[pickup.transform] = body.position;
+            }
+        }
+        try
+        {
+            station.BeginSession(player.playerCamera.transform);
+            began = true;
+            if (!station.IsSessionActive ||
+                station.GetSessionHud().IndexOf("DEADLIFT", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                failure = "Deadlift session did not open with its exercise HUD.";
+                return false;
+            }
+
+            GameObject loadedBar = GameObject.Find("Barbell DeadliftStation Loaded");
+            if (loadedBar != null)
+            {
+                Vector3 barAxis = Vector3.ProjectOnPlane(
+                    loadedBar.transform.right, Vector3.up).normalized;
+                Vector3 cameraDirection = Vector3.ProjectOnPlane(
+                    station.PlayerRotation * Vector3.forward, Vector3.up).normalized;
+                if (barAxis.sqrMagnitude < 0.0001f || cameraDirection.sqrMagnitude < 0.0001f ||
+                    Mathf.Abs(Vector3.Dot(barAxis, cameraDirection)) > 0.25f)
+                {
+                    failure = "Deadlift camera is still looking along the bar instead of toward the mirrors.";
+                    return false;
+                }
+            }
+
+            station.GetCameraPose(
+                out Vector3 setupCameraPosition,
+                out Quaternion setupCameraRotation);
+            station.TickSession(0.05f, true, false, false);
+            station.TickSession(0.05f, true, false, false);
+            if (station.LastWorkoutResult == WorkoutResult.None)
+            {
+                failure = "Deadlift timing input did not start a workout rep.";
+                return false;
+            }
+
+            station.TickSession(1.3f, false, false, false);
+            station.GetCameraPose(
+                out Vector3 hingeCameraPosition,
+                out Quaternion hingeCameraRotation);
+            if (Mathf.Abs(hingeCameraPosition.y - setupCameraPosition.y) < 0.15f ||
+                Quaternion.Angle(hingeCameraRotation, setupCameraRotation) < 4f)
+            {
+                failure = "Deadlift camera did not follow the configured hinge-to-lockout range of motion.";
+                return false;
+            }
+
+            foreach (KeyValuePair<Transform, Vector3> entry in loosePlatePositions)
+            {
+                if (entry.Key == null)
+                {
+                    continue;
+                }
+
+                Rigidbody body = entry.Key.GetComponent<Rigidbody>();
+                if (body != null && Vector3.Distance(body.position, entry.Value) > 0.002f)
+                {
+                    failure = "A loose deadlift plate moved while the selected barbell load was lifting.";
+                    return false;
+                }
+            }
+
+            station.TickSession(1.4f, false, false, false);
+            if (station.Repetitions < 1)
+            {
+                failure = "Deadlift rep timer did not complete a repetition.";
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            if (began && station.IsSessionActive)
+            {
+                station.EndSession();
+            }
+        }
     }
 
     private static bool ValidateUniformScale(

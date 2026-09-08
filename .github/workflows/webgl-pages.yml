@@ -49,10 +49,13 @@ jobs:
         run: |
           test -s GymChaos/Build/WebGL/index.html
           test -s GymChaos/Build/WebGL/gymchaos-runtime.json
+          test ! -e GymChaos/Build/WebGL/soundcloud-callback.html
+          test ! -e GymChaos/Build/WebGL/soundcloud-config.json
           grep -q '"runtimeBootstrap":true' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"mirrors"' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"characters"' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"exercises"' GymChaos/Build/WebGL/gymchaos-runtime.json
+          grep -q '"soundcloud-widget"' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"jay-cutler"' GymChaos/Build/WebGL/gymchaos-runtime.json
           grep -q '"goku-flight"' GymChaos/Build/WebGL/gymchaos-runtime.json
 

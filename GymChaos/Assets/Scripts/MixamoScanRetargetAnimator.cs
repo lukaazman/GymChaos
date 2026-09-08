@@ -3,13 +3,17 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Samples a hidden copy of the same per-enemy Mixamo FBX that is rendered by
-/// ExternalRiggedCharacterVisual. Only clip rotation deltas are copied to the
-/// visible rig, keeping each scan's T-pose bind/material layout intact.
+/// Drives an enemy from the animation clips baked into that enemy's own
+/// authored Blender FBX.  The class keeps the gameplay-facing state API used
+/// by EnemyFighter, but it no longer creates a hidden source rig or copies
+/// rotations from a shared skeleton at runtime.
 /// </summary>
 [DefaultExecutionOrder(900)]
 public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 {
+    private const float PunchDuration = 0.72f;
+    private const float AuthoredTransitionDuration = 0.12f;
+
     public enum MotionState
     {
         Uninitialized,
@@ -21,25 +25,35 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         Downed
     }
 
-    private sealed class BonePair
-    {
-        public Transform Source;
-        public Transform Target;
-        public Quaternion SourceRestInModel;
-        public Quaternion TargetRestInOwner;
-    }
-
     private BodybuilderEnemyVisual.Rig rig;
-    private GameObject sourceModel;
+    private Transform modelRoot;
+    private AnimationClip walkingClip;
     private AnimationClip runClip;
     private AnimationClip punchClip;
     private AnimationClip idleClip;
     private AnimationClip flyClip;
     private AnimationClip celebrationClip;
-    private BonePair[] pairs;
-    private Quaternion targetRootRestInOwner;
-    private bool hasTargetRootRest;
+    private AnimationClip authoredWalkingClip;
+    private AnimationClip authoredRunningClip;
+    private AnimationClip authoredPunchClip;
+    private AnimationClip authoredFlyingClip;
+    private AnimationClip authoredSquatClip;
+    private AnimationClip[] idleVariants = new AnimationClip[0];
+    private AnimationClip[] celebrationVariants = new AnimationClip[0];
+    private readonly Dictionary<Transform, Quaternion> restRotations =
+        new Dictionary<Transform, Quaternion>();
+    private readonly Dictionary<Transform, Vector3> restPositions =
+        new Dictionary<Transform, Vector3>();
+    private readonly Dictionary<Transform, Vector3> restScales =
+        new Dictionary<Transform, Vector3>();
+    private Vector3 modelBaseLocalPosition;
+    private Quaternion modelBaseLocalRotation;
+    private Vector3 modelBaseLocalScale;
+    private float groundingOffsetY;
+    private float groundingOffsetVelocity;
+    private bool groundingOffsetInitialized;
     private bool moving;
+    private bool useRunningClip;
     private bool flying;
     private bool downed;
     private float speed01;
@@ -50,137 +64,218 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private bool punchContactSent;
     private bool celebrating;
     private bool workoutPoseLocked;
+    private float workoutPoseTime;
+    private bool workoutPosePhaseDriven;
+    private float workoutPosePhase;
     private Vector3 punchDirection = Vector3.forward;
     private Vector3 punchTargetPosition;
     private bool hasPunchTarget;
     private MotionState lastMotionState = MotionState.Uninitialized;
+    private BodybuilderIdentity configuredIdentity;
+    private int variantSeed;
+    private int idleVariantCursor = -1;
+    private int celebrationVariantCursor = -1;
+    private string lastAnimationMarker;
+    private MotionState lastAnimationMarkerState = MotionState.Uninitialized;
+    private AnimationClip lastAnimationMarkerClip;
+    private string lastAnimationMarkerBranch;
+    private bool hasAnimationMarker;
+    private int authoredLoadedClipCount;
+    private string authoredLoadedClipNames = string.Empty;
+    private bool configured;
+    private readonly AuthoredPoseTransition poseTransition = new AuthoredPoseTransition();
+    private AnimationClip lastSampledClip;
+    private string lastSampledBranch;
+    private bool hasSampledPose;
 
     public bool HasRunClip => runClip != null;
+    public bool HasWalkingClip => walkingClip != null;
     public bool HasPunchClip => punchClip != null;
     public bool HasIdleClip => idleClip != null;
-    public bool HasProceduralIdle => idleClip == null && pairs != null;
+    public bool HasProceduralIdle => false;
     public bool HasFlightPose => rig != null && rig.RightUpperArm != null &&
         rig.RightForearm != null && rig.RightHand != null;
     public bool HasFlyClip => flyClip != null;
     public bool HasCelebrationClip => celebrationClip != null;
-    public bool IsPunchComplete => attackTime >= 0.72f;
+    public bool HasAuthoredWalkingClip => authoredWalkingClip != null;
+    public bool HasAuthoredRunningClip => authoredRunningClip != null;
+    public bool HasAuthoredPunchClip => authoredPunchClip != null;
+    public bool HasAuthoredFlyingClip => authoredFlyingClip != null;
+    public bool HasAuthoredSquatClip => authoredSquatClip != null;
+    public bool HasAuthoredAnimationSetup => authoredLoadedClipCount == 11;
+    public int AuthoredIdleClipCount => CountAvailable(idleVariants);
+    public int AuthoredCelebrationClipCount => CountAvailable(celebrationVariants);
+    public string AuthoredAnimationResourcePath => ResourcePath(configuredIdentity);
+    public bool RuntimeModelRootIsAuthoredInstance =>
+        modelRoot != null && modelRoot.IsChildOf(transform);
+    public string CurrentAnimationClipName => GetClipNameForMarker(lastAnimationMarker);
+    public bool IsPunchComplete => attackTime >= PunchDuration;
     public MotionState CurrentState => lastMotionState;
     public MotionState LastMotionState => lastMotionState;
     public bool IsWorkoutPoseLocked => workoutPoseLocked;
+    public bool IsUsingRunningClip => useRunningClip;
 
-    public bool Configure(BodybuilderIdentity identity, BodybuilderEnemyVisual.Rig bodyRig)
+    public bool Configure(
+        BodybuilderIdentity identity, BodybuilderEnemyVisual.Rig bodyRig)
     {
+        return Configure(identity, bodyRig, ResolveModelRoot(bodyRig));
+    }
+
+    public bool Configure(
+        BodybuilderIdentity identity,
+        BodybuilderEnemyVisual.Rig bodyRig,
+        Transform authoredRoot)
+    {
+        configuredIdentity = identity;
+        variantSeed = StableVariantSeed(identity);
+        rig = bodyRig;
+        modelRoot = authoredRoot != null ? authoredRoot : ResolveModelRoot(bodyRig);
+        lastAnimationMarker = null;
+        hasAnimationMarker = false;
+        lastAnimationMarkerClip = null;
+        lastAnimationMarkerBranch = null;
+
         string resourcePath = ResourcePath(identity);
-        GameObject prefab = Resources.Load<GameObject>(resourcePath);
-        AnimationClip[] clips = Resources.LoadAll<AnimationClip>(resourcePath);
-        idleClip = FindClip(clips, "idle");
-        runClip = FindClip(clips, "run");
-        punchClip = FindClip(clips, "punch");
-        flyClip = identity == BodybuilderIdentity.Goku ? FindClip(clips, "fly") : null;
-        celebrationClip = FindClip(clips, "celebration");
-        if (prefab == null || runClip == null || punchClip == null || bodyRig == null)
+        authoredWalkingClip = LoadAuthoredClip(resourcePath, "walking");
+        authoredRunningClip = LoadAuthoredClip(resourcePath, "running");
+        authoredPunchClip = LoadAuthoredClip(resourcePath, "punch_combo");
+        authoredFlyingClip = LoadAuthoredClip(resourcePath, "flying");
+        authoredSquatClip = LoadAuthoredClip(resourcePath, "squat");
+        idleVariants = CompactVariants(
+            LoadAuthoredClip(resourcePath, "idle1"),
+            LoadAuthoredClip(resourcePath, "idle2"),
+            LoadAuthoredClip(resourcePath, "idle3"));
+        celebrationVariants = CompactVariants(
+            LoadAuthoredClip(resourcePath, "celebration1"),
+            LoadAuthoredClip(resourcePath, "celebration2"),
+            LoadAuthoredClip(resourcePath, "celebration3"));
+        authoredLoadedClipNames = BuildAuthoredClipNameList();
+        authoredLoadedClipCount = CountLoadedAuthoredClips();
+
+        walkingClip = authoredWalkingClip;
+        runClip = authoredRunningClip;
+        punchClip = authoredPunchClip;
+        flyClip = authoredFlyingClip;
+        idleClip = null;
+        celebrationClip = null;
+        SelectInitialIdleVariant();
+        SelectCelebrationVariant();
+
+        Debug.Log(
+            $"GYMCHAOS_ENEMY_AUTHORED_CLIP_INVENTORY identity={identity} " +
+            $"path={resourcePath} loadedCount={authoredLoadedClipCount} " +
+            $"loadedNames={authoredLoadedClipNames} " +
+            $"walking={ClipName(authoredWalkingClip)} " +
+            $"running={ClipName(authoredRunningClip)} " +
+            $"idle1={ClipName(GetVariant(idleVariants, 0))} " +
+            $"idle2={ClipName(GetVariant(idleVariants, 1))} " +
+            $"idle3={ClipName(GetVariant(idleVariants, 2))} " +
+            $"flying={ClipName(authoredFlyingClip)} " +
+            $"squat={ClipName(authoredSquatClip)} " +
+            $"punch_combo={ClipName(authoredPunchClip)} " +
+            $"celebration1={ClipName(GetVariant(celebrationVariants, 0))} " +
+            $"celebration2={ClipName(GetVariant(celebrationVariants, 1))} " +
+            $"celebration3={ClipName(GetVariant(celebrationVariants, 2))} " +
+            $"selectedIdle={ClipName(idleClip)} " +
+            $"selectedCelebration={ClipName(celebrationClip)}",
+            this);
+
+        if (modelRoot == null || bodyRig == null || !HasAuthoredAnimationSetup)
         {
+            Debug.LogError(
+                $"GYMCHAOS_ENEMY_AUTHORED_CLIP_SETUP_FAILED identity={identity} " +
+                $"modelRoot={modelRoot != null} bodyRig={bodyRig != null} " +
+                $"loadedCount={authoredLoadedClipCount}/11 " +
+                $"requiredPath=Assets/Resources/{resourcePath}.fbx", this);
             return false;
         }
 
-        rig = bodyRig;
-        if (rig.Root != null)
+        CaptureRestPose();
+        configured = true;
+        RestoreVisibleRestPose();
+        if (idleClip != null)
         {
-            targetRootRestInOwner = Quaternion.Inverse(transform.rotation) * rig.Root.rotation;
-            hasTargetRootRest = true;
+            SampleDirect(idleClip, 0f);
         }
-        sourceModel = Instantiate(prefab, transform);
-        sourceModel.name = identity + " Hidden Mixamo Motion Source";
-        sourceModel.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
-        Renderer[] sourceRenderers = sourceModel.GetComponentsInChildren<Renderer>(true);
-        for (int i = 0; i < sourceRenderers.Length; i++)
-        {
-            sourceRenderers[i].enabled = false;
-            sourceRenderers[i].forceRenderingOff = true;
-        }
-        Animator[] animators = sourceModel.GetComponentsInChildren<Animator>(true);
-        for (int i = 0; i < animators.Length; i++)
-        {
-            animators[i].enabled = false;
-        }
-
-        // Unity WebGL does not allow non-Legacy AnimationClips to be sampled
-        // on a hierarchy that has no Animator.  The imported prefab usually
-        // keeps its Animator on a child armature, while SampleAnimation is
-        // invoked on this hidden root.  Keep a controller-free root Animator
-        // enabled as the sampling anchor; it does not drive a visible rig.
-        Animator samplingAnimator = sourceModel.GetComponent<Animator>();
-        if (samplingAnimator == null)
-        {
-            samplingAnimator = sourceModel.AddComponent<Animator>();
-        }
-        samplingAnimator.runtimeAnimatorController = null;
-        samplingAnimator.applyRootMotion = false;
-        samplingAnimator.enabled = true;
-
-        Transform[] sourceBones = sourceModel.GetComponentsInChildren<Transform>(true);
-        List<BonePair> mapped = new List<BonePair>();
-        AddPair(mapped, sourceBones, rig.Hips, "hips");
-        AddPair(mapped, sourceBones, rig.Spine, "spine");
-        AddPair(mapped, sourceBones, rig.Chest, "spine2", "spine1");
-        AddPair(mapped, sourceBones, rig.Neck, "neck");
-        AddPair(mapped, sourceBones, rig.Head, "head");
-        AddPair(mapped, sourceBones, rig.LeftShoulder, "leftshoulder");
-        AddPair(mapped, sourceBones, rig.LeftUpperArm, "leftarm");
-        AddPair(mapped, sourceBones, rig.LeftForearm, "leftforearm");
-        AddPair(mapped, sourceBones, rig.LeftHand, "lefthand");
-        AddPair(mapped, sourceBones, rig.RightShoulder, "rightshoulder");
-        AddPair(mapped, sourceBones, rig.RightUpperArm, "rightarm");
-        AddPair(mapped, sourceBones, rig.RightForearm, "rightforearm");
-        AddPair(mapped, sourceBones, rig.RightHand, "righthand");
-        AddPair(mapped, sourceBones, rig.LeftThigh, "leftupleg");
-        AddPair(mapped, sourceBones, rig.LeftShin, "leftleg");
-        AddPair(mapped, sourceBones, rig.LeftFoot, "leftfoot");
-        AddPair(mapped, sourceBones, rig.RightThigh, "rightupleg");
-        AddPair(mapped, sourceBones, rig.RightShin, "rightleg");
-        AddPair(mapped, sourceBones, rig.RightFoot, "rightfoot");
-        pairs = mapped.ToArray();
-        RestoreTargetRest();
+        poseTransition.Cancel();
+        lastSampledClip = idleClip;
+        lastSampledBranch = "idle";
+        hasSampledPose = idleClip != null;
         Debug.Log(
-            $"GYMCHAOS_MIXAMO_SCAN_RETARGET_OK identity={identity} bones={pairs.Length} " +
-            $"idle={idleClip?.name ?? "procedural"} run={runClip.name} punch={punchClip.name}", this);
-        return pairs.Length >= 14;
+            $"GYMCHAOS_DIRECT_AUTHORED_ANIMATION_OK identity={identity} " +
+            $"model={modelRoot.name} clips={authoredLoadedClipCount} " +
+            $"idle={ClipName(idleClip)} walking={ClipName(walkingClip)} " +
+            $"run={ClipName(runClip)} punch={ClipName(punchClip)} " +
+            $"flight={ClipName(flyClip)} squat={ClipName(authoredSquatClip)} " +
+            $"celebration={ClipName(celebrationClip)}",
+            this);
+        return true;
     }
 
-    public void SetMoving(bool shouldMove, float normalizedSpeed = 1f)
+    public void CaptureFittedModelTransform()
     {
-        if (attackTime >= 0.72f)
+        if (modelRoot == null)
         {
-            // Let FixedUpdate consume the contact at the end pose first; the
-            // next movement command can then return to Idle/Run cleanly.
+            return;
+        }
+        modelBaseLocalPosition = modelRoot.localPosition;
+        modelBaseLocalRotation = modelRoot.localRotation;
+        modelBaseLocalScale = modelRoot.localScale;
+        groundingOffsetY = 0f;
+        groundingOffsetVelocity = 0f;
+        groundingOffsetInitialized = false;
+    }
+
+    public void SetConversationActive(bool active)
+    {
+        // Conversation uses the same authored idle as the rest of the game.
+        // Keep this API for dialogue code without injecting a second
+        // procedural skeleton pose over the exported character animation.
+    }
+
+    public void SetMoving(
+        bool shouldMove, float normalizedSpeed = 1f,
+        bool shouldUseRunningClip = false)
+    {
+        if (attackTime >= PunchDuration)
+        {
             attackTime = -1f;
             punchContactSent = false;
         }
+
+        bool enteringIdle = !shouldMove &&
+            (moving || lastMotionState != MotionState.Idle);
+        // Intent selects the authored clip. Roaming may reach full walk speed
+        // and must still remain Walking; chase/anger explicitly selects Run.
+        bool nextRunningClip = shouldMove && shouldUseRunningClip;
+        bool enteringOrChangingLocomotion = shouldMove &&
+            (!moving || useRunningClip != nextRunningClip);
+        if (enteringOrChangingLocomotion)
+        {
+            runTime = 0f;
+        }
+        if (enteringIdle)
+        {
+            idleTime = 0f;
+        }
         moving = shouldMove;
         speed01 = shouldMove ? Mathf.Clamp01(normalizedSpeed) : 0f;
+        useRunningClip = nextRunningClip;
         celebrating = false;
+        if (enteringIdle)
+        {
+            SelectNextIdleVariant();
+        }
         lastMotionState = shouldMove ? MotionState.Running : MotionState.Idle;
     }
 
     public void PrepareForWorkoutPose()
     {
-        if (sourceModel == null || pairs == null)
+        if (!configured || workoutPoseLocked)
         {
             return;
         }
 
-        // GymVisitorAgent locks the rest pose during the physics-side arrival
-        // handoff. Repeated callers in the same frame must not rewrite the
-        // complete visible bone chain again before the squat solver runs.
-        if (workoutPoseLocked)
-        {
-            return;
-        }
-
-        // A workout controller needs a stable imported rest reference. Do not
-        // let the current frame of Run or the looping Idle clip become the
-        // base rotations for the IK solve; that makes the arm branch depend
-        // on which frame the visitor happened to reach the rack.
         moving = false;
         flying = false;
         celebrating = false;
@@ -188,12 +283,27 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         punchContactSent = false;
         lastMotionState = MotionState.Idle;
         workoutPoseLocked = true;
-        RestoreTargetRest();
+        workoutPoseTime = 0f;
+        workoutPosePhaseDriven = false;
+        workoutPosePhase = 0f;
+        RestoreVisibleRestPose();
+    }
+
+    public void SetWorkoutPosePhase(float normalizedPhase)
+    {
+        if (!configured || !workoutPoseLocked)
+        {
+            return;
+        }
+
+        workoutPosePhase = Mathf.Repeat(normalizedPhase, 1f);
+        workoutPosePhaseDriven = true;
     }
 
     public void ReleaseWorkoutPose()
     {
         workoutPoseLocked = false;
+        workoutPosePhaseDriven = false;
         if (lastMotionState == MotionState.Uninitialized)
         {
             lastMotionState = MotionState.Idle;
@@ -202,9 +312,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 
     public void SetFlying(bool shouldFly)
     {
-        // Flight does not sample the punch clip. Cancel an unfinished punch
-        // when the fighter leaves the ground so its attack timer cannot freeze
-        // forever and block the next grounded attack.
         if (shouldFly && attackTime >= 0f)
         {
             attackTime = -1f;
@@ -281,7 +388,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         leftHand = rig != null ? rig.LeftHand : null;
         rightHand = rig != null ? rig.RightHand : null;
         if (attackTime < 0f || punchContactSent || punchClip == null ||
-            attackTime / Mathf.Max(0.01f, 0.72f) < 0.54f)
+            attackTime / PunchDuration < 0.54f)
         {
             return false;
         }
@@ -307,9 +414,213 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     }
 
 #if UNITY_EDITOR
+    public bool SampleAuthoredClipForVerification(
+        string clipStem, float normalizedTime, out string details)
+    {
+        AnimationClip clip = FindAuthoredClip(clipStem);
+        if (!configured || modelRoot == null || clip == null)
+        {
+            details = $"clip={clipStem} missing={clip == null} model={modelRoot != null}";
+            return false;
+        }
+
+        float duration = Mathf.Max(0.01f, clip.length - 0.001f);
+        bool sampled = SampleDirect(
+            clip, Mathf.Clamp01(normalizedTime) * duration);
+        int changedBones = CountChangedRestBones();
+        float rootDelta = 0f;
+        if (rig != null && rig.Root != null &&
+            restPositions.TryGetValue(rig.Root, out Vector3 restRootPosition))
+        {
+            rootDelta = Vector3.Distance(rig.Root.localPosition, restRootPosition);
+        }
+        details =
+            $"clip={clip.name} changedBones={changedBones} rootDelta={rootDelta:F4}";
+        RestoreVisibleRestPose();
+        return sampled && changedBones > 0;
+    }
+
+    public bool SampleAllAuthoredClipsForVerification(out string details)
+    {
+        string[] clipStems =
+        {
+            "walking", "running", "punch_combo", "flying", "squat",
+            "idle1", "idle2", "idle3", "celebration1", "celebration2",
+            "celebration3"
+        };
+        List<string> samples = new List<string>(clipStems.Length);
+        bool valid = true;
+        for (int i = 0; i < clipStems.Length; i++)
+        {
+            bool sampled = SampleAuthoredClipForVerification(
+                clipStems[i], 0.5f, out string sampleDetails);
+            valid &= sampled;
+            samples.Add(sampleDetails);
+        }
+        details = string.Join(";", samples.ToArray());
+        return valid;
+    }
+
+    public bool SampleAuthoredClipRangeForVerification(
+        string clipStem, out string details)
+    {
+        AnimationClip clip = FindAuthoredClip(clipStem);
+        if (!configured || modelRoot == null || clip == null)
+        {
+            details = $"clip={clipStem} missing={clip == null} model={modelRoot != null}";
+            return false;
+        }
+
+        float duration = Mathf.Max(0.01f, clip.length - 0.001f);
+        bool sampledStart = SampleDirect(clip, 0f);
+        Dictionary<Transform, AuthoredPoseSample> startPose = CaptureAuthoredPose();
+        Vector3 startRoot = GetAuthoredRootLocalPosition();
+        int startChangedBones = CountChangedRestBones();
+
+        bool sampledMiddle = SampleDirect(clip, duration * 0.5f);
+        Dictionary<Transform, AuthoredPoseSample> middlePose = CaptureAuthoredPose();
+        Vector3 middleRoot = GetAuthoredRootLocalPosition();
+        int middleChangedBones = CountChangedRestBones();
+
+        // Sample the actual imported clip endpoint. The runtime loop still
+        // subtracts a tiny epsilon to avoid crossing the clip boundary, but
+        // the authored source's final standing frame is the authoritative
+        // endpoint for this structural rep check.
+        bool sampledEnd = SampleDirect(clip, clip.length);
+        Dictionary<Transform, AuthoredPoseSample> endPose = CaptureAuthoredPose();
+        Vector3 endRoot = GetAuthoredRootLocalPosition();
+        int endChangedBones = CountChangedRestBones();
+
+        string endpointDeltaBone;
+        string middleDeltaBone;
+        float endpointPoseDelta = GetAuthoredPoseDelta(
+            startPose, endPose, out endpointDeltaBone);
+        float middlePoseDelta = GetAuthoredPoseDelta(
+            startPose, middlePose, out middleDeltaBone);
+        float endpointRootDelta = Vector3.Distance(startRoot, endRoot);
+        float middleRootTravel = Vector3.Distance(startRoot, middleRoot);
+        bool isSquat = string.Equals(clipStem, "squat", StringComparison.OrdinalIgnoreCase);
+        bool valid = sampledStart && sampledMiddle && sampledEnd && isSquat &&
+            clip.length > 0.01f && middleChangedBones > 0 && middlePoseDelta > 0.01f &&
+            endpointPoseDelta < 0.12f && endpointRootDelta < 0.12f;
+        details =
+            $"clip={clip.name} length={clip.length:F3} " +
+            $"startChanged={startChangedBones} middleChanged={middleChangedBones} " +
+            $"endChanged={endChangedBones} middlePoseDelta={middlePoseDelta:F4} " +
+            $"endpointPoseDelta={endpointPoseDelta:F4} " +
+            $"endpointDeltaBone={endpointDeltaBone} middleDeltaBone={middleDeltaBone} " +
+            $"endpointRootDelta={endpointRootDelta:F4} " +
+            $"middleRootTravel={middleRootTravel:F4}";
+        RestoreVisibleRestPose();
+        return valid;
+    }
+
+    private struct AuthoredPoseSample
+    {
+        public Vector3 localPosition;
+        public Quaternion localRotation;
+        public Vector3 localScale;
+    }
+
+    private Dictionary<Transform, AuthoredPoseSample> CaptureAuthoredPose()
+    {
+        Dictionary<Transform, AuthoredPoseSample> pose =
+            new Dictionary<Transform, AuthoredPoseSample>(restRotations.Count);
+        foreach (KeyValuePair<Transform, Quaternion> pair in restRotations)
+        {
+            Transform bone = pair.Key;
+            if (bone == null)
+            {
+                continue;
+            }
+
+            pose[bone] = new AuthoredPoseSample
+            {
+                localPosition = bone.localPosition,
+                localRotation = bone.localRotation,
+                localScale = bone.localScale
+            };
+        }
+        return pose;
+    }
+
+    private static float GetAuthoredPoseDelta(
+        Dictionary<Transform, AuthoredPoseSample> from,
+        Dictionary<Transform, AuthoredPoseSample> to,
+        out string maximumBone)
+    {
+        float maximum = 0f;
+        maximumBone = "none";
+        foreach (KeyValuePair<Transform, AuthoredPoseSample> pair in from)
+        {
+            if (!to.TryGetValue(pair.Key, out AuthoredPoseSample target))
+            {
+                continue;
+            }
+
+            AuthoredPoseSample source = pair.Value;
+            float positionDelta = Vector3.Distance(
+                source.localPosition, target.localPosition);
+            if (positionDelta > maximum)
+            {
+                maximum = positionDelta;
+                maximumBone = pair.Key.name + ":position";
+            }
+            float rotationDelta = Quaternion.Angle(
+                source.localRotation, target.localRotation) / 180f;
+            if (rotationDelta > maximum)
+            {
+                maximum = rotationDelta;
+                maximumBone = pair.Key.name + ":rotation";
+            }
+            float scaleDelta = Vector3.Distance(
+                source.localScale, target.localScale);
+            if (scaleDelta > maximum)
+            {
+                maximum = scaleDelta;
+                maximumBone = pair.Key.name + ":scale";
+            }
+        }
+        return maximum;
+    }
+
+    private Vector3 GetAuthoredRootLocalPosition()
+    {
+        return rig != null && rig.Root != null ? rig.Root.localPosition : Vector3.zero;
+    }
+
+    public bool SamplePunchContactForVerification(
+        out Vector3 leftHandPosition, out Vector3 rightHandPosition, out string details)
+    {
+        leftHandPosition = Vector3.zero;
+        rightHandPosition = Vector3.zero;
+        if (!configured || modelRoot == null || punchClip == null || rig == null ||
+            rig.LeftHand == null || rig.RightHand == null)
+        {
+            details =
+                $"configured={configured} model={modelRoot != null} clip={punchClip != null} " +
+                $"leftHand={rig?.LeftHand != null} rightHand={rig?.RightHand != null}";
+            return false;
+        }
+
+        // TryConsumePunchContact fires at >= 0.54. The physics query runs
+        // before the following LateUpdate, so the visible hand pose is the
+        // preceding frame''s pose. Sample just before that threshold to place
+        // the verifier target on the same authored motion path.
+        const float contactNormalizedTime = 0.52f;
+        SampleDirectNormalized(punchClip, contactNormalizedTime);
+        leftHandPosition = rig.LeftHand.position;
+        rightHandPosition = rig.RightHand.position;
+        details =
+            $"clip={punchClip.name} normalized={contactNormalizedTime:F2} " +
+            $"left={leftHandPosition} right={rightHandPosition}";
+        RestoreVisibleRestPose();
+        return true;
+    }
+
     public void ResetToVerificationIdlePose()
     {
-        if (sourceModel == null || pairs == null)
+        if (!configured || modelRoot == null)
         {
             return;
         }
@@ -323,509 +634,590 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         idleTime = 0f;
         runTime = 0f;
         flightTime = 0f;
-        RestoreTargetRest();
-        if (!workoutPoseLocked && idleClip != null)
+        RestoreVisibleRestPose();
+        poseTransition.Cancel();
+        lastSampledClip = idleClip;
+        lastSampledBranch = "idle";
+        hasSampledPose = idleClip != null;
+        if (idleClip != null)
         {
-            SampleAndApply(idleClip, 0f, 1f);
+            SampleDirect(idleClip, 0f);
         }
-        ClampIdleGrounding();
         lastMotionState = MotionState.Idle;
     }
 #endif
 
     private void LateUpdate()
     {
-        if (sourceModel == null || pairs == null)
+        if (!configured || modelRoot == null)
         {
             return;
         }
 
         if (workoutPoseLocked)
         {
-            // The squat solver owns the visible rig for this frame and the
-            // whole workout. Do not sample even one idle frame between the
-            // visitor's authored arrival pose and the squat zero pose.
-            RestoreTargetRest();
             lastMotionState = MotionState.Idle;
-            return;
-        }
-
-        RestoreTargetRest();
-        if (downed)
-        {
-            lastMotionState = MotionState.Downed;
-            return;
-        }
-        if (celebrating)
-        {
-            lastMotionState = MotionState.Celebration;
-            if (celebrationClip != null)
+            PreparePoseTransition(authoredSquatClip, "workout");
+            if (authoredSquatClip != null)
             {
-                SampleAndApply(
-                    celebrationClip,
-                    Time.time % Mathf.Max(0.01f, celebrationClip.length - 0.001f),
-                    1f);
-            }
-            return;
-        }
-        if (flying)
-        {
-            lastMotionState = MotionState.Flying;
-            flightTime += Time.deltaTime;
-            if (flyClip != null)
-            {
-                SampleAndApply(
-                    flyClip,
-                    flightTime % Mathf.Max(0.01f, flyClip.length - 0.001f),
-                    1f);
+                if (workoutPosePhaseDriven)
+                {
+                    float duration = Mathf.Max(0.01f, authoredSquatClip.length - 0.001f);
+                    workoutPoseTime = workoutPosePhase * duration;
+                }
+                else
+                {
+                    workoutPoseTime += Time.deltaTime;
+                }
+                SampleDirectLoop(authoredSquatClip, workoutPoseTime);
+                EmitAnimationMarker(MotionState.Idle, authoredSquatClip, "workout");
             }
             else
             {
-                ApplyFlightPose(flightTime);
+                PreparePoseTransition(null, "animation-disabled");
+                RestoreVisibleRestPose();
+                EmitAnimationMarker(MotionState.Idle, null, "animation-disabled");
             }
             return;
         }
 
-        AnimationClip clip = null;
-        float sampleTime = 0f;
-        float influence = 0.72f;
-        bool idleState = false;
-        float punchNormalized = 0f;
+        if (downed)
+        {
+            PreparePoseTransition(null, "downed");
+            RestoreVisibleRestPose();
+            lastMotionState = MotionState.Downed;
+            EmitAnimationMarker(MotionState.Downed, null, "downed");
+            return;
+        }
+
+        if (celebrating)
+        {
+            lastMotionState = MotionState.Celebration;
+            PreparePoseTransition(celebrationClip, "celebration");
+            EmitAnimationMarker(MotionState.Celebration, celebrationClip, "celebration");
+            SampleDirectLoop(celebrationClip, Time.time);
+            return;
+        }
+
+        if (flying)
+        {
+            lastMotionState = MotionState.Flying;
+            PreparePoseTransition(flyClip, "flying");
+            flightTime += Time.deltaTime;
+            EmitAnimationMarker(MotionState.Flying, flyClip, "flying");
+            SampleDirectLoop(flyClip, flightTime);
+            return;
+        }
+
         if (attackTime >= 0f)
         {
             lastMotionState = MotionState.Punching;
+            PreparePoseTransition(punchClip, "attack");
             attackTime += Time.deltaTime;
-            punchNormalized = Mathf.Clamp01(attackTime / 0.72f);
-            clip = punchClip;
-            sampleTime = punchNormalized * Mathf.Max(0.01f, clip.length - 0.001f);
-            // The complete shoulder-to-hand chain is now mapped. Applying the
-            // full delta keeps the imported reach instead of a half-arm pose.
-            influence = 1f;
+            EmitAnimationMarker(MotionState.Punching, punchClip, "attack");
+            float normalized = Mathf.Clamp01(attackTime / PunchDuration);
+            SampleDirectNormalized(punchClip, normalized);
+            return;
         }
-        else if (moving)
+
+        if (moving)
         {
             lastMotionState = MotionState.Running;
-            // The same run clip is used for chasing and for treadmill users.
-            // Keep slow roaming readable while allowing treadmill speed to
-            // produce clearly different cadence bands instead of one fixed
-            // animation rate.
-            runTime += Time.deltaTime * Mathf.Lerp(0.55f, 1.75f, speed01);
-            clip = runClip;
-            sampleTime = runTime % Mathf.Max(0.01f, clip.length - 0.001f);
+            runTime += Time.deltaTime * Mathf.Lerp(0.85f, 1.35f, speed01);
+            AnimationClip locomotion = useRunningClip ? runClip : walkingClip;
+            PreparePoseTransition(
+                locomotion, useRunningClip ? "running" : "walking");
+            EmitAnimationMarker(MotionState.Running, locomotion,
+                useRunningClip ? "running" : "walking");
+            SampleDirectLoop(locomotion, runTime);
+            return;
         }
-        else if (idleClip != null)
+
+        lastMotionState = MotionState.Idle;
+        PreparePoseTransition(idleClip, "idle");
+        idleTime += Time.deltaTime;
+        EmitAnimationMarker(MotionState.Idle, idleClip, "idle");
+        SampleDirectLoop(idleClip, idleTime);
+    }
+
+    private void PreparePoseTransition(AnimationClip nextClip, string branch)
+    {
+        if (!hasSampledPose)
         {
-            lastMotionState = MotionState.Idle;
-            idleState = true;
-            idleTime += Time.deltaTime;
-            clip = idleClip;
-            sampleTime = idleTime % Mathf.Max(0.01f, clip.length - 0.001f);
-            influence = 1.0f;
+            hasSampledPose = true;
+            lastSampledClip = nextClip;
+            lastSampledBranch = branch;
+            poseTransition.Cancel();
+            return;
         }
+
+        if (ReferenceEquals(lastSampledClip, nextClip) &&
+            string.Equals(lastSampledBranch, branch, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (nextClip != null)
+        {
+            poseTransition.Begin(modelRoot, AuthoredTransitionDuration);
+            Debug.Log(
+                $"GYMCHAOS_ENEMY_AUTHORED_TRANSITION identity={configuredIdentity} " +
+                $"from={ClipName(lastSampledClip)} to={ClipName(nextClip)} " +
+                $"branch={branch} duration={AuthoredTransitionDuration:F2}", this);
+        }
+        else
+        {
+            poseTransition.Cancel();
+        }
+        lastSampledClip = nextClip;
+        lastSampledBranch = branch;
+    }
+
+    private void CaptureRestPose()
+    {
+        restRotations.Clear();
+        restPositions.Clear();
+        restScales.Clear();
+        modelBaseLocalPosition = modelRoot.localPosition;
+        modelBaseLocalRotation = modelRoot.localRotation;
+        modelBaseLocalScale = modelRoot.localScale;
+        Transform[] transforms = modelRoot.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform current = transforms[i];
+            if (current == modelRoot)
+            {
+                continue;
+            }
+            restRotations[current] = current.localRotation;
+            restPositions[current] = current.localPosition;
+            restScales[current] = current.localScale;
+        }
+    }
+
+    private void RestoreVisibleRestPose()
+    {
+        if (modelRoot == null)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<Transform, Quaternion> pair in restRotations)
+        {
+            if (pair.Key != null)
+            {
+                pair.Key.localRotation = pair.Value;
+            }
+        }
+        foreach (KeyValuePair<Transform, Vector3> pair in restPositions)
+        {
+            if (pair.Key != null)
+            {
+                pair.Key.localPosition = pair.Value;
+            }
+        }
+        foreach (KeyValuePair<Transform, Vector3> pair in restScales)
+        {
+            if (pair.Key != null)
+            {
+                pair.Key.localScale = pair.Value;
+            }
+        }
+        modelRoot.localPosition = modelBaseLocalPosition;
+        modelRoot.localRotation = modelBaseLocalRotation;
+        modelRoot.localScale = modelBaseLocalScale;
+    }
+
+    private bool SampleDirect(AnimationClip clip, float sampleTime)
+    {
+        if (modelRoot == null || clip == null)
+        {
+            RestoreVisibleRestPose();
+            return false;
+        }
+
+        RestoreVisibleRestPose();
+        clip.SampleAnimation(modelRoot.gameObject, Mathf.Max(0f, sampleTime));
+        // Blender's Rigify bake writes evaluated deform-bone scale channels
+        // even though this retarget is rotation/translation driven. Restore
+        // each character's own imported rest scales so those bake artifacts
+        // cannot stretch fingers or change the visible body height.
+        RestoreAnimatedScales();
+        // Root motion belongs to the EnemyFighter/Rigidbody, never to the
+        // imported child model. Keep the full authored squat root translation
+        // because squat.fbx is one complete standing -> squat -> standing rep;
+        // strip root translation from locomotion/attack/idle clips so those
+        // clips cannot change the character's world height or floor contact.
+        if (!ReferenceEquals(clip, authoredSquatClip) && rig != null &&
+            rig.Root != null && restPositions.TryGetValue(
+                rig.Root, out Vector3 rootPosition))
+        {
+            // Horizontal motion belongs to EnemyFighter/Rigidbody. Keep only
+            // the authored vertical pelvis curve: it is smooth clip data and
+            // keeps the planted foot on the floor without moving the entire
+            // FBX model root from animated renderer bounds every frame.
+            Vector3 sampledRootPosition = rig.Root.localPosition;
+            rig.Root.localPosition = new Vector3(
+                rootPosition.x, sampledRootPosition.y, rootPosition.z);
+        }
+        modelRoot.localPosition = modelBaseLocalPosition;
+        modelRoot.localRotation = modelBaseLocalRotation;
+        modelRoot.localScale = modelBaseLocalScale;
+        GroundSkeletonSmoothly();
+        return true;
+    }
+
+    private void GroundSkeletonSmoothly()
+    {
+        if (modelRoot == null || rig == null || rig.Root == null || flying || downed)
+        {
+            return;
+        }
+        Renderer[] renderers = modelRoot.GetComponentsInChildren<Renderer>(false);
+        if (renderers.Length == 0)
+        {
+            return;
+        }
+        Bounds bounds = renderers[0].bounds;
+        for (int i = 1; i < renderers.Length; i++)
+        {
+            bounds.Encapsulate(renderers[i].bounds);
+        }
+        float targetOffset = Mathf.Clamp(
+            transform.position.y - bounds.min.y, -0.45f, 0.45f);
+        if (!groundingOffsetInitialized)
+        {
+            groundingOffsetY = targetOffset;
+            groundingOffsetVelocity = 0f;
+            groundingOffsetInitialized = true;
+        }
+        else
+        {
+            groundingOffsetY = Mathf.SmoothDamp(
+                groundingOffsetY, targetOffset, ref groundingOffsetVelocity,
+                0.085f, 3.5f, Mathf.Max(Time.deltaTime, 1f / 120f));
+        }
+        // Move the authored skeleton, never the fitted FBX/model root. The
+        // correction therefore follows a damped continuous curve while the
+        // Rigidbody and visible model transform remain perfectly stable.
+        rig.Root.position += Vector3.up * groundingOffsetY;
+    }
+
+    private void RestoreAnimatedScales()
+    {
+        foreach (KeyValuePair<Transform, Vector3> pair in restScales)
+        {
+            if (pair.Key != null)
+            {
+                pair.Key.localScale = pair.Value;
+            }
+        }
+    }
+
+    private void SampleDirectLoop(AnimationClip clip, float elapsed)
+    {
         if (clip == null)
         {
-            lastMotionState = MotionState.Idle;
-            idleTime += Time.deltaTime;
-            ApplyProceduralIdle(idleTime);
+            poseTransition.Cancel();
+            RestoreVisibleRestPose();
             return;
         }
-
-        SampleAndApply(clip, sampleTime, influence);
-        if (idleState)
-        {
-            ClampIdleGrounding();
-        }
-        else if (lastMotionState == MotionState.Punching)
-        {
-            ClampPunchFacing();
-            ApplyPunchReach(punchNormalized);
-        }
+        float duration = Mathf.Max(0.01f, clip.length - 0.001f);
+        SampleDirect(clip, elapsed % duration);
+        poseTransition.Apply(Time.deltaTime);
     }
 
-    private void SampleAndApply(AnimationClip clip, float sampleTime, float influence)
+    private void SampleDirectNormalized(AnimationClip clip, float normalized)
     {
-        Vector3 stablePosition = sourceModel.transform.localPosition;
-        Quaternion stableRotation = sourceModel.transform.localRotation;
-        Vector3 stableScale = sourceModel.transform.localScale;
-        clip.SampleAnimation(sourceModel, sampleTime);
-        sourceModel.transform.localPosition = stablePosition;
-        sourceModel.transform.localRotation = stableRotation;
-        sourceModel.transform.localScale = stableScale;
-        ApplyRetargetedPose(influence);
+        if (clip == null)
+        {
+            poseTransition.Cancel();
+            RestoreVisibleRestPose();
+            return;
+        }
+        float duration = Mathf.Max(0.01f, clip.length - 0.001f);
+        SampleDirect(clip, Mathf.Clamp01(normalized) * duration);
+        poseTransition.Apply(Time.deltaTime);
     }
 
-    private void ClampIdleGrounding()
+    private static Transform ResolveModelRoot(BodybuilderEnemyVisual.Rig bodyRig)
     {
-        // The downloaded Idle can pitch the torso, neck, shoulders and feet
-        // forward. Restore this scan's complete upper/lower rest chain so
-        // the visible idle pose stays upright with planted foot contacts.
-        RestoreTargetRestRotation(rig.Root);
-        RestoreTargetRestRotation(rig.Hips);
-        RestoreTargetRestRotation(rig.Spine);
-        RestoreTargetRestRotation(rig.Chest);
-        RestoreTargetRestRotation(rig.Neck);
-        RestoreTargetRestRotation(rig.Head);
-        RestoreTargetRestRotation(rig.LeftShoulder);
-        RestoreTargetRestRotation(rig.RightShoulder);
-        RestoreTargetRestRotation(rig.LeftThigh);
-        RestoreTargetRestRotation(rig.LeftShin);
-        RestoreTargetRestRotation(rig.LeftFoot);
-        RestoreTargetRestRotation(rig.RightThigh);
-        RestoreTargetRestRotation(rig.RightShin);
-        RestoreTargetRestRotation(rig.RightFoot);
-
-        // The imported idle leaves the elbows slightly too lateral. Tighten
-        // only the upper-arm spread so the pose sits closer to the body while
-        // preserving the corrected spine, chest, neck and head posture.
-        TightenIdleArms(0.22f);
+        Transform current = bodyRig != null ? bodyRig.Root : null;
+        if (current == null)
+        {
+            return null;
+        }
+        while (current.parent != null && current.parent.parent != null)
+        {
+            current = current.parent;
+        }
+        return current;
     }
 
-    private void TightenIdleArms(float amount)
+    private static AnimationClip[] CompactVariants(params AnimationClip[] candidates)
     {
-        if (rig == null || rig.Hips == null)
+        List<AnimationClip> variants = new List<AnimationClip>();
+        for (int i = 0; i < candidates.Length; i++)
         {
-            return;
-        }
-
-        TightenIdleArm(rig.LeftShoulder, rig.LeftUpperArm, rig.LeftForearm, amount);
-        TightenIdleArm(rig.RightShoulder, rig.RightUpperArm, rig.RightForearm, amount);
-    }
-
-    private void TightenIdleArm(
-        Transform shoulder, Transform upperArm, Transform forearm, float amount)
-    {
-        if (shoulder == null || upperArm == null || forearm == null)
-        {
-            return;
-        }
-
-        Vector3 side = Vector3.ProjectOnPlane(
-            shoulder.position - rig.Hips.position, transform.up);
-        Vector3 current = forearm.position - upperArm.position;
-        if (side.sqrMagnitude < 0.0001f || current.sqrMagnitude < 0.0001f)
-        {
-            return;
-        }
-
-        side.Normalize();
-        float outwardAmount = Vector3.Dot(current, side);
-        if (outwardAmount <= 0.0001f)
-        {
-            return;
-        }
-
-        Vector3 tightened = current - side * outwardAmount * Mathf.Clamp01(amount);
-        if (tightened.sqrMagnitude < 0.0001f)
-        {
-            return;
-        }
-
-        RotateJointToward(
-            upperArm, forearm,
-            upperArm.position + tightened.normalized * current.magnitude);
-    }
-
-    private void RestoreTargetRestRotation(Transform target)
-    {
-        if (target == null || pairs == null)
-        {
-            return;
-        }
-        if (target == rig.Root && hasTargetRootRest)
-        {
-            target.rotation = transform.rotation * targetRootRestInOwner;
-            return;
-        }
-        for (int i = 0; i < pairs.Length; i++)
-        {
-            if (pairs[i].Target == target)
+            if (candidates[i] != null)
             {
-                target.rotation = transform.rotation * pairs[i].TargetRestInOwner;
-                return;
+                variants.Add(candidates[i]);
             }
         }
+        return variants.ToArray();
     }
 
-    private void ClampPunchFacing()
+    private static AnimationClip LoadAuthoredClip(string resourcePath, string fileStem)
     {
-        if (rig == null || punchDirection.sqrMagnitude < 0.0001f)
+        if (string.IsNullOrEmpty(resourcePath))
         {
-            return;
+            return null;
         }
 
-        // The downloaded Punch clip contains a lateral torso turn. Enemies
-        // are already placed facing their target, so keep the torso/head and
-        // shoulder caps on that facing axis and solve the actual reach below.
-        BlendTargetToRestRotation(rig.Hips, 1f);
-        BlendTargetToRestRotation(rig.Spine, 1f);
-        BlendTargetToRestRotation(rig.Chest, 1f);
-        BlendTargetToRestRotation(rig.LeftShoulder, 1f);
-        BlendTargetToRestRotation(rig.RightShoulder, 1f);
-        BlendTargetToRestRotation(rig.Head, 1f);
-    }
-
-    private void BlendTargetToRestRotation(Transform target, float blend)
-    {
-        if (target == null || pairs == null || blend <= 0f)
+        UnityEngine.Object[] subAssets = Resources.LoadAll<UnityEngine.Object>(resourcePath);
+        List<AnimationClip> candidates = new List<AnimationClip>();
+        for (int i = 0; i < subAssets.Length; i++)
         {
-            return;
-        }
-
-        for (int i = 0; i < pairs.Length; i++)
-        {
-            if (pairs[i].Target == target)
+            AnimationClip clip = subAssets[i] as AnimationClip;
+            if (clip == null || clip.name.StartsWith("__preview__", StringComparison.OrdinalIgnoreCase))
             {
-                Quaternion rest = transform.rotation * pairs[i].TargetRestInOwner;
-                target.rotation = Quaternion.Slerp(
-                    target.rotation, rest, Mathf.Clamp01(blend));
-                return;
+                continue;
+            }
+            candidates.Add(clip);
+        }
+
+        candidates.Sort((left, right) =>
+            StringComparer.Ordinal.Compare(left.name, right.name));
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            string name = candidates[i].name;
+            if (string.Equals(name, fileStem, StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith("|" + fileStem, StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith("_" + fileStem, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidates[i];
             }
         }
-    }
 
-    private void ApplyPunchReach(float normalized)
-    {
-        if (normalized < 0.12f || rig == null || punchDirection.sqrMagnitude < 0.0001f)
-        {
-            return;
-        }
-
-        SelectPunchArm(out Transform upperArm, out Transform forearm, out Transform hand);
-        if (upperArm == null || forearm == null || hand == null)
-        {
-            return;
-        }
-
-        float upperLength = Vector3.Distance(upperArm.position, forearm.position);
-        float forearmLength = Vector3.Distance(forearm.position, hand.position);
-        float reach = Mathf.Max(0.35f, upperLength + forearmLength);
-        float blend = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.12f, 0.48f, normalized));
-        Vector3 aimDirection = punchDirection.normalized;
-        float aimDistance = reach * 0.98f;
-        if (hasPunchTarget)
-        {
-            Vector3 targetDelta = Vector3.ProjectOnPlane(
-                punchTargetPosition - upperArm.position, Vector3.up);
-            if (targetDelta.sqrMagnitude > 0.0001f)
-            {
-                // Aim from the actual shoulder at the player position. This
-                // removes the old shoulder-plus-forward offset that made the
-                // punch visibly miss to the side from the player's view.
-                aimDirection = targetDelta.normalized;
-                aimDistance = Mathf.Min(aimDistance, targetDelta.magnitude);
-            }
-        }
-        Vector3 desired = upperArm.position + aimDirection * Mathf.Max(0.35f, aimDistance);
-        desired.y = hand.position.y;
-        Vector3 target = Vector3.Lerp(hand.position, desired, blend);
-        for (int i = 0; i < 8; i++)
-        {
-            RotateJointToward(forearm, hand, target);
-            RotateJointToward(upperArm, hand, target);
-        }
-    }
-
-    private void SelectPunchArm(
-        out Transform upperArm, out Transform forearm, out Transform hand)
-    {
-        upperArm = rig.RightUpperArm;
-        forearm = rig.RightForearm;
-        hand = rig.RightHand;
-        float rightScore = PunchArmScore(rig.RightUpperArm, rig.RightHand);
-        float leftScore = PunchArmScore(rig.LeftUpperArm, rig.LeftHand);
-        if (leftScore > rightScore)
-        {
-            upperArm = rig.LeftUpperArm;
-            forearm = rig.LeftForearm;
-            hand = rig.LeftHand;
-        }
-    }
-
-    private float PunchArmScore(Transform upperArm, Transform hand)
-    {
-        if (upperArm == null || hand == null)
-        {
-            return float.NegativeInfinity;
-        }
-        Vector3 reach = hand.position - upperArm.position;
-        Vector3 aimDirection = punchDirection;
-        if (hasPunchTarget)
-        {
-            Vector3 targetDelta = Vector3.ProjectOnPlane(
-                punchTargetPosition - upperArm.position, Vector3.up);
-            if (targetDelta.sqrMagnitude > 0.0001f)
-            {
-                aimDirection = targetDelta.normalized;
-            }
-        }
-        return Vector3.Dot(Vector3.ProjectOnPlane(reach, Vector3.up), aimDirection) +
-            reach.magnitude * 0.2f;
-    }
-
-    private void ApplyProceduralIdle(float time)
-    {
-        // Emergency fallback only when an imported Idle asset is unavailable;
-        // the normal runtime path always uses the downloaded Mixamo Idle clip.
-        float breath = Mathf.Sin(time * 1.7f);
-        float shift = Mathf.Sin(time * 0.85f);
-        ApplyTargetDelta(rig.Hips, Quaternion.Euler(0f, shift * 1.2f, 0f));
-        ApplyTargetDelta(rig.Spine, Quaternion.Euler(breath * 1.1f, 0f, shift * 0.7f));
-        ApplyTargetDelta(rig.Chest, Quaternion.Euler(breath * 2.2f, 0f, shift * 1.1f));
-        ApplyTargetDelta(rig.Head, Quaternion.Euler(-breath * 0.8f, shift * 1.1f, 0f));
-        ApplyTargetDelta(rig.LeftUpperArm, Quaternion.Euler(0f, 0f, shift * 1.4f));
-        ApplyTargetDelta(rig.RightUpperArm, Quaternion.Euler(0f, 0f, -shift * 1.4f));
-        Vector3 leftTarget = transform.position - transform.right * 0.55f + transform.up * 0.98f;
-        Vector3 rightTarget = transform.position + transform.right * 0.55f + transform.up * 0.98f;
-        ExtendArm(rig.LeftUpperArm, rig.LeftForearm, rig.LeftHand, leftTarget);
-        ExtendArm(rig.RightUpperArm, rig.RightForearm, rig.RightHand, rightTarget);
-        TightenIdleArms(0.22f);
-    }
-
-    private void ApplyFlightPose(float time)
-    {
-        // Goku's root is tilted by EnemyFighter during flight. Extend one arm
-        // into that local forward direction and keep a light looping body sway.
-        float pulse = Mathf.Sin(time * 3.2f);
-        ApplyTargetDelta(rig.Hips, Quaternion.Euler(pulse * 1.5f, 0f, 0f));
-        ApplyTargetDelta(rig.Spine, Quaternion.Euler(-8f + pulse * 1.5f, 0f, 0f));
-        ApplyTargetDelta(rig.Chest, Quaternion.Euler(-12f + pulse * 2f, 0f, 0f));
-        ExtendArm(rig.RightUpperArm, rig.RightForearm, rig.RightHand, transform.up * 1.2f);
-        ApplyTargetDelta(rig.LeftUpperArm, Quaternion.Euler(18f, 0f, -22f));
-        ApplyTargetDelta(rig.LeftForearm, Quaternion.Euler(-28f, 0f, 0f));
-    }
-
-    private void ExtendArm(Transform upperArm, Transform forearm, Transform hand, Vector3 worldTarget)
-    {
-        if (upperArm == null || forearm == null || hand == null)
-        {
-            return;
-        }
-        for (int i = 0; i < 5; i++)
-        {
-            RotateJointToward(forearm, hand, upperArm.position + worldTarget);
-            RotateJointToward(upperArm, hand, upperArm.position + worldTarget);
-        }
-    }
-
-    private void ApplyTargetDelta(Transform target, Quaternion delta)
-    {
-        if (target == null)
-        {
-            return;
-        }
-        target.rotation = transform.rotation * delta * Quaternion.Inverse(transform.rotation) * target.rotation;
-    }
-
-    private static void RotateJointToward(Transform joint, Transform endpoint, Vector3 target)
-    {
-        Vector3 current = endpoint.position - joint.position;
-        Vector3 desired = target - joint.position;
-        if (current.sqrMagnitude < 0.000001f || desired.sqrMagnitude < 0.000001f)
-        {
-            return;
-        }
-        joint.rotation = Quaternion.FromToRotation(current, desired) * joint.rotation;
-    }
-
-    private void ApplyRetargetedPose(float influence)
-    {
-        Quaternion ownerRotation = transform.rotation;
-        Quaternion sourceRootInverse = Quaternion.Inverse(sourceModel.transform.rotation);
-        for (int i = 0; i < pairs.Length; i++)
-        {
-            BonePair pair = pairs[i];
-            Quaternion sourceCurrentInModel = sourceRootInverse * pair.Source.rotation;
-            Quaternion delta = sourceCurrentInModel * Quaternion.Inverse(pair.SourceRestInModel);
-            Quaternion safeDelta = Quaternion.Slerp(Quaternion.identity, delta, influence);
-            pair.Target.rotation = ownerRotation * safeDelta * pair.TargetRestInOwner;
-        }
-    }
-
-    private void RestoreTargetRest()
-    {
-        if (pairs == null)
-        {
-            return;
-        }
-        Quaternion ownerRotation = transform.rotation;
-        if (hasTargetRootRest && rig.Root != null)
-        {
-            rig.Root.rotation = ownerRotation * targetRootRestInOwner;
-        }
-        for (int i = 0; i < pairs.Length; i++)
-        {
-            pairs[i].Target.rotation = ownerRotation * pairs[i].TargetRestInOwner;
-        }
-    }
-
-    private void AddPair(
-        List<BonePair> mapped, Transform[] sourceBones, Transform target,
-        params string[] sourceNames)
-    {
-        Transform source = FindBone(sourceBones, sourceNames);
-        if (source == null || target == null)
-        {
-            return;
-        }
-        mapped.Add(new BonePair
-        {
-            Source = source,
-            Target = target,
-            SourceRestInModel = Quaternion.Inverse(sourceModel.transform.rotation) * source.rotation,
-            TargetRestInOwner = Quaternion.Inverse(transform.rotation) * target.rotation
-        });
-    }
-
-    private static Transform FindBone(Transform[] bones, params string[] candidates)
-    {
-        for (int i = 0; i < bones.Length; i++)
-        {
-            string normalized = Normalize(bones[i].name);
-            for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
-            {
-                if (normalized == candidates[candidateIndex] ||
-                    normalized.EndsWith(candidates[candidateIndex], StringComparison.Ordinal))
-                {
-                    return bones[i];
-                }
-            }
-        }
         return null;
     }
 
-    private static string Normalize(string value)
+    private int CountLoadedAuthoredClips()
     {
-        return value.Replace("mixamorig:", string.Empty)
-            .Replace("mixamorig", string.Empty)
-            .Replace("_", string.Empty)
-            .Replace(" ", string.Empty)
-            .ToLowerInvariant();
-    }
-
-    private static AnimationClip FindClip(AnimationClip[] clips, string marker)
-    {
+        int count = 0;
+        AnimationClip[] clips = AuthoredClipSet();
         for (int i = 0; i < clips.Length; i++)
         {
-            if (clips[i] != null &&
-                !clips[i].name.StartsWith("__preview__", StringComparison.OrdinalIgnoreCase) &&
-                clips[i].name.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0)
+            if (clips[i] != null)
             {
-                return clips[i];
+                count++;
             }
         }
+        return count;
+    }
+
+    private AnimationClip FindAuthoredClip(string clipStem)
+    {
+        if (string.IsNullOrEmpty(clipStem))
+        {
+            return null;
+        }
+
+        if (string.Equals(clipStem, "walking", StringComparison.OrdinalIgnoreCase)) return authoredWalkingClip;
+        if (string.Equals(clipStem, "running", StringComparison.OrdinalIgnoreCase)) return authoredRunningClip;
+        if (string.Equals(clipStem, "punch_combo", StringComparison.OrdinalIgnoreCase)) return authoredPunchClip;
+        if (string.Equals(clipStem, "flying", StringComparison.OrdinalIgnoreCase)) return authoredFlyingClip;
+        if (string.Equals(clipStem, "squat", StringComparison.OrdinalIgnoreCase)) return authoredSquatClip;
+        if (string.Equals(clipStem, "idle1", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 0);
+        if (string.Equals(clipStem, "idle2", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 1);
+        if (string.Equals(clipStem, "idle3", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 2);
+        if (string.Equals(clipStem, "celebration1", StringComparison.OrdinalIgnoreCase)) return GetVariant(celebrationVariants, 0);
+        if (string.Equals(clipStem, "celebration2", StringComparison.OrdinalIgnoreCase)) return GetVariant(celebrationVariants, 1);
+        if (string.Equals(clipStem, "celebration3", StringComparison.OrdinalIgnoreCase)) return GetVariant(celebrationVariants, 2);
         return null;
+    }
+
+#if UNITY_EDITOR
+    private int CountChangedRestBones()
+    {
+        int changed = 0;
+        foreach (KeyValuePair<Transform, Quaternion> pair in restRotations)
+        {
+            Transform bone = pair.Key;
+            if (bone == null)
+            {
+                continue;
+            }
+
+            bool rotationChanged = Quaternion.Angle(pair.Value, bone.localRotation) > 0.25f;
+            bool positionChanged = restPositions.TryGetValue(bone, out Vector3 restPosition) &&
+                Vector3.Distance(restPosition, bone.localPosition) > 0.0005f;
+            bool scaleChanged = restScales.TryGetValue(bone, out Vector3 restScale) &&
+                Vector3.Distance(restScale, bone.localScale) > 0.0005f;
+            if (rotationChanged || positionChanged || scaleChanged)
+            {
+                changed++;
+            }
+        }
+        return changed;
+    }
+#endif
+
+    private string BuildAuthoredClipNameList()
+    {
+        List<string> names = new List<string>();
+        AnimationClip[] clips = AuthoredClipSet();
+        for (int i = 0; i < clips.Length; i++)
+        {
+            if (clips[i] != null && !names.Contains(clips[i].name))
+            {
+                names.Add(clips[i].name);
+            }
+        }
+        return names.Count == 0 ? "none" : string.Join(",", names.ToArray());
+    }
+
+    private AnimationClip[] AuthoredClipSet()
+    {
+        List<AnimationClip> clips = new List<AnimationClip>
+        {
+            authoredWalkingClip,
+            authoredRunningClip,
+            authoredPunchClip,
+            authoredFlyingClip,
+            authoredSquatClip
+        };
+        clips.AddRange(idleVariants);
+        clips.AddRange(celebrationVariants);
+        return clips.ToArray();
+    }
+
+    private void SelectInitialIdleVariant()
+    {
+        idleVariantCursor = -1;
+        SelectNextIdleVariant();
+    }
+
+    private void SelectNextIdleVariant()
+    {
+        int count = CountAvailable(idleVariants);
+        if (count == 0)
+        {
+            idleTime = 0f;
+            return;
+        }
+        int next = UnityEngine.Random.Range(0, count);
+        if (count > 1 && next == idleVariantCursor)
+        {
+            next = (next + UnityEngine.Random.Range(1, count)) % count;
+        }
+        idleVariantCursor = next;
+        idleClip = GetVariant(idleVariants, idleVariantCursor);
+        idleTime = 0f;
+    }
+
+    private void SelectCelebrationVariant()
+    {
+        int count = CountAvailable(celebrationVariants);
+        if (count == 0)
+        {
+            celebrationVariantCursor = -1;
+            celebrationClip = null;
+            return;
+        }
+        int next = UnityEngine.Random.Range(0, count);
+        if (count > 1 && next == celebrationVariantCursor)
+        {
+            next = (next + UnityEngine.Random.Range(1, count)) % count;
+        }
+        celebrationVariantCursor = next;
+        celebrationClip = GetVariant(celebrationVariants, celebrationVariantCursor);
+    }
+
+    private static int CountAvailable(AnimationClip[] variants)
+    {
+        return variants == null ? 0 : variants.Length;
+    }
+
+    private static AnimationClip GetVariant(AnimationClip[] variants, int index)
+    {
+        return variants != null && index >= 0 && index < variants.Length
+            ? variants[index]
+            : null;
+    }
+
+    private int StableVariantSeed(BodybuilderIdentity identity)
+    {
+        unchecked
+        {
+            int hash = 17;
+            string identityName = identity.ToString();
+            for (int i = 0; i < identityName.Length; i++)
+            {
+                hash = hash * 31 + identityName[i];
+            }
+            return hash;
+        }
+    }
+
+    private static int PositiveModulo(int value, int modulus)
+    {
+        if (modulus <= 0)
+        {
+            return 0;
+        }
+        int remainder = value % modulus;
+        return remainder < 0 ? remainder + modulus : remainder;
+    }
+
+    private void EmitAnimationMarker(
+        MotionState state, AnimationClip clip, string branch)
+    {
+        if (hasAnimationMarker &&
+            lastAnimationMarkerState == state &&
+            ReferenceEquals(lastAnimationMarkerClip, clip) &&
+            string.Equals(lastAnimationMarkerBranch, branch, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        hasAnimationMarker = true;
+        lastAnimationMarkerState = state;
+        lastAnimationMarkerClip = clip;
+        lastAnimationMarkerBranch = branch;
+        string marker = $"{state}|{branch}|{ClipName(clip)}";
+        lastAnimationMarker = marker;
+        Debug.Log(
+            $"GYMCHAOS_ENEMY_ANIMATION_STATE identity={configuredIdentity} " +
+            $"state={state} branch={branch} clip={ClipName(clip)} " +
+            $"speed01={speed01:F2}", this);
+    }
+
+    private static string ClipName(AnimationClip clip)
+    {
+        return clip == null ? "missing" : clip.name;
+    }
+
+    private static string GetClipNameForMarker(string marker)
+    {
+        if (string.IsNullOrEmpty(marker))
+        {
+            return string.Empty;
+        }
+        int separator = marker.LastIndexOf('|');
+        return separator >= 0 ? marker.Substring(separator + 1) : marker;
     }
 
     private static string ResourcePath(BodybuilderIdentity identity)
     {
         switch (identity)
         {
-            case BodybuilderIdentity.Arnold: return "Characters/Enemies/arnold_mixamo_rigged";
-            case BodybuilderIdentity.Cbum: return "Characters/Enemies/cbum_mixamo_rigged";
-            case BodybuilderIdentity.Zyzz: return "Characters/Enemies/zyzz_mixamo_rigged";
-            case BodybuilderIdentity.Ronnie: return "Characters/Enemies/ronnie_mixamo_rigged";
-            case BodybuilderIdentity.JayCutler: return "Characters/Enemies/jay_mixamo_rigged";
-            case BodybuilderIdentity.Goku: return "Characters/Enemies/goku_mixamo_rigged";
+            case BodybuilderIdentity.Arnold: return "Characters/Enemies/arnold_authored";
+            case BodybuilderIdentity.Cbum: return "Characters/Enemies/cbum_authored";
+            case BodybuilderIdentity.Zyzz: return "Characters/Enemies/zyzz_authored";
+            case BodybuilderIdentity.Ronnie: return "Characters/Enemies/ronnie_authored";
+            case BodybuilderIdentity.JayCutler: return "Characters/Enemies/jaycutler_authored";
+            case BodybuilderIdentity.Goku: return "Characters/Enemies/goku_authored";
             default: return string.Empty;
         }
     }

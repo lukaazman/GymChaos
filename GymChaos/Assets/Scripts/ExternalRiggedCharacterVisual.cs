@@ -4,10 +4,9 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Loads the per-enemy T-pose scan FBX whose mesh, UVs, fitted skeleton and
-/// animation clips share one bind hierarchy.  The matching base-color image
-/// from Assets/BodyBuilders/enemies is rebound explicitly so the visible
-/// material stays on the same UV layout as the animated scan.
+/// Loads the per-character FBX exported from that character's own Blender
+/// rig.  The mesh, bind hierarchy and baked animation clips therefore stay in
+/// one asset; no hidden shared skeleton or runtime retarget source is needed.
 /// </summary>
 [DefaultExecutionOrder(1000)]
 public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
@@ -21,10 +20,23 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     public float GroundContactY => GetGroundContactY();
     public float GroundedFootToMeshOffset => groundedFootToMeshOffset;
     public bool HasGroundedFootReference => hasGroundedFootReference;
+    public Transform RuntimeModelRoot => runtimeModelRoot;
+    public SkinnedMeshRenderer RuntimeRenderer => runtimeRenderer;
+    public BodybuilderEnemyVisual.Rig RuntimeRig => runtimeRig;
+    public BodybuilderIdentity RuntimeIdentity => runtimeIdentity;
+    public string RuntimeResourcePath => runtimeResourcePath;
+    public float RuntimeAuthoredHeight => runtimeAuthoredHeight;
 
     private Transform runtimeModelRoot;
     private SkinnedMeshRenderer runtimeRenderer;
     private BodybuilderIdentity runtimeIdentity;
+    private string runtimeResourcePath;
+    private float runtimeAuthoredHeight;
+    private BodybuilderEnemyVisual.Rig runtimeRig;
+    private FaceCensorSettings runtimeFaceCensor;
+    private Mesh runtimeFaceCalibrationMesh;
+    private bool runtimeFaceCalibrationSettled;
+    private bool runtimeFaceRefreshLogged;
     private Transform groundedLeftFoot;
     private Transform groundedRightFoot;
     private float groundedFootToMeshOffset;
@@ -39,12 +51,12 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     private static readonly Dictionary<BodybuilderIdentity, string> ResourcePaths =
         new Dictionary<BodybuilderIdentity, string>
         {
-            { BodybuilderIdentity.Arnold, "Characters/Enemies/arnold_mixamo_rigged" },
-            { BodybuilderIdentity.Cbum, "Characters/Enemies/cbum_mixamo_rigged" },
-            { BodybuilderIdentity.Zyzz, "Characters/Enemies/zyzz_mixamo_rigged" },
-            { BodybuilderIdentity.Ronnie, "Characters/Enemies/ronnie_mixamo_rigged" },
-            { BodybuilderIdentity.JayCutler, "Characters/Enemies/jay_mixamo_rigged" },
-            { BodybuilderIdentity.Goku, "Characters/Enemies/goku_mixamo_rigged" },
+            { BodybuilderIdentity.Arnold, "Characters/Enemies/arnold_authored" },
+            { BodybuilderIdentity.Cbum, "Characters/Enemies/cbum_authored" },
+            { BodybuilderIdentity.Zyzz, "Characters/Enemies/zyzz_authored" },
+            { BodybuilderIdentity.Ronnie, "Characters/Enemies/ronnie_authored" },
+            { BodybuilderIdentity.JayCutler, "Characters/Enemies/jaycutler_authored" },
+            { BodybuilderIdentity.Goku, "Characters/Enemies/goku_authored" },
             { BodybuilderIdentity.Manwithsuit1, "Characters/Reception/manwithsuit1_mixamo_rigged" }
         };
 
@@ -68,7 +80,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     private bool Build(GameObject prefab, BodybuilderIdentity identity, string resourcePath)
     {
         GameObject modelRoot = Instantiate(prefab, transform);
-        modelRoot.name = identity + " External Mixamo Rig";
+        modelRoot.name = identity + " Authored Blender Rig";
         modelRoot.transform.SetLocalPositionAndRotation(Vector3.zero, Quaternion.identity);
 
         Animator[] unityAnimators = modelRoot.GetComponentsInChildren<Animator>(true);
@@ -85,24 +97,21 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return false;
         }
 
+        renderer.updateWhenOffscreen = true;
         FitToGameplayHeight(modelRoot.transform, renderer, identity);
         PreserveImportedTextures(modelRoot, identity);
 
         BodybuilderEnemyVisual.Rig rig = BuildRig(modelRoot.transform, renderer);
         if (!HasRequiredBones(rig))
         {
-            Debug.LogError($"{identity} external FBX is missing required Mixamo bones.", this);
+            Debug.LogError($"{identity} authored FBX is missing required deform bones.", this);
             Destroy(modelRoot);
             Destroy(this);
             return false;
         }
 
-        ApplyUprightRestPosture(modelRoot.transform, rig, identity);
         EnemyMeshHitboxRig.Configure(gameObject, rig, renderer);
         bool neutralNpc = identity == BodybuilderIdentity.Manwithsuit1;
-        BodybuilderEnemyVisual.ConfigureImportedVisual(
-            modelRoot.transform, renderer, rig, identity, neutralNpc);
-
         if (neutralNpc)
         {
             ManWithSuitIdleAnimator idleAnimator = gameObject.AddComponent<ManWithSuitIdleAnimator>();
@@ -115,16 +124,30 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             // so each scan keeps the proportions of its own T-pose bind.
             MixamoScanRetargetAnimator animator =
                 gameObject.AddComponent<MixamoScanRetargetAnimator>();
-            if (!animator.Configure(identity, rig))
+            if (!animator.Configure(identity, rig, modelRoot.transform))
             {
                 Debug.LogError(
-                    $"Final rigged FBX animation setup failed for {identity}.", this);
-                Destroy(modelRoot);
+                    $"GYMCHAOS_AUTHORED_ANIMATION_DISABLED identity={identity} " +
+                    $"requiredPath=Assets/Resources/Characters/Enemies/{identity.ToString().ToLowerInvariant()}_authored.fbx",
+                    this);
                 Destroy(animator);
-                Destroy(this);
-                return false;
+            }
+            else
+            {
+                // Configure samples this FBX's actual authored idle. Fit that
+                // pose once while the prepared actor is still hidden. Runtime
+                // scale/floor corrections fight locomotion and cause shaking.
+                FitToGameplayHeight(modelRoot.transform, renderer, identity);
+                animator.CaptureFittedModelTransform();
             }
         }
+
+        // Configure the censor after the visible rig has received its initial
+        // idle/rest pose. The eye band is sampled from the deformed renderer;
+        // doing it before the retargeter runs leaves the bar in the FBX bind
+        // pose while the head has already moved to the gameplay pose.
+        BodybuilderEnemyVisual.ConfigureImportedVisual(
+            modelRoot.transform, renderer, rig, identity, neutralNpc);
 
         if (identity == BodybuilderIdentity.Goku)
         {
@@ -143,20 +166,34 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         runtimeModelRoot = modelRoot.transform;
         runtimeRenderer = renderer;
         runtimeIdentity = identity;
+        runtimeResourcePath = resourcePath;
+        runtimeRig = rig;
+        runtimeFaceCensor = modelRoot.GetComponentInChildren<FaceCensorSettings>(true);
+        if (BodybuilderEnemyVisual.RequiresImportedFaceRefresh(identity))
+        {
+            runtimeFaceCalibrationMesh = new Mesh
+            {
+                name = identity + " runtime face calibration mesh"
+            };
+            runtimeFaceCalibrationMesh.MarkDynamic();
+        }
+        runtimeFaceCalibrationSettled = false;
         groundedLeftFoot = rig.LeftFoot;
         groundedRightFoot = rig.RightFoot;
-        heightCorrectionFrames = identity == BodybuilderIdentity.Manwithsuit1 ? 0 : 4;
-        // Settle the imported renderer for a few grounded frames, then leave
-        // the child model transform alone. Rewriting it every frame from an
-        // animated pose makes an idle/punch scan float when its AABB changes;
-        // the owner Rigidbody is now floor-locked while alive.
+        // Allow a few idle frames for Unity to refresh the skinned bounds after
+        // import/posture setup. Stop correcting before locomotion starts so a
+        // stride can never make a character grow or shrink over time.
+        heightCorrectionFrames = 0;
+        // Leave the authored child scale alone after the initial fit. The
+        // owner Rigidbody is floor-locked while alive.
         dynamicHeightCorrection = false;
         heightCorrectionLogged = false;
-        groundingSettleFrames = 12;
-        groundingSettled = false;
-        initialGroundingCorrectionApplied = false;
+        groundingSettleFrames = 0;
+        groundingSettled = true;
+        initialGroundingCorrectionApplied = true;
 
         Bounds verifiedBounds = CalculateBakedWorldBounds(renderer);
+        runtimeAuthoredHeight = verifiedBounds.size.y;
         float lowestFootY = GetLowestFootY();
         if (lowestFootY < float.PositiveInfinity)
         {
@@ -220,19 +257,57 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // allowed to animate the legs, but it must not lift the whole visible
         // character off the enemy root's floor while the visitor is walking.
         // Goku is the only intentional airborne exception.
-        if (!workoutPoseLocked &&
-            (fighter == null || (!fighter.IsDead && !fighter.IsGokuFlightActive)))
+        // The authored child transform stays fixed after its hidden preload
+        // fit. Foot/mesh AABB changes are pose data, not corrections to apply
+        // back onto the model root every frame.
+
+        heightCorrectionLogged = true;
+
+        // The face shell is parented to the imported head bone, so animation
+        // already carries it with the eyes. Re-baking the full 140k+ triangle
+        // scan every frame was the main runtime cost of the recent calibration
+        // change. Wait until the short height correction has settled, then
+        // sample the visible pose once and keep the result for the session.
+        if (!runtimeFaceCalibrationSettled &&
+            heightCorrectionFrames == 0 &&
+            !workoutPoseLocked)
         {
-            KeepVisibleModelOnFloor();
+            RefreshRuntimeFaceCensor();
+            runtimeFaceCalibrationSettled = true;
+        }
+    }
+
+    public bool RefreshFaceCensorForCurrentPose()
+    {
+        if (runtimeFaceCalibrationMesh == null)
+        {
+            return false;
         }
 
-        if (!heightCorrectionLogged &&
-            (dynamicHeightCorrection || heightCorrectionFrames == 0))
+        return BodybuilderEnemyVisual.RefreshImportedFaceCensor(
+            runtimeModelRoot, runtimeRenderer, runtimeRig, runtimeIdentity,
+            runtimeFaceCensor, runtimeFaceCalibrationMesh);
+    }
+
+    private void RefreshRuntimeFaceCensor()
+    {
+        if (!RefreshFaceCensorForCurrentPose())
         {
+            return;
+        }
+
+        if (!runtimeFaceRefreshLogged &&
+            (runtimeIdentity == BodybuilderIdentity.Ronnie ||
+            runtimeIdentity == BodybuilderIdentity.JayCutler ||
+            runtimeIdentity == BodybuilderIdentity.Goku))
+        {
+            Vector3 barLocal = runtimeRig.Head.InverseTransformPoint(
+                runtimeFaceCensor.transform.position);
             Debug.Log(
-                $"GYMCHAOS_EXTERNAL_RIG_HEIGHT_OK identity={runtimeIdentity} " +
-                $"height={runtimeRenderer.bounds.size.y:F3}", this);
-            heightCorrectionLogged = true;
+                $"FACE_CENSOR_RUNTIME_REFRESH identity={runtimeIdentity} " +
+                $"barLocal={barLocal} depth={runtimeFaceCensor.ConfiguredFaceDepth:F4}",
+                runtimeFaceCensor);
+            runtimeFaceRefreshLogged = true;
         }
     }
 
@@ -294,12 +369,10 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return float.PositiveInfinity;
         }
 
-        float lowestFootY = GetLowestFootY();
-        if (hasGroundedFootReference && lowestFootY < float.PositiveInfinity)
-        {
-            return lowestFootY + groundedFootToMeshOffset;
-        }
-
+        // An ankle bone is not a floor-contact point during a walk cycle.
+        // Measure the actual deformed surface while leaving the model root
+        // untouched; feeding animated bone height back into the root caused
+        // the visible per-step shake.
         return runtimeRenderer.bounds.min.y;
     }
 
@@ -540,25 +613,25 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         BodybuilderEnemyVisual.Rig rig = new BodybuilderEnemyVisual.Rig
         {
             Root = renderer.rootBone != null ? renderer.rootBone : modelRoot,
-            Hips = FindBone(bones, "hips"),
-            Spine = FindBone(bones, "spine"),
-            Chest = FindBone(bones, "spine2", "spine1"),
-            Neck = FindBone(bones, "neck"),
-            Head = FindBone(bones, "head"),
-            LeftShoulder = FindBone(bones, "leftshoulder"),
-            LeftUpperArm = FindBone(bones, "leftarm"),
-            LeftForearm = FindBone(bones, "leftforearm"),
-            LeftHand = FindBone(bones, "lefthand"),
-            RightShoulder = FindBone(bones, "rightshoulder"),
-            RightUpperArm = FindBone(bones, "rightarm"),
-            RightForearm = FindBone(bones, "rightforearm"),
-            RightHand = FindBone(bones, "righthand"),
-            LeftThigh = FindBone(bones, "leftupleg"),
-            LeftShin = FindBone(bones, "leftleg"),
-            LeftFoot = FindBone(bones, "leftfoot"),
-            RightThigh = FindBone(bones, "rightupleg"),
-            RightShin = FindBone(bones, "rightleg"),
-            RightFoot = FindBone(bones, "rightfoot")
+            Hips = FindBone(bones, "hips", "def-spine"),
+            Spine = FindBone(bones, "def-spine.001", "spine"),
+            Chest = FindBone(bones, "def-spine.003", "def-spine.002", "spine2", "spine1"),
+            Neck = FindBone(bones, "neck", "def-spine.004"),
+            Head = FindBone(bones, "head", "def-spine.005"),
+            LeftShoulder = FindBone(bones, "leftshoulder", "shoulder.l", "def-shoulder.l"),
+            LeftUpperArm = FindBone(bones, "leftarm", "leftupperarm", "upper-arm.l", "def-upperarm.l"),
+            LeftForearm = FindBone(bones, "leftforearm", "leftlowerarm", "forearm.l", "def-forearm.l"),
+            LeftHand = FindBone(bones, "lefthand", "hand.l", "def-hand.l"),
+            RightShoulder = FindBone(bones, "rightshoulder", "shoulder.r", "def-shoulder.r"),
+            RightUpperArm = FindBone(bones, "rightarm", "rightupperarm", "upper-arm.r", "def-upperarm.r"),
+            RightForearm = FindBone(bones, "rightforearm", "rightlowerarm", "forearm.r", "def-forearm.r"),
+            RightHand = FindBone(bones, "righthand", "hand.r", "def-hand.r"),
+            LeftThigh = FindBone(bones, "leftupleg", "leftthigh", "thigh.l", "def-thigh.l"),
+            LeftShin = FindBone(bones, "leftleg", "leftcalf", "leftlowerleg", "shin.l", "def-shin.l"),
+            LeftFoot = FindBone(bones, "leftfoot", "foot.l", "def-foot.l"),
+            RightThigh = FindBone(bones, "rightupleg", "rightthigh", "thigh.r", "def-thigh.r"),
+            RightShin = FindBone(bones, "rightleg", "rightcalf", "rightlowerleg", "shin.r", "def-shin.r"),
+            RightFoot = FindBone(bones, "rightfoot", "foot.r", "def-foot.r")
         };
 
         Transform leftFoot = FindBone(bones, "leftfoot");
@@ -588,13 +661,27 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
     private static Transform FindBone(Transform[] bones, params string[] candidates)
     {
-        for (int i = 0; i < bones.Length; i++)
+        // Prefer an exact authored deform-bone name before allowing a loose
+        // suffix match.  Rigify has both DEF-spine and DEF-spine.001; a
+        // scene-order suffix search can otherwise bind Spine to the hips.
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
         {
-            string normalized = NormalizeBoneName(bones[i].name);
-            for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+            string candidate = NormalizeBoneName(candidates[candidateIndex]);
+            for (int i = 0; i < bones.Length; i++)
             {
-                if (normalized == candidates[candidateIndex] ||
-                    normalized.EndsWith(candidates[candidateIndex], StringComparison.Ordinal))
+                if (NormalizeBoneName(bones[i].name) == candidate)
+                {
+                    return bones[i];
+                }
+            }
+        }
+
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            string candidate = NormalizeBoneName(candidates[candidateIndex]);
+            for (int i = 0; i < bones.Length; i++)
+            {
+                if (NormalizeBoneName(bones[i].name).EndsWith(candidate, StringComparison.Ordinal))
                 {
                     return bones[i];
                 }

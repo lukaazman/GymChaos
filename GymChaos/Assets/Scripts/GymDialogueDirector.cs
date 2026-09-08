@@ -99,13 +99,13 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
     public EnemyFighter FindNearbyTalkTarget(Vector3 position)
     {
-        EnemyFighter[] fighters = FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        var fighters = EnemyFighter.RegisteredFighters;
         EnemyFighter closest = null;
         float bestDistance = 3.2f * 3.2f;
-        for (int i = 0; i < fighters.Length; i++)
+        for (int i = 0; i < fighters.Count; i++)
         {
             EnemyFighter fighter = fighters[i];
-            if (fighter == null || fighter.IsDead || fighter.IsAggressive)
+            if (fighter == null || !fighter.isActiveAndEnabled || fighter.IsDead || fighter.IsAggressive)
             {
                 continue;
             }
@@ -369,48 +369,191 @@ public sealed class GymDialogueDirector : MonoBehaviour
             return result;
         }
 
-        if (fighter.Identity == BodybuilderIdentity.Ronnie)
+        switch (fighter.Identity)
         {
-            result.nodes.Add(new DialogueNode(name,
-                negativeRep
-                    ? "You planning to train, or make me chase you around the room again?"
-                    : positiveRep
-                        ? "Heard you have been keeping the room together. You planning to train, or just collect compliments?"
-                        : "You planning to train, or start another scene?")
-                .AddChoice("Train. No trouble.", 1, 4)
-                .AddChoice("Try me.", 1, -6)
-                .AddChoice("I need a spot.", 1, 2));
-            result.nodes.Add(new DialogueNode(name,
-                "Then keep your hands to yourself. I don't want to cross the room because you got bored.")
-                .AddChoice("Fair enough.", -1, 2)
-                .AddChoice("Make me.", -1, -5));
-            return result;
+            case BodybuilderIdentity.Goku:
+                AddMemberConversation(
+                    result,
+                    name,
+                    negativeRep
+                        ? "You keep bringing bad energy into the room. Train with me, or leave the drama outside."
+                        : positiveRep
+                            ? "I heard you helped some people today. Nice! Now, are we training or talking?"
+                            : "Hey! You look strong! Want to train together? I was going to eat, but one more round sounds better.",
+                    "Show me one clean technique.",
+                    "Good choice. Clean first, power second. If the stance breaks, reset and try again.",
+                    3,
+                    "Race me to the next set.",
+                    "All right! No flying this time, promise. Winner picks lunch!",
+                    1,
+                    "I need a quiet session.",
+                    "Oh, okay! I will try to keep it down. Let me know if you want a training partner.",
+                    0);
+                break;
+
+            case BodybuilderIdentity.Cbum:
+                AddMemberConversation(
+                    result,
+                    name,
+                    negativeRep
+                        ? "Your last few reps looked rushed. Fix the shape before you ask for more."
+                        : positiveRep
+                            ? "You have been helping the room. Good. Keep that same control in your own sets."
+                            : "Honestly, some days I still overthink everything. Then I get here, breathe, and do the next set.",
+                    "Check my form.",
+                    "Lower the weight, own the path, and make every rep look the same.",
+                    3,
+                    "I want to push heavier.",
+                    "I get it. But I care how the rep feels in the muscle. Leave the ego out of this one.",
+                    1,
+                    "How do you handle pressure?",
+                    "I try to stop treating every session like a verdict on who I am. Do the work, then go be a person.",
+                    0);
+                break;
+
+            case BodybuilderIdentity.Ronnie:
+                AddMemberConversation(
+                    result,
+                    name,
+                    negativeRep
+                        ? "You got a lot of noise in your sets and not enough work. Change that."
+                        : positiveRep
+                            ? "People say you have been helping. Good. Now bring that work ethic to your own set."
+                            : "Yeah buddy! You warmed up? Come on over, we have some work to do!",
+                    "I will earn the next rep.",
+                    "Light weight, baby! Get yourself set. I am right here with you for this rep.",
+                    4,
+                    "I need a spot.",
+                    "You got it, buddy. Tell me how many you are going for, and when you want a hand.",
+                    2,
+                    "I want to test my strength.",
+                    "Ha! I like the enthusiasm. Work up to it first. We have all afternoon.",
+                    0);
+                break;
+
+            case BodybuilderIdentity.JayCutler:
+                AddMemberConversation(
+                    result,
+                    name,
+                    negativeRep
+                        ? "The room does not owe you respect. Your training has to earn it."
+                        : positiveRep
+                            ? "I see the work. Keep the standard high and the excuses short."
+                            : "I have already got my session written down. What are you training today?",
+                    "Tell me what to fix.",
+                    "Start with the weak point you keep avoiding. Make it the first thing you train.",
+                    3,
+                    "I want a heavier set.",
+                    "I have moved plenty of weight. These days I want the muscle doing the work. Slow that rep down.",
+                    1,
+                    "I am here to learn.",
+                    "Keep a record. Training, food, recovery. It is easier to adjust something you actually track.",
+                    2);
+                break;
+
+            case BodybuilderIdentity.Arnold:
+                AddMemberConversation(
+                    result,
+                    name,
+                    negativeRep
+                        ? "You are spending too much energy making a scene. Put that energy into a goal."
+                        : positiveRep
+                            ? "You have started to become part of the room. Give that momentum a direction."
+                            : "Tell me what you want to build. If you can picture it clearly, we can give this workout a purpose.",
+                    "Help me choose a goal.",
+                    "Choose something you can name, measure, and pursue when the room is empty.",
+                    3,
+                    "I want to look stronger.",
+                    "Good! But do not just stand in front of the mirror. Give yourself something new to see tomorrow.",
+                    1,
+                    "I just want to enjoy the session.",
+                    "Of course! Training should be something you look forward to. Bring a friend and push each other.",
+                    1);
+                break;
+
+            case BodybuilderIdentity.Zyzz:
+                AddMemberConversation(
+                    result,
+                    name,
+                    negativeRep
+                        ? "You are chasing attention before you have earned the session. Fix the order."
+                        : positiveRep
+                            ? "The room has noticed your energy. Use it to lift the mood, not just your profile."
+                            : "There he is! Shoulders back, brah. You came to train, not apologise for taking up space.",
+                    "Show me how to carry myself.",
+                    "Start by enjoying yourself, brah. Get your set in, hit a pose, hype up the guy next to you.",
+                    3,
+                    "I want the session to be memorable.",
+                    "Put a good track on. Train with your mates. There is a whole life outside counting reps.",
+                    1,
+                    "I am not here to perform.",
+                    "Fair enough, brah. Do your thing. You do not need an audience to feel good about yourself.",
+                    2);
+                break;
+
+            default:
+                AddMemberConversation(
+                    result,
+                    name,
+                    "The room has its own rhythm. Find yours before you start making noise.",
+                    "I will keep it clean.",
+                    "Good. A clean session gives everyone else room to train.",
+                    2,
+                    "I want to push harder.",
+                    "Push with a plan, then leave the equipment ready for the next member.",
+                    1,
+                    "I am just looking around.",
+                    "Look, learn, and do not block the lane.",
+                    0);
+                break;
         }
 
-        result.nodes.Add(new DialogueNode(name,
-            negativeRep
-                ? "You keep picking fights between sets. Is that your whole workout?"
-                : positiveRep
-                    ? "You are the one people keep thanking. Need a partner, or are you just making the rounds?"
-                    : "You always stare between sets, or am I getting special treatment?")
-            .AddChoice("Just saying hi.", 1, 3)
-            .AddChoice("I'm sizing you up.", 1, -3)
-            .AddChoice("Need a partner?", 1, 4));
-        result.nodes.Add(new DialogueNode(name,
-            "Good. Finish your set before the room finds a reason to notice you.")
-            .AddChoice("Deal.", -1, 1));
         return result;
     }
 
+    private static void AddMemberConversation(
+        DialogueDefinition result,
+        string speaker,
+        string opening,
+        string firstChoice,
+        string firstResponse,
+        int firstDelta,
+        string secondChoice,
+        string secondResponse,
+        int secondDelta,
+        string thirdChoice,
+        string thirdResponse,
+        int thirdDelta)
+    {
+        int firstResponseIndex = result.nodes.Count + 1;
+        result.nodes.Add(new DialogueNode(speaker, opening)
+            .AddChoice(firstChoice, firstResponseIndex, firstDelta)
+            .AddChoice(secondChoice, firstResponseIndex + 1, secondDelta)
+            .AddChoice(thirdChoice, firstResponseIndex + 2, thirdDelta));
+        result.nodes.Add(new DialogueNode(speaker, firstResponse)
+            .AddChoice("I'll put it into practice.", -1, 1));
+        result.nodes.Add(new DialogueNode(speaker, secondResponse)
+            .AddChoice("Understood.", -1, 0));
+        result.nodes.Add(new DialogueNode(speaker, thirdResponse)
+            .AddChoice("I'll remember that.", -1, 0));
+    }
     private static string GetDisplayName(EnemyFighter fighter)
     {
         if (fighter == null)
         {
             return "Gym regular";
         }
-        return fighter.Identity == BodybuilderIdentity.Manwithsuit1
-            ? "Reception"
-            : fighter.Identity.ToString();
+        switch (fighter.Identity)
+        {
+            case BodybuilderIdentity.Manwithsuit1: return "Reception";
+            case BodybuilderIdentity.Cbum: return "Cbum";
+            case BodybuilderIdentity.Ronnie: return "Ronnie Coleman";
+            case BodybuilderIdentity.JayCutler: return "Jay Cutler";
+            case BodybuilderIdentity.Arnold: return "Arnold";
+            case BodybuilderIdentity.Zyzz: return "Zyzz";
+            case BodybuilderIdentity.Goku: return "Goku";
+            default: return fighter.Identity.ToString();
+        }
     }
 
     private void OnGUI()

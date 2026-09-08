@@ -38,6 +38,7 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private PlayerMovement player;
     private GymRadio radio;
+    private GameObject preparedGameplayActors;
     private bool gameplayStarted;
 
     private static bool IsWebGlPlayer => Application.platform == RuntimePlatform.WebGLPlayer;
@@ -194,8 +195,11 @@ public class GymArenaBootstrap : MonoBehaviour
             }
             if (spatiallyMountedWeightRoots.Contains(entry.Key))
             {
-                body.linearVelocity = Vector3.zero;
-                body.angularVelocity = Vector3.zero;
+                if (!body.isKinematic)
+                {
+                    body.linearVelocity = Vector3.zero;
+                    body.angularVelocity = Vector3.zero;
+                }
                 body.useGravity = false;
                 body.isKinematic = true;
             }
@@ -209,7 +213,12 @@ public class GymArenaBootstrap : MonoBehaviour
             return;
         }
 
+        double activationStarted = Time.realtimeSinceStartupAsDouble;
         gameplayStarted = true;
+        if (preparedGameplayActors != null)
+        {
+            preparedGameplayActors.SetActive(true);
+        }
         if (player != null)
         {
             Transform playerRig = player.transform.Find("PlayerAvatarRig");
@@ -221,18 +230,24 @@ public class GymArenaBootstrap : MonoBehaviour
             player.enabled = true;
         }
 
-        SpawnNeutralReceptionNpc();
-        SpawnEnemies();
+        // Heavy actors were built before the menu became interactive. Do not
+        // run spawn reconciliation again here: default scene queries exclude
+        // the inactive prepared roster and used to duplicate all seven rigs.
         GymVisitorDirector.CreateForScene(player);
         if (radio != null)
         {
-            radio.BeginPlayback();
         }
         if (!Application.isBatchMode)
         {
             GymPauseMenu.CreateForScene(player);
         }
-        Debug.Log("GYMCHAOS_GAMEPLAY_READY", this);
+        double activationMilliseconds =
+            (Time.realtimeSinceStartupAsDouble - activationStarted) * 1000.0;
+        int activeActorCount = FindObjectsByType<EnemyFighter>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None).Length;
+        Debug.Log(
+            $"GYMCHAOS_GAMEPLAY_READY playActivationMs={activationMilliseconds:F1} " +
+            $"actors={activeActorCount}", this);
     }
 
     private void Initialize(PlayerMovement targetPlayer)
@@ -251,6 +266,17 @@ public class GymArenaBootstrap : MonoBehaviour
         GymExerciseStation.CreateForScene();
         GymExperienceService.CreateForScene(targetPlayer);
         GymDialogueDirector.CreateForScene(targetPlayer);
+
+        // Load and build heavyweight character FBXs before the start screen is
+        // interactive. Keeping their common root inactive prevents AI,
+        // physics and rendering from running until Play, while Play itself
+        // only activates already prepared actors instead of synchronously
+        // importing seven large skinned meshes.
+        preparedGameplayActors = new GameObject("Prepared Gameplay Actors");
+        preparedGameplayActors.transform.SetParent(transform, false);
+        preparedGameplayActors.SetActive(false);
+        SpawnNeutralReceptionNpc();
+        SpawnEnemies();
 
         if (Application.isBatchMode)
         {
@@ -432,8 +458,11 @@ public class GymArenaBootstrap : MonoBehaviour
         Rigidbody[] bodies = equipmentRoot.GetComponentsInChildren<Rigidbody>(true);
         for (int i = 0; i < bodies.Length; i++)
         {
-            bodies[i].linearVelocity = Vector3.zero;
-            bodies[i].angularVelocity = Vector3.zero;
+            if (!bodies[i].isKinematic)
+            {
+                bodies[i].linearVelocity = Vector3.zero;
+                bodies[i].angularVelocity = Vector3.zero;
+            }
             bodies[i].useGravity = false;
             bodies[i].isKinematic = true;
         }
@@ -741,8 +770,8 @@ public class GymArenaBootstrap : MonoBehaviour
             return;
         }
 
-        EnemyFighter[] existingFighters =
-            FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        EnemyFighter[] existingFighters = FindObjectsByType<EnemyFighter>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
         // Scene-authored enemies can already exist when the runtime roster is
         // reconciled. Apply the same deadlift-station collision exemption to
         // them as to enemies created below, otherwise a pre-placed Ronnie can
@@ -777,7 +806,17 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private void SpawnNeutralReceptionNpc()
     {
-        if (GameObject.Find("NPC - manwithsuit1") != null || player == null)
+        EnemyFighter[] existingFighters = FindObjectsByType<EnemyFighter>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < existingFighters.Length; i++)
+        {
+            if (existingFighters[i] != null &&
+                existingFighters[i].Identity == BodybuilderIdentity.Manwithsuit1)
+            {
+                return;
+            }
+        }
+        if (player == null)
         {
             return;
         }
@@ -807,6 +846,11 @@ public class GymArenaBootstrap : MonoBehaviour
         position.y = floorY + 0.08f;
 
         GameObject npc = new GameObject("NPC - manwithsuit1");
+        // The receptionist uses the separate legacy GLB coroutine loader.
+        // Keep it active under the bootstrap while the start screen is open
+        // so it is fully loaded behind the counter before Play. Only the six
+        // authored enemies belong under the inactive preload root.
+        npc.transform.SetParent(transform, false);
         npc.transform.SetPositionAndRotation(
             position, Quaternion.LookRotation(-towardWall, Vector3.up));
         CapsuleCollider collider = npc.AddComponent<CapsuleCollider>();
@@ -1262,7 +1306,8 @@ public class GymArenaBootstrap : MonoBehaviour
         bounds = default;
         for (int i = 0; i < renderers.Length; i++)
         {
-            if (renderers[i].name != "Locker")
+            if (renderers[i].name != "Locker" &&
+                renderers[i].name != "Locker cabinet")
             {
                 continue;
             }
@@ -1382,6 +1427,10 @@ public class GymArenaBootstrap : MonoBehaviour
     private void CreateEnemy(BodybuilderIdentity identity, Vector3 position, Quaternion rotation)
     {
         GameObject enemy = new GameObject($"Enemy - {identity}");
+        if (preparedGameplayActors != null)
+        {
+            enemy.transform.SetParent(preparedGameplayActors.transform, false);
+        }
         enemy.tag = "Enemies";
         enemy.layer = EnemyFighter.EnemyCollisionLayer;
         enemy.transform.position = position;

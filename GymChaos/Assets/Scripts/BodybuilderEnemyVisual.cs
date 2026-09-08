@@ -184,19 +184,20 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
     public static BodybuilderEnemyVisual Build(GameObject enemy, BodybuilderIdentity identity)
     {
-        // The final FBX is the per-enemy T-pose scan with its fitted Mixamo
-        // skeleton and authored UV/material layout.  Keep that hierarchy as
-        // the visible body; the legacy procedural GLB loader below is only a
-        // recovery fallback when an FBX is genuinely unavailable.
+        // Every enemy must resolve to its own authored FBX.  Do not silently
+        // replace a missing rig with the old procedural GLB body: that path
+        // has a different skeleton and is exactly what causes animation and
+        // proportions to drift between characters.
         if (ExternalRiggedCharacterVisual.TryBuild(enemy, identity))
         {
             return null;
         }
 
-        BodybuilderEnemyVisual visual = enemy.AddComponent<BodybuilderEnemyVisual>();
-        // Recovery-only path for a missing/invalid final FBX.
-        visual.StartCoroutine(visual.BuildVisual(identity, false));
-        return visual;
+        Debug.LogError(
+            $"GYMCHAOS_AUTHORED_CHARACTER_BUILD_FAILED identity={identity} " +
+            $"requiredPath=Assets/Resources/Characters/Enemies/{identity.ToString().ToLowerInvariant()}_authored.fbx",
+            enemy);
+        return null;
     }
 
     public static BodybuilderEnemyVisual BuildNeutralNpc(GameObject npc, BodybuilderIdentity identity)
@@ -216,18 +217,17 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         }
 
         Mesh baked = new Mesh { name = identity + " imported visual setup" };
-        // Request vertices without the renderer scale, then apply the
-        // renderer hierarchy exactly once while converting them into the
-        // visible model-root space. The imported armature has a bind scale of
-        // about 0.02; baking that scale and TransformPoint-ing it again makes
-        // the eye sample drift roughly a metre above the head.
+        // BakeMesh(..., false) already contains the FBX skinning/import scale.
+        // Restore only the renderer position and rotation here. Applying
+        // TransformPoint would multiply the imported root scale a second time
+        // and move the eye target above the visible asset.
         bodyRenderer.BakeMesh(baked, false);
         Vector3[] bakedVertices = baked.vertices;
         Vector3[] vertices = new Vector3[bakedVertices.Length];
         Bounds bounds = default;
         for (int i = 0; i < bakedVertices.Length; i++)
         {
-            Vector3 world = bodyRenderer.transform.TransformPoint(bakedVertices[i]);
+            Vector3 world = GetBakedVertexWorldPosition(bodyRenderer, bakedVertices[i]);
             vertices[i] = visualRoot.InverseTransformPoint(world);
             if (i == 0)
             {
@@ -244,7 +244,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         LogImportedHeadGeometry(identity, bodyRenderer, rig.Head, visualRoot, vertices);
         FaceCensorProfile importedProfile = GetImportedFaceCensorProfile(
             identity, vertices, bounds, profile, visualRoot, rig.Head,
-            bodyRenderer.bounds.size.y);
+            bodyRenderer, bodyRenderer.bounds.size.y);
         if (neutralNpc)
         {
             CreateDeathMarkersAndName(
@@ -257,6 +257,119 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity,
                 importedProfile);
         }
+    }
+
+    public static bool RequiresImportedFaceRefresh(BodybuilderIdentity identity)
+    {
+        return IsAssetSpecificFaceCalibration(identity);
+    }
+
+    public static bool RefreshImportedFaceCensor(
+        Transform visualRoot, SkinnedMeshRenderer bodyRenderer, Rig rig,
+        BodybuilderIdentity identity, FaceCensorSettings censor, Mesh bakedMesh)
+    {
+        if (!RequiresImportedFaceRefresh(identity) || visualRoot == null ||
+            bodyRenderer == null || rig == null || rig.Head == null ||
+            censor == null || bakedMesh == null)
+        {
+            return false;
+        }
+
+        bodyRenderer.BakeMesh(bakedMesh, false);
+        Vector3[] bakedVertices = bakedMesh.vertices;
+        if (bakedVertices == null || bakedVertices.Length == 0)
+        {
+            return false;
+        }
+
+        Vector3[] vertices = new Vector3[bakedVertices.Length];
+        Bounds bounds = default;
+        for (int i = 0; i < bakedVertices.Length; i++)
+        {
+            Vector3 world = GetBakedVertexWorldPosition(bodyRenderer, bakedVertices[i]);
+            vertices[i] = visualRoot.InverseTransformPoint(world);
+            if (i == 0)
+            {
+                bounds = new Bounds(vertices[i], Vector3.zero);
+            }
+            else
+            {
+                bounds.Encapsulate(vertices[i]);
+            }
+        }
+
+        Transform censorHead = censor.transform.parent != null
+            ? censor.transform.parent
+            : rig.Head;
+        if (censorHead == null)
+        {
+            return false;
+        }
+
+        FaceCensorProfile profile = GetImportedFaceCensorProfile(
+            identity, vertices, bounds, GetRigProfile(identity), visualRoot,
+            censorHead, bodyRenderer, bodyRenderer.bounds.size.y, false);
+        censor.ApplyRuntimePlacement(profile);
+        return true;
+    }
+
+    private readonly struct ImportedFaceSample
+    {
+        public readonly Vector3 World;
+        public readonly float Vertical;
+        public readonly float Lateral;
+        public readonly float Depth;
+        public readonly Vector2 UV;
+
+        public ImportedFaceSample(
+            Vector3 world, float vertical, float lateral, float depth,
+            Vector2 uv)
+        {
+            World = world;
+            Vertical = vertical;
+            Lateral = lateral;
+            Depth = depth;
+            UV = uv;
+        }
+    }
+
+    private readonly struct ImportedFaceGeometry
+    {
+        public readonly Vector3 EyeAnchorWorld;
+        public readonly Bounds FaceBoundsWorld;
+        public readonly float MinVertical;
+        public readonly float MaxVertical;
+        public readonly float CenterLateral;
+        public readonly float CenterDepth;
+
+        public ImportedFaceGeometry(
+            Vector3 eyeAnchorWorld, Bounds faceBoundsWorld,
+            float minVertical, float maxVertical,
+            float centerLateral, float centerDepth)
+        {
+            EyeAnchorWorld = eyeAnchorWorld;
+            FaceBoundsWorld = faceBoundsWorld;
+            MinVertical = minVertical;
+            MaxVertical = maxVertical;
+            CenterLateral = centerLateral;
+            CenterDepth = centerDepth;
+        }
+    }
+
+    private static Vector3 GetBakedVertexWorldPosition(
+        SkinnedMeshRenderer renderer, Vector3 bakedVertex)
+    {
+        if (renderer == null)
+        {
+            return bakedVertex;
+        }
+
+        // Unity's false BakeMesh path returns the skinned vertices with the
+        // imported FBX/armature scale already represented. Do not call
+        // TransformPoint: its scale multiplication would double the model
+        // height. Position and rotation are still needed to reach world
+        // space, while the renderer hierarchy scale must be omitted.
+        return renderer.transform.position + renderer.transform.rotation * bakedVertex;
     }
 
     private static void LogImportedHeadGeometry(
@@ -320,8 +433,449 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         }
     }
 
+    private static bool TryGetWeightedHeadBounds(
+        SkinnedMeshRenderer bodyRenderer, Transform head, Vector3[] vertices,
+        out Bounds headBounds)
+    {
+        headBounds = default;
+        if (bodyRenderer == null || head == null || bodyRenderer.sharedMesh == null ||
+            bodyRenderer.bones == null || bodyRenderer.sharedMesh.boneWeights == null)
+        {
+            return false;
+        }
+
+        int headBoneIndex = -1;
+        for (int i = 0; i < bodyRenderer.bones.Length; i++)
+        {
+            if (bodyRenderer.bones[i] == head)
+            {
+                headBoneIndex = i;
+                break;
+            }
+        }
+        if (headBoneIndex < 0)
+        {
+            return false;
+        }
+
+        BoneWeight[] weights = bodyRenderer.sharedMesh.boneWeights;
+        bool hasBounds = false;
+        int count = Mathf.Min(vertices.Length, weights.Length);
+        for (int i = 0; i < count; i++)
+        {
+            BoneWeight weight = weights[i];
+            float headWeight = 0f;
+            if (weight.boneIndex0 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight0);
+            if (weight.boneIndex1 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight1);
+            if (weight.boneIndex2 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight2);
+            if (weight.boneIndex3 == headBoneIndex) headWeight = Mathf.Max(headWeight, weight.weight3);
+            if (headWeight < 0.25f)
+            {
+                continue;
+            }
+
+            if (!hasBounds)
+            {
+                headBounds = new Bounds(vertices[i], Vector3.zero);
+                hasBounds = true;
+            }
+            else
+            {
+                headBounds.Encapsulate(vertices[i]);
+            }
+        }
+
+        return hasBounds && headBounds.size.sqrMagnitude > 0.000001f;
+    }
+
+    /// <summary>
+    /// Finds the visible facial core for the imported scans. The head bone is
+    /// deliberately only a starting mask: on Goku it also owns the tall hair,
+    /// while on Ronnie and Jay it includes asymmetric ear/hair geometry. The
+    /// final target is therefore built from front-facing, central, skin-like
+    /// mesh vertices and their UV texture samples. No gameplay collider is
+    /// involved in this calibration.
+    /// </summary>
+    public static bool TryGetImportedFaceTarget(
+        BodybuilderIdentity identity, SkinnedMeshRenderer bodyRenderer,
+        Transform visualRoot, Transform head, Vector3[] vertices,
+        out Vector3 eyeTargetWorld, out Bounds faceBoundsWorld)
+    {
+        eyeTargetWorld = head != null ? head.position : Vector3.zero;
+        faceBoundsWorld = default;
+        if (!TryBuildImportedFaceGeometry(
+                identity, bodyRenderer, visualRoot, head, vertices,
+                out ImportedFaceGeometry geometry))
+        {
+            return false;
+        }
+
+        eyeTargetWorld = geometry.EyeAnchorWorld;
+        faceBoundsWorld = geometry.FaceBoundsWorld;
+        return true;
+    }
+
+    private static bool TryBuildImportedFaceGeometry(
+        BodybuilderIdentity identity, SkinnedMeshRenderer bodyRenderer,
+        Transform visualRoot, Transform head, Vector3[] vertices,
+        out ImportedFaceGeometry geometry)
+    {
+        geometry = default;
+        if (!IsAssetSpecificFaceCalibration(identity) ||
+            bodyRenderer == null || visualRoot == null || head == null ||
+            vertices == null || bodyRenderer.sharedMesh == null ||
+            bodyRenderer.bones == null || bodyRenderer.sharedMesh.boneWeights == null)
+        {
+            return false;
+        }
+
+        int headBoneIndex = FindHeadBoneIndex(bodyRenderer, head);
+        if (headBoneIndex < 0)
+        {
+            return false;
+        }
+
+        Vector3 faceForward = head.forward;
+        if (faceForward.sqrMagnitude < 0.0001f)
+        {
+            faceForward = visualRoot.forward;
+        }
+        faceForward.Normalize();
+        if (Vector3.Dot(faceForward, visualRoot.forward) < 0f)
+        {
+            faceForward = -faceForward;
+        }
+
+        Vector3 faceUp = Vector3.ProjectOnPlane(head.up, faceForward).normalized;
+        if (faceUp.sqrMagnitude < 0.0001f)
+        {
+            faceUp = Vector3.up;
+        }
+
+        Vector3 faceRight = Vector3.Cross(faceUp, faceForward).normalized;
+        if (faceRight.sqrMagnitude < 0.0001f)
+        {
+            faceRight = head.right.normalized;
+        }
+        faceUp = Vector3.Cross(faceForward, faceRight).normalized;
+        if (Vector3.Dot(faceUp, head.up) < 0f)
+        {
+            faceRight = -faceRight;
+            faceUp = -faceUp;
+        }
+
+        BoneWeight[] weights = bodyRenderer.sharedMesh.boneWeights;
+        Vector2[] uvs = bodyRenderer.sharedMesh.uv;
+        int count = Mathf.Min(vertices.Length, weights.Length);
+        List<ImportedFaceSample> headSamples = new List<ImportedFaceSample>(count);
+        float headMinDepth = float.PositiveInfinity;
+        float headMaxDepth = float.NegativeInfinity;
+        float headHalfWidth = 0f;
+        for (int i = 0; i < count; i++)
+        {
+            if (GetBoneWeight(weights[i], headBoneIndex) < 0.25f)
+            {
+                continue;
+            }
+
+            Vector3 world = visualRoot.TransformPoint(vertices[i]);
+            Vector3 delta = world - head.position;
+            float vertical = Vector3.Dot(delta, faceUp);
+            float lateral = Vector3.Dot(delta, faceRight);
+            float depth = Vector3.Dot(delta, faceForward);
+            Vector2 uv = uvs != null && i < uvs.Length ? uvs[i] : Vector2.zero;
+            headSamples.Add(new ImportedFaceSample(
+                world, vertical, lateral, depth, uv));
+            headMinDepth = Mathf.Min(headMinDepth, depth);
+            headMaxDepth = Mathf.Max(headMaxDepth, depth);
+            headHalfWidth = Mathf.Max(headHalfWidth, Mathf.Abs(lateral));
+        }
+
+        if (headSamples.Count < 24 ||
+            float.IsPositiveInfinity(headMinDepth) ||
+            headHalfWidth < 0.005f)
+        {
+            return false;
+        }
+
+        float frontThreshold = Mathf.Lerp(
+            headMinDepth, headMaxDepth,
+            GetImportedFaceFrontDepthRatio(identity));
+        float centralHalfWidth = headHalfWidth *
+            GetImportedFaceCentralWidthRatio(identity);
+        Texture2D texture = Resources.Load<Texture2D>(
+            "Characters/Textures/" + GetImportedFaceTextureName(identity));
+        bool hasReadableTexture = texture != null && texture.isReadable &&
+            uvs != null && uvs.Length >= count;
+        List<ImportedFaceSample> faceSamples =
+            new List<ImportedFaceSample>(headSamples.Count);
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool useTextureMask = hasReadableTexture && pass == 0;
+            faceSamples.Clear();
+            for (int i = 0; i < headSamples.Count; i++)
+            {
+                ImportedFaceSample sample = headSamples[i];
+                if (sample.Depth < frontThreshold ||
+                    Mathf.Abs(sample.Lateral) > centralHalfWidth)
+                {
+                    continue;
+                }
+
+                if (useTextureMask && !IsImportedSkinSample(
+                        texture, sample.UV, identity))
+                {
+                    continue;
+                }
+
+                faceSamples.Add(sample);
+            }
+
+            // If a particular FBX has no readable/matching atlas, keep the
+            // direct visible front-core geometry as the deterministic fallback
+            // rather than reverting to the enemy capsule or head AABB.
+            if (!useTextureMask || faceSamples.Count >= 24)
+            {
+                break;
+            }
+        }
+
+        if (faceSamples.Count < 24)
+        {
+            return false;
+        }
+
+        List<float> verticals = new List<float>(faceSamples.Count);
+        List<float> laterals = new List<float>(faceSamples.Count);
+        List<float> depths = new List<float>(faceSamples.Count);
+        for (int i = 0; i < faceSamples.Count; i++)
+        {
+            verticals.Add(faceSamples[i].Vertical);
+            laterals.Add(faceSamples[i].Lateral);
+            depths.Add(faceSamples[i].Depth);
+        }
+
+        verticals.Sort();
+        laterals.Sort();
+        depths.Sort();
+        float minVertical = GetPercentile(verticals, 0.05f);
+        float maxVertical = GetPercentile(
+            verticals, GetImportedFaceUpperPercentile(identity));
+        if (maxVertical - minVertical < 0.06f)
+        {
+            minVertical = GetPercentile(verticals, 0.01f);
+            maxVertical = GetPercentile(verticals, 0.99f);
+        }
+        if (maxVertical - minVertical < 0.03f)
+        {
+            return false;
+        }
+
+        float centerDepth = GetPercentile(depths, 0.50f);
+        float eyeVertical = Mathf.Lerp(
+            minVertical, maxVertical, GetImportedEyeLineRatio(identity));
+        // Use the narrow eye band for the left/right axis. A whole-face
+        // midpoint can drift toward an ear, jaw flare, or one-sided hair
+        // mass, which makes a symmetric censor cover more of one cheek than
+        // the other. The shell itself remains symmetric around this sampled
+        // facial midline.
+        List<float> eyeLaterals = new List<float>(faceSamples.Count);
+        float eyeBandHalfHeight = Mathf.Max(
+            (maxVertical - minVertical) * 0.12f, 0.025f);
+        for (int i = 0; i < faceSamples.Count; i++)
+        {
+            if (Mathf.Abs(faceSamples[i].Vertical - eyeVertical) <=
+                eyeBandHalfHeight)
+            {
+                eyeLaterals.Add(faceSamples[i].Lateral);
+            }
+        }
+
+        float centerLateral;
+        if (eyeLaterals.Count >= 8)
+        {
+            eyeLaterals.Sort();
+            centerLateral = (GetPercentile(eyeLaterals, 0.10f) +
+                GetPercentile(eyeLaterals, 0.90f)) * 0.5f;
+        }
+        else
+        {
+            centerLateral = (GetPercentile(laterals, 0.20f) +
+                GetPercentile(laterals, 0.80f)) * 0.5f;
+        }
+        Vector3 eyeAnchorWorld = head.position +
+            faceUp * eyeVertical +
+            faceRight * centerLateral +
+            faceForward * centerDepth;
+
+        bool hasFaceBounds = false;
+        Bounds faceBounds = default;
+        for (int i = 0; i < faceSamples.Count; i++)
+        {
+            ImportedFaceSample sample = faceSamples[i];
+            if (sample.Vertical < minVertical ||
+                sample.Vertical > maxVertical)
+            {
+                continue;
+            }
+
+            if (!hasFaceBounds)
+            {
+                faceBounds = new Bounds(sample.World, Vector3.zero);
+                hasFaceBounds = true;
+            }
+            else
+            {
+                faceBounds.Encapsulate(sample.World);
+            }
+        }
+
+        if (!hasFaceBounds)
+        {
+            return false;
+        }
+
+        geometry = new ImportedFaceGeometry(
+            eyeAnchorWorld, faceBounds, minVertical, maxVertical,
+            centerLateral, centerDepth);
+        return true;
+    }
+
+    private static int FindHeadBoneIndex(
+        SkinnedMeshRenderer bodyRenderer, Transform head)
+    {
+        for (int i = 0; i < bodyRenderer.bones.Length; i++)
+        {
+            if (bodyRenderer.bones[i] == head)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static float GetBoneWeight(BoneWeight weight, int boneIndex)
+    {
+        float result = 0f;
+        if (weight.boneIndex0 == boneIndex) result = Mathf.Max(result, weight.weight0);
+        if (weight.boneIndex1 == boneIndex) result = Mathf.Max(result, weight.weight1);
+        if (weight.boneIndex2 == boneIndex) result = Mathf.Max(result, weight.weight2);
+        if (weight.boneIndex3 == boneIndex) result = Mathf.Max(result, weight.weight3);
+        return result;
+    }
+
+    private static float GetPercentile(List<float> sortedValues, float percentile)
+    {
+        if (sortedValues == null || sortedValues.Count == 0)
+        {
+            return 0f;
+        }
+
+        float index = Mathf.Clamp01(percentile) * (sortedValues.Count - 1);
+        int lower = Mathf.FloorToInt(index);
+        int upper = Mathf.Min(sortedValues.Count - 1, lower + 1);
+        return Mathf.Lerp(sortedValues[lower], sortedValues[upper], index - lower);
+    }
+
+    private static bool IsImportedSkinSample(
+        Texture2D texture, Vector2 uv, BodybuilderIdentity identity)
+    {
+        if (texture == null || !texture.isReadable)
+        {
+            return true;
+        }
+
+        Color color;
+        try
+        {
+            color = texture.GetPixelBilinear(
+                Mathf.Repeat(uv.x, 1f), Mathf.Repeat(uv.y, 1f));
+        }
+        catch (UnityException)
+        {
+            return true;
+        }
+
+        float red = color.r;
+        float green = color.g;
+        float blue = color.b;
+        float warmth = red - green;
+        float fleshContrast = green - blue;
+        float brightness = (red + green + blue) / 3f;
+        // The exact skin tone differs per scan. This rejects black clothing,
+        // saturated Goku hair/orange fabric and Jay's neutral shirt while
+        // retaining the darker/redder skin tones in the Ronnie atlas.
+        bool plausibleFlesh = brightness > 0.10f &&
+            red > green && green > blue - 0.015f &&
+            warmth > 0.012f && warmth < 0.44f &&
+            fleshContrast > 0.012f;
+        if (identity == BodybuilderIdentity.Goku)
+        {
+            // Goku's orange clothing is especially warm; keep the facial
+            // peach tones but reject the strongest yellow/orange samples.
+            plausibleFlesh &= warmth < 0.36f && fleshContrast < 0.44f;
+        }
+
+        return plausibleFlesh;
+    }
+
+    private static string GetImportedFaceTextureName(BodybuilderIdentity identity)
+    {
+        return identity == BodybuilderIdentity.JayCutler
+            ? "jay"
+            : identity.ToString().ToLowerInvariant();
+    }
+
+    private static float GetImportedFaceCentralWidthRatio(
+        BodybuilderIdentity identity)
+    {
+        switch (identity)
+        {
+            case BodybuilderIdentity.Ronnie: return 0.76f;
+            case BodybuilderIdentity.JayCutler: return 0.74f;
+            case BodybuilderIdentity.Goku: return 0.58f;
+            default: return 0.70f;
+        }
+    }
+
+    private static float GetImportedFaceFrontDepthRatio(
+        BodybuilderIdentity identity)
+    {
+        switch (identity)
+        {
+            case BodybuilderIdentity.Ronnie: return 0.32f;
+            case BodybuilderIdentity.JayCutler: return 0.34f;
+            case BodybuilderIdentity.Goku: return 0.38f;
+            default: return 0.35f;
+        }
+    }
+
+    private static float GetImportedFaceUpperPercentile(
+        BodybuilderIdentity identity)
+    {
+        switch (identity)
+        {
+            case BodybuilderIdentity.Ronnie: return 0.90f;
+            case BodybuilderIdentity.JayCutler: return 0.90f;
+            case BodybuilderIdentity.Goku: return 0.78f;
+            default: return 0.88f;
+        }
+    }
+
     private IEnumerator BuildVisual(BodybuilderIdentity identity, bool neutralNpc)
     {
+        // The six playable enemies are no longer allowed through this legacy
+        // GLB/procedural path. Their own authored Blender rigs are built by
+        // ExternalRiggedCharacterVisual; this loader is reserved for the
+        // separate reception NPC only.
+        if (identity != BodybuilderIdentity.Manwithsuit1 || !neutralNpc)
+        {
+            Debug.LogError(
+                $"GYMCHAOS_LEGACY_CHARACTER_PATH_BLOCKED identity={identity}", this);
+            yield break;
+        }
+
         // Stagger the large scans so parsing and mesh upload do not land in one frame.
         int delayFrames = (int)identity * 2 + 1;
         for (int i = 0; i < delayFrames; i++)
@@ -479,10 +1033,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 gameObject.AddComponent<MixamoScanRetargetAnimator>();
             if (!mixamoAnimator.Configure(identity, rig))
             {
+                // A missing authored set disables only this animation
+                // integration. Keep the visible scan in its neutral imported
+                // pose; never install the legacy procedural animator.
                 Destroy(mixamoAnimator);
-                BodybuilderEnemyAnimator fallbackAnimator =
-                    gameObject.AddComponent<BodybuilderEnemyAnimator>();
-                fallbackAnimator.Configure(identity, rig);
             }
         }
     }
@@ -1285,7 +1839,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
     private static FaceCensorProfile GetImportedFaceCensorProfile(
         BodybuilderIdentity identity, Vector3[] vertices, Bounds bounds,
-        RigProfile rigProfile, Transform visualRoot, Transform head, float worldHeight)
+        RigProfile rigProfile, Transform visualRoot, Transform head,
+        SkinnedMeshRenderer bodyRenderer, float worldHeight, bool logCalibration = true)
     {
         float localHeight = Mathf.Max(0.1f, bounds.size.y);
         // The normalized full-body FaceY profile belongs to the old
@@ -1293,9 +1848,21 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         // use that asset-space position as the vertical eye anchor so a
         // different scan cannot move the bar up into the forehead.
         Vector3 headLocal = visualRoot.InverseTransformPoint(head.position);
+        bool hasAssetHeadGeometry = IsAssetSpecificFaceCalibration(identity);
+        Vector3 importedEyeTargetWorld = head.position;
+        Bounds importedFaceBoundsWorld = default;
+        bool hasImportedFaceTarget = hasAssetHeadGeometry &&
+            TryGetImportedFaceTarget(
+                identity, bodyRenderer, visualRoot, head, vertices,
+                out importedEyeTargetWorld,
+                out importedFaceBoundsWorld);
+        bool hasWeightedHeadBounds = TryGetWeightedHeadBounds(
+            bodyRenderer, head, vertices, out Bounds weightedHeadBounds);
         float importedEyeOffset = 0f;
+        float importedEyeBandDrop = GetImportedEyeBandDrop(identity);
         float faceDepthScale = 1f;
         float faceCenterOffset = 0f;
+        bool useZeroDepthFacePlane = false;
         switch (identity)
         {
             // Every imported asset gets its own eye-line and face-depth
@@ -1320,7 +1887,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             case BodybuilderIdentity.Ronnie:
                 importedEyeOffset = -0.058f;
                 faceDepthScale = 1.08f;
-                faceCenterOffset = localHeight * 0.0095f;
+                // Keep the shell centered on the imported head pivot. The
+                // screenshot reference is low-angle, so height is corrected
+                // through the eye-line ratio, never by shifting it sideways.
+                faceCenterOffset = 0f;
+                useZeroDepthFacePlane = true;
                 break;
             case BodybuilderIdentity.Manwithsuit1:
                 importedEyeOffset = -0.031f;
@@ -1330,16 +1901,62 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             case BodybuilderIdentity.JayCutler:
                 importedEyeOffset = -0.064f;
                 faceDepthScale = 1.0f;
-                faceCenterOffset = -0.0015f;
+                // Jay's visible hair/ear bounds are not a lateral face
+                // midpoint; use the head pivot so both sides cover evenly.
+                faceCenterOffset = 0f;
+                useZeroDepthFacePlane = true;
                 break;
             case BodybuilderIdentity.Goku:
                 importedEyeOffset = -0.064f;
                 faceDepthScale = 0.92f;
-                faceCenterOffset = 0.0005f;
+                faceCenterOffset = 0f;
+                useZeroDepthFacePlane = true;
                 break;
         }
         float eyeY = headLocal.y + localHeight *
             (ImportedEyeLineBaseOffset + importedEyeOffset);
+        if (hasImportedFaceTarget)
+        {
+            // This is the direct visible facial-core target. It excludes the
+            // Goku hair mass and uses the median facial midline for Ronnie/Jay,
+            // so the shell is centred on the actual face rather than a broad
+            // weighted head AABB.
+            Vector3 targetLocal = visualRoot.InverseTransformPoint(importedEyeTargetWorld);
+            targetLocal.y += localHeight * importedEyeBandDrop;
+            importedEyeTargetWorld = visualRoot.TransformPoint(targetLocal);
+            eyeY = targetLocal.y;
+            if (logCalibration)
+            {
+                Debug.Log(
+                $"FACE_ASSET_CALIBRATION identity={identity} " +
+                $"source=frontSkinGeometry faceBounds=" +
+                $"{importedFaceBoundsWorld.min}/{importedFaceBoundsWorld.max} " +
+                $"eyeWorld={importedEyeTargetWorld} eyeLocalY={eyeY:F3} " +
+                $"eyeLineRatio={GetImportedEyeLineRatio(identity):F3} " +
+                $"eyeBandDrop={importedEyeBandDrop:F4}");
+            }
+        }
+        else if (hasAssetHeadGeometry && hasWeightedHeadBounds)
+        {
+            // Fallback for a malformed/imported mesh without enough readable
+            // face samples. This still uses visible weighted head geometry,
+            // never the enemy collider.
+            eyeY = Mathf.Lerp(
+                weightedHeadBounds.min.y,
+                weightedHeadBounds.max.y,
+                GetImportedEyeLineRatio(identity));
+            eyeY += localHeight * importedEyeBandDrop;
+            if (logCalibration)
+            {
+                Debug.Log(
+                $"FACE_ASSET_CALIBRATION identity={identity} " +
+                $"weightedHeadGeometry={hasWeightedHeadBounds} " +
+                $"headBounds={weightedHeadBounds.min}/{weightedHeadBounds.max} " +
+                $"headBoneLocalY={headLocal.y:F3} eyeLocalY={eyeY:F3} " +
+                $"eyeLineRatio={GetImportedEyeLineRatio(identity):F3} " +
+                $"eyeBandDrop={importedEyeBandDrop:F4}");
+            }
+        }
 
         float height = Mathf.Max(0.1f, worldHeight);
         Vector2 size;
@@ -1383,6 +2000,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         // Keep the lateral correction in the asset's model space, but sample
         // depth in the actual head frame. This handles identities whose head
         // sits farther forward/back or tilts relative to the body root.
+        // The weighted mesh AABB is intentionally not used for lateral
+        // centering: Ronnie's and Jay's hair/ear vertices make that AABB
+        // asymmetric, which shifts the bar across more surface on one side.
+        // The direct front-skin sample supplies the eye-band midline, while
+        // the shell geometry remains symmetric around that line.
         float faceCenterX = headLocal.x + faceCenterOffset;
 
         Vector3 faceDirectionWorld = head.forward;
@@ -1418,8 +2040,15 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             faceUpWorld = -faceUpWorld;
         }
 
-        Vector3 eyeAnchorLocal = new Vector3(faceCenterX, eyeY, headLocal.z);
-        Vector3 eyeAnchorWorld = visualRoot.TransformPoint(eyeAnchorLocal);
+        float faceCenterZ = hasImportedFaceTarget
+            ? visualRoot.InverseTransformPoint(importedEyeTargetWorld).z
+            : hasAssetHeadGeometry && hasWeightedHeadBounds
+                ? weightedHeadBounds.center.z
+                : headLocal.z;
+        Vector3 eyeAnchorLocal = new Vector3(faceCenterX, eyeY, faceCenterZ);
+        Vector3 eyeAnchorWorld = hasImportedFaceTarget
+            ? importedEyeTargetWorld
+            : visualRoot.TransformPoint(eyeAnchorLocal);
         float eyeHalfHeight = Mathf.Max(localHeight * 0.022f, size.y * 0.65f);
         float eyeHalfWidth = Mathf.Max(
             localHeight * rigProfile.HeadHalfWidth * 0.95f, size.x * 0.6f);
@@ -1458,13 +2087,42 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         const float faceSurfaceOffset = 0f;
         Vector3 faceSurfaceWorld = eyeAnchorWorld +
             faceDirectionWorld * (frontDepth + faceSurfaceOffset);
+        // The imported head's forward axis can be pitched. A raw depth ray
+        // would then move the censor vertically, which is why Ronnie, Jay and
+        // Goku could end up with a bar above the eyes even when eyeY was
+        // correct. Keep the measured front surface on the exact eye-height
+        // plane while retaining the asset-specific X/Z depth placement.
+        faceSurfaceWorld.y = eyeAnchorWorld.y;
+        if (hasImportedFaceTarget)
+        {
+            // The depth ray and the world-Y correction can introduce a small
+            // lateral drift when an imported head frame is tilted. Re-lock
+            // the bar to the sampled eye-band midline in head local X while
+            // preserving the measured front-face depth.
+            Vector3 surfaceLocal = head.InverseTransformPoint(faceSurfaceWorld);
+            Vector3 eyeLocal = head.InverseTransformPoint(eyeAnchorWorld);
+            surfaceLocal.x = eyeLocal.x;
+            Vector3 surfaceAtLocalYZero = head.TransformPoint(
+                new Vector3(surfaceLocal.x, 0f, surfaceLocal.z));
+            Vector3 surfaceAtLocalYOne = head.TransformPoint(
+                new Vector3(surfaceLocal.x, 1f, surfaceLocal.z));
+            float worldYPerLocalY = surfaceAtLocalYOne.y - surfaceAtLocalYZero.y;
+            if (Mathf.Abs(worldYPerLocalY) > 0.0001f)
+            {
+                surfaceLocal.y = (eyeAnchorWorld.y - surfaceAtLocalYZero.y) /
+                    worldYPerLocalY;
+            }
+            faceSurfaceWorld = head.TransformPoint(surfaceLocal);
+        }
         float faceSurfaceZ = visualRoot.InverseTransformPoint(faceSurfaceWorld).z;
         float faceSpread = Mathf.Max(0f, frontDepth - backDepth);
         float arcDrop = 1f - Mathf.Cos(Mathf.Clamp(coverage, 55f, 82f) * Mathf.Deg2Rad);
-        float faceDepth = Mathf.Clamp(
-            faceSpread * faceDepthScale / Mathf.Max(0.2f, arcDrop),
-            height * 0.0015f,
-            height * 0.08f);
+        float faceDepth = useZeroDepthFacePlane
+            ? 0f
+            : Mathf.Clamp(
+                faceSpread * faceDepthScale / Mathf.Max(0.2f, arcDrop),
+                height * 0.0015f,
+                height * 0.08f);
 
         // The shell's centre lands exactly on the sampled front boundary;
         // its curved sides follow the asset's measured depth spread instead
@@ -1475,16 +2133,77 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Quaternion faceRotation = Quaternion.LookRotation(faceDirectionLocal, upLocal);
 
         Vector3 localPosition = head.InverseTransformPoint(barOriginWorld);
-        Debug.Log(
-            $"FACE_GEOMETRY_DEBUG identity={identity} root={visualRoot.position} " +
-            $"rootScale={visualRoot.lossyScale} rootForward={visualRoot.forward} " +
-            $"head={head.position} headForward={head.forward} localBounds={bounds.min}/{bounds.max} " +
-            $"eyeLocal={eyeY:F3} surfaceLocalZ={faceSurfaceZ:F3} surfaceWorld={faceSurfaceWorld} " +
-            $"frontDepth={frontDepth:F4} backDepth={backDepth:F4} " +
-            $"faceDepth={faceDepth:F4} depthOffset={faceSurfaceOffset:F4} " +
-            $"barOrigin={barOriginWorld} profileLocal={localPosition}");
+        if (hasImportedFaceTarget)
+        {
+            // Keep the shell axis on the sampled facial midline after
+            // the depth pass as well. Imported head rotations can turn a
+            // world-space depth correction into a local-X drift.
+            Vector3 targetLocal = head.InverseTransformPoint(eyeAnchorWorld);
+            localPosition.x = targetLocal.x;
+        }
+        if (logCalibration)
+        {
+            Debug.Log(
+                $"FACE_GEOMETRY_DEBUG identity={identity} root={visualRoot.position} " +
+                $"rootScale={visualRoot.lossyScale} rootForward={visualRoot.forward} " +
+                $"head={head.position} headForward={head.forward} localBounds={bounds.min}/{bounds.max} " +
+                $"eyeLocal={eyeY:F3} surfaceLocalZ={faceSurfaceZ:F3} surfaceWorld={faceSurfaceWorld} " +
+                $"frontDepth={frontDepth:F4} backDepth={backDepth:F4} " +
+                $"faceDepth={faceDepth:F4} depthOffset={faceSurfaceOffset:F4} " +
+                $"barOrigin={barOriginWorld} profileLocal={localPosition}");
+        }
         return new FaceCensorProfile(
             localPosition, faceRotation.eulerAngles, size, faceDepth, coverage, Color.black);
+    }
+
+    private static bool IsAssetSpecificFaceCalibration(BodybuilderIdentity identity)
+    {
+        return identity == BodybuilderIdentity.Ronnie ||
+            identity == BodybuilderIdentity.JayCutler ||
+            identity == BodybuilderIdentity.Goku;
+    }
+
+    private static float GetImportedEyeBandDrop(BodybuilderIdentity identity)
+    {
+        // The imported front-skin sample is the correct face target, but the
+        // eye band in these three scans sits slightly below its median. Keep
+        // the correction in visual-root space so it follows model scale and
+        // never becomes a world-space drift or a generic identity offset.
+        switch (identity)
+        {
+            case BodybuilderIdentity.Ronnie:
+                return -0.011f;
+            case BodybuilderIdentity.JayCutler:
+                return -0.012f;
+            case BodybuilderIdentity.Goku:
+                return -0.015f;
+            default:
+                return 0f;
+        }
+    }
+
+    public static float GetImportedEyeLineRatio(BodybuilderIdentity identity)
+    {
+        switch (identity)
+        {
+            case BodybuilderIdentity.Ronnie:
+                // Ratio inside Ronnie's sampled face skin band (chin to
+                // forehead), not inside the much broader head/hair AABB.
+                // The supplied references are low-angle, so keep the eye line
+                // slightly higher than a naive image-space estimate.
+                return 0.65f;
+            case BodybuilderIdentity.JayCutler:
+                // Jay's head pivot and hair are asymmetric; this ratio is
+                // applied only after the front facial core has been isolated.
+                return 0.65f;
+            case BodybuilderIdentity.Goku:
+                // Goku's spiky hair is explicitly excluded from the sampled
+                // face band. The low-angle reference keeps the target just
+                // above the band's midpoint.
+                return 0.63f;
+            default:
+                return 0.50f;
+        }
     }
 
     private static FaceCensorProfile GetFaceCensorProfile(

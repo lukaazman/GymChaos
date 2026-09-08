@@ -18,11 +18,17 @@ public sealed class PlanarGymMirror : MonoBehaviour
     private Vector3 planeNormal;
     private bool invertCulling;
     private bool continuousRefresh;
+    private bool useObliqueClip = true;
+    private float nextPlayerMaterialRepair;
 
     public bool ReflectionIncludesPlayerLayer => reflectionCamera != null &&
         (reflectionCamera.cullingMask & (1 << MirrorPlayerLayer)) != 0;
     public Camera ReflectionCamera => reflectionCamera;
     public RenderTexture ReflectionTexture => reflectionTexture;
+    public string ReflectionShaderName => mirrorMaterial != null &&
+        mirrorMaterial.shader != null ? mirrorMaterial.shader.name : string.Empty;
+    public bool HasReadyReflectionTexture => reflectionTexture != null &&
+        reflectionTexture.IsCreated();
     public Vector3 PlaneNormal => planeNormal;
     public bool ContinuousRefresh
     {
@@ -30,9 +36,21 @@ public sealed class PlanarGymMirror : MonoBehaviour
         set => continuousRefresh = value;
     }
 
+    public void RequestImmediateRefresh()
+    {
+        UpdateReflectionCamera();
+        if (reflectionCamera != null)
+        {
+            // Enabling the camera here makes an outfit change visible on the
+            // next camera pass even when the mirror was in its alternating
+            // refresh phase. Locker mode still keeps ContinuousRefresh on.
+            reflectionCamera.enabled = true;
+        }
+    }
+
     public static void Create(
         Transform parent, Camera playerCamera, Renderer[] mirrorRenderers,
-        Vector3 pointOnPlane, Vector3 normal)
+        Vector3 pointOnPlane, Vector3 normal, bool useObliqueClip = true)
     {
         if (playerCamera == null || mirrorRenderers == null || mirrorRenderers.Length == 0)
         {
@@ -42,6 +60,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         GameObject controller = new GameObject("Realtime Planar Mirror");
         controller.transform.SetParent(parent, false);
         PlanarGymMirror mirror = controller.AddComponent<PlanarGymMirror>();
+        mirror.useObliqueClip = useObliqueClip;
         mirror.Initialize(playerCamera, mirrorRenderers, pointOnPlane, normal);
     }
 
@@ -80,8 +99,8 @@ public sealed class PlanarGymMirror : MonoBehaviour
             hideFlags = HideFlags.DontSave
         };
 
-        int width = Mathf.Clamp(Mathf.RoundToInt(Screen.width * 0.55f), 512, 960);
-        int height = Mathf.Clamp(Mathf.RoundToInt(Screen.height * 0.55f), 288, 540);
+        int width = Mathf.Clamp(Mathf.RoundToInt(Screen.width * 0.62f), 512, 1024);
+        int height = Mathf.Clamp(Mathf.RoundToInt(Screen.height * 0.62f), 288, 576);
         reflectionTexture = new RenderTexture(width, height, 16, RenderTextureFormat.Default)
         {
             name = "Gym Planar Reflection",
@@ -128,9 +147,14 @@ public sealed class PlanarGymMirror : MonoBehaviour
     private void LateUpdate()
     {
         UpdateReflectionCamera();
+        if (Time.unscaledTime >= nextPlayerMaterialRepair)
+        {
+            nextPlayerMaterialRepair = Time.unscaledTime + 0.5f;
+            EnforceOpaqueMirrorPlayerMaterials();
+        }
         if (reflectionCamera != null)
         {
-            reflectionCamera.enabled = continuousRefresh || (Time.frameCount & 1) == 0;
+            reflectionCamera.enabled = true;
         }
     }
 
@@ -143,9 +167,12 @@ public sealed class PlanarGymMirror : MonoBehaviour
 
         reflectionCamera.fieldOfView = sourceCamera.fieldOfView;
         reflectionCamera.aspect = sourceCamera.aspect;
-        reflectionCamera.nearClipPlane = sourceCamera.nearClipPlane;
+        reflectionCamera.nearClipPlane = Mathf.Min(sourceCamera.nearClipPlane, 0.03f);
         reflectionCamera.farClipPlane = sourceCamera.farClipPlane;
         reflectionCamera.projectionMatrix = sourceCamera.projectionMatrix;
+        reflectionCamera.rect = new Rect(0f, 0f, 1f, 1f);
+        reflectionCamera.pixelRect = new Rect(
+            0f, 0f, reflectionTexture.width, reflectionTexture.height);
 
         float signedDistance = Vector3.Dot(sourceCamera.transform.position - planePoint, planeNormal);
         Vector3 reflectedPosition = sourceCamera.transform.position - 2f * signedDistance * planeNormal;
@@ -154,12 +181,78 @@ public sealed class PlanarGymMirror : MonoBehaviour
         reflectionCamera.transform.SetPositionAndRotation(
             reflectedPosition, Quaternion.LookRotation(reflectedForward, reflectedUp));
 
-        Vector4 clipPlane = CameraSpacePlane(
-            reflectionCamera, planePoint, planeNormal, 1f, 0.03f);
-        reflectionCamera.projectionMatrix = reflectionCamera.CalculateObliqueMatrix(clipPlane);
+        // A reflection changes handedness. LookRotation alone builds a normal
+        // camera and cannot be paired with inverted culling (it shows backsides).
+        Vector4 plane = new Vector4(planeNormal.x, planeNormal.y, planeNormal.z,
+            -Vector3.Dot(planeNormal, planePoint));
+        Matrix4x4 reflection = Matrix4x4.identity;
+        for (int row = 0; row < 3; row++)
+            for (int column = 0; column < 4; column++)
+                reflection[row, column] -= 2f * plane[row] * plane[column];
+        reflectionCamera.worldToCameraMatrix = sourceCamera.worldToCameraMatrix * reflection;
+
+        if (useObliqueClip)
+        {
+            Vector3 viewerNormal = signedDistance >= 0f ? planeNormal : -planeNormal;
+            Vector4 clipPlane = CameraSpacePlane(
+                reflectionCamera, planePoint, viewerNormal, 1f, 0.008f);
+            reflectionCamera.projectionMatrix = reflectionCamera.CalculateObliqueMatrix(clipPlane);
+        }
         Matrix4x4 gpuProjection = GL.GetGPUProjectionMatrix(reflectionCamera.projectionMatrix, true);
         mirrorMaterial.SetMatrix(
             MirrorViewProjectionId, gpuProjection * reflectionCamera.worldToCameraMatrix);
+    }
+
+    private void OnPreCull()
+    {
+        if (reflectionTexture != null && !reflectionTexture.IsCreated())
+        {
+            reflectionTexture.Create();
+            mirrorMaterial?.SetTexture(ReflectionTextureId, reflectionTexture);
+        }
+    }
+
+    private static void EnforceOpaqueMirrorPlayerMaterials()
+    {
+        PlayerHandRig[] playerRigs = FindObjectsByType<PlayerHandRig>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < playerRigs.Length; i++)
+        {
+            if (playerRigs[i] != null)
+            {
+                playerRigs[i].EnsureMirrorAppearance();
+            }
+        }
+
+        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        for (int r = 0; r < renderers.Length; r++)
+        {
+            Renderer renderer = renderers[r];
+            if (renderer == null || renderer.gameObject.layer != MirrorPlayerLayer ||
+                renderer.GetComponentInParent<PlayerHandRig>() != null) continue;
+            Material[] materials = renderer.sharedMaterials;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                Material material = materials[i];
+                if (material == null) continue;
+                if (material.HasProperty("_BaseColor"))
+                {
+                    Color color = material.GetColor("_BaseColor");
+                    color.a = 1f;
+                    material.SetColor("_BaseColor", color);
+                }
+                if (material.HasProperty("_Color"))
+                {
+                    Color color = material.GetColor("_Color");
+                    color.a = 1f;
+                    material.SetColor("_Color", color);
+                }
+                if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0f);
+                if (material.HasProperty("_AlphaClip")) material.SetFloat("_AlphaClip", 0f);
+                material.SetOverrideTag("RenderType", "Opaque");
+                material.renderQueue = (int)RenderQueue.Geometry;
+            }
+        }
     }
 
     private static Vector4 CameraSpacePlane(

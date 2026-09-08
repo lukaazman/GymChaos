@@ -30,6 +30,41 @@ public sealed class FaceCensorSettings : MonoBehaviour
     [SerializeField] private FaceCensorProfile profile;
     private GameObject deathMarkers;
 
+    public float ConfiguredFaceDepth => profile.FaceDepth;
+    public Vector2 ConfiguredSize => profile.Size;
+
+    public void ApplyRuntimePlacement(FaceCensorProfile value)
+    {
+        profile.LocalPosition = value.LocalPosition;
+        profile.LocalEulerAngles = value.LocalEulerAngles;
+        profile.Size = value.Size;
+        profile.ProfileCoverage = value.ProfileCoverage;
+        profile.FaceDepth = value.FaceDepth;
+
+        MeshFilter filter = GetComponent<MeshFilter>();
+        if (filter != null)
+        {
+            Mesh previousMesh = filter.sharedMesh;
+            filter.sharedMesh = CreateCurvedFaceShell(profile);
+            if (previousMesh != null)
+            {
+                Destroy(previousMesh);
+            }
+        }
+
+        transform.localPosition = profile.LocalPosition;
+        transform.localRotation = Quaternion.Euler(profile.LocalEulerAngles);
+        Transform head = transform.parent;
+        if (head != null)
+        {
+            Vector3 headScale = head.lossyScale;
+            transform.localScale = new Vector3(
+                SafeScaleInverse(headScale.x),
+                SafeScaleInverse(headScale.y),
+                SafeScaleInverse(headScale.z));
+        }
+    }
+
     public void Configure(
         FaceCensorProfile value, Transform head, int textureSeed, bool showBlackBar = true)
     {

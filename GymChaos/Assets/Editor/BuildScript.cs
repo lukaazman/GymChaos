@@ -24,13 +24,7 @@ public static class BuildScript
         string streamingAssetsRoot = Path.Combine(Application.dataPath, "StreamingAssets");
         string[] requiredStreamingFiles =
         {
-            Path.Combine("BodyBuilders", "arnold.glb"),
-            Path.Combine("BodyBuilders", "cbum.glb"),
-            Path.Combine("BodyBuilders", "goku.glb"),
-            Path.Combine("BodyBuilders", "jay.glb"),
             Path.Combine("BodyBuilders", "manwithsuit1.glb"),
-            Path.Combine("BodyBuilders", "ronnie.glb"),
-            Path.Combine("BodyBuilders", "zyzz.glb"),
             Path.Combine("Videos", "manwithsuit.mp4")
         };
         for (int i = 0; i < requiredStreamingFiles.Length; i++)
@@ -57,7 +51,19 @@ public static class BuildScript
             throw new BuildFailedException($"WebGL build failed with result: {report.summary.result}");
         }
 
+        DeleteLegacySoundCloudArtifact(
+            Path.Combine(outputPath, "soundcloud-callback.html"));
+        DeleteLegacySoundCloudArtifact(
+            Path.Combine(outputPath, "soundcloud-config.json"));
         File.WriteAllText(Path.Combine(outputPath, "gymchaos-runtime.json"),
-            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\",\"pointer-lock\",\"day-night\",\"tv-screen\",\"webgl-colliders\",\"jay-cutler\",\"goku-flight\"]}");
+            "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\",\"pointer-lock\",\"soundcloud-widget\",\"day-night\",\"tv-screen\",\"webgl-colliders\",\"jay-cutler\",\"goku-flight\"]}");
+    }
+
+    private static void DeleteLegacySoundCloudArtifact(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
     }
 }

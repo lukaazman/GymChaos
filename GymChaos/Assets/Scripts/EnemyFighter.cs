@@ -8,10 +8,14 @@ public class EnemyFighter : MonoBehaviour
     // so the physics engine can keep enemies from shoving one another while
     // still colliding with the player and the gym equipment.
     public const int EnemyCollisionLayer = 3;
+    private const float AnimationMovementSpeedThreshold = 0.08f;
 
     private static readonly List<EnemyFighter> Fighters = new List<EnemyFighter>();
     private static readonly float[] MovementProbeAngles =
         { 0f, 30f, -30f, 60f, -60f, 90f, -90f, 135f, -135f, 180f };
+    // Visitor route probe.
+    private static readonly float[] VisitorMovementProbeAngles =
+        { 0f, 10f, -10f, 20f, -20f, 32f, -32f, 45f, -45f, 58f, -58f };
     private static readonly int[] NavigationNeighborX =
         { 1, -1, 0, 0, 1, 1, -1, -1 };
     private static readonly int[] NavigationNeighborZ =
@@ -30,6 +34,7 @@ public class EnemyFighter : MonoBehaviour
     };
 
     public static int ActiveCount { get; private set; }
+    internal static IReadOnlyList<EnemyFighter> RegisteredFighters => Fighters;
 
     [SerializeField] private float maxHealth = 100f;
     [SerializeField] private float moveForce = 26f;
@@ -95,6 +100,10 @@ public class EnemyFighter : MonoBehaviour
     private float stalledRoamTime;
     private Vector3 roamDirection;
     private float roamDirectionHoldUntil;
+    private Vector3 visitorRouteDirection;
+    private string lastVisitorRouteBlocker = "none";
+    private int deadliftCollisionRetryFrames;
+    private bool deadliftEscapeApplied;
     private GymExerciseStation treadmillStation;
     private float treadmillSpeed;
     private float treadmillUntil;
@@ -172,6 +181,10 @@ public class EnemyFighter : MonoBehaviour
     private Quaternion gokuFlightStartRotation;
     private Quaternion gokuFlightTargetRotation;
     private CollisionDetectionMode gokuGroundCollisionMode = CollisionDetectionMode.Discrete;
+    private Transform visitorVehicleRideAnchor;
+    private bool visitorVehicleRideDetectCollisions;
+    private int visitorDismountGroundSnapFrames;
+    private float visitorDismountGroundY;
 
     public float CurrentHealth => health;
     public float MaxHealth => maxHealth;
@@ -185,6 +198,8 @@ public class EnemyFighter : MonoBehaviour
         currentTarget == null && treadmillStation == null;
     public bool HasRoamDestination => !dialogueLocked && !isPassive && !isDead && !isAggressive &&
         hasRoamTarget;
+    public bool HasDeadliftRoamTarget => roamTargetStation != null &&
+        roamTargetStation.IsDeadlift;
     public float CurrentRoamTargetDistance => hasRoamTarget
         ? Vector3.ProjectOnPlane(roamTarget - transform.position, Vector3.up).magnitude
         : 0f;
@@ -307,6 +322,14 @@ public class EnemyFighter : MonoBehaviour
         BodybuilderIdentity fighterIdentity, PlayerMovement player,
         float configuredHealth, bool police, bool passive = false, bool countAsOpponent = true)
     {
+        // Runtime-preloaded enemies are configured while their shared parent
+        // is inactive, before Unity invokes Awake. Resolve the already-added
+        // Rigidbody here so physics setup and later visitor spawn poses cannot
+        // be skipped and then overwritten by the stale body pose on activation.
+        if (body == null)
+        {
+            body = GetComponent<Rigidbody>();
+        }
         identity = fighterIdentity;
         playerTarget = player;
         maxHealth = Mathf.Max(1f, configuredHealth);
@@ -351,6 +374,8 @@ public class EnemyFighter : MonoBehaviour
         ClearRoamRoute();
         roamDirection = Vector3.zero;
         roamDirectionHoldUntil = 0f;
+        deadliftCollisionRetryFrames = 180;
+        deadliftEscapeApplied = false;
         gokuFlightState = GokuFlightState.Grounded;
         // Normal enemies begin neutral. They only acquire the player after a
         // player-caused hit calls BecomeAggressive; Ronnie normally uses the
@@ -442,6 +467,70 @@ public class EnemyFighter : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (visitorVehicleRideAnchor != null && !isDead)
+        {
+            Vector3 ridePosition = visitorVehicleRideAnchor.position;
+            Quaternion rideRotation = visitorVehicleRideAnchor.rotation;
+            if (body != null)
+            {
+                body.position = ridePosition;
+                body.rotation = rideRotation;
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+            transform.SetPositionAndRotation(ridePosition, rideRotation);
+            SetAnimatedMovement(false);
+            externalBodyAnimator?.SetFlying(false);
+            return;
+        }
+        // The station is runtime-created and imported enemy colliders can be
+        // attached after the first physics tick. Keep the ignore pair alive
+        // for the complete session, not only the initial retry window; an
+        // enemy can otherwise walk back onto the platform after the one-shot
+        // escape has already expired.
+        bool collisionIgnoreReady =
+            GymLooseItemSpawner.EnsureDeadliftStationCollisionIgnore(this);
+        // Escape is deliberately independent from the status probe above.
+        // A newly imported enemy can have one child collider appear between
+        // the IgnoreCollision calls and AreEnemyCollisionsIgnored(), but it
+        // still must not remain wedged in the player-only platform.
+        if (body != null)
+        {
+            if (GymLooseItemSpawner.TryGetDeadliftEscapePointForEnemy(
+                    this, 0.55f, out Vector3 escapePoint))
+            {
+                body.position = escapePoint;
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+                transform.position = escapePoint;
+                hasRoamTarget = false;
+                roamTargetStation = null;
+                roamTargetPurposeful = false;
+                roamTargetInterestLabel = null;
+                ClearRoamRoute();
+                if (!deadliftEscapeApplied)
+                {
+                    Debug.Log(
+                        $"GYMCHAOS_DEADLIFT_ENEMY_ESCAPE identity={identity} " +
+                        $"fromPlatform=true collisionsIgnored={collisionIgnoreReady} " +
+                        $"position={escapePoint}", this);
+                }
+                deadliftEscapeApplied = true;
+                Physics.SyncTransforms();
+            }
+            else
+            {
+                // Re-arm the guard after the enemy has left. This makes a
+                // later accidental route/collision into the platform safe as
+                // well, instead of treating the first escape as permanent.
+                deadliftEscapeApplied = false;
+            }
+        }
+        if (deadliftCollisionRetryFrames > 0)
+        {
+            deadliftCollisionRetryFrames--;
+        }
+
         if (dialogueLocked && !isDead)
         {
             StopMovingPhysicsImmediately();
@@ -593,12 +682,10 @@ public class EnemyFighter : MonoBehaviour
         if (Time.time < throwPushbackUntilTime)
         {
             // Let the impact velocity carry the fighter backward for a short
-            // visible beat. Keep the Run animation active and let normal chase
-            // steering resume after the pushback window.
-            float impactPlanarSpeed =
-                Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
-            SetAnimatedMovement(
-                true, impactPlanarSpeed / Mathf.Max(0.01f, chaseSpeed));
+            // visible beat. The animation must follow the velocity that
+            // actually exists; forcing Run while the body is stopped creates
+            // the reported foot-glide.
+            SetAnimatedMovementFromVelocity(chaseSpeed);
             return;
         }
 
@@ -621,12 +708,6 @@ public class EnemyFighter : MonoBehaviour
             }
             return;
         }
-
-        float planarSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
-        bool policeStillMovingNearTarget = isPolice && planarSpeed > 0.12f;
-        SetAnimatedMovement(
-            distance > attackRange || policeStillMovingNearTarget,
-            planarSpeed / Mathf.Max(0.01f, chaseSpeed));
 
         if (distance > 0.15f)
         {
@@ -657,6 +738,15 @@ public class EnemyFighter : MonoBehaviour
                 transform.rotation = Quaternion.Slerp(
                     transform.rotation, lookRotation, 10f * Time.fixedDeltaTime);
             }
+        }
+
+        // Apply the desired Rigidbody velocity first, then choose the visible
+        // locomotion state from the resulting velocity. The old order selected
+        // Run from target distance before steering, so a blocked or freshly
+        // spawned enemy could visibly run in place and slide across the floor.
+        if (!(IsGoku() && gokuFlightState == GokuFlightState.Flying))
+        {
+            SetAnimatedMovementFromVelocity(chaseSpeed);
         }
 
     }
@@ -718,6 +808,12 @@ public class EnemyFighter : MonoBehaviour
 
     public void SetDialogueLocked(bool locked, Transform conversationPartner = null)
     {
+        if (externalBodyAnimator == null)
+        {
+            externalBodyAnimator = GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        }
+        externalBodyAnimator?.SetConversationActive(locked);
+
         if (dialogueLocked == locked)
         {
             return;
@@ -823,6 +919,86 @@ public class EnemyFighter : MonoBehaviour
         floorRootY = position.y;
     }
 
+    public void BeginVisitorVehicleRide(Transform anchor)
+    {
+        if (!IsGoku() || anchor == null || isDead) return;
+        visitorVehicleRideAnchor = anchor;
+        if (body != null)
+        {
+            visitorVehicleRideDetectCollisions = body.detectCollisions;
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+            body.detectCollisions = false;
+            body.useGravity = false;
+            body.isKinematic = true;
+        }
+        transform.SetPositionAndRotation(anchor.position, anchor.rotation);
+        StopVisitorMovement();
+        externalBodyAnimator?.SetFlying(false);
+    }
+
+    public void EndVisitorVehicleRide(Vector3 groundPosition, Quaternion rotation)
+    {
+        visitorVehicleRideAnchor = null;
+        gokuFlightState = GokuFlightState.Grounded;
+        gokuFlightTransition = 0f;
+        groundPosition.y = ResolveGymFloorY(groundPosition.y);
+        if (body != null)
+        {
+            // A visitor dismount always returns to grounded locomotion. Do not
+            // restore a stale kinematic combat-flight state captured before
+            // boarding, otherwise Goku walks horizontally at cloud height.
+            body.isKinematic = false;
+            body.useGravity = false;
+            body.detectCollisions = visitorVehicleRideDetectCollisions;
+            body.collisionDetectionMode = gokuGroundCollisionMode;
+            body.constraints |= RigidbodyConstraints.FreezePositionY;
+        }
+        SetVisitorSpawnPose(groundPosition, rotation);
+        visitorDismountGroundY = groundPosition.y;
+        visitorDismountGroundSnapFrames = 4;
+        externalBodyAnimator?.SetFlying(false);
+        Physics.SyncTransforms();
+    }
+
+    private void LateUpdate()
+    {
+        if (visitorDismountGroundSnapFrames <= 0 ||
+            visitorVehicleRideAnchor != null || isDead)
+        {
+            return;
+        }
+
+        visitorDismountGroundSnapFrames--;
+        Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
+        float lowestVisiblePoint = float.PositiveInfinity;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled ||
+                (!(renderer is SkinnedMeshRenderer) && !(renderer is MeshRenderer)))
+            {
+                continue;
+            }
+            lowestVisiblePoint = Mathf.Min(lowestVisiblePoint, renderer.bounds.min.y);
+        }
+
+        if (lowestVisiblePoint == float.PositiveInfinity) return;
+        float correction = visitorDismountGroundY - lowestVisiblePoint;
+        if (Mathf.Abs(correction) <= 0.01f || Mathf.Abs(correction) > 2.5f) return;
+        Vector3 corrected = body != null ? body.position : transform.position;
+        corrected.y += correction;
+        if (body != null)
+        {
+            body.position = corrected;
+            body.linearVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+        }
+        transform.position = corrected;
+        standingRootY = corrected.y;
+        floorRootY = corrected.y;
+        Physics.SyncTransforms();
+    }
+
     public void RestoreVisitorPoseInterpolation()
     {
         if (body == null || !visitorPoseInterpolationOverrideActive)
@@ -839,6 +1015,110 @@ public class EnemyFighter : MonoBehaviour
     public bool MoveVisitorTo(Vector3 destination, float speed, bool allowOutsideRoom)
     {
         return MoveVisitorTo(destination, speed, allowOutsideRoom, null);
+    }
+
+    public bool MoveVisitorAlongExteriorRoute(Vector3 destination, float speed)
+    {
+        return MoveVisitorAlongExteriorRoute(destination, speed, null);
+    }
+
+    public string LastVisitorRouteBlocker => lastVisitorRouteBlocker;
+
+    public bool MoveVisitorAlongExteriorRoute(
+        Vector3 destination, float speed, Vector3? nextWaypoint,
+        float requestedCompletionRadius = -1f)
+    {
+        if (body == null || isDead)
+        {
+            return false;
+        }
+
+        destination.y = standingRootY;
+        Vector3 delta = Vector3.ProjectOnPlane(destination - body.position, Vector3.up);
+        float distance = delta.magnitude;
+        float completionRadius = requestedCompletionRadius > 0f
+            ? Mathf.Clamp(requestedCompletionRadius, 0.2f, 2.2f)
+            : nextWaypoint.HasValue ? 1.85f : 0.2f;
+        Vector3 outgoing = Vector3.zero;
+        bool hasOutgoing = false;
+        bool crossedWaypointPlane = false;
+        if (nextWaypoint.HasValue)
+        {
+            outgoing = Vector3.ProjectOnPlane(
+                nextWaypoint.Value - destination, Vector3.up);
+            hasOutgoing = outgoing.sqrMagnitude > 0.01f;
+            if (hasOutgoing)
+            {
+                Vector3 outgoingDirection = outgoing.normalized;
+                Vector3 fromWaypoint = Vector3.ProjectOnPlane(
+                    body.position - destination, Vector3.up);
+                float alongOutgoing = Vector3.Dot(fromWaypoint, outgoingDirection);
+                Vector3 crossTrack = fromWaypoint - outgoingDirection * alongOutgoing;
+                crossedWaypointPlane = alongOutgoing >= -0.05f &&
+                    crossTrack.magnitude <= Mathf.Max(completionRadius, 2.2f);
+            }
+        }
+        if (distance <= completionRadius || crossedWaypointPlane)
+        {
+            if (!nextWaypoint.HasValue)
+            {
+                StopMovingPhysicsImmediately();
+                SetAnimatedMovement(false);
+                visitorRouteDirection = Vector3.zero;
+            }
+            else if (hasOutgoing)
+            {
+                visitorRouteDirection = visitorRouteDirection.sqrMagnitude > 0.01f
+                    ? Vector3.Slerp(
+                        visitorRouteDirection.normalized,
+                        outgoing.normalized, 0.42f).normalized
+                    : outgoing.normalized;
+            }
+            return true;
+        }
+
+        RestoreVisitorPoseInterpolation();
+        Vector3 desiredDirection = delta / distance;
+        if (hasOutgoing && distance < 7.2f)
+        {
+            float cornerBlend = Mathf.InverseLerp(7.2f, completionRadius, distance);
+            desiredDirection = Vector3.Slerp(
+                desiredDirection, outgoing.normalized, cornerBlend * 0.84f).normalized;
+        }
+        Vector3 direction = FindVisitorMovementDirection(
+            desiredDirection, Mathf.Min(distance, 1.55f), true, null);
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            StopMovingPhysicsImmediately();
+            SetAnimatedMovement(false);
+            return false;
+        }
+        if (visitorRouteDirection.sqrMagnitude < 0.01f)
+        {
+            visitorRouteDirection = direction;
+        }
+        else
+        {
+            Vector3 steeredDirection = Vector3.RotateTowards(
+                visitorRouteDirection.normalized, direction,
+                Mathf.Deg2Rad * 105f * Time.fixedDeltaTime, 0f).normalized;
+            visitorRouteDirection = IsVisitorPathClear(
+                    steeredDirection, Mathf.Min(distance, 1.2f), true, null)
+                ? steeredDirection
+                : direction;
+        }
+        float movementSpeed = Mathf.Clamp(speed, 0.8f, maxSpeed);
+        Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+        planarVelocity = Vector3.MoveTowards(
+            planarVelocity, visitorRouteDirection * movementSpeed,
+            Mathf.Max(moveForce * 0.55f, 8f) * Time.fixedDeltaTime);
+        body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
+        body.MoveRotation(Quaternion.RotateTowards(
+            body.rotation,
+            Quaternion.LookRotation(visitorRouteDirection, Vector3.up),
+            140f * Time.fixedDeltaTime));
+        SetAnimatedMovementFromVelocity(movementSpeed);
+        return false;
     }
 
     public bool MoveVisitorTo(
@@ -877,6 +1157,7 @@ public class EnemyFighter : MonoBehaviour
             SetAnimatedMovement(false);
             return false;
         }
+        visitorRouteDirection = direction;
 
         float movementSpeed = Mathf.Clamp(speed, 0.8f, maxSpeed);
         Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
@@ -898,7 +1179,7 @@ public class EnemyFighter : MonoBehaviour
         }
         transform.rotation = Quaternion.Slerp(
             transform.rotation, lookRotation, 9f * Time.fixedDeltaTime);
-        SetAnimatedMovement(true, Mathf.Clamp01(movementSpeed / Mathf.Max(0.01f, maxSpeed)));
+        SetAnimatedMovementFromVelocity(movementSpeed);
         return false;
     }
 
@@ -906,6 +1187,7 @@ public class EnemyFighter : MonoBehaviour
     {
         StopMovingPhysicsImmediately();
         SetAnimatedMovement(false);
+        visitorRouteDirection = Vector3.zero;
     }
 
     public void ResumeVisitorRoaming()
@@ -940,6 +1222,21 @@ public class EnemyFighter : MonoBehaviour
     public void SetAggressiveForVerification(PlayerMovement source)
     {
         BecomeAggressive(source);
+    }
+
+    public void ResetAggressionForVerification()
+    {
+        isAggressive = false;
+        currentTarget = null;
+        currentFighterTarget = null;
+        punchInProgress = false;
+        verificationPunchOnly = false;
+        stunnedUntilTime = 0f;
+        throwPushbackUntilTime = 0f;
+        health = maxHealth;
+        RestoreGokuGroundPhysicsForDeath();
+        StopMovingPhysicsImmediately();
+        SelectRoamDestination();
     }
 
     public bool BeginTreadmillForVerification(GymExerciseStation station, float speed)
@@ -1062,6 +1359,20 @@ public class EnemyFighter : MonoBehaviour
             {
                 SelectRoamDestination();
             }
+            return;
+        }
+
+        if (roamTargetStation != null && roamTargetStation.IsDeadlift)
+        {
+            // Clear stale targets as well as preventing new ones from being
+            // collected. This covers hot-reload/scene-authoring cases where
+            // an enemy already had the player-only station selected.
+            hasRoamTarget = false;
+            roamTargetStation = null;
+            roamTargetPurposeful = false;
+            roamTargetInterestLabel = null;
+            ClearRoamRoute();
+            SelectRoamDestination();
             return;
         }
 
@@ -1236,7 +1547,7 @@ public class EnemyFighter : MonoBehaviour
         Quaternion lookRotation = Quaternion.LookRotation(direction, Vector3.up);
         transform.rotation = Quaternion.Slerp(
             transform.rotation, lookRotation, 8f * Time.fixedDeltaTime);
-        SetAnimatedMovement(true, Mathf.Clamp01(roamSpeed / Mathf.Max(0.01f, maxSpeed)));
+        SetAnimatedMovementFromVelocity(roamSpeed);
     }
 
     private void SelectRoamDestination()
@@ -1743,9 +2054,16 @@ public class EnemyFighter : MonoBehaviour
                 continue;
             }
             if (hit.GetComponentInParent<EnemyFighter>() != null ||
-                hit.GetComponentInParent<PlayerMovement>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null)
+            {
+                return false;
+            }
+            if (
                 HasRoomFloorInHierarchy(hit.transform) ||
-                IsWalkableFloorSurface(hit))
+                IsWalkableFloorSurface(hit) ||
+                hit.GetComponentInParent<GymExteriorOnlyVisual>() != null ||
+                hit.name == "Player Road Access Blocker" ||
+                hit.name == "Exterior Courtyard Foundation")
             {
                 continue;
             }
@@ -2054,6 +2372,15 @@ public class EnemyFighter : MonoBehaviour
                 // enemy can pace beside a rack without ever starting a squat.
                 continue;
             }
+            if (station.IsDeadlift)
+            {
+                // The deadlift station is player-only. Its bar and loose
+                // plates are deliberately physical/pickable, so sending a
+                // roaming enemy to the interaction point would let its body
+                // wedge into the platform even though the station is not a
+                // visitor exercise target.
+                continue;
+            }
 
             float footprint = station.IsTreadmill ? 2.5f
                 : station.IsCardio ? 2.2f : 2.9f;
@@ -2077,7 +2404,8 @@ public class EnemyFighter : MonoBehaviour
             if (renderer == null || !renderer.enabled ||
                 renderer is ParticleSystemRenderer ||
                 renderer.GetComponentInParent<PlayerMovement>() != null ||
-                renderer.GetComponentInParent<EnemyFighter>() != null)
+                renderer.GetComponentInParent<EnemyFighter>() != null ||
+                GymLooseItemSpawner.IsDeadliftStationObject(renderer.transform))
             {
                 continue;
             }
@@ -2163,6 +2491,10 @@ public class EnemyFighter : MonoBehaviour
         {
             RoamInterest interest = roamInterests[i];
             if (interest == null || interest.root == null)
+            {
+                continue;
+            }
+            if (interest.station != null && interest.station.IsDeadlift)
             {
                 continue;
             }
@@ -2498,6 +2830,10 @@ public class EnemyFighter : MonoBehaviour
             }
 
             float alignment = Vector3.Dot(candidate, desiredDirection);
+            if (alignment < 0.48f)
+            {
+                continue;
+            }
             float score = alignment * 4f - Mathf.Abs(MovementProbeAngles[i]) * 0.002f;
             if (avoidCharacters && roamDirection.sqrMagnitude > 0.001f)
             {
@@ -2529,19 +2865,44 @@ public class EnemyFighter : MonoBehaviour
         }
         desiredDirection.Normalize();
 
+        // Keep the authored exterior route shortest. Character separation is
+        // useful inside the gym, but applying it to an outdoor corridor can
+        // turn a direct target vector into a lateral orbit around another
+        // visitor. Vehicle traffic already serializes the physical road;
+        // visitor capsules still block one another through the probe below.
+        Vector3 visitorSeparation = !allowOutsideRoom
+            ? GetCharacterSeparation()
+            : Vector3.zero;
+        if (visitorSeparation.sqrMagnitude > 0.0001f)
+        {
+            desiredDirection =
+                (desiredDirection + visitorSeparation * 0.7f).normalized;
+        }
+
         Vector3 best = Vector3.zero;
         float bestScore = float.NegativeInfinity;
-        for (int i = 0; i < MovementProbeAngles.Length; i++)
+        for (int i = 0; i < VisitorMovementProbeAngles.Length; i++)
         {
-            Vector3 candidate = Quaternion.Euler(0f, MovementProbeAngles[i], 0f) * desiredDirection;
+            Vector3 candidate = Quaternion.Euler(
+                0f, VisitorMovementProbeAngles[i], 0f) * desiredDirection;
             if ((!allowOutsideRoom && !IsInsideRoom(candidate, targetDistance)) ||
-                !IsVisitorPathClear(candidate, targetDistance, targetStation))
+                !IsVisitorPathClear(
+                    candidate, targetDistance, allowOutsideRoom, targetStation))
             {
                 continue;
             }
 
             float alignment = Vector3.Dot(candidate, desiredDirection);
-            float score = alignment * 4f - Mathf.Abs(MovementProbeAngles[i]) * 0.002f;
+            float score = alignment * 5f -
+                Mathf.Abs(VisitorMovementProbeAngles[i]) * 0.002f;
+            if (visitorRouteDirection.sqrMagnitude > 0.001f &&
+                Vector3.Dot(visitorRouteDirection, desiredDirection) > 0.2f)
+            {
+                // Keep a chosen side around an obstacle long enough to pass
+                // it instead of alternating left/right every physics tick.
+                score += Vector3.Dot(
+                    candidate, visitorRouteDirection.normalized) * 1.15f;
+            }
             if (score > bestScore)
             {
                 bestScore = score;
@@ -2555,8 +2916,10 @@ public class EnemyFighter : MonoBehaviour
     private bool IsVisitorPathClear(
         Vector3 direction,
         float distance,
+        bool allowOutsideRoom,
         GymExerciseStation targetStation)
     {
+        lastVisitorRouteBlocker = "none";
         Vector3 origin = body != null ? body.position : transform.position;
         Vector3 lower = origin + Vector3.up * 0.55f;
         Vector3 upper = origin + Vector3.up * 1.85f;
@@ -2571,9 +2934,17 @@ public class EnemyFighter : MonoBehaviour
                 continue;
             }
             if (hit.GetComponentInParent<EnemyFighter>() != null ||
-                hit.GetComponentInParent<PlayerMovement>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null)
+            {
+                return false;
+            }
+            if (
                 HasRoomFloorInHierarchy(hit.transform) ||
-                IsWalkableFloorSurface(hit))
+                IsWalkableFloorSurface(hit) ||
+                hit.GetComponentInParent<GymExteriorOnlyVisual>() != null ||
+                hit.name == "Player Road Access Blocker" ||
+                hit.name == "Exterior Courtyard Foundation" ||
+                (allowOutsideRoom && IsVisitorExteriorRouteGuard(hit)))
             {
                 continue;
             }
@@ -2585,10 +2956,39 @@ public class EnemyFighter : MonoBehaviour
             {
                 continue;
             }
+            lastVisitorRouteBlocker = hit.name;
             return false;
         }
 
         return true;
+    }
+
+    private static bool IsVisitorExteriorRouteGuard(Collider hit)
+    {
+        if (hit == null)
+        {
+            return false;
+        }
+
+        bool belongsToExterior = false;
+        for (Transform current = hit.transform;
+             current != null;
+             current = current.parent)
+        {
+            if (current.name == "Gym Exterior (Runtime)")
+            {
+                belongsToExterior = true;
+                break;
+            }
+        }
+
+        if (!belongsToExterior)
+        {
+            return false;
+        }
+
+        string lowerName = hit.name.ToLowerInvariant();
+        return lowerName.Contains("boundary") || lowerName.Contains("blocker");
     }
 
     private Vector3 StabilizeRoamDirection(
@@ -2753,7 +3153,12 @@ public class EnemyFighter : MonoBehaviour
         {
             string lowerName = current.name.ToLowerInvariant();
             if (lowerName.Contains("mat") || lowerName.Contains("carpet") ||
-                lowerName.Contains("rug"))
+                lowerName.Contains("rug") || lowerName.Contains("parking lot") ||
+                lowerName.Contains("courtyard foundation") ||
+                lowerName.Contains("door landing") ||
+                lowerName.Contains("path from gym") ||
+                lowerName.Contains("parking path turn") ||
+                lowerName.Contains("vehicle road"))
             {
                 return true;
             }
@@ -3322,6 +3727,20 @@ public class EnemyFighter : MonoBehaviour
             // query so this frame tests the actual hand pose, not a stale
             // previous transform.
             Physics.SyncTransforms();
+#if UNITY_EDITOR
+            if (verificationPunchOnly)
+            {
+                Debug.Log(
+                    $"GYMCHAOS_ENEMY_PUNCH_HAND_DIAGNOSTIC attacker={Identity} " +
+                    $"left={leftHand?.position.ToString() ?? "missing"} " +
+                    $"right={rightHand?.position.ToString() ?? "missing"} " +
+                    $"root={transform.position} forward={transform.forward} " +
+                    $"target={currentTarget?.position.ToString() ?? "missing"} " +
+                    $"leftDistance={(leftHand != null && currentTarget != null ? Vector3.Distance(leftHand.position, currentTarget.position) : -1f):F3} " +
+                    $"rightDistance={(rightHand != null && currentTarget != null ? Vector3.Distance(rightHand.position, currentTarget.position) : -1f):F3}",
+                    this);
+            }
+#endif
             bool leftHit = IsPunchHandTouchingTarget(leftHand, currentTarget);
             bool rightHit = IsPunchHandTouchingTarget(rightHand, currentTarget);
             if (leftHit || rightHit)
@@ -3634,7 +4053,25 @@ public class EnemyFighter : MonoBehaviour
         {
             externalBodyAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
         }
-        externalBodyAnimator?.SetMoving(moving, normalizedSpeed);
+        bool chasing = currentTarget != null && !isPassive;
+        externalBodyAnimator?.SetMoving(
+            moving, normalizedSpeed, isAggressive || chasing);
+    }
+
+    private void SetAnimatedMovementFromVelocity(float referenceSpeed)
+    {
+        if (body == null)
+        {
+            SetAnimatedMovement(false);
+            return;
+        }
+
+        float planarSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
+        bool moving = planarSpeed > AnimationMovementSpeedThreshold;
+        float normalizedSpeed = moving
+            ? planarSpeed / Mathf.Max(0.01f, referenceSpeed)
+            : 0f;
+        SetAnimatedMovement(moving, Mathf.Clamp01(normalizedSpeed));
     }
 
     private bool IsGoku()

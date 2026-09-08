@@ -40,6 +40,10 @@ public static class GymChaosVisitorVerifier
     private static Vector3 workoutCompletionPosition;
     private static bool workoutReleaseMoveValidated;
     private static bool groundingVerificationLogged;
+    private static bool departureRequested;
+    private static EnemyFighter departureFighter;
+    private static GymVisitorVehicle departureVehicle;
+    private static int departureApproachVersion;
     private static EnemyFighter groundingViolationFighter;
     private static int groundingViolationFrames;
 
@@ -103,6 +107,10 @@ public static class GymChaosVisitorVerifier
         workoutCompletionPosition = Vector3.zero;
         workoutReleaseMoveValidated = false;
         groundingVerificationLogged = false;
+        departureRequested = false;
+        departureFighter = null;
+        departureVehicle = null;
+        departureApproachVersion = 0;
         groundingViolationFighter = null;
         groundingViolationFrames = 0;
     }
@@ -239,6 +247,8 @@ public static class GymChaosVisitorVerifier
 
                     if (!workoutPoseValidated && squat != null && squat.CurrentMotion > 0.82f)
                     {
+                        MixamoScanRetargetAnimator authoredAnimator =
+                            workoutFighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
                         Vector3 actualFacing = Vector3.ProjectOnPlane(
                             workoutFighter.transform.forward, Vector3.up).normalized;
                         Vector3 expectedFacing = Vector3.ProjectOnPlane(
@@ -258,48 +268,23 @@ public static class GymChaosVisitorVerifier
                                 $"tilt={workoutStation.EnemySquatBarTiltError:0.000}.");
                         }
 
-                        if (!squat.HasValidSquatRig || squat.FootPlantError > 0.14f ||
-                            squat.FootSoleError > 0.045f ||
-                            squat.FootGroundError > 0.035f ||
-                            squat.FootRotationError > 0.5f ||
-                            !squat.HasValidArmRig || squat.CurrentHipDrop < 0.34f ||
-                            squat.CurrentKneeBend < 45f ||
-                            squat.KneeBendDifference > 8f ||
-                            squat.LegDepthDifference > 0.16f ||
-                            squat.GripError > 0.28f || !squat.HasOverhandGrip ||
-                            squat.HandSpreadRatio < 1.25f ||
-                            squat.ForearmOutwardError > 0.35f ||
-                            squat.ArmCrossingError > 0.08f ||
-                            squat.ElbowOutwardError > 0.04f ||
-                            squat.UpperArmReferenceError > 0.08f ||
-                            squat.ForearmReferenceError > 0.08f ||
-                            squat.ArmShapeError > 1.05f ||
-                            squat.HandContactError > 0.16f ||
+                        bool authoredSquatActive = authoredAnimator != null &&
+                            authoredAnimator.IsWorkoutPoseLocked &&
+                            authoredAnimator.HasAuthoredSquatClip &&
+                            authoredAnimator.CurrentAnimationClipName.IndexOf(
+                                "squat", StringComparison.OrdinalIgnoreCase) >= 0;
+                        if (!authoredSquatActive || !squat.HasValidSquatRig ||
+                            !squat.HasValidArmRig || squat.CurrentHipDrop < 0.20f ||
                             squat.BarBodyFollowError > 0.10f ||
                             squat.BarDropFromStart < 0.05f ||
                             squatFacingDot < 0.98f)
                         {
                             throw new InvalidOperationException(
-                                $"Squat rig validation failed: valid={squat.HasValidSquatRig} " +
+                                $"Squat authored clip validation failed: authored={authoredSquatActive} " +
+                                $"valid={squat.HasValidSquatRig} " +
                                 $"arms={squat.HasValidArmRig} " +
-                                $"footError={squat.FootPlantError:0.000} " +
-                                $"soleError={squat.FootSoleError:0.000} " +
-                                $"groundError={squat.FootGroundError:0.000} " +
-                                $"footRotation={squat.FootRotationError:0.0} " +
                                 $"hipDrop={squat.CurrentHipDrop:0.000} " +
                                 $"kneeBend={squat.CurrentKneeBend:0.0} " +
-                                $"kneeDelta={squat.KneeBendDifference:0.0} " +
-                                $"legDepthDelta={squat.LegDepthDifference:0.000} " +
-                                $"gripError={squat.GripError:0.000} " +
-                                $"overhand={squat.HasOverhandGrip} " +
-                                $"handSpreadRatio={squat.HandSpreadRatio:0.000} " +
-                                $"forearmOutward={squat.ForearmOutwardError:0.000} " +
-                                $"armCrossing={squat.ArmCrossingError:0.000} " +
-                                $"elbowOutward={squat.ElbowOutwardError:0.000} " +
-                                $"upperArmRef={squat.UpperArmReferenceError:0.000} " +
-                                $"forearmRef={squat.ForearmReferenceError:0.000} " +
-                                $"armShape={squat.ArmShapeError:0.000} " +
-                                $"handContact={squat.HandContactError:0.000} " +
                                 $"barFollow={squat.BarBodyFollowError:0.000} " +
                                 $"barDrop={squat.BarDropFromStart:0.000} " +
                                 $"facingDot={squatFacingDot:0.000}.");
@@ -308,25 +293,9 @@ public static class GymChaosVisitorVerifier
                         workoutPoseValidated = true;
                         Debug.Log(
                             $"GYMCHAOS_SQUAT_POSE_OK enemy={workoutFighter.Identity} " +
-                            $"footError={squat.FootPlantError:0.000} " +
-                            $"soleError={squat.FootSoleError:0.000} " +
-                            $"groundError={squat.FootGroundError:0.000} " +
-                            $"footRotation={squat.FootRotationError:0.0} " +
+                            "mode=authored-clip-only " +
                             $"hipDrop={squat.CurrentHipDrop:0.000} " +
                             $"kneeBend={squat.CurrentKneeBend:0.0} " +
-                            $"kneeDelta={squat.KneeBendDifference:0.0} " +
-                            $"legDepthDelta={squat.LegDepthDifference:0.000} " +
-                            $"gripError={squat.GripError:0.000} " +
-                            $"overhand={squat.HasOverhandGrip} " +
-                            $"handSpread={squat.HandSpread:0.000} " +
-                            $"handSpreadRatio={squat.HandSpreadRatio:0.000} " +
-                            $"forearmOutward={squat.ForearmOutwardError:0.000} " +
-                            $"armCrossing={squat.ArmCrossingError:0.000} " +
-                            $"elbowOutward={squat.ElbowOutwardError:0.000} " +
-                            $"upperArmRef={squat.UpperArmReferenceError:0.000} " +
-                            $"forearmRef={squat.ForearmReferenceError:0.000} " +
-                            $"armShape={squat.ArmShapeError:0.000} " +
-                            $"handContact={squat.HandContactError:0.000} " +
                             $"barFollow={squat.BarBodyFollowError:0.000} " +
                             $"barDrop={squat.BarDropFromStart:0.000} " +
                             $"facingDot={squatFacingDot:0.000} " +
@@ -411,16 +380,48 @@ public static class GymChaosVisitorVerifier
                         $"poseValidated={workoutPoseValidated}.");
                 }
 
+                if (!departureRequested && director.BeginDepartureForVerification(
+                    out departureFighter, out departureVehicle))
+                {
+                    GymVisitorAgent departureAgent =
+                        departureFighter.GetComponent<GymVisitorAgent>();
+                    departureApproachVersion = departureAgent != null
+                        ? departureAgent.CompletedVehicleApproaches : 0;
+                    departureRequested = true;
+                    Debug.Log($"GYMCHAOS_VISITOR_DEPARTURE_TEST_STARTED enemy={departureFighter.Identity}");
+                    return;
+                }
+                if (!departureRequested || departureFighter == null || departureVehicle == null)
+                {
+                    return;
+                }
+                GymVisitorAgent completedDepartureAgent =
+                    departureFighter.GetComponent<GymVisitorAgent>();
+                bool walkedToVehicle = completedDepartureAgent != null &&
+                    completedDepartureAgent.CompletedVehicleApproaches > departureApproachVersion;
+                if (!walkedToVehicle || !departureVehicle.HasCompletedDeparture ||
+                    departureFighter.gameObject.activeInHierarchy)
+                {
+                    if (elapsed > 90d)
+                    {
+                        throw new InvalidOperationException(
+                            $"Vehicle departure incomplete: walked={walkedToVehicle} " +
+                            $"departed={departureVehicle.HasCompletedDeparture} " +
+                            $"fighterActive={departureFighter.gameObject.activeInHierarchy}.");
+                    }
+                    return;
+                }
                 Debug.Log(
                     $"GYMCHAOS_VISITOR_VERIFICATION_OK entryMoved={entryMoved} " +
                     $"entryConfirmed={entryConfirmed} workoutMoved={workoutMoved} " +
-                    $"workoutStarted={workoutStarted} workoutCompleted={workoutCompleted}");
+                    $"workoutStarted={workoutStarted} workoutCompleted={workoutCompleted} " +
+                    $"walkedToVehicle={walkedToVehicle} vehicleDeparted={departureVehicle.HasCompletedDeparture}");
                 verificationCompleted = true;
                 EditorApplication.isPlaying = false;
                 return;
             }
 
-            if (elapsed > 50d)
+            if (elapsed > 95d)
             {
                 throw new InvalidOperationException(
                     $"Visitor runtime smoke did not finish: entryRequested={entryRequested} " +
@@ -670,6 +671,13 @@ public static class GymChaosVisitorVerifier
             // an airborne character.
             GymVisitorAgent visitor = fighter.GetComponent<GymVisitorAgent>();
             if (visitor != null && visitor.IsBusy)
+            {
+                continue;
+            }
+            MixamoScanRetargetAnimator animator =
+                fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+            if (animator != null &&
+                animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Idle)
             {
                 continue;
             }

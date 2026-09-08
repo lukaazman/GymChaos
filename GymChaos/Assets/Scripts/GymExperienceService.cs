@@ -25,6 +25,16 @@ public sealed class GymExperienceService : MonoBehaviour
         "Talk to 2 people",
         "Cause one piece of chaos"
     };
+    private static readonly GymShirtColor[] LockerShirtOptions =
+    {
+        GymShirtColor.Black, GymShirtColor.White, GymShirtColor.Red,
+        GymShirtColor.Blue, GymShirtColor.Gold
+    };
+    private static readonly GymHeadwear[] LockerHeadwearOptions =
+    {
+        GymHeadwear.None, GymHeadwear.Cap, GymHeadwear.Beanie,
+        GymHeadwear.Headband, GymHeadwear.Visor
+    };
 
     private readonly HashSet<string> oneShotRewards = new HashSet<string>();
     private readonly Dictionary<string, float> recentRewards = new Dictionary<string, float>();
@@ -724,14 +734,14 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public GymBackRoomInteractable FindNearbyInteractable(Vector3 position, float maxDistance)
     {
-        GymBackRoomInteractable[] interactables =
-            FindObjectsByType<GymBackRoomInteractable>(FindObjectsSortMode.None);
+        IReadOnlyList<GymBackRoomInteractable> interactables =
+            GymBackRoomInteractable.RegisteredInteractables;
         GymBackRoomInteractable closest = null;
         float best = maxDistance * maxDistance;
-        for (int i = 0; i < interactables.Length; i++)
+        for (int i = 0; i < interactables.Count; i++)
         {
             GymBackRoomInteractable candidate = interactables[i];
-            if (candidate == null)
+            if (candidate == null || !candidate.isActiveAndEnabled)
             {
                 continue;
             }
@@ -813,6 +823,9 @@ public sealed class GymExperienceService : MonoBehaviour
             lockerMenuPoseCaptured = true;
         }
 
+        PlayerHandRig playerRig =
+            targetPlayer.GetComponentInChildren<PlayerHandRig>(true);
+        playerRig?.EnsureMirrorAppearance();
         lockerMenuOpen = true;
         SetLockerMirrorContinuousRefresh(true);
         lockerMenuWasCursorCaptured = targetPlayer.CursorCaptured;
@@ -856,6 +869,7 @@ public sealed class GymExperienceService : MonoBehaviour
                 Vector3.Dot(mirror.PlaneNormal, Vector3.forward) > 0.9f)
             {
                 mirror.ContinuousRefresh = enabled;
+                mirror.RequestImmediateRefresh();
             }
         }
     }
@@ -1010,12 +1024,14 @@ public sealed class GymExperienceService : MonoBehaviour
         }
 
         EnsureProgressHudStyles();
-        DrawProgressHud();
-        DrawDailyGoals();
-
         if (lockerMenuOpen)
         {
             DrawLockerMenu();
+        }
+        else
+        {
+            DrawProgressHud();
+            DrawDailyGoals();
         }
         if (levelChoiceVisible && !EnemyFighter.IsFightActive &&
             !GymDialogueDirector.IsDialogueActive)
@@ -1425,14 +1441,9 @@ public sealed class GymExperienceService : MonoBehaviour
 
         GUI.Label(new Rect(panel.x + left, panel.y + 82f, panel.width - left * 2f, 22f),
             "SHIRT", lockerSectionStyle);
-        GymShirtColor[] shirts =
+        for (int i = 0; i < LockerShirtOptions.Length; i++)
         {
-            GymShirtColor.Black, GymShirtColor.White, GymShirtColor.Red,
-            GymShirtColor.Blue, GymShirtColor.Gold
-        };
-        for (int i = 0; i < shirts.Length; i++)
-        {
-            GymShirtColor shirt = shirts[i];
+            GymShirtColor shirt = LockerShirtOptions[i];
             bool selected = string.Equals(state.shirt, shirt.ToString(), StringComparison.OrdinalIgnoreCase);
             bool unlocked = IsCosmeticUnlocked(shirt);
             string label = selected ? $"✓ {shirt}" : unlocked ? shirt.ToString() :
@@ -1455,15 +1466,10 @@ public sealed class GymExperienceService : MonoBehaviour
 
         GUI.Label(new Rect(panel.x + left, panel.y + 212f, panel.width - left * 2f, 22f),
             "HEADWEAR", lockerSectionStyle);
-        GymHeadwear[] headwear =
-        {
-            GymHeadwear.None, GymHeadwear.Cap, GymHeadwear.Beanie,
-            GymHeadwear.Headband, GymHeadwear.Visor
-        };
         float headwearTop = panel.y + 242f;
-        for (int i = 0; i < headwear.Length; i++)
+        for (int i = 0; i < LockerHeadwearOptions.Length; i++)
         {
-            GymHeadwear item = headwear[i];
+            GymHeadwear item = LockerHeadwearOptions[i];
             bool selected = string.Equals(state.headwear, item.ToString(), StringComparison.OrdinalIgnoreCase);
             bool unlocked = IsCosmeticUnlocked(item);
             string label = selected ? $"✓ {item}" : unlocked ? item.ToString() :

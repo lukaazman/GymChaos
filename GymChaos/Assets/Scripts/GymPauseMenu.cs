@@ -69,10 +69,7 @@ public sealed class GymPauseMenu : MonoBehaviour
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
         canvas.sortingOrder = 200;
         CanvasScaler scaler = gameObject.AddComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
-        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-        scaler.matchWidthOrHeight = 0.55f;
+        GymRuntimeSettings.ConfigureBalancedCanvasScaler(scaler);
         gameObject.AddComponent<GraphicRaycaster>();
         canvasGroup = gameObject.AddComponent<CanvasGroup>();
 
@@ -159,6 +156,10 @@ public sealed class GymPauseMenu : MonoBehaviour
         canvasGroup.alpha = visible ? 1f : 0f;
         canvasGroup.interactable = visible;
         canvasGroup.blocksRaycasts = visible;
+        if (visible)
+        {
+            Cursor.lockState = CursorLockMode.None;
+        }
         Cursor.visible = visible;
     }
 

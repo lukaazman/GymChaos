@@ -14,6 +14,8 @@ using UnityEngine;
 [DefaultExecutionOrder(1200)]
 public sealed class EnemyMeshHitboxRig : MonoBehaviour
 {
+    private const float ThighGapClearance = 0.004f;
+
     private sealed class Segment
     {
         public Transform start;
@@ -30,6 +32,8 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
     private Mesh bakedSurface;
     private Transform leftThighAnchor;
     private Transform rightThighAnchor;
+    private Transform leftThighEnd;
+    private Transform rightThighEnd;
 
     public static EnemyMeshHitboxRig Configure(
         GameObject owner, BodybuilderEnemyVisual.Rig rig, SkinnedMeshRenderer renderer)
@@ -51,6 +55,8 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         combatColliders.Clear();
         leftThighAnchor = rig.LeftThigh;
         rightThighAnchor = rig.RightThigh;
+        leftThighEnd = rig.LeftShin;
+        rightThighEnd = rig.RightShin;
 
         CapsuleCollider[] broadColliders = GetComponents<CapsuleCollider>();
         for (int i = 0; i < broadColliders.Length; i++)
@@ -134,11 +140,25 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         GameObject hitboxObject = new GameObject(objectName);
         hitboxObject.layer = gameObject.layer;
         hitboxObject.transform.SetParent(anchor, false);
+        // Authored FBX rigs can carry a large import/unit scale on their bone
+        // hierarchy even when the skinned mesh is fitted to the same world
+        // height. Keep the hitbox radius in world units instead of multiplying
+        // it by that character-specific bone scale.
+        Vector3 anchorScale = anchor.lossyScale;
+        hitboxObject.transform.localScale = new Vector3(
+            SafeInverseScale(anchorScale.x),
+            SafeInverseScale(anchorScale.y),
+            SafeInverseScale(anchorScale.z));
         hitboxObject.transform.position = anchor.position + worldOffset;
         SphereCollider sphere = hitboxObject.AddComponent<SphereCollider>();
         sphere.radius = radius;
         sphere.isTrigger = false;
         combatColliders.Add(sphere);
+    }
+
+    private static float SafeInverseScale(float value)
+    {
+        return Mathf.Abs(value) > 0.0001f ? 1f / Mathf.Abs(value) : 1f;
     }
 
     public bool IsTightCombatSurface(Collider collider)
@@ -155,6 +175,16 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
 
     private void UpdateSegments()
     {
+        bool hasLegGap = leftThighAnchor != null && rightThighAnchor != null && leftThighEnd != null && rightThighEnd != null;
+        Vector3 leftThighCenter = hasLegGap
+            ? (leftThighAnchor.position + leftThighEnd.position) * 0.5f
+            : Vector3.zero;
+        Vector3 rightThighCenter = hasLegGap
+            ? (rightThighAnchor.position + rightThighEnd.position) * 0.5f
+            : Vector3.zero;
+        Vector3 legGap = hasLegGap
+            ? (leftThighCenter + rightThighCenter) * 0.5f
+            : Vector3.zero;
         for (int i = 0; i < segments.Count; i++)
         {
             Segment segment = segments[i];
@@ -165,14 +195,21 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
 
             Vector3 delta = segment.end.position - segment.start.position;
             float radius = segment.baseRadius;
-            if (segment.keepsLegGapOpen && leftThighAnchor != null && rightThighAnchor != null)
+            if (segment.keepsLegGapOpen && hasLegGap)
             {
                 // In a punch/landing pose the knees can rotate inward. Keep
-                // each thigh capsule tight to its own side so the midpoint
-                // between the thighs never becomes an invisible body bridge.
-                float halfThighSeparation =
-                    Vector3.Distance(leftThighAnchor.position, rightThighAnchor.position) * 0.5f;
-                radius = Mathf.Min(radius, Mathf.Max(0.008f, halfThighSeparation * 0.68f));
+                // each thigh capsule inside its own side of the midpoint gap.
+                // The limit is based on the actual animated thigh segment,
+                // rather than only the distance between its two anchors.
+                float gapDistance = DistanceToSegment(
+                    legGap, segment.start.position, segment.end.position);
+                float maxWorldRadius = Mathf.Max(0f, gapDistance - ThighGapClearance);
+                float largestRadialScale = Mathf.Max(
+                    Mathf.Abs(segment.hitbox.lossyScale.x),
+                    Mathf.Abs(segment.hitbox.lossyScale.z));
+                radius = Mathf.Min(
+                    radius,
+                    maxWorldRadius / Mathf.Max(0.001f, largestRadialScale));
             }
             segment.collider.radius = radius;
             float length = Mathf.Max(radius * 2f, delta.magnitude);
@@ -186,6 +223,18 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
         }
     }
 
+    private static float DistanceToSegment(Vector3 point, Vector3 start, Vector3 end)
+    {
+        Vector3 segment = end - start;
+        float segmentLengthSquared = segment.sqrMagnitude;
+        if (segmentLengthSquared <= 0.000001f)
+        {
+            return Vector3.Distance(point, start);
+        }
+
+        float projection = Mathf.Clamp01(Vector3.Dot(point - start, segment) / segmentLengthSquared);
+        return Vector3.Distance(point, start + segment * projection);
+    }
     public bool TrySnapToSurface(Vector3 approximatePoint, out Vector3 surfacePoint, out Vector3 surfaceNormal)
     {
         surfacePoint = approximatePoint;

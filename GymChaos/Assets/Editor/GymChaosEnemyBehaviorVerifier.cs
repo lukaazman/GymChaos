@@ -31,6 +31,7 @@ public static class GymChaosEnemyBehaviorVerifier
     private static double treadmillDeadline;
     private static double ronnieMismatchSince;
     private static bool ronnieDirectAggroTested;
+    private static bool ronnieNearestTargetVerified;
     private static bool visitorSimulationSuspended;
     private static EnemyFighter aggressionTarget;
     private static EnemyFighter treadmillUser;
@@ -51,6 +52,10 @@ public static class GymChaosEnemyBehaviorVerifier
     private static readonly Dictionary<EnemyFighter, MixamoScanRetargetAnimator.MotionState>
         previousRoamAnimationStates =
         new Dictionary<EnemyFighter, MixamoScanRetargetAnimator.MotionState>();
+    private static readonly Dictionary<EnemyFighter, float> minimumVisualRootY =
+        new Dictionary<EnemyFighter, float>();
+    private static readonly Dictionary<EnemyFighter, float> maximumVisualRootY =
+        new Dictionary<EnemyFighter, float>();
 
     static GymChaosEnemyBehaviorVerifier()
     {
@@ -104,6 +109,7 @@ public static class GymChaosEnemyBehaviorVerifier
         treadmillDeadline = 0d;
         ronnieMismatchSince = -1d;
         ronnieDirectAggroTested = false;
+        ronnieNearestTargetVerified = false;
         visitorSimulationSuspended = false;
         aggressionTarget = null;
         treadmillUser = null;
@@ -116,6 +122,8 @@ public static class GymChaosEnemyBehaviorVerifier
         earlyMovedIdentities.Clear();
         startupPositions.Clear();
         previousRoamAnimationStates.Clear();
+        minimumVisualRootY.Clear();
+        maximumVisualRootY.Clear();
     }
 
     private static void ResumeAfterDomainReload()
@@ -228,6 +236,47 @@ public static class GymChaosEnemyBehaviorVerifier
         Debug.Log(
             $"GYMCHAOS_ENEMY_NEUTRAL_ROAM_OK count={combatFighters.Count} " +
             $"initialStates={BuildStateSignature(combatFighters)}");
+
+        int attackedAggroCount = 0;
+        for (int i = 0; i < combatFighters.Count; i++)
+        {
+            EnemyFighter candidate = combatFighters[i];
+            if (candidate.IsPolice)
+            {
+                continue;
+            }
+            candidate.TakeMeleeHit(Vector3.zero, 1f, 0f);
+            if (!candidate.IsAggressive ||
+                candidate.CurrentTarget != player.transform ||
+                candidate.IsRoaming || candidate.HasRoamDestination)
+            {
+                throw new InvalidOperationException(
+                    $"{candidate.Identity} did not switch from its current activity " +
+                    "to player chase after being attacked.");
+            }
+            attackedAggroCount++;
+            candidate.ResetAggressionForVerification();
+        }
+        if (attackedAggroCount != 5)
+        {
+            throw new InvalidOperationException(
+                $"Expected five attackable non-police enemies, got {attackedAggroCount}.");
+        }
+        EnemyFighter receptionist = FindIdentity(
+            fighters, BodybuilderIdentity.Manwithsuit1);
+        if (receptionist == null)
+        {
+            throw new InvalidOperationException("Manwithsuit1 was missing from the passive test.");
+        }
+        receptionist.TakeMeleeHit(Vector3.zero, 1f, 0f);
+        if (receptionist.IsAggressive)
+        {
+            throw new InvalidOperationException(
+                "Manwithsuit1 became aggressive despite being the passive exception.");
+        }
+        Debug.Log(
+            "GYMCHAOS_ALL_ATTACKED_ENEMIES_AGGRO_OK count=5 " +
+            "activityCancelled=True target=Player passiveSuit=True");
 
         aggressionTarget = combatFighters[0];
         aggressionTarget.TakeMeleeHit(Vector3.zero, 1f, 0.1f);
@@ -381,6 +430,31 @@ public static class GymChaosEnemyBehaviorVerifier
                     $"a direction change: routeRemaining={fighter.CurrentRoamRouteRemaining}.");
             }
             previousRoamAnimationStates[fighter] = currentState;
+            ExternalRiggedCharacterVisual visual =
+                fighter.GetComponent<ExternalRiggedCharacterVisual>();
+            if (visual != null && visual.RuntimeModelRoot != null &&
+                !fighter.IsOnTreadmill)
+            {
+                float rootY = visual.RuntimeModelRoot.localPosition.y;
+                if (!minimumVisualRootY.ContainsKey(fighter))
+                {
+                    minimumVisualRootY[fighter] = rootY;
+                    maximumVisualRootY[fighter] = rootY;
+                }
+                minimumVisualRootY[fighter] = Mathf.Min(
+                    minimumVisualRootY[fighter], rootY);
+                maximumVisualRootY[fighter] = Mathf.Max(
+                    maximumVisualRootY[fighter], rootY);
+                float verticalJitter = maximumVisualRootY[fighter] -
+                    minimumVisualRootY[fighter];
+                if (verticalJitter > 0.015f)
+                {
+                    throw new InvalidOperationException(
+                        $"{fighter.Identity} visual root changed height during locomotion: " +
+                        $"span={verticalJitter:F4} min={minimumVisualRootY[fighter]:F4} " +
+                        $"max={maximumVisualRootY[fighter]:F4}.");
+                }
+            }
             maximumObservedBlockedTime = Mathf.Max(
                 maximumObservedBlockedTime, fighter.CurrentRoamBlockedTime);
             if (fighter.AnimationState == MixamoScanRetargetAnimator.MotionState.Idle)
@@ -485,6 +559,13 @@ public static class GymChaosEnemyBehaviorVerifier
         }
 
         ronnieMismatchSince = -1d;
+        if (!ronnieNearestTargetVerified && nearest != null)
+        {
+            ronnieNearestTargetVerified = true;
+            Debug.Log(
+                $"GYMCHAOS_RONNIE_NEAREST_FIGHT_TARGET_OK target={nearest.name} " +
+                "refreshTolerance=0.35s");
+        }
     }
 
     private static void ObserveTreadmill()

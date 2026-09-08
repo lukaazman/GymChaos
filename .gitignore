@@ -12,3 +12,11 @@ AGENTS.md
 /UNITY-LICENSING-RECOVERY.md
 /unity-face-censor-batch.log
 /unity-face-censor-batch-2.log
+
+# Local worker/executor runtime state and handoff reports
+.agents/runtime/
+
+# Unity-generated project files and local editor settings
+/GymChaos/*.csproj
+/GymChaos/*.slnx
+/GymChaos/.vscode/

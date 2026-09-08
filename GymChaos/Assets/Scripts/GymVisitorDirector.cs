@@ -10,6 +10,7 @@ using UnityEngine;
 [DefaultExecutionOrder(-20)]
 public sealed class GymVisitorDirector : MonoBehaviour
 {
+    private const float VisitorEntryTimeoutSeconds = 42f;
     private sealed class VisitorRecord
     {
         public EnemyFighter fighter;
@@ -27,6 +28,12 @@ public sealed class GymVisitorDirector : MonoBehaviour
         public float[] entryTimes = new float[2];
         public float[] workoutTimes = new float[2];
         public int observedWorkoutVersion;
+        public GymVisitorVehicle vehicle;
+        public bool waitingForVehicle;
+        public bool vehicleDepartureStarted;
+        public bool walkingToVehicle;
+        public bool queuedForcedDeparture;
+        public float nextEligibleRealtime;
     }
 
     private static readonly BodybuilderIdentity[] EligibleIdentities =
@@ -45,6 +52,8 @@ public sealed class GymVisitorDirector : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float secondScheduleStart = 0.62f;
     [SerializeField, Range(0f, 1f)] private float minimumWorkoutDelay = 0.06f;
     [SerializeField, Range(0f, 1f)] private float maximumWorkoutDelay = 0.13f;
+    [SerializeField, Min(20f)] private float minimumReturnCooldownSeconds = 45f;
+    [SerializeField, Min(30f)] private float maximumReturnCooldownSeconds = 80f;
 
     private readonly List<VisitorRecord> records = new List<VisitorRecord>();
     private System.Random random;
@@ -53,6 +62,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
     private PlayerMovement player;
     private int lastDay = -1;
     private bool initialized;
+    private bool departureDrainMode;
 
     public static GymVisitorDirector Instance { get; private set; }
     public int EligibleEnemyCount => records.Count;
@@ -114,6 +124,9 @@ public sealed class GymVisitorDirector : MonoBehaviour
     }
 
 #if UNITY_EDITOR
+    public float MinimumReturnCooldownForVerification => minimumReturnCooldownSeconds;
+    public float MaximumReturnCooldownForVerification => maximumReturnCooldownSeconds;
+
     public void SuspendVisitorSimulationForVerification()
     {
         if (!initialized)
@@ -126,7 +139,6 @@ public sealed class GymVisitorDirector : MonoBehaviour
         {
             VisitorRecord record = records[i];
             record.fighter.gameObject.SetActive(true);
-            record.agent.MarkDormant();
             record.agent.MarkInitialInside();
             record.active = true;
             record.visitInProgress = false;
@@ -157,9 +169,11 @@ public sealed class GymVisitorDirector : MonoBehaviour
                     continue;
                 }
 
-                ActivateScheduled(record, true);
-                fighter = record.fighter;
-                break;
+                if (ActivateScheduled(record, true))
+                {
+                    fighter = record.fighter;
+                    break;
+                }
             }
         }
 
@@ -203,6 +217,107 @@ public sealed class GymVisitorDirector : MonoBehaviour
         }
 
         return false;
+    }
+
+    public bool BeginDepartureForVerification(
+        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
+    {
+        fighter = null;
+        vehicle = null;
+        if (doorway == null) return false;
+        for (int i = 0; i < records.Count; i++)
+        {
+            VisitorRecord record = records[i];
+            if (!record.active || record.waitingForVehicle || record.agent == null ||
+                !record.agent.IsInsideGym || record.agent.IsBusy) continue;
+            EnsureVehicle(record, true);
+            fighter = record.fighter;
+            vehicle = record.vehicle;
+            record.leaveAfter = Time.time;
+            record.agent.BeginExit(doorway);
+            return true;
+        }
+        return false;
+    }
+
+    public bool BeginZyzzDepartureForVerification(
+        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
+    {
+        fighter = null;
+        vehicle = null;
+        if (doorway == null) return false;
+        VisitorRecord record = FindRecord(BodybuilderIdentity.Zyzz);
+        if (record == null || record.fighter == null || record.agent == null) return false;
+        EnsureVehicle(record, true);
+        record.fighter.gameObject.SetActive(true);
+        record.agent.MarkInitialInside();
+        record.active = true;
+        record.visitInProgress = false;
+        record.workoutInProgress = false;
+        record.waitingForVehicle = false;
+        record.walkingToVehicle = false;
+        record.vehicleDepartureStarted = false;
+        fighter = record.fighter;
+        vehicle = record.vehicle;
+        record.agent.BeginExit(doorway);
+        return true;
+    }
+
+    public bool BeginGokuDepartureForVerification(
+        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
+    {
+        fighter = null;
+        vehicle = null;
+        if (doorway == null) return false;
+        VisitorRecord record = FindRecord(BodybuilderIdentity.Goku);
+        if (record == null || record.fighter == null || record.agent == null) return false;
+        EnsureVehicle(record, true);
+        record.fighter.gameObject.SetActive(true);
+        record.agent.MarkInitialInside();
+        record.active = true;
+        record.visitInProgress = false;
+        record.workoutInProgress = false;
+        record.waitingForVehicle = false;
+        record.walkingToVehicle = false;
+        record.vehicleDepartureStarted = false;
+        fighter = record.fighter;
+        vehicle = record.vehicle;
+        record.agent.BeginExit(doorway);
+        return true;
+    }
+
+    public int BeginAllDeparturesForVerification(
+        List<EnemyFighter> fighters, List<GymVisitorVehicle> vehicles)
+    {
+        if (doorway == null || fighters == null || vehicles == null)
+        {
+            return 0;
+        }
+        fighters.Clear();
+        vehicles.Clear();
+        departureDrainMode = true;
+        for (int i = 0; i < records.Count; i++)
+        {
+            VisitorRecord record = records[i];
+            if (record == null || record.fighter == null || record.agent == null)
+            {
+                continue;
+            }
+            EnsureVehicle(record, true);
+            record.fighter.gameObject.SetActive(true);
+            record.agent.MarkInitialInside();
+            record.active = true;
+            record.visitInProgress = false;
+            record.workoutInProgress = false;
+            record.suspendedForCombat = false;
+            record.waitingForVehicle = false;
+            record.walkingToVehicle = false;
+            record.vehicleDepartureStarted = false;
+            record.queuedForcedDeparture = true;
+            fighters.Add(record.fighter);
+            vehicles.Add(record.vehicle);
+        }
+        return fighters.Count;
     }
 
 #endif
@@ -366,6 +481,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
 
     private void ActivateInitial(VisitorRecord record)
     {
+        EnsureVehicle(record, true);
         record.fighter.gameObject.SetActive(true);
         record.agent.MarkInitialInside();
         record.active = true;
@@ -392,7 +508,10 @@ public sealed class GymVisitorDirector : MonoBehaviour
         }
 
         float now = timeOfDay.Time01;
-        EnsureMinimumVisitors();
+        if (!departureDrainMode)
+        {
+            EnsureMinimumVisitors();
+        }
         int insideCount = ActiveVisitorCount;
         for (int i = 0; i < records.Count; i++)
         {
@@ -419,7 +538,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
                 continue;
             }
 
-            if (record.active && record.visitInProgress)
+            if (record.active && record.visitInProgress && !record.waitingForVehicle)
             {
                 if (record.agent.HasEnteredGym)
                 {
@@ -437,7 +556,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
                         $"visit={record.visitsToday}",
                         this);
                 }
-                else if (Time.time - record.entryStartedAt > 18f)
+                else if (Time.time - record.entryStartedAt > VisitorEntryTimeoutSeconds)
                 {
                     // A failed incoming route must still return through the
                     // authored doorway. Never hide an object at the room
@@ -470,10 +589,19 @@ public sealed class GymVisitorDirector : MonoBehaviour
 
             if (!record.active)
             {
-                if (record.visitsToday < 2 && IsDue(now, record.entryTimes[record.visitsToday]))
+                if (!departureDrainMode && record.visitsToday < 2 &&
+                    IsDue(now, record.entryTimes[record.visitsToday]))
                 {
                     ActivateScheduled(record);
                 }
+                continue;
+            }
+
+            // A dormant agent can retain its completed-exit marker while its
+            // next vehicle is still approaching. Do not interpret that stale
+            // marker as a new departure and cancel DriveIn.
+            if (record.waitingForVehicle)
+            {
                 continue;
             }
 
@@ -526,24 +654,28 @@ public sealed class GymVisitorDirector : MonoBehaviour
                 }
             }
 
-            if (!record.agent.IsBusy && !record.fighter.IsOnTreadmill &&
+            if (!departureDrainMode && !record.agent.IsBusy &&
+                !record.fighter.IsOnTreadmill &&
                 !record.workoutInProgress && record.workoutsToday < 2 &&
                 IsDue(now, record.workoutTimes[record.workoutsToday]))
             {
                 TryStartWorkout(record);
             }
 
-            if (Time.time >= record.leaveAfter && !record.agent.IsBusy &&
+            if ((record.queuedForcedDeparture || Time.time >= record.leaveAfter) &&
+                !record.agent.IsBusy &&
                 !record.fighter.IsOnTreadmill)
             {
-                if (insideCount <= 2)
+                if (insideCount <= 2 && !record.queuedForcedDeparture)
                 {
                     EnsureThreeVisitors();
                     insideCount = ActiveVisitorCount;
                 }
 
-                if (insideCount > 2)
+                if ((insideCount > 2 || record.queuedForcedDeparture) &&
+                    !IsDoorTraversalBusy(record))
                 {
+                    record.queuedForcedDeparture = false;
                     record.agent.BeginExit(doorway);
                     insideCount = ActiveVisitorCount;
                 }
@@ -561,7 +693,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
         for (int i = 0; i < records.Count && CountActiveOrEnteringVisitors() < 2; i++)
         {
             VisitorRecord record = records[i];
-            if (!record.active && !record.suspendedForCombat && record.visitsToday < 2)
+            if (CanActivateNow(record, false))
             {
                 ActivateScheduled(record, true);
             }
@@ -578,7 +710,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
         for (int i = 0; i < records.Count; i++)
         {
             VisitorRecord record = records[i];
-            if (!record.active && !record.suspendedForCombat && record.visitsToday < 2)
+            if (CanActivateNow(record, false))
             {
                 ActivateScheduled(record, true);
                 return;
@@ -603,22 +735,118 @@ public sealed class GymVisitorDirector : MonoBehaviour
         return count;
     }
 
-    private void ActivateScheduled(VisitorRecord record, bool forced = false)
+    private bool IsArrivalSequenceBusy(VisitorRecord ignoredRecord = null)
+    {
+        for (int i = 0; i < records.Count; i++)
+        {
+            VisitorRecord other = records[i];
+            if (other == null || other == ignoredRecord || !other.active)
+            {
+                continue;
+            }
+
+            if (other.waitingForVehicle ||
+                (other.agent != null && other.agent.IsEntryPending))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsDoorTraversalBusy(VisitorRecord ignoredRecord = null)
+    {
+        for (int i = 0; i < records.Count; i++)
+        {
+            VisitorRecord other = records[i];
+            if (other == null || other == ignoredRecord || !other.active ||
+                other.agent == null)
+            {
+                continue;
+            }
+
+            GymVisitorAgent.VisitorState otherState = other.agent.State;
+            if (otherState == GymVisitorAgent.VisitorState.ExitingDoor ||
+                otherState == GymVisitorAgent.VisitorState.LeavingGym ||
+                otherState == GymVisitorAgent.VisitorState.EnteringDoor ||
+                otherState == GymVisitorAgent.VisitorState.EnteringRoom ||
+                other.agent.IsUsingSharedParkingConnector)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool ActivateScheduled(VisitorRecord record, bool forced = false)
     {
         if (record == null || record.active || record.visitsToday >= 2 || doorway == null)
         {
-            return;
+            return false;
         }
-
-        Vector3 outside = doorway.ExteriorPoint;
-        Vector3 inward = Vector3.ProjectOnPlane(doorway.InteriorPoint - outside, Vector3.up);
-        Quaternion rotation = inward.sqrMagnitude > 0.01f
-            ? Quaternion.LookRotation(inward.normalized, Vector3.up)
-            : record.fighter.transform.rotation;
-        record.fighter.SetVisitorSpawnPose(outside, rotation);
-        record.fighter.gameObject.SetActive(true);
-        record.agent.BeginEntry(doorway, ChooseRoomTarget(record.fighter.Identity));
+        if (!forced && Time.unscaledTime < record.nextEligibleRealtime)
+        {
+            return false;
+        }
+        EnsureVehicle(record, false);
         record.active = true;
+        record.waitingForVehicle = true;
+        record.visitInProgress = true;
+        record.entryStartedAt = Time.time;
+        record.leaveAfter = float.PositiveInfinity;
+        record.vehicleDepartureStarted = false;
+        record.walkingToVehicle = false;
+        record.queuedForcedDeparture = false;
+        if (record.vehicle.IsCloud)
+        {
+            record.fighter.gameObject.SetActive(true);
+            record.vehicle.MountRider(record.fighter);
+        }
+        else
+        {
+            record.fighter.gameObject.SetActive(false);
+        }
+        record.vehicle.DriveIn(() => CompleteVehicleArrival(record, forced));
+        Debug.Log($"GYMCHAOS_VEHICLE_ARRIVAL_STARTED enemy={record.fighter.Identity}", this);
+        return true;
+    }
+
+    private void CompleteVehicleArrival(VisitorRecord record, bool forced)
+    {
+        if (record == null || record.fighter == null || record.agent == null) return;
+        bool stagedOutside = record.vehicle != null;
+        Vector3 outside = record.vehicle != null
+            ? record.vehicle.PassengerPoint
+            : ChooseVisitorArrivalStage(record, out stagedOutside);
+        Vector3 approach = Vector3.ProjectOnPlane(
+            doorway.ExteriorPoint - outside, Vector3.up);
+        if (approach.sqrMagnitude < 0.01f)
+        {
+            approach = Vector3.ProjectOnPlane(
+                doorway.InteriorPoint - outside, Vector3.up);
+        }
+        Quaternion rotation = approach.sqrMagnitude > 0.01f
+            ? Quaternion.LookRotation(approach.normalized, Vector3.up)
+            : record.fighter.transform.rotation;
+        record.fighter.gameObject.SetActive(true);
+        if (record.vehicle != null && record.vehicle.IsCloud)
+            record.vehicle.DismountRider(outside, rotation);
+        else
+            record.fighter.SetVisitorSpawnPose(outside, rotation);
+        Physics.SyncTransforms();
+        if (record.vehicle != null)
+        {
+            record.agent.BeginEntryFromVehicle(
+                doorway, ChooseRoomTarget(record.fighter.Identity),
+                record.vehicle.PassengerPoint, record.vehicle.AislePassengerPoint);
+        }
+        else
+        {
+            record.agent.BeginEntry(doorway, ChooseRoomTarget(record.fighter.Identity));
+        }
+        record.waitingForVehicle = false;
         record.visitInProgress = true;
         record.entryStartedAt = Time.time;
         record.activeSince = Time.time;
@@ -626,7 +854,8 @@ public sealed class GymVisitorDirector : MonoBehaviour
         record.observedWorkoutVersion = record.agent.CompletedWorkoutVersion;
         Debug.Log(
             $"GYMCHAOS_VISITOR_ENTRY_REQUESTED enemy={record.fighter.Identity} " +
-            $"visitCandidate={record.visitsToday + 1} forced={forced}",
+            $"visitCandidate={record.visitsToday + 1} forced={forced} " +
+            $"stagedOutside={stagedOutside} stage={outside}",
             this);
     }
 
@@ -667,17 +896,75 @@ public sealed class GymVisitorDirector : MonoBehaviour
             return;
         }
 
+        EnsureVehicle(record, true);
+        if (!record.walkingToVehicle)
+        {
+            if (record.agent.BeginVehicleApproach(
+                record.vehicle.PassengerPoint, record.vehicle.BoardingReachDistance))
+            {
+                record.walkingToVehicle = true;
+            }
+            record.leaveAfter = Time.time + 0.25f;
+            return;
+        }
+        if (!record.agent.HasReachedVehicle)
+        {
+            record.leaveAfter = Time.time + 0.25f;
+            return;
+        }
+        if (!record.vehicleDepartureStarted)
+        {
+            record.vehicleDepartureStarted = true;
+            record.waitingForVehicle = true;
+            record.agent.ReleaseVehicleApproachReservation();
+            if (record.vehicle.IsCloud)
+                record.vehicle.MountRider(record.fighter);
+            else
+                record.fighter.gameObject.SetActive(false);
+            record.vehicle.DriveOut(() => CompleteVehicleDeparture(record));
+        }
+    }
+
+    private void CompleteVehicleDeparture(VisitorRecord record)
+    {
+        if (record == null) return;
+
+        if (record.vehicle != null && record.vehicle.IsCloud)
+            record.vehicle.DismountRider(record.fighter.transform.position,
+                record.fighter.transform.rotation);
         record.deactivationDeferredLogged = false;
         record.active = false;
         record.visitInProgress = false;
         record.workoutInProgress = false;
         record.suspendedForCombat = false;
+        record.waitingForVehicle = false;
+        record.vehicleDepartureStarted = false;
+        record.walkingToVehicle = false;
+        record.queuedForcedDeparture = false;
         record.agent.MarkDormant();
         record.fighter.gameObject.SetActive(false);
+        record.nextEligibleRealtime = Time.unscaledTime + RandomRange(
+            minimumReturnCooldownSeconds,
+            Mathf.Max(minimumReturnCooldownSeconds, maximumReturnCooldownSeconds));
         Debug.Log(
             $"GYMCHAOS_VISITOR_VISIT_END enemy={record.fighter.Identity} " +
             $"visits={record.visitsToday} afterDoorExit={record.agent.HasCompletedDoorExit}",
             this);
+    }
+
+    private static bool CanActivateNow(VisitorRecord record, bool forced)
+    {
+        return record != null && !record.active && !record.suspendedForCombat &&
+            record.visitsToday < 2 &&
+            (forced || Time.unscaledTime >= record.nextEligibleRealtime);
+    }
+
+    private void EnsureVehicle(VisitorRecord record, bool parked)
+    {
+        if (record == null || record.vehicle != null) return;
+        int slot = Mathf.Max(0, records.IndexOf(record));
+        record.vehicle = GymVisitorVehicle.Create(
+            record.fighter.Identity, slot, player, parked);
     }
 
     private void TryStartWorkout(VisitorRecord record)
@@ -709,6 +996,77 @@ public sealed class GymVisitorDirector : MonoBehaviour
             this);
     }
 
+    private Vector3 ChooseVisitorArrivalStage(
+        VisitorRecord record, out bool stagedOutside)
+    {
+        stagedOutside = false;
+        Vector3 fallback = doorway != null
+            ? doorway.ExteriorPoint
+            : record != null && record.fighter != null
+                ? record.fighter.transform.position
+                : transform.position;
+        if (doorway == null || record == null || record.fighter == null ||
+            !GymOutdoorBuilder.IsBuilt)
+        {
+            return fallback;
+        }
+
+        Bounds accessible = GymOutdoorBuilder.AccessibleBounds;
+        Bounds parking = GymOutdoorBuilder.ParkingBounds;
+        if (accessible.size.x < 3f || accessible.size.z < 3f ||
+            parking.size.x < 3f || parking.size.z < 3f)
+        {
+            return fallback;
+        }
+
+        Vector3 door = doorway.ExteriorPoint;
+        Vector3 pathDirection = Vector3.ProjectOnPlane(
+            parking.center - door, Vector3.up);
+        if (pathDirection.sqrMagnitude < 0.25f)
+        {
+            pathDirection = Vector3.ProjectOnPlane(
+                accessible.center - door, Vector3.up);
+        }
+        if (pathDirection.sqrMagnitude < 0.25f)
+        {
+            return fallback;
+        }
+
+        pathDirection.Normalize();
+        Vector3 lateral = Vector3.Cross(Vector3.up, pathDirection).normalized;
+        int recordIndex = records.IndexOf(record);
+        if (recordIndex < 0)
+        {
+            recordIndex = 0;
+        }
+
+        // Keep each stable record on a repeatable, separated path/courtyard
+        // slot. The offset is intentionally outside the authored door landing.
+        float distanceAlongPath = 4.5f + recordIndex * 2.4f;
+        float lateralOffset = (recordIndex & 1) == 0 ? -0.7f : 0.7f;
+        Vector3 candidate = door + pathDirection * distanceAlongPath +
+            lateral * lateralOffset;
+        const float edgeMargin = 0.9f;
+        float minX = accessible.min.x + edgeMargin;
+        float maxX = accessible.max.x - edgeMargin;
+        float minZ = accessible.min.z + edgeMargin;
+        float maxZ = accessible.max.z - edgeMargin;
+        if (minX >= maxX || minZ >= maxZ)
+        {
+            return fallback;
+        }
+
+        candidate.x = Mathf.Clamp(candidate.x, minX, maxX);
+        candidate.z = Mathf.Clamp(candidate.z, minZ, maxZ);
+        candidate.y = accessible.center.y;
+        if (Vector3.ProjectOnPlane(candidate - door, Vector3.up).sqrMagnitude < 6.25f)
+        {
+            return fallback;
+        }
+
+        stagedOutside = true;
+        return candidate;
+    }
     private Vector3 ChooseRoomTarget(BodybuilderIdentity identity)
     {
         GameObject floor = GameObject.Find("Rubber Floor");

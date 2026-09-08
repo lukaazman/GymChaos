@@ -130,6 +130,7 @@ public class GymExerciseStation : MonoBehaviour
     private Vector3 pullUpBarTarget;
     private Vector3 pullUpLookDirection = Vector3.forward;
     private float pullUpBarHeightAbovePlayer;
+    private bool cableMachinePullUp;
     private sealed class LatWeightStackPart
     {
         public Transform transform;
@@ -153,6 +154,10 @@ public class GymExerciseStation : MonoBehaviour
     public bool IsTreadmill => exerciseType == GymExerciseType.Treadmill;
     public bool IsSquat => exerciseType == GymExerciseType.BarbellSquat;
     public bool IsDeadlift => exerciseType == GymExerciseType.Deadlift;
+    public bool IsCableMachinePullUp =>
+        exerciseType == GymExerciseType.PullUps && cableMachinePullUp;
+    public Vector3 PullUpLookDirection => pullUpLookDirection;
+    public float PullUpCameraLowering => cableMachinePullUp ? 0.48f : 0f;
     public bool IsOccupied => playerOccupant != null || enemyOccupant != null ||
         enemySquatReleaseOccupant != null;
     public bool IsOccupiedByEnemy => enemyOccupant != null || enemySquatReleaseOccupant != null;
@@ -161,7 +166,18 @@ public class GymExerciseStation : MonoBehaviour
     // Treadmills use the same authored center/facing correction as the player
     // exercise pose. That keeps an enemy's feet on the belt and its chest
     // pointed at the machine screen instead of at the aisle.
-    public Vector3 EnemyPosition => playerPosition;
+    public Vector3 EnemyPosition
+    {
+        get
+        {
+            Vector3 position = playerPosition;
+            if (IsTreadmill && treadmillBeltRenderer != null)
+            {
+                position.y = treadmillBeltRenderer.bounds.max.y + 0.015f;
+            }
+            return position;
+        }
+    }
     public Quaternion EnemyRotation => playerRotation;
     public float CurrentTreadmillSpeed => currentSpeed;
     public bool IsSessionActive => sessionActive;
@@ -952,6 +968,15 @@ public class GymExerciseStation : MonoBehaviour
             1.42f, pullUpBarHeightAbovePlayer - 0.24f);
         float aboveBarHeight = Mathf.Max(
             belowBarHeight + 0.24f, pullUpBarHeightAbovePlayer + 0.10f);
+        if (cableMachinePullUp)
+        {
+            // The dual-cable frame has a lower overhead opening than the
+            // calisthenics rig. Keep the complete top pull bar in frame
+            // through the lift by lowering the camera another 14 cm from the
+            // previous cable-machine pose.
+            belowBarHeight -= 0.48f;
+            aboveBarHeight -= 0.42f;
+        }
         float cameraHeight = Mathf.Lerp(belowBarHeight, aboveBarHeight, motion);
         localPosition = new Vector3(0f, cameraHeight, -0.34f);
 
@@ -960,7 +985,11 @@ public class GymExerciseStation : MonoBehaviour
         // upward camera pitch visible in the previous implementation.
         Quaternion worldRotation = Quaternion.LookRotation(
             pullUpLookDirection, Vector3.up);
-        localRotation = Quaternion.Inverse(playerRotation) * worldRotation;
+        Quaternion cameraRightTrim = cableMachinePullUp
+            ? Quaternion.Euler(0f, 3f, 0f)
+            : Quaternion.identity;
+        localRotation = Quaternion.Inverse(playerRotation) * worldRotation *
+            cameraRightTrim;
     }
 
     private float GetCardioBob(float maximumAmplitude)
@@ -1005,7 +1034,27 @@ public class GymExerciseStation : MonoBehaviour
         Bounds stagingBounds = type == GymExerciseType.BarbellSquat
             ? GetSquatFrameBounds(equipment, bounds, sceneBar)
             : bounds;
-        float floorY = bounds.min.y + 0.06f;
+        // CableMachineDual exposes its pull-up bars as child renderers. The
+        // station is discovered on that child, so its bounds describe only
+        // the bar and would place the player/camera at bar height. Use the
+        // complete machine bounds for the floor while keeping the bar bounds
+        // for the actual pull-up target.
+        Bounds floorBounds = bounds;
+        if (type == GymExerciseType.PullUps)
+        {
+            Transform cableMachineRoot = FindNamedAncestor(
+                equipment, "cablemachinedual");
+            if (cableMachineRoot != null)
+            {
+                Renderer[] machineRenderers =
+                    cableMachineRoot.GetComponentsInChildren<Renderer>(true);
+                if (machineRenderers.Length > 0)
+                {
+                    floorBounds = GetCombinedBounds(machineRenderers);
+                }
+            }
+        }
+        float floorY = floorBounds.min.y + 0.06f;
         Vector3 offset = GetPlayerOffset(type, forward);
         playerPosition = new Vector3(
             stagingBounds.center.x + offset.x,
@@ -1112,8 +1161,11 @@ public class GymExerciseStation : MonoBehaviour
         }
         if (type == GymExerciseType.PullUps)
         {
-            pullUpLookDirection = GetPullUpLookDirection(
-                bounds.center, forward);
+            cableMachinePullUp = HasNamedAncestor(
+                equipment, "cablemachinedual");
+            pullUpLookDirection = cableMachinePullUp
+                ? GetDirectionToNearestMirror(bounds.center, -forward)
+                : GetPullUpLookDirection(bounds.center, forward);
             playerRotation = Quaternion.LookRotation(
                 pullUpLookDirection, Vector3.up);
         }
@@ -1149,6 +1201,7 @@ public class GymExerciseStation : MonoBehaviour
         {
             Debug.Log(
                 $"GYMCHAOS_PULLUP_CONFIG station={equipment.name} " +
+                $"cableMachine={cableMachinePullUp} " +
                 $"barHeight={pullUpBarHeightAbovePlayer:0.00} " +
                 $"look={pullUpLookDirection}",
                 this);
@@ -1289,8 +1342,11 @@ public class GymExerciseStation : MonoBehaviour
             squatBarUsedGravity = squatBarBody.useGravity;
             squatBarWasInterpolation = squatBarBody.interpolation;
             squatBarWasDetectCollisions = squatBarBody.detectCollisions;
-            squatBarBody.linearVelocity = Vector3.zero;
-            squatBarBody.angularVelocity = Vector3.zero;
+            if (!squatBarBody.isKinematic)
+            {
+                squatBarBody.linearVelocity = Vector3.zero;
+                squatBarBody.angularVelocity = Vector3.zero;
+            }
             // An interpolated kinematic pickup otherwise renders one frame
             // between its rack pose and the traps pose during reparenting.
             squatBarBody.interpolation = RigidbodyInterpolation.None;
@@ -1320,8 +1376,6 @@ public class GymExerciseStation : MonoBehaviour
         {
             squatBarBody.position = sceneBar.position;
             squatBarBody.rotation = sceneBar.rotation;
-            squatBarBody.linearVelocity = Vector3.zero;
-            squatBarBody.angularVelocity = Vector3.zero;
         }
         return true;
     }
@@ -2136,8 +2190,6 @@ public class GymExerciseStation : MonoBehaviour
 
             mountedBody.position = mountedBody.transform.position;
             mountedBody.rotation = mountedBody.transform.rotation;
-            mountedBody.linearVelocity = Vector3.zero;
-            mountedBody.angularVelocity = Vector3.zero;
         }
         Physics.SyncTransforms();
     }
@@ -2332,8 +2384,11 @@ public class GymExerciseStation : MonoBehaviour
             body.useGravity = state.UseGravity;
             body.detectCollisions = state.DetectCollisions;
             body.interpolation = state.Interpolation;
-            body.linearVelocity = state.IsKinematic ? Vector3.zero : state.LinearVelocity;
-            body.angularVelocity = state.IsKinematic ? Vector3.zero : state.AngularVelocity;
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = state.LinearVelocity;
+                body.angularVelocity = state.AngularVelocity;
+            }
         }
         if (deadliftLoosePlateStates.Count > 0)
         {
@@ -3000,6 +3055,64 @@ public class GymExerciseStation : MonoBehaviour
             direction = Vector3.forward;
         }
         return direction.normalized;
+    }
+
+    private static Transform FindNamedAncestor(
+        Transform current, string normalizedMarker)
+    {
+        while (current != null)
+        {
+            string normalized = current.name.ToLowerInvariant()
+                .Replace(" ", string.Empty)
+                .Replace("_", string.Empty)
+                .Replace("-", string.Empty);
+            if (normalized.Contains(normalizedMarker))
+            {
+                return current;
+            }
+            current = current.parent;
+        }
+        return null;
+    }
+
+    private static bool HasNamedAncestor(Transform current, string normalizedMarker)
+    {
+        return FindNamedAncestor(current, normalizedMarker) != null;
+    }
+
+    private static Vector3 GetDirectionToNearestMirror(
+        Vector3 equipmentCenter, Vector3 fallback)
+    {
+        Renderer[] renderers = FindObjectsByType<Renderer>(
+            FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        Vector3 direction = Vector3.zero;
+        float bestDistance = float.PositiveInfinity;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null ||
+                !renderer.name.ToLowerInvariant().Contains("mirror"))
+            {
+                continue;
+            }
+
+            Vector3 candidate = Vector3.ProjectOnPlane(
+                renderer.bounds.center - equipmentCenter, Vector3.up);
+            float distance = candidate.sqrMagnitude;
+            if (distance > 0.01f && distance < bestDistance)
+            {
+                bestDistance = distance;
+                direction = candidate;
+            }
+        }
+
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            direction = Vector3.ProjectOnPlane(fallback, Vector3.up);
+        }
+        return direction.sqrMagnitude > 0.01f
+            ? direction.normalized
+            : Vector3.back;
     }
 
     private static Quaternion GetFacingCorrection(GymExerciseType type)

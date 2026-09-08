@@ -337,6 +337,12 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     private const float CurrentMedicineBallScale = 0.95f;
     private const float FoamRollerScale = CurrentFoamRollerScale * 0.75f;
     private const float MedicineBallScale = CurrentMedicineBallScale * 1.25f;
+    private const float MedicineBallMass = 0.5f;
+    private const float MedicineBallEntryClearance = 1.15f;
+    private const float MedicineBallFloorHalfExtent = 0.24f;
+    private const int MedicineBallCandidateGridResolution = 7;
+    private const float MedicineBallSquatCorridorDepth = 1.75f;
+    private const float MedicineBallRearClearance = 0.65f;
     private const float DeadliftPlatformThickness = 0.12f;
     private const float DeadliftLoadedPlateThickness = 0.12f;
     private const float DeadliftLoadedPlateClearance = 0.002f;
@@ -382,6 +388,14 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         public Mesh Mesh;
         public Material Material;
         public Bounds LocalBounds;
+    }
+
+    private sealed class SquatLaneLayout
+    {
+        public string Name;
+        public Bounds Bounds;
+        public Transform Anchor;
+        public Vector3 EntryDirection;
     }
 
     private sealed class ShelfLayout
@@ -888,11 +902,13 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         PickupItem pickup = barObject.AddComponent<PickupItem>();
         pickup.Configure(body, WeightType.Barbell, new[] { collider }, true,
             "Loaded deadlift barbell", 60f);
-        body.isKinematic = true;
+        if (!body.isKinematic)
+        {
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
         body.useGravity = false;
-        body.linearVelocity = Vector3.zero;
-        body.angularVelocity = Vector3.zero;
-        body.WakeUp();
+        body.isKinematic = true;
         Physics.SyncTransforms();
         SettleLoadedDeadliftBarbell(barObject, stationCenter);
     }
@@ -930,10 +946,13 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         // Mounted plates are real rigidbodies, but stay fixed with the bar
         // until the bar pickup explicitly detaches them. After detachment,
         // PickupItem restores gravity and the plate can slide down the shaft.
-        body.isKinematic = true;
+        if (!body.isKinematic)
+        {
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
         body.useGravity = false;
-        body.linearVelocity = Vector3.zero;
-        body.angularVelocity = Vector3.zero;
+        body.isKinematic = true;
     }
 
     private static float GetDeadliftLoadedPlateCenter(
@@ -1007,8 +1026,11 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             }
 
             bodies[i].position = bodies[i].transform.position;
-            bodies[i].linearVelocity = Vector3.zero;
-            bodies[i].angularVelocity = Vector3.zero;
+            if (!bodies[i].isKinematic)
+            {
+                bodies[i].linearVelocity = Vector3.zero;
+                bodies[i].angularVelocity = Vector3.zero;
+            }
         }
         Physics.SyncTransforms();
 
@@ -1068,8 +1090,11 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         PickupItem pickup = plateObject.AddComponent<PickupItem>();
         pickup.Configure(body, itemType, new[] { collider }, true,
             $"{weight}kg deadlift plate");
-        body.linearVelocity = Vector3.zero;
-        body.angularVelocity = Vector3.zero;
+        if (!body.isKinematic)
+        {
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
         SettleDeadliftPlateOnFloor(plateObject, collider, floorY);
     }
 
@@ -1104,8 +1129,11 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         if (body != null)
         {
             body.position = plateObject.transform.position;
-            body.linearVelocity = Vector3.zero;
-            body.angularVelocity = Vector3.zero;
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
         }
     }
 
@@ -1338,8 +1366,11 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         Rigidbody[] bodies = clone.GetComponentsInChildren<Rigidbody>(true);
         for (int i = 0; i < bodies.Length; i++)
         {
-            bodies[i].linearVelocity = Vector3.zero;
-            bodies[i].angularVelocity = Vector3.zero;
+            if (!bodies[i].isKinematic)
+            {
+                bodies[i].linearVelocity = Vector3.zero;
+                bodies[i].angularVelocity = Vector3.zero;
+            }
             bodies[i].useGravity = false;
             bodies[i].isKinematic = true;
             bodies[i].detectCollisions = false;
@@ -1392,16 +1423,29 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         hasYogaSurfaceBounds = yogaSurfaceBounds.size.x > 0.1f && yogaSurfaceBounds.size.z > 0.1f;
         float yogaSurfaceY = yogaSurfaceBounds.max.y + 0.006f;
 
-        Bounds rackAnchor;
-        if (!TryFindNamedBounds(
-                new[] { "cage", "smithmachine", "squatrack", "powerrack" },
-                out rackAnchor))
+        List<SquatLaneLayout> squatLanes = FindSquatLaneLayouts();
+        if (squatLanes.Count == 0)
         {
-            rackAnchor = new Bounds(
-                floorBounds.center + new Vector3(floorBounds.size.x * 0.18f, 0f, floorBounds.size.z * 0.12f),
+            Bounds fallbackBounds = new Bounds(
+                floorBounds.center + new Vector3(
+                    floorBounds.size.x * 0.18f, 0f, floorBounds.size.z * 0.12f),
                 new Vector3(2.2f, 2.5f, 2.2f));
+            Vector3 fallbackDirection = Vector3.ProjectOnPlane(
+                floorBounds.center - fallbackBounds.center, Vector3.up);
+            if (fallbackDirection.sqrMagnitude < 0.01f)
+            {
+                fallbackDirection = Vector3.right;
+            }
+            squatLanes.Add(new SquatLaneLayout
+            {
+                Name = "Fallback squat lane",
+                Bounds = fallbackBounds,
+                EntryDirection = fallbackDirection.normalized
+            });
         }
 
+        SquatLaneLayout primarySquatLane = squatLanes[0];
+        Bounds rackAnchor = primarySquatLane.Bounds;
         // The authored extra-large mat is a visual anchor, not a tray. Keep
         // both loose yoga mats on the floor beside it, on the same z band, so
         // they read as a small stretching setup instead of a stack below it.
@@ -1436,9 +1480,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         Vector3 stepPosition = ClampToFloor(
             rackAnchor.center + Vector3.forward * (rackAnchor.extents.z + 0.72f),
             new Vector3(0.62f, 0f, 0.34f));
-        Vector3 redBallPosition = ClampToFloor(
-            rackAnchor.center + Vector3.right * (rackAnchor.extents.x + 0.95f),
-            new Vector3(0.2f, 0f, 0.2f));
+        Vector3 redBallPosition = GetSafeMedicineBallPosition(squatLanes);
         Vector3 blueBallPosition = ClampToFloor(
             yogaArea + Vector3.forward * 1.55f,
             new Vector3(0.2f, 0f, 0.2f));
@@ -1457,7 +1499,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
                 true),
             CreateSpec(
                 "step_platform.glb", "Step platform", WeightType.StepPlatform,
-                1.22f, stepPosition, new Vector3(0f, 0f, 0f), floorY, false, ColliderKind.Box),
+                1.22f, stepPosition, new Vector3(0f, 0f, 0f), floorY, true, ColliderKind.Box),
             CreateSpec(
                 "red_ball.glb", "Red medicine ball", WeightType.Ball,
                 MedicineBallScale, redBallPosition, Vector3.zero, floorY, true, ColliderKind.Sphere),
@@ -1475,6 +1517,217 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         };
 
         return specs;
+    }
+
+    private List<SquatLaneLayout> FindSquatLaneLayouts()
+    {
+        string[] keywords = { "cage", "smithmachine", "squatrack", "powerrack" };
+        Transform[] transforms = FindObjectsByType<Transform>();
+        List<SquatLaneLayout> lanes = new List<SquatLaneLayout>();
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate == null || ShouldSkipAnchor(candidate))
+            {
+                continue;
+            }
+
+            string normalizedName = Normalize(candidate.name);
+            bool matches = false;
+            for (int keywordIndex = 0; keywordIndex < keywords.Length; keywordIndex++)
+            {
+                if (normalizedName.Contains(Normalize(keywords[keywordIndex])))
+                {
+                    matches = true;
+                    break;
+                }
+            }
+            if (!matches || !TryGetRendererBounds(candidate, out Bounds bounds))
+            {
+                continue;
+            }
+
+            bool duplicate = false;
+            for (int laneIndex = 0; laneIndex < lanes.Count; laneIndex++)
+            {
+                Transform existingAnchor = lanes[laneIndex].Anchor;
+                if (existingAnchor == candidate ||
+                    (existingAnchor != null && candidate.IsChildOf(existingAnchor)) ||
+                    (existingAnchor != null && existingAnchor.IsChildOf(candidate)))
+                {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate)
+            {
+                continue;
+            }
+
+            Vector3 entryDirection = Vector3.ProjectOnPlane(
+                candidate.forward, Vector3.up);
+            if (entryDirection.sqrMagnitude < 0.01f)
+            {
+                entryDirection = Vector3.ProjectOnPlane(
+                    floorBounds.center - bounds.center, Vector3.up);
+            }
+            if (entryDirection.sqrMagnitude < 0.01f)
+            {
+                entryDirection = Vector3.right;
+            }
+
+            lanes.Add(new SquatLaneLayout
+            {
+                Name = candidate.name,
+                Bounds = bounds,
+                Anchor = candidate,
+                EntryDirection = entryDirection.normalized
+            });
+        }
+
+        lanes.Sort((left, right) =>
+        {
+            int distanceComparison = (left.Bounds.center - floorBounds.center).sqrMagnitude
+                .CompareTo((right.Bounds.center - floorBounds.center).sqrMagnitude);
+            return distanceComparison != 0
+                ? distanceComparison
+                : string.Compare(left.Name, right.Name, StringComparison.Ordinal);
+        });
+        return lanes;
+    }
+
+    private Vector3 GetSafeMedicineBallPosition(List<SquatLaneLayout> squatLanes)
+    {
+        Vector3 halfExtents = new Vector3(
+            MedicineBallFloorHalfExtent, 0f, MedicineBallFloorHalfExtent);
+        float minX = floorBounds.min.x + 0.42f + halfExtents.x;
+        float maxX = floorBounds.max.x - 0.42f - halfExtents.x;
+        float minZ = floorBounds.min.z + 0.42f + halfExtents.z;
+        float maxZ = floorBounds.max.z - 0.42f - halfExtents.z;
+        Vector3 best = ClampToFloor(floorBounds.center, halfExtents);
+        float bestScore = float.NegativeInfinity;
+        float bestClearance = float.NegativeInfinity;
+        int gridResolution = Mathf.Max(3, MedicineBallCandidateGridResolution);
+
+        for (int x = 0; x < gridResolution; x++)
+        {
+            float xT = x / (float)(gridResolution - 1);
+            for (int z = 0; z < gridResolution; z++)
+            {
+                float zT = z / (float)(gridResolution - 1);
+                Vector3 candidate = new Vector3(
+                    Mathf.Lerp(minX, maxX, xT), floorBounds.max.y,
+                    Mathf.Lerp(minZ, maxZ, zT));
+                float minimumClearance = GetMinimumSquatLaneClearance(
+                    candidate, halfExtents, squatLanes);
+                float wallClearance = Mathf.Min(
+                    candidate.x - floorBounds.min.x,
+                    floorBounds.max.x - candidate.x,
+                    candidate.z - floorBounds.min.z,
+                    floorBounds.max.z - candidate.z);
+                float score = minimumClearance >= 0f
+                    ? 10000f + minimumClearance * 100f + wallClearance * 0.1f
+                    : minimumClearance * 100f;
+                if (score > bestScore)
+                {
+                    best = candidate;
+                    bestScore = score;
+                    bestClearance = minimumClearance;
+                }
+            }
+        }
+
+        StringBuilder laneEvidence = new StringBuilder();
+        for (int i = 0; i < squatLanes.Count; i++)
+        {
+            SquatLaneLayout lane = squatLanes[i];
+            if (i > 0)
+            {
+                laneEvidence.Append('|');
+            }
+            laneEvidence.Append(lane.Name)
+                .Append(" center=").Append(lane.Bounds.center)
+                .Append(" size=").Append(lane.Bounds.size.x.ToString("0.00"))
+                .Append('x').Append(lane.Bounds.size.z.ToString("0.00"))
+                .Append(" entry=").Append(lane.EntryDirection);
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_MEDICINE_BALL_LAYOUT red={best} " +
+            $"squatLanes={squatLanes.Count} minClearance={bestClearance:0.00} " +
+            $"entryClearance={MedicineBallEntryClearance:0.00} " +
+            $"corridorDepth={MedicineBallSquatCorridorDepth:0.00} " +
+            $"floorBounds={floorBounds.size.x:0.00}x{floorBounds.size.z:0.00} " +
+            $"laneData={laneEvidence} " +
+            $"physics=dynamic mass={MedicineBallMass:0.00} constraints=None " +
+            "pickup=PickupItem impact=shared-flow",
+            this);
+        return best;
+    }
+
+    private static float GetMinimumSquatLaneClearance(
+        Vector3 position, Vector3 halfExtents, List<SquatLaneLayout> squatLanes)
+    {
+        float minimumClearance = float.PositiveInfinity;
+        for (int i = 0; i < squatLanes.Count; i++)
+        {
+            float clearance = GetSquatLaneClearance(
+                position, halfExtents, squatLanes[i]);
+            minimumClearance = Mathf.Min(minimumClearance, clearance);
+        }
+        return minimumClearance;
+    }
+
+    private static float GetSquatLaneClearance(
+        Vector3 position, Vector3 halfExtents, SquatLaneLayout lane)
+    {
+        Vector3 entryDirection = lane.EntryDirection;
+        Vector3 lateralDirection = Vector3.Cross(
+            Vector3.up, entryDirection).normalized;
+        Vector3 relative = position - lane.Bounds.center;
+        relative.y = 0f;
+        float lateralDistance = Mathf.Abs(
+            Vector3.Dot(relative, lateralDirection));
+        float longitudinalDistance = Vector3.Dot(relative, entryDirection);
+        float lateralExtent = GetBoundsPlanarExtent(lane.Bounds, lateralDirection) +
+            GetPlanarExtent(halfExtents, lateralDirection) +
+            MedicineBallEntryClearance;
+        float frontExtent = GetBoundsPlanarExtent(lane.Bounds, entryDirection) +
+            GetPlanarExtent(halfExtents, entryDirection) +
+            MedicineBallEntryClearance + MedicineBallSquatCorridorDepth;
+        float rearExtent = GetBoundsPlanarExtent(lane.Bounds, entryDirection) +
+            GetPlanarExtent(halfExtents, entryDirection) +
+            MedicineBallEntryClearance + MedicineBallRearClearance;
+        float outsideLateral = lateralDistance - lateralExtent;
+        float outsideLongitudinal = longitudinalDistance < -rearExtent
+            ? -rearExtent - longitudinalDistance
+            : longitudinalDistance > frontExtent
+                ? longitudinalDistance - frontExtent
+                : 0f;
+        if (outsideLateral >= 0f || outsideLongitudinal > 0f)
+        {
+            return Mathf.Sqrt(
+                Mathf.Max(0f, outsideLateral) * Mathf.Max(0f, outsideLateral) +
+                outsideLongitudinal * outsideLongitudinal);
+        }
+
+        float lateralPenetration = lateralExtent - lateralDistance;
+        float longitudinalPenetration = Mathf.Min(
+            frontExtent - longitudinalDistance,
+            longitudinalDistance + rearExtent);
+        return -Mathf.Min(lateralPenetration, longitudinalPenetration);
+    }
+
+    private static float GetPlanarExtent(Vector3 halfExtents, Vector3 direction)
+    {
+        return Mathf.Abs(direction.x) * halfExtents.x +
+            Mathf.Abs(direction.z) * halfExtents.z;
+    }
+
+    private static float GetBoundsPlanarExtent(Bounds bounds, Vector3 direction)
+    {
+        return Mathf.Abs(direction.x) * bounds.extents.x +
+            Mathf.Abs(direction.z) * bounds.extents.z;
     }
 
     private ItemSpec CreateSpec(
@@ -1650,6 +1903,10 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             Rigidbody body = itemObject.AddComponent<Rigidbody>();
             PickupItem pickup = itemObject.AddComponent<PickupItem>();
             pickup.Configure(body, spec.ItemType, new[] { collider }, true, spec.DisplayName);
+            if (spec.ItemType == WeightType.Ball)
+            {
+                ConfigureMedicineBallPhysics(body);
+            }
         }
     }
 
@@ -1818,6 +2075,24 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
 
         return collider;
+    }
+
+    private static void ConfigureMedicineBallPhysics(Rigidbody body)
+    {
+        if (body == null)
+        {
+            return;
+        }
+
+        body.mass = MedicineBallMass;
+        body.isKinematic = false;
+        body.useGravity = true;
+        body.constraints = RigidbodyConstraints.None;
+        body.linearDamping = 0.35f;
+        body.angularDamping = 0.15f;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        body.WakeUp();
     }
 
     private PhysicsMaterial CreatePhysicsMaterial(ItemSpec spec)
@@ -2164,7 +2439,14 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
 
     private bool TryFindNamedBounds(string[] keywords, out Bounds bounds)
     {
+        return TryFindNamedBounds(keywords, out bounds, out _);
+    }
+
+    private bool TryFindNamedBounds(
+        string[] keywords, out Bounds bounds, out Transform anchor)
+    {
         bounds = default;
+        anchor = null;
         Transform[] transforms = FindObjectsByType<Transform>();
         bool found = false;
         float bestScore = float.PositiveInfinity;
@@ -2198,6 +2480,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
                 found = true;
                 bestScore = score;
                 bounds = candidateBounds;
+                anchor = candidate;
             }
         }
 

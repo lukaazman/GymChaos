@@ -31,6 +31,18 @@ public static class GymRuntimeSettings
     private static readonly Color Accent = new Color(0.98f, 0.34f, 0.13f, 1f);
     private static readonly Color Rule = new Color(0.82f, 0.89f, 0.97f, 0.22f);
 
+    internal static void ConfigureBalancedCanvasScaler(CanvasScaler scaler)
+    {
+        if (scaler == null)
+        {
+            return;
+        }
+
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+        scaler.matchWidthOrHeight = 0.5f;
+    }
     public static GameObject CreateOptionsPanel(
         Transform parent, Font font, UnityAction backAction)
     {

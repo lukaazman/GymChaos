@@ -296,11 +296,11 @@ public static class GymInteriorBuilder
             new Vector3(0.12f, doorHeight, doorWidth),
             frame,
             false);
-        // The panel is still available from the courtyard side, but it must
-        // not read as a black wall inside the gym. GymExteriorOnlyVisual keeps
-        // the doorway geometry available for the visitor route while hiding
-        // the panel whenever the player is on the interior side.
-        panel.AddComponent<GymExteriorOnlyVisual>();
+        // Keep the panel rendered from both sides of the doorway. It has no
+        // collision (GymDoorway disables its BoxCollider), so the player can
+        // still cross the passage, while the wall/landing is already visible
+        // through the frame before the player steps outside instead of
+        // popping in after the outside-state test changes.
         panel.transform.localRotation = Quaternion.identity;
         panel.transform.localPosition = Vector3.zero;
 
@@ -443,12 +443,12 @@ public static class GymInteriorBuilder
             center.x + Mathf.Min(width * 0.24f, 8f),
             center.y + openingBottom + 2.9f,
             exteriorZ - 0.6f);
-        CreateCelestialSphere(parent, "Exterior visible sun", sunStart, 4.6f, sunMaterial);
-        CreateCelestialSphere(parent, "Exterior visible moon", moonStart, 5f, moonMaterial);
+        CreateCelestialSphere(parent, "Exterior visible sun", sunStart, 7.4f, sunMaterial);
+        CreateCelestialSphere(parent, "Exterior visible moon", moonStart, 7.8f, moonMaterial);
         CreateCelestialGlowLight(
-            parent, "Exterior sun glow", sunStart, new Color(1f, 0.84f, 0.12f), 8f, 32f);
+            parent, "Exterior sun glow", sunStart, new Color(1f, 0.84f, 0.12f), 11f, 46f);
         CreateCelestialGlowLight(
-            parent, "Exterior moon glow", moonStart, Color.white, 4f, 30f);
+            parent, "Exterior moon glow", moonStart, Color.white, 6.5f, 42f);
 
         for (int i = -2; i <= 2; i++)
         {
@@ -746,16 +746,57 @@ public static class GymInteriorBuilder
         CreateBox("Reception desk", parent, deskPosition, new Vector3(5.2f, 1.3f, 1.1f), trim, true);
         CreateBox("Reception accent", parent, deskPosition + new Vector3(0f, 0.05f, -0.57f), new Vector3(3.4f, 0.56f, 0.08f), accent, false);
 
-        for (int i = -2; i <= 2; i++)
-        {
-            Vector3 lockerPosition = center + new Vector3(width * 0.5f - 0.46f, 1.25f, i * 1.65f);
-            CreateBox("Locker", parent, lockerPosition, new Vector3(0.72f, 2.5f, 1.45f), i % 2 == 0 ? trim : wall, true);
-            CreateBox("Locker handle", parent, lockerPosition + new Vector3(-0.39f, 0f, -0.42f), new Vector3(0.05f, 0.25f, 0.05f), accent, false);
-        }
+        // The main-gym bank uses the same current double-door, vented cabinet
+        // design as the locker room instead of the older single-box variant.
+        GymBackRoomBuilder.CreateModernLockerBank(
+            parent,
+            center.z,
+            center.y,
+            center.x + width * 0.5f - 0.46f,
+            1,
+            5,
+            1.65f,
+            trim,
+            accent);
 
+        // Yoga mats, the foam roller, and the other recovery props are supplied
+        // by GymLooseItemSpawner from BodyBuilders/items. Do not create a
+        // second handmade recovery set here.
+        RemoveTemporaryReceptionProps(parent, deskPosition);
+        // GymRadio owns the only prop placed on the clear counter surface.
         CreateMeccaPosterWall(parent, center, width, depth, height, trim, wall);
     }
 
+    private static void RemoveTemporaryReceptionProps(
+        Transform parent,
+        Vector3 deskPosition)
+    {
+        Transform[] children = parent.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < children.Length; i++)
+        {
+            Transform candidate = children[i];
+            if (candidate == null || candidate == parent)
+            {
+                continue;
+            }
+
+            string name = candidate.name.ToLowerInvariant();
+            bool temporaryRock = name.Contains("rock") ||
+                name.Contains("stone") || name.Contains("breaking") ||
+                name.Contains("chopping");
+            if (!temporaryRock)
+            {
+                continue;
+            }
+
+            Vector3 delta = candidate.position - deskPosition;
+            delta.y = 0f;
+            if (delta.sqrMagnitude <= 16f)
+            {
+                Object.Destroy(candidate.gameObject);
+            }
+        }
+    }
     private static void CreateMeccaPosterWall(
         Transform parent, Vector3 center, float width, float depth, float height,
         Material trim, Material wall)

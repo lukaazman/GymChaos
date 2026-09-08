@@ -6,6 +6,9 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.Rendering;
+#if UNITY_WEBGL && !UNITY_EDITOR
+using System.Runtime.InteropServices;
+#endif
 
 public sealed class GymRadio : MonoBehaviour
 {
@@ -16,6 +19,10 @@ public sealed class GymRadio : MonoBehaviour
     private const float DeskTopGap = 0.008f;
     private const float BaseRadioVolume = 0.62f;
     private const float UserVolumeScale = 0.85f;
+    private const string SoundCloudLibraryUrl =
+        "https://soundcloud.com/you/library";
+    private const string SoundCloudPlaylistUrlPref =
+        "GymChaos.SoundCloud.PlaylistUrl.v1";
 
     private static readonly string[] FallbackPlaylist =
     {
@@ -119,15 +126,81 @@ public sealed class GymRadio : MonoBehaviour
     private readonly List<string> playlistEntries = new List<string>();
     private AudioSource audioSource;
     private Bounds deskBounds;
+    private Coroutine radioModelRoutine;
+    private GameObject radioModel;
+    private Renderer radioModelRenderer;
     private Coroutine playlistRoutine;
+    private AudioClip activeRuntimeDownloadedClip;
     private bool playbackRequested;
-    private bool musicEnabled = true;
+    private bool musicEnabled;
     private PlayerMovement listenerPlayer;
     private bool listenerZoneKnown;
     private bool listenerInsideGym;
     private float nextZoneCheckTime;
+    private GymRadioSoundCloudPopup soundCloudPopup;
+    private string soundCloudStatus = "LOCAL PLAYLIST READY";
+    private string soundCloudPlaylistUrl;
+    private bool soundCloudError;
+    private bool soundCloudMode;
+    private bool soundCloudWidgetReady;
+    private bool soundCloudWidgetPlaying;
+    private int soundCloudWidgetVolume;
+    private Vector3 widgetListenerPosition;
+    private AnimationCurve radioRolloff;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+    [DllImport("__Internal")]
+    private static extern int GymChaosOpenSoundCloudSite(string url);
+    [DllImport("__Internal")]
+    private static extern int GymChaosSoundCloudWidgetLoad(
+        string playlistUrl, string objectName, int volume);
+    [DllImport("__Internal")]
+    private static extern void GymChaosSoundCloudWidgetPlay();
+    [DllImport("__Internal")]
+    private static extern void GymChaosSoundCloudWidgetPause();
+    [DllImport("__Internal")]
+    private static extern void GymChaosSoundCloudWidgetNext();
+    [DllImport("__Internal")]
+    private static extern void GymChaosSoundCloudWidgetContinue();
+    [DllImport("__Internal")]
+    private static extern void GymChaosSoundCloudWidgetSetVolume(int volume);
+    [DllImport("__Internal")]
+    private static extern void GymChaosSoundCloudWidgetDestroy();
+#endif
 
     public bool IsMusicEnabled => musicEnabled;
+    public bool IsLocalMusicEnabled => musicEnabled && !soundCloudMode;
+    public bool IsSoundCloudMode => soundCloudMode;
+    public bool IsSoundCloudError => soundCloudError;
+    public bool HasSoundCloudPlaylistUrl =>
+        IsValidSoundCloudPlaylistUrl(soundCloudPlaylistUrl);
+    public string SoundCloudPlaylistUrl => soundCloudPlaylistUrl ?? string.Empty;
+    public bool IsSoundCloudWidgetReady => soundCloudWidgetReady;
+    public bool IsSoundCloudWidgetPlaying => soundCloudWidgetPlaying;
+    public int SoundCloudWidgetVolume => soundCloudWidgetVolume;
+    public bool HasSoundCloudPlaylistPreference =>
+        PlayerPrefs.HasKey(SoundCloudPlaylistUrlPref);
+    public string PersistedSoundCloudPlaylistUrl => PlayerPrefs.GetString(
+        SoundCloudPlaylistUrlPref, string.Empty);
+    public bool IsListenerInsideGym => listenerInsideGym;
+    public float AudioMinDistance => audioSource != null ? audioSource.minDistance : 0f;
+    public float AudioMaxDistance => audioSource != null ? audioSource.maxDistance : 0f;
+    public bool UsesDistanceRolloff => audioSource != null &&
+        audioSource.spatialBlend >= 0.99f &&
+        audioSource.rolloffMode == AudioRolloffMode.Custom;
+    public bool HasPhysicalModel
+    {
+        get
+        {
+            Transform model = radioModel != null
+                ? radioModel.transform
+                : transform.Find("Radio model");
+            return model != null && model.gameObject.activeInHierarchy &&
+                (radioModelRenderer != null
+                    ? radioModelRenderer.enabled
+                    : model.GetComponent<Renderer>() != null);
+        }
+    }
 
     public static GymRadio CreateForScene()
     {
@@ -149,7 +222,8 @@ public sealed class GymRadio : MonoBehaviour
         radio.deskBounds = bounds;
         radio.listenerPlayer = FindAnyObjectByType<PlayerMovement>();
         radio.ConfigureAudio();
-        radio.StartCoroutine(radio.LoadRadioModel());
+        radio.LoadSoundCloudState();
+        radio.radioModelRoutine = radio.StartCoroutine(radio.LoadRadioModel());
         return radio;
     }
 
@@ -177,16 +251,548 @@ public sealed class GymRadio : MonoBehaviour
 
     public string GetInteractionPrompt()
     {
-        return musicEnabled ? "[F] Turn music off" : "[F] Turn music on";
+        return "[F] Open radio controls";
     }
 
     public void ToggleMusic()
     {
-        musicEnabled = !musicEnabled;
+        OpenSoundCloudPopup();
+    }
+
+    public void ToggleMusicPlayback()
+    {
+        if (musicEnabled)
+        {
+            musicEnabled = false;
+            if (soundCloudMode)
+            {
+                PauseSoundCloudWidget(false);
+            }
+            else
+            {
+                StopLocalPlaylistPlayback();
+            }
+            soundCloudStatus = "MUSIC OFF // RADIO STILL ACTIVE";
+        }
+        else
+        {
+            musicEnabled = true;
+            if (soundCloudMode && HasSoundCloudPlaylistUrl)
+            {
+                PlaySoundCloudWidget();
+            }
+            else
+            {
+                BeginPlayback();
+            }
+            soundCloudStatus = soundCloudMode
+                ? "SOUNDCLOUD PLAYBACK ENABLED"
+                : "LOCAL PLAYLIST ENABLED";
+        }
+
         ApplyMuteState(listenerInsideGym);
+        soundCloudPopup?.RefreshFromRadio();
+        Debug.Log($"GYMCHAOS_RADIO_MUSIC_TOGGLED enabled={musicEnabled}", this);
+    }
+
+    public void ToggleLocalPlayback()
+    {
+        StopSoundCloudPlayback();
+        StopLocalPlaylistPlayback();
+        soundCloudMode = false;
+        musicEnabled = !musicEnabled;
+        if (musicEnabled)
+        {
+            BeginPlayback();
+        }
+        ApplyMuteState(listenerInsideGym);
+        soundCloudStatus = musicEnabled
+            ? "LOCAL PLAYLIST ENABLED"
+            : "LOCAL PLAYLIST MUTED";
+        soundCloudError = false;
+        soundCloudPopup?.RefreshFromRadio();
         Debug.Log(
             $"GYMCHAOS_RADIO_MUSIC_TOGGLED enabled={musicEnabled}", this);
     }
+
+    public string GetSoundCloudUiStatus()
+    {
+        return soundCloudStatus;
+    }
+
+    public void OpenSoundCloudPopup()
+    {
+        if (soundCloudPopup == null)
+        {
+            soundCloudPopup = GymRadioSoundCloudPopup.CreateFor(this);
+        }
+        soundCloudPopup?.Open();
+    }
+
+    private void LoadSoundCloudState()
+    {
+        soundCloudPlaylistUrl = PlayerPrefs.GetString(
+            SoundCloudPlaylistUrlPref, string.Empty).Trim();
+        soundCloudStatus = HasSoundCloudPlaylistUrl
+            ? "SOUNDCLOUD PLAYLIST SAVED // LOAD WHEN READY"
+            : "PASTE A SOUNDCLOUD PLAYLIST URL";
+        soundCloudError = false;
+    }
+
+    public static bool IsValidSoundCloudPlaylistUrl(string value)
+    {
+        string normalized = NormalizeSoundCloudUrl(value);
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            !Uri.TryCreate(normalized, UriKind.Absolute, out Uri uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            (!uri.IsDefaultPort && uri.Port != 443))
+        {
+            return false;
+        }
+
+        string host = uri.IdnHost.TrimEnd('.');
+        bool soundCloudHost = string.Equals(
+                host, "soundcloud.com", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(
+                ".soundcloud.com", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "snd.sc", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "soundcloud.app.goo.gl", StringComparison.OrdinalIgnoreCase);
+        if (!soundCloudHost)
+        {
+            return false;
+        }
+
+        string path = uri.AbsolutePath.Trim('/');
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+        if (string.Equals(host, "on.soundcloud.com", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "snd.sc", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(host, "soundcloud.app.goo.gl", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        string normalizedPath = "/" + path + "/";
+        return normalizedPath.IndexOf(
+            "/sets/", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    public static string NormalizeSoundCloudUrl(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+        string candidate = value.Trim();
+        int https = candidate.IndexOf("https://", StringComparison.OrdinalIgnoreCase);
+        int http = candidate.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
+        int start = https >= 0 ? https : http;
+        if (start >= 0)
+        {
+            candidate = candidate.Substring(start);
+        }
+        else if (candidate.StartsWith("soundcloud.com/", StringComparison.OrdinalIgnoreCase) ||
+                 candidate.StartsWith("on.soundcloud.com/", StringComparison.OrdinalIgnoreCase) ||
+                 candidate.StartsWith("snd.sc/", StringComparison.OrdinalIgnoreCase))
+        {
+            candidate = "https://" + candidate;
+        }
+        int end = candidate.IndexOfAny(new[] { ' ', '\r', '\n', '\t' });
+        if (end > 0)
+        {
+            candidate = candidate.Substring(0, end);
+        }
+        return candidate.TrimEnd('.', ',', ')', ']', '}');
+    }
+
+    public void OpenSoundCloudSite()
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        if (GymChaosOpenSoundCloudSite(SoundCloudLibraryUrl) == 0)
+        {
+            soundCloudStatus =
+                "SOUNDCLOUD WINDOW BLOCKED // ALLOW POPUPS AND TRY AGAIN";
+            soundCloudError = true;
+            soundCloudPopup?.RefreshFromRadio();
+            return;
+        }
+#else
+        Application.OpenURL(SoundCloudLibraryUrl);
+#endif
+        soundCloudStatus =
+            "SOUNDCLOUD OPENED // COPY A PLAYLIST SHARE LINK";
+        soundCloudError = false;
+        soundCloudPopup?.RefreshFromRadio();
+        Debug.Log("GYMCHAOS_RADIO_SOUNDCLOUD_SITE_OPENED", this);
+    }
+
+    public bool LoadSoundCloudPlaylistUrl(string value)
+    {
+        string trimmed = NormalizeSoundCloudUrl(value);
+        if (!IsValidSoundCloudPlaylistUrl(trimmed))
+        {
+            soundCloudStatus =
+                "INVALID URL // USE AN HTTPS SOUNDCLOUD PLAYLIST LINK";
+            soundCloudError = true;
+            soundCloudPopup?.RefreshFromRadio();
+            return false;
+        }
+
+        soundCloudPlaylistUrl = trimmed;
+        PlayerPrefs.SetString(SoundCloudPlaylistUrlPref, soundCloudPlaylistUrl);
+        PlayerPrefs.Save();
+        StopLocalPlaylistPlayback();
+        soundCloudMode = true;
+        soundCloudWidgetReady = false;
+        soundCloudWidgetPlaying = false;
+        musicEnabled = true;
+        soundCloudStatus = "SOUNDCLOUD PLAYLIST // LOADING WIDGET";
+        soundCloudError = false;
+        UpdateSoundCloudWidgetVolume(widgetListenerPosition, listenerInsideGym);
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        if (GymChaosSoundCloudWidgetLoad(
+                soundCloudPlaylistUrl, gameObject.name, soundCloudWidgetVolume) == 0)
+        {
+            FallbackToLocal(
+                "SOUNDCLOUD WIDGET UNAVAILABLE // LOCAL PLAYLIST ACTIVE");
+            return false;
+        }
+#else
+        soundCloudMode = false;
+        BeginPlayback();
+        soundCloudStatus =
+            "SOUNDCLOUD PLAYLIST SAVED // WEBGL WIDGET AVAILABLE IN BUILD";
+#endif
+        soundCloudPopup?.RefreshFromRadio();
+        Debug.Log(
+            $"GYMCHAOS_RADIO_SOUNDCLOUD_WIDGET_LOAD url={soundCloudPlaylistUrl}",
+            this);
+        return true;
+    }
+
+    public void ToggleSoundCloudWidgetPlayback()
+    {
+        if (soundCloudWidgetPlaying)
+        {
+            PauseSoundCloudWidget();
+        }
+        else
+        {
+            PlaySoundCloudWidget();
+        }
+    }
+
+    public void PlaySoundCloudWidget()
+    {
+        if (!HasSoundCloudPlaylistUrl)
+        {
+            soundCloudStatus = "LOAD A VALID SOUNDCLOUD PLAYLIST FIRST";
+            soundCloudError = true;
+            soundCloudPopup?.RefreshFromRadio();
+            return;
+        }
+        if (!soundCloudMode)
+        {
+            LoadSoundCloudPlaylistUrl(soundCloudPlaylistUrl);
+#if !UNITY_WEBGL || UNITY_EDITOR
+            return;
+#endif
+        }
+        if (!soundCloudWidgetReady)
+        {
+            soundCloudStatus = "SOUNDCLOUD WIDGET STILL LOADING";
+            soundCloudError = false;
+            soundCloudPopup?.RefreshFromRadio();
+            return;
+        }
+
+        musicEnabled = true;
+        soundCloudError = false;
+        UpdateSoundCloudWidgetVolume(widgetListenerPosition, listenerInsideGym);
+#if UNITY_WEBGL && !UNITY_EDITOR
+        GymChaosSoundCloudWidgetPlay();
+#endif
+        soundCloudStatus = "SOUNDCLOUD PLAYBACK STARTING";
+        soundCloudPopup?.RefreshFromRadio();
+    }
+
+    public void PauseSoundCloudWidget()
+    {
+        PauseSoundCloudWidget(true);
+    }
+
+    private void PauseSoundCloudWidget(bool updateStatus)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        GymChaosSoundCloudWidgetPause();
+#endif
+        soundCloudWidgetPlaying = false;
+        if (updateStatus)
+        {
+            soundCloudStatus = "SOUNDCLOUD PLAYLIST PAUSED";
+            soundCloudError = false;
+            soundCloudPopup?.RefreshFromRadio();
+        }
+    }
+
+    public void NextSoundCloudWidgetTrack()
+    {
+        if (!soundCloudMode || !soundCloudWidgetReady)
+        {
+            soundCloudStatus = "LOAD THE SOUNDCLOUD PLAYLIST FIRST";
+            soundCloudError = true;
+            soundCloudPopup?.RefreshFromRadio();
+            return;
+        }
+
+        musicEnabled = true;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        GymChaosSoundCloudWidgetNext();
+#endif
+        soundCloudStatus = "SOUNDCLOUD // NEXT TRACK";
+        soundCloudError = false;
+        soundCloudPopup?.RefreshFromRadio();
+    }
+
+    public void HandleSoundCloudWidgetReady(string payload)
+    {
+        if (!soundCloudMode)
+        {
+            soundCloudWidgetReady = false;
+            UpdateSoundCloudWidgetVolume(widgetListenerPosition, false);
+            return;
+        }
+        soundCloudWidgetReady = true;
+        soundCloudWidgetPlaying = false;
+        soundCloudStatus = "SOUNDCLOUD PLAYLIST READY // PRESS PLAY";
+        soundCloudError = false;
+        UpdateSoundCloudWidgetVolume(widgetListenerPosition, listenerInsideGym);
+#if UNITY_WEBGL && !UNITY_EDITOR
+        if (musicEnabled)
+        {
+            GymChaosSoundCloudWidgetPlay();
+        }
+#endif
+        soundCloudPopup?.RefreshFromRadio();
+        Debug.Log("GYMCHAOS_RADIO_SOUNDCLOUD_WIDGET_READY", this);
+    }
+
+    public void HandleSoundCloudWidgetPlay(string payload)
+    {
+        if (!soundCloudMode || !musicEnabled)
+        {
+            PauseSoundCloudWidget(false);
+            UpdateSoundCloudWidgetVolume(widgetListenerPosition, false);
+            return;
+        }
+        soundCloudWidgetReady = true;
+        soundCloudWidgetPlaying = true;
+        soundCloudStatus = "SOUNDCLOUD PLAYLIST // PLAYING";
+        soundCloudError = false;
+        UpdateSoundCloudWidgetVolume(widgetListenerPosition, listenerInsideGym);
+        soundCloudPopup?.RefreshFromRadio();
+    }
+
+    public void HandleSoundCloudWidgetPause(string payload)
+    {
+        soundCloudWidgetPlaying = false;
+        if (!soundCloudMode)
+        {
+            return;
+        }
+        soundCloudStatus = musicEnabled
+            ? "SOUNDCLOUD PLAYLIST // PAUSED"
+            : "MUSIC OFF // RADIO STILL ACTIVE";
+        soundCloudError = false;
+        soundCloudPopup?.RefreshFromRadio();
+    }
+
+    public void HandleSoundCloudWidgetFinish(string payload)
+    {
+        if (!soundCloudMode || !musicEnabled)
+        {
+            soundCloudWidgetPlaying = false;
+            UpdateSoundCloudWidgetVolume(widgetListenerPosition, false);
+            return;
+        }
+        soundCloudWidgetPlaying = musicEnabled && soundCloudMode;
+        soundCloudStatus = soundCloudWidgetPlaying
+            ? "SOUNDCLOUD PLAYLIST // CONTINUING"
+            : "SOUNDCLOUD PLAYLIST // FINISHED";
+        soundCloudError = false;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        if (soundCloudWidgetPlaying)
+        {
+            GymChaosSoundCloudWidgetContinue();
+        }
+#endif
+        soundCloudPopup?.RefreshFromRadio();
+    }
+
+    public void HandleSoundCloudWidgetError(string payload)
+    {
+        if (!soundCloudMode)
+        {
+            return;
+        }
+        FallbackToLocal(
+            "SOUNDCLOUD PLAYLIST UNAVAILABLE // LOCAL PLAYLIST ACTIVE");
+    }
+
+#if UNITY_EDITOR
+    public void PrepareSoundCloudWidgetForVerification()
+    {
+        soundCloudMode = HasSoundCloudPlaylistUrl;
+    }
+
+    public void RestoreSoundCloudPlaylistUrlForVerification(
+        string value, bool existed)
+    {
+        soundCloudPlaylistUrl = value ?? string.Empty;
+        if (existed)
+        {
+            PlayerPrefs.SetString(
+                SoundCloudPlaylistUrlPref, soundCloudPlaylistUrl);
+        }
+        else
+        {
+            PlayerPrefs.DeleteKey(SoundCloudPlaylistUrlPref);
+        }
+        PlayerPrefs.Save();
+        soundCloudWidgetReady = false;
+        soundCloudWidgetPlaying = false;
+    }
+#endif
+
+    private void StopLocalPlaylistPlayback()
+    {
+        playbackRequested = false;
+        StopCoroutineIfRunning(ref playlistRoutine);
+        StopAndReleaseActiveAudioClip();
+    }
+
+    private void StopSoundCloudPlayback()
+    {
+        PauseSoundCloudWidget(false);
+        soundCloudWidgetReady = false;
+        soundCloudMode = false;
+        UpdateSoundCloudWidgetVolume(widgetListenerPosition, false);
+    }
+
+    private void StopCoroutineIfRunning(ref Coroutine routine)
+    {
+        if (routine == null)
+        {
+            return;
+        }
+
+        StopCoroutine(routine);
+        routine = null;
+    }
+
+    private void SetRuntimeAudioClip(AudioClip clip)
+    {
+        ReleaseActiveRuntimeAudioClip();
+        if (audioSource == null)
+        {
+            if (clip != null)
+            {
+                Destroy(clip);
+            }
+            return;
+        }
+
+        audioSource.clip = clip;
+        activeRuntimeDownloadedClip = clip;
+    }
+
+    private void StopAndReleaseActiveAudioClip()
+    {
+        if (audioSource != null)
+        {
+            audioSource.Stop();
+            audioSource.clip = null;
+        }
+        ReleaseActiveRuntimeAudioClip();
+    }
+
+    private void ReleaseActiveRuntimeAudioClip()
+    {
+        AudioClip clip = activeRuntimeDownloadedClip;
+        activeRuntimeDownloadedClip = null;
+        if (clip != null)
+        {
+            Destroy(clip);
+        }
+    }
+
+    private void FallbackToLocal(string status)
+    {
+        StopSoundCloudPlayback();
+        soundCloudStatus = status;
+        soundCloudError = true;
+        BeginPlayback();
+        ApplyMuteState(listenerInsideGym);
+        soundCloudPopup?.RefreshFromRadio();
+    }
+
+    public int CalculateSoundCloudWidgetVolume(Vector3 listenerPosition)
+    {
+        return CalculateSoundCloudWidgetVolume(
+            listenerPosition, IsPositionInsidePlayableGym(listenerPosition));
+    }
+
+    private int CalculateSoundCloudWidgetVolume(
+        Vector3 listenerPosition, bool insideGym)
+    {
+        if (!musicEnabled || !insideGym || audioSource == null ||
+            radioRolloff == null)
+        {
+            return 0;
+        }
+
+        float distance = Vector3.Distance(transform.position, listenerPosition);
+        float normalizedDistance = Mathf.InverseLerp(
+            audioSource.minDistance, audioSource.maxDistance, distance);
+        float attenuation = distance <= audioSource.minDistance
+            ? 1f
+            : radioRolloff.Evaluate(normalizedDistance);
+        float linearVolume = BaseRadioVolume * UserVolumeScale *
+            Mathf.Clamp01(attenuation);
+        return Mathf.Clamp(Mathf.RoundToInt(linearVolume * 100f), 0, 100);
+    }
+
+    private void UpdateSoundCloudWidgetVolume(
+        Vector3 listenerPosition, bool insideGym)
+    {
+        widgetListenerPosition = listenerPosition;
+        soundCloudWidgetVolume = CalculateSoundCloudWidgetVolume(
+            listenerPosition, insideGym);
+#if UNITY_WEBGL && !UNITY_EDITOR
+        GymChaosSoundCloudWidgetSetVolume(soundCloudWidgetVolume);
+#endif
+    }
+
+    public static bool IsPositionInsidePlayableGym(Vector3 position)
+    {
+        return GymBackRoomBuilder.IsInsideRoom(position) ||
+            !GymOutdoorBuilder.IsPlayerOutsideGym(position);
+    }
+
+#if UNITY_EDITOR
+    public bool ApplyListenerPositionForVerification(Vector3 position)
+    {
+        bool inside = IsPositionInsidePlayableGym(position);
+        widgetListenerPosition = position;
+        ApplyMuteState(inside);
+        return audioSource != null && audioSource.mute;
+    }
+#endif
 
     private void ConfigureAudio()
     {
@@ -200,18 +806,19 @@ public sealed class GymRadio : MonoBehaviour
         audioSource.volume = BaseRadioVolume * UserVolumeScale;
         audioSource.rolloffMode = AudioRolloffMode.Custom;
         audioSource.minDistance = 2.5f;
-        audioSource.maxDistance = 32f;
+        audioSource.maxDistance = 96f;
         audioSource.dopplerLevel = 0f;
 
         // Keep the source spatial and distance-aware, but hold the volume up
         // longer inside the gym so the radio does not disappear too quickly.
-        AnimationCurve rolloff = new AnimationCurve(
+        radioRolloff = new AnimationCurve(
             new Keyframe(0f, 1f),
             new Keyframe(0.32f, 0.97f),
-            new Keyframe(0.68f, 0.78f),
-            new Keyframe(0.88f, 0.42f),
-            new Keyframe(1f, 0f));
-        audioSource.SetCustomCurve(AudioSourceCurveType.CustomRolloff, rolloff);
+            new Keyframe(0.68f, 0.72f),
+            new Keyframe(0.88f, 0.38f),
+            new Keyframe(1f, 0.16f));
+        audioSource.SetCustomCurve(
+            AudioSourceCurveType.CustomRolloff, radioRolloff);
     }
 
     private void Update()
@@ -227,8 +834,15 @@ public sealed class GymRadio : MonoBehaviour
             listenerPlayer = FindAnyObjectByType<PlayerMovement>();
         }
 
-        bool insideGym = listenerPlayer != null &&
-            !GymOutdoorBuilder.IsPlayerOutsideGym(listenerPlayer.transform.position);
+        bool lockerPreviewActive = GymExperienceService.Active != null &&
+            GymExperienceService.Active.IsLockerMenuOpen;
+        Vector3 listenerPosition = listenerPlayer != null
+            ? listenerPlayer.transform.position
+            : transform.position;
+        bool insideGym = lockerPreviewActive ||
+            (listenerPlayer != null &&
+                IsPositionInsidePlayableGym(listenerPosition));
+        widgetListenerPosition = listenerPosition;
         ApplyMuteState(insideGym);
         if (!listenerZoneKnown || listenerInsideGym != insideGym)
         {
@@ -239,8 +853,33 @@ public sealed class GymRadio : MonoBehaviour
         }
     }
 
+    private void OnDestroy()
+    {
+        if (soundCloudPopup != null)
+        {
+            soundCloudPopup.Close();
+            Destroy(soundCloudPopup.gameObject);
+            soundCloudPopup = null;
+        }
+        StopCoroutineIfRunning(ref radioModelRoutine);
+        StopCoroutineIfRunning(ref playlistRoutine);
+        playbackRequested = false;
+        soundCloudMode = false;
+        soundCloudWidgetReady = false;
+        soundCloudWidgetPlaying = false;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        GymChaosSoundCloudWidgetDestroy();
+#endif
+        StopAndReleaseActiveAudioClip();
+    }
     private IEnumerator LoadRadioModel()
     {
+        if (HasPhysicalModel)
+        {
+            radioModelRoutine = null;
+            yield break;
+        }
+
         byte[] glbBytes;
         string path = JoinStreamingAssetsPath(RadioRelativePath);
         using (UnityWebRequest request = UnityWebRequest.Get(path))
@@ -345,6 +984,8 @@ public sealed class GymRadio : MonoBehaviour
         renderer.sharedMaterial = CreateRadioMaterial(gltf, binary);
         renderer.shadowCastingMode = ShadowCastingMode.On;
         renderer.receiveShadows = true;
+        radioModel = model;
+        radioModelRenderer = renderer;
 
         PlaceModelOnDesk(renderer);
         EnsurePickupPhysics(renderer);
@@ -387,9 +1028,20 @@ public sealed class GymRadio : MonoBehaviour
             true,
             "Radio");
 
+        // Keep the desk placement stable until PickupItem.PickUp() explicitly
+        // switches the rigidbody back to dynamic mode.
+        if (!body.isKinematic)
+        {
+            body.linearVelocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
+        body.useGravity = false;
+        body.isKinematic = true;
+
         Debug.Log(
             $"GYMCHAOS_RADIO_PICKUP_READY mass={body.mass:F1} " +
-            $"collider={boxCollider.size} audioRoot={audioSource != null}",
+            $"collider={boxCollider.size} audioRoot={audioSource != null} " +
+            $"deskAnchored={body.isKinematic}",
             this);
     }
 
@@ -471,21 +1123,20 @@ public sealed class GymRadio : MonoBehaviour
 
             if (clip != null)
             {
-                audioSource.clip = clip;
-                audioSource.Play();
+                SetRuntimeAudioClip(clip);
+                audioSource?.Play();
                 Debug.Log(
                     $"GYMCHAOS_RADIO_PLAYING index={index} " +
                     $"track={Path.GetFileName(relativePath)} loop=playlist", this);
 
                 float minimumWait = Time.unscaledTime + 0.15f;
-                while (audioSource.isPlaying || Time.unscaledTime < minimumWait)
+                while ((audioSource != null && audioSource.isPlaying) ||
+                    Time.unscaledTime < minimumWait)
                 {
                     yield return null;
                 }
 
-                audioSource.Stop();
-                audioSource.clip = null;
-                Destroy(clip);
+                StopAndReleaseActiveAudioClip();
             }
 
             index = (index + 1) % playlistEntries.Count;
@@ -501,6 +1152,7 @@ public sealed class GymRadio : MonoBehaviour
         {
             audioSource.mute = !musicEnabled || !insideGym;
         }
+        UpdateSoundCloudWidgetVolume(widgetListenerPosition, insideGym);
     }
 
     private static void ShufflePlaylist(List<string> entries)
@@ -788,8 +1440,4 @@ public sealed class GymRadio : MonoBehaviour
         return result;
     }
 
-    private void OnDestroy()
-    {
-        playbackRequested = false;
-    }
 }

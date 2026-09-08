@@ -64,6 +64,10 @@ public class PlayerMovement : MonoBehaviour
 
     private readonly Collider[] overlapHits = new Collider[64];
     private readonly Collider[] pickupHits = new Collider[256];
+    private readonly HashSet<PickupItem> inspectedPickupItems =
+        new HashSet<PickupItem>();
+    private readonly List<Collider> pickupColliderScratch =
+        new List<Collider>(16);
 
     private CharacterController characterController;
     private PlayerHandRig handRig;
@@ -79,10 +83,23 @@ public class PlayerMovement : MonoBehaviour
     private bool showCursor;
     private bool cinematicLock;
     private bool suppressGameplayInputThisFrame;
-    private bool useRightHandNext = true;
+    private bool useRightHandNext = false;
+    private bool useRightThrowNext = true;
+    private bool animationSprinting;
     private float crouchAmount;
     private Vector3 cameraBaseLocalPosition;
     private const float PlayerPunchAimLift = 0.16f;
+    private const float ContextPromptMinWidth = 220f;
+    private const float ContextPromptMaxWidth = 328f;
+    private const float ContextPromptHeight = 50f;
+    private const float ContextPromptGap = 8f;
+    private const float ContextPromptBottomInset = 28f;
+    private const float ContextPromptViewportInset = 16f;
+    private const float ContextPromptOuterInset = 12f;
+    private const float ContextPromptInnerInset = 10f;
+    private const float ContextPromptKeyColumnWidth = 54f;
+    private const float ContextPromptMessageLeftPadding = 14f;
+    private const float ContextPromptMessageRightPadding = 12f;
 
     private GUIStyle hudShadowStyle;
     private GUIStyle hudTitleStyle;
@@ -91,6 +108,7 @@ public class PlayerMovement : MonoBehaviour
     private GUIStyle hudHintStyle;
     private GUIStyle hudAccentStyle;
     private GUIStyle hudPromptStyle;
+    private GUIStyle hudPromptMessageStyle;
 
     private Transform carryAnchor;
     private PickupItem heldItem;
@@ -98,6 +116,8 @@ public class PlayerMovement : MonoBehaviour
     private GymExerciseStation nearbyExerciseStation;
     private GymRadio nearbyRadio;
     private PickupItem nearbyPickup;
+    private EnemyFighter nearbyTalkTarget;
+    private GymBackRoomInteractable nearbyBackRoomInteractable;
     private float nextPickupPromptScanTime;
     private GymExerciseStation activeExerciseStation;
     private GymExerciseStation pendingWeightStation;
@@ -145,6 +165,20 @@ public class PlayerMovement : MonoBehaviour
     public bool IsCinematicLocked => cinematicLock;
     public bool CursorCaptured => IsCursorCaptured;
     public Vector3 StandingCameraLocalPosition => cameraBaseLocalPosition;
+    public bool CanShowCursorRecapturePrompt
+    {
+        get
+        {
+            GymExperienceService progression = GymExperienceService.Active;
+            return GymArenaBootstrap.IsGameplayStarted &&
+                !IsDead && !cinematicLock && !IsExercising &&
+                !GymStartScreen.IsMenuVisible && !GymPauseMenu.IsVisible &&
+                !GymRadioSoundCloudPopup.IsAnyVisible &&
+                !GymDialogueDirector.IsDialogueActive &&
+                (progression == null || !progression.IsBlockingPlayerInput) &&
+                !IsCursorCaptured;
+        }
+    }
 
     public void SetCinematicLock(bool locked)
     {
@@ -304,6 +338,11 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (GymRadioSoundCloudPopup.IsAnyVisible)
+        {
+            return;
+        }
+
         if (GymExperienceService.Active != null &&
             GymExperienceService.Active.IsBlockingPlayerInput)
         {
@@ -360,6 +399,12 @@ public class PlayerMovement : MonoBehaviour
         if (Time.unscaledTime >= nextPickupPromptScanTime)
         {
             nearbyPickup = heldItem == null ? FindBestPickup() : null;
+            nearbyTalkTarget = GymDialogueDirector.Active != null
+                ? GymDialogueDirector.Active.FindNearbyTalkTarget(transform.position)
+                : null;
+            nearbyBackRoomInteractable = GymExperienceService.Active != null
+                ? GymExperienceService.Active.FindNearbyInteractable(transform.position, 3.1f)
+                : null;
             nextPickupPromptScanTime = Time.unscaledTime + 0.12f;
         }
         if (GymDialogueDirector.TryStartNearby(this, ReadInteractPressed()))
@@ -422,6 +467,48 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+    private void OnControllerColliderHit(ControllerColliderHit hit)
+    {
+        Rigidbody body = hit.rigidbody;
+        if (body == null || body.isKinematic)
+        {
+            return;
+        }
+
+        PickupItem item = body.GetComponent<PickupItem>();
+        if (item == null || item.ItemType != WeightType.Ball)
+        {
+            return;
+        }
+
+        Vector3 pushDirection = Vector3.ProjectOnPlane(hit.moveDirection, Vector3.up);
+        if (pushDirection.sqrMagnitude < 0.01f)
+        {
+            pushDirection = Vector3.ProjectOnPlane(planarVelocity, Vector3.up);
+        }
+        if (pushDirection.sqrMagnitude < 0.01f)
+        {
+            return;
+        }
+
+        float speed = Mathf.Max(planarVelocity.magnitude,
+            new Vector2(hit.moveDirection.x, hit.moveDirection.z).magnitude);
+        float impulse = Mathf.Lerp(0.45f, 2.2f,
+            Mathf.InverseLerp(0f, runSpeed, speed));
+        body.WakeUp();
+        body.AddForceAtPosition(pushDirection.normalized * impulse,
+            hit.point, ForceMode.Impulse);
+    }
+
+#if UNITY_EDITOR
+    public void ResetMovementForVerification()
+    {
+        planarVelocity = Vector3.zero;
+        impactVelocity = Vector3.zero;
+        verticalVelocity = 0f;
+    }
+#endif
+
     private void Die(EnemyFighter attacker)
     {
         if (IsDead)
@@ -460,6 +547,7 @@ public class PlayerMovement : MonoBehaviour
             : 100f;
         sprintEnergy = Mathf.Clamp(sprintEnergy, 0f, sprintCapacity);
         bool sprinting = sprintHeld && !crouchHeld && sprintEnergy > 0.01f;
+        animationSprinting = sprinting;
         if (sprinting && moveInput.sqrMagnitude > 0.01f)
         {
             float drain = progression != null
@@ -641,6 +729,7 @@ public class PlayerMovement : MonoBehaviour
         if (handRig != null)
         {
             handRig.TriggerPunch(useRightHandNext);
+            useRightHandNext = !useRightHandNext;
         }
 
         Vector3 origin = playerCamera.transform.position;
@@ -703,7 +792,6 @@ public class PlayerMovement : MonoBehaviour
             body.AddForceAtPosition(impulse, hit.point, ForceMode.Impulse);
         }
 
-        useRightHandNext = !useRightHandNext;
     }
 
     private void PerformShove()
@@ -940,15 +1028,14 @@ public class PlayerMovement : MonoBehaviour
         {
             return;
         }
+        bool isPlateThrow = IsPlateType(heldItem.ItemType);
 
         if (handRig != null)
         {
-            handRig.TriggerThrow(useRightHandNext);
+            handRig.TriggerThrow(useRightThrowNext, isPlateThrow);
             handRig.SetHolding(false);
         }
 
-        bool isPlateThrow = heldItem.ItemType == WeightType.Plate || heldItem.ItemType == WeightType.Plate5 ||
-                            heldItem.ItemType == WeightType.Plate10 || heldItem.ItemType == WeightType.Plate20;
         bool allowSpin = !isPlateThrow;
         Vector3 throwDirection = isPlateThrow ? GetFlatThrowDirection() : (playerCamera.transform.forward + Vector3.up * 0.12f).normalized;
         GymExperienceService progression = GymExperienceService.Active;
@@ -963,7 +1050,7 @@ public class PlayerMovement : MonoBehaviour
 
         heldItem.Throw(throwImpulse, playerColliders, collisionRestoreDelay, allowSpin);
         heldItem = null;
-        useRightHandNext = !useRightHandNext;
+        useRightThrowNext = !useRightThrowNext;
     }
 
     private void UpdateHeldItem()
@@ -1018,7 +1105,7 @@ public class PlayerMovement : MonoBehaviour
 
         Vector3 planarVelocity = new Vector3(characterController.velocity.x, 0f, characterController.velocity.z);
         float moveAmount = Mathf.Clamp01(planarVelocity.magnitude / Mathf.Max(runSpeed, 0.01f));
-        handRig.Tick(moveAmount, crouchAmount);
+        handRig.Tick(moveAmount, crouchAmount, animationSprinting, characterController.isGrounded);
         handRig.SetHolding(heldItem != null);
     }
 
@@ -1089,7 +1176,7 @@ public class PlayerMovement : MonoBehaviour
         Vector3 viewForward = playerCamera.transform.forward;
         PickupItem bestItem = null;
         float bestScore = float.MinValue;
-        HashSet<PickupItem> inspectedItems = new HashSet<PickupItem>();
+        inspectedPickupItems.Clear();
 
         int hitCount = Physics.OverlapSphereNonAlloc(playerCenter, interactRange, pickupHits, ~0, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < hitCount; i++)
@@ -1102,7 +1189,8 @@ public class PlayerMovement : MonoBehaviour
 
             PickupItem item = candidateCollider.GetComponentInParent<PickupItem>();
             item = ResolveMountedPickup(item);
-            if (item == null || item.IsHeld || !item.IsThrowableWeapon || !inspectedItems.Add(item))
+            if (item == null || item.IsHeld || !item.IsThrowableWeapon ||
+                !inspectedPickupItems.Add(item))
             {
                 continue;
             }
@@ -1131,6 +1219,13 @@ public class PlayerMovement : MonoBehaviour
                 continue;
             }
 
+            // Proximity alone must never select props through locker-room or
+            // gym walls. Only the candidate hierarchy may be first blocker.
+            if (!HasPickupLineOfSight(item, viewOrigin, toViewPoint))
+            {
+                continue;
+            }
+
             float score = alignment * (weightStandPlate ? 2f : 3f) -
                 Mathf.Sqrt(distanceSqr) * (weightStandPlate ? 0.65f : 0.4f);
             if (score > bestScore)
@@ -1141,6 +1236,33 @@ public class PlayerMovement : MonoBehaviour
         }
 
         return bestItem;
+    }
+
+    private bool HasPickupLineOfSight(
+        PickupItem item, Vector3 origin, Vector3 directionToItem)
+    {
+        float distance = directionToItem.magnitude;
+        if (item == null || distance <= 0.001f)
+        {
+            return item != null;
+        }
+
+        RaycastHit[] hits = Physics.RaycastAll(
+            origin, directionToItem / distance, distance + 0.06f,
+            ~0, QueryTriggerInteraction.Ignore);
+        System.Array.Sort(hits, (left, right) =>
+            left.distance.CompareTo(right.distance));
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hit = hits[i].collider;
+            if (hit == null || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            PickupItem hitItem = hit.GetComponentInParent<PickupItem>();
+            return hitItem == item;
+        }
+        return false;
     }
 
     private static PickupItem ResolveMountedPickup(PickupItem candidate)
@@ -1170,9 +1292,7 @@ public class PlayerMovement : MonoBehaviour
         Transform current = item.transform;
         while (current != null)
         {
-            string normalized = current.name.ToLowerInvariant()
-                .Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
-            if (normalized.Contains("weightstandflat"))
+            if (ContainsNormalizedWeightStandFlat(current.name))
             {
                 return true;
             }
@@ -1181,25 +1301,70 @@ public class PlayerMovement : MonoBehaviour
         return false;
     }
 
-    private static Vector3 GetClosestPickupPoint(PickupItem item, Vector3 origin)
+    private static bool ContainsNormalizedWeightStandFlat(string value)
     {
-        Collider[] colliders = item.GetComponentsInChildren<Collider>(true);
-        Vector3 closest = item.transform.position;
-        float closestDistance = (closest - origin).sqrMagnitude;
-        for (int i = 0; i < colliders.Length; i++)
+        const string marker = "weightstandflat";
+        int markerIndex = 0;
+        for (int i = 0; i < value.Length; i++)
         {
-            if (colliders[i] == null || !colliders[i].enabled)
+            char character = value[i];
+            if (character == ' ' || character == '_' || character == '-')
             {
                 continue;
             }
-            Vector3 point = colliders[i].ClosestPoint(origin);
-            float distance = (point - origin).sqrMagnitude;
-            if (distance < closestDistance)
+
+            char normalizedCharacter = char.ToLowerInvariant(character);
+            if (normalizedCharacter == marker[markerIndex])
             {
-                closest = point;
-                closestDistance = distance;
+                markerIndex++;
+                if (markerIndex == marker.Length)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                markerIndex = normalizedCharacter == marker[0] ? 1 : 0;
             }
         }
+        return false;
+    }
+
+    private Vector3 GetClosestPickupPoint(PickupItem item, Vector3 origin)
+    {
+        pickupColliderScratch.Clear();
+        Transform itemTransform = item != null ? item.transform : null;
+        if (itemTransform == null)
+        {
+            return origin;
+        }
+
+        Vector3 closest = itemTransform.position;
+        float closestDistance = (closest - origin).sqrMagnitude;
+        try
+        {
+            item.GetComponentsInChildren<Collider>(true, pickupColliderScratch);
+            for (int i = 0; i < pickupColliderScratch.Count; i++)
+            {
+                Collider collider = pickupColliderScratch[i];
+                if (collider == null || !collider.enabled)
+                {
+                    continue;
+                }
+                Vector3 point = collider.ClosestPoint(origin);
+                float distance = (point - origin).sqrMagnitude;
+                if (distance < closestDistance)
+                {
+                    closest = point;
+                    closestDistance = distance;
+                }
+            }
+        }
+        finally
+        {
+            pickupColliderScratch.Clear();
+        }
+
         return closest;
     }
 
@@ -1630,6 +1795,12 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        GymExperienceService progressionService = GymExperienceService.Active;
+        if (progressionService != null && progressionService.IsLockerMenuOpen)
+        {
+            return;
+        }
+
         if (IsDead)
         {
             DrawDeathOverlay();
@@ -1682,12 +1853,14 @@ public class PlayerMovement : MonoBehaviour
         float sprintCapacity = GymExperienceService.Active != null
             ? GymExperienceService.Active.GetSprintCapacity()
             : 100f;
-        const float hudLeft = 24f;
-        const float barX = 108f;
-        const float barWidth = 190f;
-        const float valueX = barX + barWidth + 14f;
-        DrawHudText(new Rect(hudLeft, 18f, 76f, 20f), "HP", hudMetricStyle);
-        DrawHudText(new Rect(hudLeft, 45f, 76f, 20f), "SPRINT", hudMetricStyle);
+        float hudLeft = Mathf.Clamp(Screen.width * 0.02f, 18f, 32f);
+        float labelWidth = Mathf.Clamp(Screen.width * 0.11f, 64f, 92f);
+        float barX = hudLeft + labelWidth + 10f;
+        float barWidth = Mathf.Clamp(Screen.width * 0.2f, 100f, 220f);
+        float valueX = barX + barWidth + 10f;
+        float valueWidth = Mathf.Max(42f, Screen.width - valueX - hudLeft);
+        DrawHudText(new Rect(hudLeft, 18f, labelWidth, 20f), "HP", hudMetricStyle);
+        DrawHudText(new Rect(hudLeft, 45f, labelWidth, 20f), "SPRINT", hudMetricStyle);
         DrawHudBar(
             new Rect(barX, 23f, barWidth, 8f),
             currentHealth / Mathf.Max(1f, maxHealth),
@@ -1697,11 +1870,11 @@ public class PlayerMovement : MonoBehaviour
             sprintEnergy / Mathf.Max(1f, sprintCapacity),
             new Color(0.95f, 0.62f, 0.16f, 1f));
         DrawHudText(
-            new Rect(valueX, 15f, 74f, 22f),
+            new Rect(valueX, 15f, valueWidth, 22f),
             $"{Mathf.CeilToInt(currentHealth):0}",
             hudMetricStyle);
         DrawHudText(
-            new Rect(valueX, 42f, 74f, 22f),
+            new Rect(valueX, 42f, valueWidth, 22f),
             $"{Mathf.CeilToInt(sprintEnergy):0}",
             hudMetricStyle);
         DrawHudText(
@@ -1711,14 +1884,12 @@ public class PlayerMovement : MonoBehaviour
         if (heldItem != null)
         {
             DrawHudText(
-                new Rect(hudLeft, 101f, 520f, 22f),
+                new Rect(hudLeft, 101f, Mathf.Max(220f, Screen.width - hudLeft * 2f), 22f),
                 $"HELD  {heldItem.DisplayName.ToUpperInvariant()}",
                 hudAccentStyle);
         }
 
-        bool lockerAppearanceOpen = GymExperienceService.Active != null &&
-            GymExperienceService.Active.IsLockerMenuOpen;
-        if (!lockerAppearanceOpen && !IsCursorCaptured)
+        if (CanShowCursorRecapturePrompt)
         {
             float width = Mathf.Min(360f, Screen.width - 32f);
             Rect captureRect = new Rect(
@@ -1729,28 +1900,186 @@ public class PlayerMovement : MonoBehaviour
             DrawHudPrompt(captureRect, "LMB", "CLICK TO LOOK AROUND");
         }
 
-        float promptBottom = Screen.height - 78f;
-        float promptWidth = Mathf.Min(360f, Screen.width - 32f);
-        Rect promptRect = new Rect(
-            (Screen.width - promptWidth) * 0.5f,
-            promptBottom,
-            promptWidth,
-            54f);
-        if (nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer)
+        DrawContextInteractionPrompts();
+    }
+
+    private void DrawContextInteractionPrompts()
+    {
+        if (GymExperienceService.Active != null &&
+            GymExperienceService.Active.IsBlockingPlayerInput)
         {
-            DrawHudPrompt(
-                promptRect,
-                "F",
-                StripPromptKey(nearbyExerciseStation.GetInteractionPrompt()));
+            return;
         }
-        else if (nearbyRadio != null)
+
+        bool hasE = false;
+        string eMessage = string.Empty;
+        if (nearbyTalkTarget != null)
+        {
+            hasE = true;
+            eMessage = "TALK TO MEMBER";
+        }
+        else if (nearbyBackRoomInteractable != null)
+        {
+            hasE = true;
+            eMessage = string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
+                ? "INTERACT"
+                : nearbyBackRoomInteractable.DisplayName.ToUpperInvariant();
+        }
+        else if (heldItem != null)
+        {
+            hasE = true;
+            eMessage = "DROP " + GetPromptItemName(heldItem);
+        }
+        else if (nearbyPickup != null)
+        {
+            hasE = true;
+            eMessage = "PICK UP " + GetPromptItemName(nearbyPickup);
+        }
+
+        bool hasF = false;
+        string fMessage = string.Empty;
+        if (nearbyRadio != null)
+        {
+            hasF = true;
+            fMessage = StripPromptKey(nearbyRadio.GetInteractionPrompt());
+        }
+        else if (nearbyExerciseStation != null &&
+                 nearbyExerciseStation.IsAvailableForPlayer)
+        {
+            hasF = true;
+            fMessage = StripPromptKey(nearbyExerciseStation.GetInteractionPrompt());
+        }
+
+        if (!hasE && !hasF)
+        {
+            return;
+        }
+
+        float eWidth = hasE ? GetHudPromptWidth(eMessage) : 0f;
+        float fWidth = hasF ? GetHudPromptWidth(fMessage) : 0f;
+        float eHeight = hasE ? GetHudPromptHeight(eMessage, eWidth) : 0f;
+        float fHeight = hasF ? GetHudPromptHeight(fMessage, fWidth) : 0f;
+        float promptHeight = Mathf.Max(eHeight, fHeight, ContextPromptHeight);
+        float maxAllowedWidth = GetHudPromptViewportWidth();
+        bool sideBySide = hasE && hasF && Screen.width >= 640f &&
+            eWidth + ContextPromptGap + fWidth <= maxAllowedWidth;
+        if (sideBySide)
+        {
+            float totalWidth = eWidth + ContextPromptGap + fWidth;
+            float left = (Screen.width - totalWidth) * 0.5f;
+            DrawHudPrompt(
+                new Rect(left, Screen.height - ContextPromptBottomInset - promptHeight, eWidth, promptHeight),
+                "E",
+                eMessage);
+            DrawHudPrompt(
+                new Rect(left + eWidth + ContextPromptGap, Screen.height - ContextPromptBottomInset - promptHeight,
+                    fWidth, promptHeight),
+                "F",
+                fMessage);
+            return;
+        }
+
+        float stackedBottom = Screen.height - ContextPromptBottomInset;
+        float stackedTotalHeight = (hasE ? eHeight : 0f) +
+            (hasF ? fHeight : 0f) +
+            (hasE && hasF ? ContextPromptGap : 0f);
+        float stackedTop = stackedBottom - stackedTotalHeight;
+
+        if (hasE)
         {
             DrawHudPrompt(
-                promptRect,
+                new Rect(
+                    (Screen.width - eWidth) * 0.5f,
+                    stackedTop,
+                    eWidth,
+                    eHeight),
+                "E",
+                eMessage);
+            stackedTop += eHeight + ContextPromptGap;
+        }
+
+        if (hasF)
+        {
+            DrawHudPrompt(
+                new Rect(
+                    (Screen.width - fWidth) * 0.5f,
+                    stackedTop,
+                    fWidth,
+                    fHeight),
                 "F",
-                StripPromptKey(nearbyRadio.GetInteractionPrompt()));
+                fMessage);
         }
     }
+
+    private static float GetHudPromptViewportWidth()
+    {
+        return Mathf.Max(1f, Screen.width - ContextPromptViewportInset * 2f);
+    }
+
+    private float GetHudPromptWidth(string message)
+    {
+        string safeMessage = string.IsNullOrEmpty(message) ? " " : message;
+        float measuredMessageWidth = hudPromptMessageStyle != null
+            ? hudPromptMessageStyle.CalcSize(new GUIContent(safeMessage)).x
+            : safeMessage.Length * 7f;
+        float desiredWidth = ContextPromptOuterInset * 2f +
+            ContextPromptKeyColumnWidth +
+            ContextPromptMessageLeftPadding +
+            ContextPromptMessageRightPadding +
+            measuredMessageWidth;
+        float availableWidth = GetHudPromptViewportWidth();
+        float minimumWidth = Mathf.Min(ContextPromptMinWidth, availableWidth);
+        return Mathf.Clamp(
+            desiredWidth,
+            minimumWidth,
+            Mathf.Min(ContextPromptMaxWidth, availableWidth));
+    }
+
+    private float GetHudPromptHeight(string message, float promptWidth)
+    {
+        string safeMessage = string.IsNullOrEmpty(message) ? " " : message;
+        float messageWidth = GetHudPromptMessageWidth(promptWidth);
+        float measuredMessageHeight = hudPromptMessageStyle != null
+            ? hudPromptMessageStyle.CalcHeight(new GUIContent(safeMessage), messageWidth)
+            : 18f;
+        return Mathf.Max(
+            ContextPromptHeight,
+            Mathf.Ceil(measuredMessageHeight) + ContextPromptInnerInset * 2f);
+    }
+
+    private static float GetHudPromptKeyWidth(float promptWidth)
+    {
+        float availableKeyWidth = promptWidth - ContextPromptOuterInset * 2f -
+            ContextPromptMessageLeftPadding - ContextPromptMessageRightPadding;
+        return Mathf.Min(ContextPromptKeyColumnWidth, Mathf.Max(1f, availableKeyWidth));
+    }
+
+    private static float GetHudPromptMessageWidth(float promptWidth)
+    {
+        return Mathf.Max(
+            1f,
+            promptWidth - ContextPromptOuterInset * 2f -
+            GetHudPromptKeyWidth(promptWidth) -
+            ContextPromptMessageLeftPadding -
+            ContextPromptMessageRightPadding);
+    }
+
+    private static Rect GetHudPromptContentRect(Rect promptRect)
+    {
+        return new Rect(
+            promptRect.x + ContextPromptOuterInset,
+            promptRect.y + ContextPromptInnerInset,
+            Mathf.Max(1f, promptRect.width - ContextPromptOuterInset * 2f),
+            Mathf.Max(1f, promptRect.height - ContextPromptInnerInset * 2f));
+    }
+
+    private static string GetPromptItemName(PickupItem item)
+    {
+        return item == null || string.IsNullOrWhiteSpace(item.DisplayName)
+            ? "ITEM"
+            : item.DisplayName.ToUpperInvariant();
+    }
+
     private static string StripPromptKey(string prompt)
     {
         if (string.IsNullOrEmpty(prompt))
@@ -1758,7 +2087,7 @@ public class PlayerMovement : MonoBehaviour
             return string.Empty;
         }
 
-        return prompt.StartsWith("[F] ")
+        return prompt.StartsWith("[F] ") || prompt.StartsWith("[E] ")
             ? prompt.Substring(4)
             : prompt;
     }
@@ -1788,22 +2117,27 @@ public class PlayerMovement : MonoBehaviour
     private void DrawHudPrompt(Rect rect, string key, string message)
     {
         DrawHudPanel(rect);
-        float keyWidth = Mathf.Min(74f, rect.width * 0.2f);
+        Rect contentRect = GetHudPromptContentRect(rect);
+        float keyWidth = GetHudPromptKeyWidth(rect.width);
+        Rect keyRect = new Rect(
+            contentRect.x,
+            contentRect.y,
+            keyWidth,
+            contentRect.height);
         Color previousColor = GUI.color;
         GUI.color = new Color(0.95f, 0.62f, 0.16f, 0.95f);
-        GUI.DrawTexture(
-            new Rect(rect.x + 12f, rect.y + 10f, keyWidth, rect.height - 20f),
-            Texture2D.whiteTexture);
+        GUI.DrawTexture(keyRect, Texture2D.whiteTexture);
         GUI.color = previousColor;
+        DrawHudText(keyRect, key, hudPromptStyle);
+        Rect messageRect = new Rect(
+            keyRect.xMax + ContextPromptMessageLeftPadding,
+            contentRect.y,
+            GetHudPromptMessageWidth(rect.width),
+            contentRect.height);
         DrawHudText(
-            new Rect(rect.x + 12f, rect.y + 10f, keyWidth, rect.height - 20f),
-            key,
-            hudPromptStyle);
-        DrawHudText(
-            new Rect(rect.x + keyWidth + 28f, rect.y + 10f,
-                rect.width - keyWidth - 44f, rect.height - 20f),
+            messageRect,
             message,
-            hudBodyStyle);
+            hudPromptMessageStyle);
     }
     private void EnsureHudStyles()
     {
@@ -1833,6 +2167,9 @@ public class PlayerMovement : MonoBehaviour
         hudAccentStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
         hudPromptStyle = CreateHudStyle(17, FontStyle.Bold, TextAnchor.MiddleCenter);
         hudPromptStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
+        hudPromptMessageStyle = CreateHudStyle(14, FontStyle.Bold, TextAnchor.MiddleLeft);
+        hudPromptMessageStyle.normal.textColor = Color.white;
+        hudPromptMessageStyle.clipping = TextClipping.Clip;
     }
 
     private static GUIStyle CreateHudStyle(

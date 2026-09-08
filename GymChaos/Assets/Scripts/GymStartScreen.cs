@@ -81,7 +81,10 @@ public sealed class GymStartScreen : MonoBehaviour
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920f, 1080f);
         scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-        scaler.matchWidthOrHeight = 0.55f;
+        // A balanced scaler keeps the centered composition legible on both
+        // narrow windows and ultrawide displays without pushing the controls
+        // toward an edge when the aspect ratio changes.
+        scaler.matchWidthOrHeight = 0.5f;
         gameObject.AddComponent<GraphicRaycaster>();
         canvasGroup = gameObject.AddComponent<CanvasGroup>();
 
@@ -104,61 +107,35 @@ public sealed class GymStartScreen : MonoBehaviour
         Stretch(veil.rectTransform);
         veil.raycastTarget = false;
 
-        // Keep the boot composition quiet and centered over the room.
-        CreateFrameLine(
-            "Menu Baseline",
-            transform,
-            new Vector2(0.31f, 0.18f),
-            new Vector2(0.69f, 0.18f),
-            Frame);
-
-
-        CreateText(
-            "Title",
-            transform,
-            font,
-            "GYMCHAOS",
-            82,
-            Ink,
-            FontStyle.Bold,
-            TextAnchor.MiddleCenter,
-            new Vector2(0.28f, 0.6f),
-            new Vector2(0.72f, 0.74f));
-        Image titleRule = CreateImage("Title Accent Rule", transform, Accent);
-        SetAnchors(titleRule.rectTransform, new Vector2(0.42f, 0.575f), new Vector2(0.58f, 0.575f), 0f, -1f, 0f, -1f);
-        titleRule.raycastTarget = false;
-        CreateText(
-            "Subtitle",
-            transform,
-            font,
-            "THE FLOOR IS READY",
-            16,
-            MutedInk,
-            FontStyle.Normal,
-            TextAnchor.MiddleCenter,
-            new Vector2(0.3f, 0.51f),
-            new Vector2(0.7f, 0.55f));
-
-        playButton = CreateButton(
-            "Play Button",
-            transform,
-            font,
-            "PLAY",
-            Accent,
-            new Vector2(0.4f, 0.36f),
-            new Vector2(0.6f, 0.45f),
-            BeginPlay);
-        CreateButton(
-            "Exit Button",
-            transform,
-            font,
-            "EXIT",
-            RaisedInk,
-            new Vector2(0.4f, 0.24f),
-            new Vector2(0.6f, 0.33f),
-            ExitGame);
-
-
+        Image panel = CreateImage("Menu Shade", transform, new Color(0.018f, 0.024f, 0.029f, 0.93f));
+        SetAnchors(panel.rectTransform, Vector2.zero, new Vector2(0.44f, 1f));
+        panel.raycastTarget = false;
+        CreateText("Club Edition", transform, font, "FITNES KING  /  OPEN DAILY", 17,
+            MutedInk, FontStyle.Normal, TextAnchor.MiddleLeft,
+            new Vector2(0.065f, 0.85f), new Vector2(0.40f, 0.91f));
+        CreateText("Title", transform, font, "GYM", 108, Ink,
+            FontStyle.Bold, TextAnchor.MiddleLeft, new Vector2(0.06f, 0.65f), new Vector2(0.42f, 0.82f));
+        CreateText("Title Chaos", transform, font, "CHAOS", 108, Accent,
+            FontStyle.Bold, TextAnchor.MiddleLeft, new Vector2(0.06f, 0.50f), new Vector2(0.42f, 0.68f));
+        CreateText("Subtitle", transform, font, "Train hard. Make a name for yourself.", 20,
+            MutedInk, FontStyle.Normal, TextAnchor.MiddleLeft,
+            new Vector2(0.065f, 0.45f), new Vector2(0.40f, 0.51f));
+        playButton = CreateButton("Play Button", transform, font, "ENTER THE GYM", Accent,
+            new Vector2(0.065f, 0.32f), new Vector2(0.375f, 0.405f), BeginPlay);
+        GameObject options = null;
+        Button optionsButton = CreateButton("Options Button", transform, font, "SETTINGS", RaisedInk,
+            new Vector2(0.065f, 0.225f), new Vector2(0.265f, 0.295f), () => options.SetActive(true));
+        CreateButton("Exit Button", transform, font, "EXIT", RaisedInk,
+            new Vector2(0.275f, 0.225f), new Vector2(0.375f, 0.295f), ExitGame);
+        CreateText("Controls", transform, font, "WASD  Move     F  Interact     ESC  Pause", 15,
+            MutedInk, FontStyle.Normal, TextAnchor.MiddleLeft,
+            new Vector2(0.065f, 0.085f), new Vector2(0.405f, 0.145f));
+        CreateFrameLine("Menu Baseline", transform, new Vector2(0.065f, 0.18f), new Vector2(0.375f, 0.18f), Frame);
+        options = GymRuntimeSettings.CreateOptionsPanel(transform, font, () => {
+            options.SetActive(false);
+            if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(optionsButton.gameObject);
+        });
+        options.SetActive(false);
 
         if (EventSystem.current != null && playButton != null)
         {

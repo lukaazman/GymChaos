@@ -1,9 +1,10 @@
 using UnityEngine;
 
 /// <summary>
-/// Small procedural squat layer applied after the imported idle/run sample.
-/// The imported animation remains the base pose while the hips, legs and
-/// upper back are driven through a readable squat arc.
+/// Coordinates the gym squat rep with each visitor's authored squat clip.
+/// The imported per-character animation remains authoritative for the
+/// character pose; this component only follows the station bar and exposes
+/// the gameplay-facing squat measurements.
 /// </summary>
 [DefaultExecutionOrder(1100)]
 public sealed class SquatWorkoutController : MonoBehaviour
@@ -411,6 +412,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
             // zero-motion pose instead of advancing the rep immediately.
             initialPoseHoldPending = false;
             CurrentMotion = 0f;
+            SetAuthoredWorkoutPhase(0f);
             station.TickEnemySquat(owner, 0f);
             return;
         }
@@ -421,6 +423,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
         float cycle = Mathf.Repeat(elapsed, repDuration) / repDuration;
         float motion = Mathf.Sin(cycle * Mathf.PI);
         CurrentMotion = motion;
+        SetAuthoredWorkoutPhase(cycle);
         if (!station.TickEnemySquat(owner, motion))
         {
             Cancel();
@@ -452,12 +455,30 @@ public sealed class SquatWorkoutController : MonoBehaviour
         float cycle = Mathf.Repeat(elapsed, repDuration) / Mathf.Max(0.01f, repDuration);
         float motion = Mathf.Sin(cycle * Mathf.PI);
         CurrentMotion = motion;
+        SetAuthoredWorkoutPhase(cycle);
         ApplySquatPose(motion);
+    }
+
+    private void SetAuthoredWorkoutPhase(float normalizedPhase)
+    {
+        if (owner == null)
+        {
+            return;
+        }
+
+        MixamoScanRetargetAnimator authoredAnimator =
+            owner.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        authoredAnimator?.SetWorkoutPosePhase(normalizedPhase);
     }
 
     private void ApplySquatPose(float motion)
     {
         if (!basePoseCaptured)
+        {
+            return;
+        }
+
+        if (TryApplyAuthoredSquatPose())
         {
             return;
         }
@@ -649,6 +670,94 @@ public sealed class SquatWorkoutController : MonoBehaviour
                 $"{rightUpperLegLength + rightLowerLegLength:0.000}",
                 this);
         }
+    }
+
+    private bool TryApplyAuthoredSquatPose()
+    {
+        if (owner == null || station == null)
+        {
+            return false;
+        }
+
+        MixamoScanRetargetAnimator authoredAnimator =
+            owner.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        if (authoredAnimator == null || !authoredAnimator.IsWorkoutPoseLocked ||
+            !authoredAnimator.HasAuthoredSquatClip)
+        {
+            return false;
+        }
+
+        // The authored squat already contains each character's own hip,
+        // spine, leg, foot and hand motion. Do not overwrite that evaluated
+        // pose with the old generic world-space IK solver; it was calibrated
+        // against a shared skeleton and visibly changed height/shape on the
+        // per-character rigs. Only derive measurements and attach the scene
+        // bar to the current authored traps position here.
+        Vector3 up = owner.transform.up;
+        // The per-character squat.fbx is one complete authored repetition.
+        // Keep its hip, torso, leg, foot and hand transforms untouched; the
+        // old generic correction solvers were calibrated against a shared
+        // skeleton and changed the source animation on differently rigged
+        // enemies.
+        currentHipDrop = Mathf.Max(
+            0f, Vector3.Dot(baseHipsWorldPosition - hips.position, up));
+        float leftKneeBend = GetKneeBend(leftThigh, leftShin, leftFoot);
+        float rightKneeBend = GetKneeBend(rightThigh, rightShin, rightFoot);
+        currentKneeBend = (leftKneeBend + rightKneeBend) * 0.5f;
+        currentKneeBendDifference = Mathf.Abs(leftKneeBend - rightKneeBend);
+        Vector3 depthAxis = Vector3.ProjectOnPlane(
+            owner.transform.forward, up);
+        if (depthAxis.sqrMagnitude < 0.0001f)
+        {
+            depthAxis = Vector3.forward;
+        }
+        depthAxis.Normalize();
+        currentLegDepthDifference = Mathf.Abs(
+            Vector3.Dot(leftShin.position - leftThigh.position, depthAxis) -
+            Vector3.Dot(rightShin.position - rightThigh.position, depthAxis));
+
+        currentLeftFootSoleError = GetFootSoleError(
+            leftFoot, leftToe, leftFootBoneToSoleOffset);
+        currentRightFootSoleError = GetFootSoleError(
+            rightFoot, rightToe, rightFootBoneToSoleOffset);
+        currentLeftFootGroundError = GetFootGroundError(
+            leftFoot, leftFootMeshSoleOffset);
+        currentRightFootGroundError = GetFootGroundError(
+            rightFoot, rightFootMeshSoleOffset);
+        currentLeftFootRotationError = Quaternion.Angle(
+            leftFoot.rotation, baseLeftFootRotation);
+        currentRightFootRotationError = Quaternion.Angle(
+            rightFoot.rotation, baseRightFootRotation);
+
+        Vector3 currentBarTarget = CalculateBarTargetPosition(owner);
+        station.SyncEnemySquatBarPose(owner, Traps, currentBarTarget);
+        currentBarBodyFollowError = Vector3.Distance(
+            station.EnemySquatBarCenter, currentBarTarget);
+        currentBarDropFromStart = initialAttachedBarCenter.y -
+            station.EnemySquatBarCenter.y;
+
+        // The scene bar is the only object layered onto the authored pose.
+        // It follows the current traps/neck target every sampled frame, while
+        // the authored hands remain exactly as exported in squat.fbx.
+        if (!poseMetricLogged && CurrentMotion > 0.82f)
+        {
+            poseMetricLogged = true;
+            Debug.Log(
+                $"GYMCHAOS_SQUAT_AUTHORED_METRICS enemy={owner.Identity} " +
+                $"clip={authoredAnimator.CurrentAnimationClipName} " +
+                "mode=authored-clip-only " +
+                $"footPositionError={FootPlantError:0.000} " +
+                $"soleError={FootSoleError:0.000} " +
+                $"groundError={FootGroundError:0.000} " +
+                $"footRotation={FootRotationError:0.0} " +
+                $"hipDrop={currentHipDrop:0.000} " +
+                $"kneeBend={currentKneeBend:0.0} " +
+                $"kneeDelta={currentKneeBendDifference:0.0} " +
+                $"barFollow={currentBarBodyFollowError:0.000} " +
+                $"barDrop={currentBarDropFromStart:0.000}",
+                this);
+        }
+        return true;
     }
 
     private Quaternion GetForwardLeanRotation(
@@ -1077,10 +1186,14 @@ public sealed class SquatWorkoutController : MonoBehaviour
         // Start from each imported hand's real endpoint vector.  The arm IK
         // will refine this after it has selected the elbow plane because the
         // endpoint vector rotates with the forearm on every asset.
+        Vector3 leftContactOffsetLocal = GetEffectiveHandContactOffsetLocal(
+            leftHand, baseLeftHandContactOffsetLocal);
+        Vector3 rightContactOffsetLocal = GetEffectiveHandContactOffsetLocal(
+            rightHand, baseRightHandContactOffsetLocal);
         leftTarget = leftContactTarget -
-            leftHand.TransformVector(baseLeftHandContactOffsetLocal);
+            leftHand.TransformVector(leftContactOffsetLocal);
         rightTarget = rightContactTarget -
-            rightHand.TransformVector(baseRightHandContactOffsetLocal);
+            rightHand.TransformVector(rightContactOffsetLocal);
     }
 
     private float GetBoneSideSign(Vector3 bonePosition, float fallback)
@@ -1902,7 +2015,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
         upperArmDown = 0.30f;
         upperArmOutward = 0.48f;
         forearmUp = 0.17f;
-        forearmOutward = 0.28f;
+        forearmOutward = 0.80f;
         if (owner == null)
         {
             return;
@@ -1914,25 +2027,28 @@ public sealed class SquatWorkoutController : MonoBehaviour
                 upperArmDown = 0.28f;
                 upperArmOutward = 0.46f;
                 forearmUp = 0.17f;
-                forearmOutward = 0.28f;
+                // Cbum's wider authored arm span puts the hands far outside
+                // the elbows on this rack; the correct forearm direction is
+                // therefore much more lateral than the narrow default.
+                forearmOutward = 0.94f;
                 break;
             case BodybuilderIdentity.Arnold:
                 upperArmDown = 0.30f;
                 upperArmOutward = 0.45f;
                 forearmUp = 0.16f;
-                forearmOutward = 0.27f;
+                forearmOutward = 0.48f;
                 break;
             case BodybuilderIdentity.Zyzz:
                 upperArmDown = 0.32f;
                 upperArmOutward = 0.49f;
                 forearmUp = 0.18f;
-                forearmOutward = 0.29f;
+                forearmOutward = 1.12f;
                 break;
             case BodybuilderIdentity.JayCutler:
                 upperArmDown = 0.31f;
                 upperArmOutward = 0.48f;
                 forearmUp = 0.17f;
-                forearmOutward = 0.28f;
+                forearmOutward = 0.84f;
                 break;
             case BodybuilderIdentity.Goku:
                 // Goku's stylized scan places the traps/bar below the
@@ -1942,13 +2058,13 @@ public sealed class SquatWorkoutController : MonoBehaviour
                 upperArmDown = 0.02f;
                 upperArmOutward = 0.28f;
                 forearmUp = 0.02f;
-                forearmOutward = 0.20f;
+                forearmOutward = 0.85f;
                 break;
             case BodybuilderIdentity.Ronnie:
                 upperArmDown = 0.28f;
                 upperArmOutward = 0.46f;
                 forearmUp = 0.16f;
-                forearmOutward = 0.28f;
+                forearmOutward = 0.80f;
                 break;
         }
     }
@@ -2032,9 +2148,29 @@ public sealed class SquatWorkoutController : MonoBehaviour
             : hand == rightHand
                 ? baseRightHandContactOffsetLocal
                 : Vector3.zero;
+        contactOffset = GetEffectiveHandContactOffsetLocal(hand, contactOffset);
         return contactOffset.sqrMagnitude > 0.000001f
             ? hand.TransformPoint(contactOffset)
             : hand.position;
+    }
+
+    private static Vector3 GetEffectiveHandContactOffsetLocal(
+        Transform hand, Vector3 capturedOffset)
+    {
+        if (hand == null)
+        {
+            return Vector3.zero;
+        }
+
+        if (capturedOffset.sqrMagnitude > 0.000001f)
+        {
+            return capturedOffset;
+        }
+
+        // Some authored hands contain a valid hand bone but collapse the
+        // fingertip endpoints onto that pivot. Use a finite local fallback so
+        // contact and arm-shape measurements stay valid on that rig.
+        return hand.InverseTransformVector(hand.forward * 0.08f);
     }
 
     private float GetArmContinuityCost(
@@ -2394,11 +2530,13 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private float GetHandContactError(
         Transform hand, Vector3 contactOffsetLocal, Vector3 targetContact)
     {
-        if (hand == null || contactOffsetLocal.sqrMagnitude < 0.000001f)
+        if (hand == null)
         {
             return float.PositiveInfinity;
         }
 
+        contactOffsetLocal = GetEffectiveHandContactOffsetLocal(
+            hand, contactOffsetLocal);
         return Vector3.Distance(
             hand.TransformPoint(contactOffsetLocal), targetContact);
     }
@@ -2422,28 +2560,31 @@ public sealed class SquatWorkoutController : MonoBehaviour
 
     private Vector3 CalculateBarTargetPosition(EnemyFighter fighter)
     {
-        if (fighter == null || chest == null)
+        Transform traps = Traps;
+        if (fighter == null || traps == null)
         {
-            return chest != null ? chest.position : Vector3.zero;
+            return traps != null ? traps.position : Vector3.zero;
         }
 
-        Vector3 shoulderCenter = chest.position;
         bool hasShoulders = leftShoulder != null && rightShoulder != null;
-        if (hasShoulders)
-        {
-            shoulderCenter = (leftShoulder.position + rightShoulder.position) * 0.5f;
-        }
-
+        // On the authored DEF hierarchy the chest bone is several centimetres
+        // below the upper-traps line. Use the animated shoulder midpoint as
+        // the anatomical traps anchor when it exists, and keep chest as the
+        // per-rig fallback for skeletons without shoulder helper bones.
+        Vector3 trapsPosition = hasShoulders
+            ? (leftShoulder.position + rightShoulder.position) * 0.5f
+            : traps.position;
+        Vector3 up = fighter.transform.up;
         Vector3 neckPosition = neck != null
             ? neck.position
-            : shoulderCenter + fighter.transform.up * 0.12f;
-        float shoulderToNeck = Vector3.Distance(shoulderCenter, neckPosition);
-        // The shaft rests low on the upper traps, between the shoulder line
-        // and neck rather than climbing toward the neck itself. Keep the
-        // vertical placement upright even if an imported scan has a slight
-        // root tilt.
-        Vector3 target = Vector3.Lerp(shoulderCenter, neckPosition, 0.24f);
-        target -= Vector3.up * Mathf.Clamp(shoulderToNeck * 0.04f, 0.012f, 0.035f);
+            : trapsPosition + up * 0.12f;
+        float trapsToNeck = Vector3.Distance(trapsPosition, neckPosition);
+        // The shaft rests on the upper traps, in the short anatomical span
+        // between the traps bone and the neck. Sampling these authored bones
+        // after every clip frame keeps the bar in place through the complete
+        // standing -> squat -> standing movement for every rig.
+        Vector3 target = Vector3.Lerp(trapsPosition, neckPosition, 0.24f);
+        target -= up * Mathf.Clamp(trapsToNeck * 0.04f, 0.012f, 0.035f);
 
         // The bar belongs on the upper back, between the neck and shoulder
         // blades. Use each model's shoulder width to scale the rear offset so
@@ -2451,13 +2592,13 @@ public sealed class SquatWorkoutController : MonoBehaviour
         // visibly wrong fixed distance from the neck.
         float shoulderWidth = hasShoulders
             ? Vector3.Distance(leftShoulder.position, rightShoulder.position)
-            : shoulderToNeck * 3.2f;
+            : trapsToNeck * 3.2f;
         float rearOffset = Mathf.Clamp(shoulderWidth * 0.16f, 0.055f, 0.14f);
         Vector3 horizontalForward = Vector3.ProjectOnPlane(
-            fighter.transform.forward, Vector3.up);
+            fighter.transform.forward, up);
         if (horizontalForward.sqrMagnitude < 0.0001f)
         {
-            horizontalForward = Vector3.forward;
+            horizontalForward = Vector3.ProjectOnPlane(Vector3.forward, up);
         }
         target -= horizontalForward.normalized * rearOffset;
         return target;
@@ -2977,39 +3118,57 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private void ResolveBones()
     {
         Transform[] bones = GetComponentsInChildren<Transform>(true);
-        hips = FindBone(bones, "hips");
-        spine = FindBone(bones, "spine");
-        chest = FindBone(bones, "spine2", "spine1", "chest");
-        neck = FindBone(bones, "neck");
-        leftShoulder = FindBone(bones, "leftshoulder");
-        leftUpperArm = FindBone(bones, "leftarm", "leftupperarm", "leftupper");
-        leftForearm = FindBone(bones, "leftforearm", "leftlowerarm");
-        leftHand = FindBone(bones, "lefthand");
-        leftIndexTip = FindBone(bones, "lefthandindex3");
-        leftMiddleTip = FindBone(bones, "lefthandmiddle3");
-        leftRingTip = FindBone(bones, "lefthandring3");
-        leftPinkyTip = FindBone(bones, "lefthandpinky3");
-        rightShoulder = FindBone(bones, "rightshoulder");
-        rightUpperArm = FindBone(bones, "rightarm", "rightupperarm", "rightupper");
-        rightForearm = FindBone(bones, "rightforearm", "rightlowerarm");
-        rightHand = FindBone(bones, "righthand");
-        rightIndexTip = FindBone(bones, "righthandindex3");
-        rightMiddleTip = FindBone(bones, "righthandmiddle3");
-        rightRingTip = FindBone(bones, "righthandring3");
-        rightPinkyTip = FindBone(bones, "righthandpinky3");
-        leftThigh = FindBone(bones, "leftupleg", "leftthigh");
-        leftShin = FindBone(bones, "leftleg", "leftshin", "leftlowerleg");
-        leftFoot = FindBone(bones, "leftfoot");
-        leftToe = FindBone(bones, "lefttoebase", "lefttoe");
+        // The authored exports use a clean DEF hierarchy, but every source
+        // character reaches it from a different Rigify skeleton. Resolve
+        // exact DEF names first and only then fall back to Mixamo aliases;
+        // suffix-first matching would bind DEF-spine to both hips and spine.
+        hips = FindBone(bones, "hips", "pelvis", "def-spine");
+        spine = FindBone(bones, "spine", "def-spine.001");
+        chest = FindBone(bones, "spine2", "spine1", "chest", "def-spine.003");
+        neck = FindBone(bones, "neck", "def-spine.004");
+        leftShoulder = FindBone(bones, "leftshoulder", "def-shoulder.l");
+        leftUpperArm = FindBone(
+            bones, "leftarm", "leftupperarm", "leftupper", "def-upper_arm.l");
+        leftForearm = FindBone(
+            bones, "leftforearm", "leftlowerarm", "def-forearm.l");
+        leftHand = FindBone(bones, "lefthand", "def-hand.l");
+        leftIndexTip = FindBone(
+            bones, "lefthandindex3", "def-f_index.03.l");
+        leftMiddleTip = FindBone(
+            bones, "lefthandmiddle3", "def-f_middle.03.l");
+        leftRingTip = FindBone(
+            bones, "lefthandring3", "def-f_ring.03.l");
+        leftPinkyTip = FindBone(
+            bones, "lefthandpinky3", "def-f_pinky.03.l");
+        rightShoulder = FindBone(bones, "rightshoulder", "def-shoulder.r");
+        rightUpperArm = FindBone(
+            bones, "rightarm", "rightupperarm", "rightupper", "def-upper_arm.r");
+        rightForearm = FindBone(
+            bones, "rightforearm", "rightlowerarm", "def-forearm.r");
+        rightHand = FindBone(bones, "righthand", "def-hand.r");
+        rightIndexTip = FindBone(
+            bones, "righthandindex3", "def-f_index.03.r");
+        rightMiddleTip = FindBone(
+            bones, "righthandmiddle3", "def-f_middle.03.r");
+        rightRingTip = FindBone(
+            bones, "righthandring3", "def-f_ring.03.r");
+        rightPinkyTip = FindBone(
+            bones, "righthandpinky3", "def-f_pinky.03.r");
+        leftThigh = FindBone(bones, "leftupleg", "leftthigh", "def-thigh.l");
+        leftShin = FindBone(
+            bones, "leftleg", "leftshin", "leftlowerleg", "def-shin.l");
+        leftFoot = FindBone(bones, "leftfoot", "def-foot.l");
+        leftToe = FindBone(bones, "lefttoebase", "lefttoe", "def-toe.l");
         if (leftToe == leftFoot ||
             (leftToe != null && leftFoot != null && !leftToe.IsChildOf(leftFoot)))
         {
             leftToe = null;
         }
-        rightThigh = FindBone(bones, "rightupleg", "rightthigh");
-        rightShin = FindBone(bones, "rightleg", "rightshin", "rightlowerleg");
-        rightFoot = FindBone(bones, "rightfoot");
-        rightToe = FindBone(bones, "righttoebase", "righttoe");
+        rightThigh = FindBone(bones, "rightupleg", "rightthigh", "def-thigh.r");
+        rightShin = FindBone(
+            bones, "rightleg", "rightshin", "rightlowerleg", "def-shin.r");
+        rightFoot = FindBone(bones, "rightfoot", "def-foot.r");
+        rightToe = FindBone(bones, "righttoebase", "righttoe", "def-toe.r");
         if (rightToe == rightFoot ||
             (rightToe != null && rightFoot != null && !rightToe.IsChildOf(rightFoot)))
         {
@@ -3037,13 +3196,25 @@ public sealed class SquatWorkoutController : MonoBehaviour
 
     private static Transform FindBone(Transform[] bones, params string[] candidates)
     {
-        for (int i = 0; i < bones.Length; i++)
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
         {
-            string normalized = NormalizeBoneName(bones[i].name);
-            for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+            string candidate = NormalizeBoneName(candidates[candidateIndex]);
+            for (int i = 0; i < bones.Length; i++)
             {
-                string candidate = NormalizeBoneName(candidates[candidateIndex]);
-                if (normalized == candidate || normalized.EndsWith(candidate))
+                if (NormalizeBoneName(bones[i].name) == candidate)
+                {
+                    return bones[i];
+                }
+            }
+        }
+
+        for (int candidateIndex = 0; candidateIndex < candidates.Length; candidateIndex++)
+        {
+            string candidate = NormalizeBoneName(candidates[candidateIndex]);
+            for (int i = 0; i < bones.Length; i++)
+            {
+                string normalized = NormalizeBoneName(bones[i].name);
+                if (normalized.EndsWith(candidate))
                 {
                     return bones[i];
                 }

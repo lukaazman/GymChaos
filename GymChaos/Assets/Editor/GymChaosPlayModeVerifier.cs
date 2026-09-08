@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEditor;
@@ -40,10 +41,14 @@ public static class GymChaosPlayModeVerifier
     private static double contactVerificationStartedAt;
     private static Vector3 contactOriginalPosition;
     private static Quaternion contactOriginalRotation;
+    private static bool contactCollisionIgnored;
     private static double deathScreenCaptureStartedAt;
     private static string deathScreenCapturePath;
     private static GameObject deathScreenCaptureOverlay;
     private static bool verificationFailed;
+    private static bool audioPauseCaptured;
+    private static bool audioPauseBeforeVerification;
+    private static bool radioPopupVerified;
 
     static GymChaosPlayModeVerifier()
     {
@@ -90,9 +95,14 @@ public static class GymChaosPlayModeVerifier
         contactVerificationStartedAt = 0d;
         contactOriginalPosition = Vector3.zero;
         contactOriginalRotation = Quaternion.identity;
+        contactCollisionIgnored = false;
         deathScreenCaptureStartedAt = 0d;
         deathScreenCapturePath = string.Empty;
         deathScreenCaptureOverlay = null;
+        audioPauseBeforeVerification = AudioListener.pause;
+        audioPauseCaptured = true;
+        radioPopupVerified = false;
+        AudioListener.pause = true;
         EditorPrefs.SetBool(VerificationRequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -104,6 +114,7 @@ public static class GymChaosPlayModeVerifier
     {
         if (EditorApplication.isPlaying)
         {
+            AudioListener.pause = true;
             enteredPlayTime = EditorApplication.timeSinceStartup;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
@@ -114,11 +125,22 @@ public static class GymChaosPlayModeVerifier
     {
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
+            if (!audioPauseCaptured)
+            {
+                audioPauseBeforeVerification = AudioListener.pause;
+                audioPauseCaptured = true;
+            }
+            AudioListener.pause = true;
             enteredPlayTime = EditorApplication.timeSinceStartup;
             EditorApplication.update += Tick;
         }
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
+            if (audioPauseCaptured)
+            {
+                AudioListener.pause = audioPauseBeforeVerification;
+                audioPauseCaptured = false;
+            }
             RestoreOriginalProgressionSave();
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -159,6 +181,22 @@ public static class GymChaosPlayModeVerifier
             {
                 ValidateSkyRender(player.playerCamera);
                 skyRenderVerified = true;
+            }
+
+            if (!radioPopupVerified && elapsed > 10d)
+            {
+                GymRadio radio = UnityEngine.Object.FindFirstObjectByType<GymRadio>();
+                if (radio != null && radio.HasPhysicalModel)
+                {
+                    ValidateRadioPopupAndModel(radio, player);
+                    ValidatePullUpCameraVariants();
+                    radioPopupVerified = true;
+                }
+                else if (elapsed > 30d)
+                {
+                    throw new InvalidOperationException(
+                        "Reception radio did not retain a physical model for popup verification.");
+                }
             }
 
             if (!positioned && elapsed > 4d)
@@ -413,9 +451,47 @@ public static class GymChaosPlayModeVerifier
                     $"GYMCHAOS_ENEMY_PUNCH_MISS_OK attacker={contactKiller.Identity} " +
                     $"health={player.CurrentHealth:F0}");
 
+                float distanceBefore = Vector3.ProjectOnPlane(
+                    player.transform.position - contactKiller.transform.position, Vector3.up).magnitude;
+                Debug.Log(
+                    $"GYMCHAOS_ENEMY_PUNCH_SETUP attacker={contactKiller.Identity} " +
+                    $"root={contactKiller.transform.position} forward={contactKiller.transform.forward} " +
+                    $"targetBefore={player.transform.position} " +
+                    $"distanceBefore={distanceBefore:F3}");
+
+                SetContactCollisionIgnored(true, player);
+                MixamoScanRetargetAnimator contactAnimator =
+                    contactKiller.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+                Vector3 contactTarget = contactKiller.transform.position +
+                    contactKiller.transform.forward * 0.72f;
+                if (contactAnimator != null && contactAnimator.SamplePunchContactForVerification(
+                        out Vector3 leftHandPosition, out Vector3 rightHandPosition,
+                        out string handDetails))
+                {
+                    Vector3 forward = Vector3.ProjectOnPlane(
+                        contactKiller.transform.forward, Vector3.up).normalized;
+                    Vector3 leftPlanar = Vector3.ProjectOnPlane(
+                        leftHandPosition - contactKiller.transform.position, Vector3.up);
+                    Vector3 rightPlanar = Vector3.ProjectOnPlane(
+                        rightHandPosition - contactKiller.transform.position, Vector3.up);
+                    contactTarget = Vector3.Dot(leftPlanar, forward) >=
+                        Vector3.Dot(rightPlanar, forward)
+                        ? leftHandPosition
+                        : rightHandPosition;
+                    Debug.Log(
+                        $"GYMCHAOS_ENEMY_PUNCH_CONTACT_TARGET attacker={contactKiller.Identity} " +
+                        $"target={contactTarget} details={handDetails}");
+                }
                 MovePlayerForVerification(
                     player,
-                    contactKiller.transform.position + contactKiller.transform.forward * 1.05f);
+                    contactTarget);
+                float distanceAfter = Vector3.ProjectOnPlane(
+                    player.transform.position - contactKiller.transform.position, Vector3.up).magnitude;
+                Debug.Log(
+                    $"GYMCHAOS_ENEMY_PUNCH_SETUP_PLACED attacker={contactKiller.Identity} " +
+                    $"root={contactKiller.transform.position} forward={contactKiller.transform.forward} " +
+                    $"targetAfter={player.transform.position} " +
+                    $"distanceAfter={distanceAfter:F3}");
                 contactHealthBefore = player.CurrentHealth;
                 contactKiller.BeginPunchForVerification(player.transform);
                 contactVerificationStartedAt = EditorApplication.timeSinceStartup;
@@ -436,6 +512,7 @@ public static class GymChaosPlayModeVerifier
                     Debug.Log(
                         $"GYMCHAOS_ENEMY_PUNCH_HIT_OK attacker={contactKiller.Identity} " +
                         $"damage={damage:F0} health={player.CurrentHealth:F0}");
+                    SetContactCollisionIgnored(false, player);
                     MovePlayerForVerification(player, contactOriginalPosition);
                     player.transform.rotation = contactOriginalRotation;
                     gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
@@ -492,6 +569,8 @@ public static class GymChaosPlayModeVerifier
         catch (Exception exception)
         {
             Debug.LogException(exception);
+            SetContactCollisionIgnored(false,
+                UnityEngine.Object.FindFirstObjectByType<PlayerMovement>());
             verificationFailed = true;
             EditorPrefs.DeleteKey(VerificationRequestedKey);
             EditorApplication.update -= Tick;
@@ -732,11 +811,42 @@ public static class GymChaosPlayModeVerifier
                 $"cameraY={cameraPosition.y:F2}, targetEyeY={targetEyeY:F2}, delta={eyeDelta:F2}.");
         }
 
+        LogFirstPersonCameraEvidence(player.playerCamera, player);
         firstPersonEyeCapturePath = CaptureCamera(player.playerCamera, "player-eye-level-verification.png");
         Debug.Log(
             $"GYMCHAOS_PLAYER_EYE_LEVEL_OK target={target.Identity} cameraY={cameraPosition.y:F2} " +
             $"targetEyeY={targetEyeY:F2} delta={eyeDelta:F2} screenshot={firstPersonEyeCapturePath}");
         return true;
+    }
+
+    private static void LogFirstPersonCameraEvidence(Camera camera, PlayerMovement player)
+    {
+        if (camera == null || player == null)
+        {
+            return;
+        }
+
+        PlayerHandRig rig = player.GetComponentInChildren<PlayerHandRig>(true);
+        MeshRenderer[] renderers = rig != null
+            ? rig.GetComponentsInChildren<MeshRenderer>(true)
+            : new MeshRenderer[0];
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            MeshRenderer renderer = renderers[i];
+            if (renderer == null || !renderer.name.StartsWith("First Person Arms Render", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            Vector3 viewportCenter = camera.WorldToViewportPoint(renderer.bounds.center);
+            Debug.Log(
+                $"GYMCHAOS_PLAYER_FIRST_PERSON_EYE_RENDER name={renderer.name} " +
+                $"enabled={renderer.enabled} forceOff={renderer.forceRenderingOff} " +
+                $"layer={renderer.gameObject.layer} visible={renderer.isVisible} " +
+                $"bounds={renderer.bounds.center}/{renderer.bounds.size} " +
+                $"camera={camera.transform.position}/{camera.transform.forward} " +
+                $"viewportCenter={viewportCenter}", renderer);
+        }
     }
 
     private static void CaptureAverageEnemyEyeLine(EnemyFighter[] fighters)
@@ -853,8 +963,37 @@ public static class GymChaosPlayModeVerifier
         contactVerificationStartedAt = EditorApplication.timeSinceStartup;
     }
 
+    private static void SetContactCollisionIgnored(bool ignored, PlayerMovement player)
+    {
+        if (contactKiller == null || player == null || ignored == contactCollisionIgnored)
+        {
+            return;
+        }
+
+        Collider[] enemyColliders = contactKiller.GetComponentsInChildren<Collider>(true);
+        Collider[] playerColliders = player.GetComponentsInChildren<Collider>(true);
+        for (int enemyIndex = 0; enemyIndex < enemyColliders.Length; enemyIndex++)
+        {
+            Collider enemyCollider = enemyColliders[enemyIndex];
+            if (enemyCollider == null)
+            {
+                continue;
+            }
+            for (int playerIndex = 0; playerIndex < playerColliders.Length; playerIndex++)
+            {
+                Collider playerCollider = playerColliders[playerIndex];
+                if (playerCollider != null)
+                {
+                    Physics.IgnoreCollision(enemyCollider, playerCollider, ignored);
+                }
+            }
+        }
+        contactCollisionIgnored = ignored;
+    }
+
     private static void MovePlayerForVerification(PlayerMovement player, Vector3 position)
     {
+        player.ResetMovementForVerification();
         CharacterController controller = player.GetComponent<CharacterController>();
         bool wasEnabled = controller != null && controller.enabled;
         if (wasEnabled)
@@ -863,6 +1002,7 @@ public static class GymChaosPlayModeVerifier
         }
         position.y = player.transform.position.y;
         player.transform.position = position;
+        player.ResetMovementForVerification();
         if (wasEnabled)
         {
             controller.enabled = true;
@@ -871,6 +1011,86 @@ public static class GymChaosPlayModeVerifier
 
     private static void ValidateAndCapture(PlayerMovement player, PlayerHandRig rig)
     {
+        rig.ResetToVerificationIdlePose();
+        string playerPoseDetails = "not sampled";
+        string playerIdleDetails = "not sampled";
+        string playerJumpDetails = "not sampled";
+        string playerAttackPoseDetails = "not sampled";
+        string playerFrisbeeThrowDetails = "not sampled";
+        string playerHardThrowDetails = "not sampled";
+        if (!rig.SampleAuthoredClipForVerification(
+                "idle1", 0.52f, out playerIdleDetails) ||
+            !rig.SampleAuthoredClipForVerification(
+                "jumping", 0.52f, out playerJumpDetails) ||
+            !rig.SampleAuthoredClipForVerification(
+                "walking", 0.37f, out playerPoseDetails) ||
+            !rig.SampleAuthoredClipForVerification(
+                "punch_left", 0.52f, out playerAttackPoseDetails) ||
+            !rig.SampleAuthoredClipForVerification(
+                "throw_frisbee", 0.52f, out playerFrisbeeThrowDetails) ||
+            !rig.SampleAuthoredClipForVerification(
+                "throw_object_hard", 0.52f, out playerHardThrowDetails))
+        {
+            throw new InvalidOperationException(
+                $"Player authored clips did not deform the player rig: " +
+                $"idle={playerIdleDetails}, jump={playerJumpDetails}, " +
+                $"walk={playerPoseDetails}, punch={playerAttackPoseDetails}, " +
+                $"throw_frisbee={playerFrisbeeThrowDetails}, " +
+                $"throw_object_hard={playerHardThrowDetails}.");
+        }
+        Debug.Log(
+            $"GYMCHAOS_PLAYER_AUTHORED_DIRECT_POSE_OK " +
+            $"modelResource={rig.RuntimeModelResourcePath} " +
+            $"animationResource={rig.RuntimeAnimationResourcePath} " +
+            $"idle={playerIdleDetails} jump={playerJumpDetails} " +
+            $"walk={playerPoseDetails} punch={playerAttackPoseDetails} " +
+            $"throw_frisbee={playerFrisbeeThrowDetails} " +
+            $"throw_object_hard={playerHardThrowDetails}", rig);
+        string jumpStability = "not sampled";
+        string leftPunchStability = "not sampled";
+        string rightPunchStability = "not sampled";
+        bool jumpStable = rig.VerifyStableActionPoseForVerification(
+            "jumping", 0.52f, out jumpStability);
+        bool leftPunchStable = rig.VerifyStableActionPoseForVerification(
+            "punch_left", 0.52f, out leftPunchStability);
+        bool rightPunchStable = rig.VerifyStableActionPoseForVerification(
+            "punch_right", 0.52f, out rightPunchStability);
+        if (!jumpStable || !leftPunchStable || !rightPunchStable)
+        {
+            throw new InvalidOperationException(
+                $"Player action support/twist regression: jump={jumpStability}, " +
+                $"leftPunch={leftPunchStability}, rightPunch={rightPunchStability}.");
+        }
+        Debug.Log(
+            $"GYMCHAOS_PLAYER_ACTION_STABILITY_OK jump={jumpStability} " +
+            $"leftPunch={leftPunchStability} rightPunch={rightPunchStability}", rig);
+        string[] stablePoseClips =
+        {
+            "idle1", "walking", "running",
+            "jumping", "punch_left", "punch_right"
+        };
+        List<string> stablePoseCaptures = new List<string>();
+        for (int i = 0; i < stablePoseClips.Length; i++)
+        {
+            stablePoseCaptures.Add(CaptureStablePlayerPose(
+                rig, stablePoseClips[i], 0.52f));
+        }
+        stablePoseCaptures.Add(CaptureStablePlayerPose(
+            rig, "punch_left", 0.52f, true));
+        stablePoseCaptures.Add(CaptureStablePlayerPose(
+            rig, "punch_right", 0.52f, true));
+        rig.ResetToVerificationIdlePose();
+        Debug.Log(
+            "GYMCHAOS_PLAYER_STABLE_POSE_CAPTURES_OK paths=" +
+            string.Join(",", stablePoseCaptures), rig);
+        if (!rig.HasSampledBothThrowClips)
+        {
+            throw new InvalidOperationException(
+                "Both authored player throw clips were not sampled in Play Mode.");
+        }
+        Debug.Log(
+            $"GYMCHAOS_PLAYER_THROW_CLIPS_OK " +
+            $"frisbee={playerFrisbeeThrowDetails} hard={playerHardThrowDetails}", rig);
         rig.ResetToVerificationIdlePose();
         ValidateRuntimeRoster();
         ValidateExternalCharactersAndCapture();
@@ -926,7 +1146,7 @@ public static class GymChaosPlayModeVerifier
                     }
                     physicalColliderCount++;
                 }
-                if (candidate.enabled &&
+                if (candidate.enabled && candidate.bounds.Contains(legGap) &&
                     (candidate.ClosestPoint(legGap) - legGap).sqrMagnitude < 0.000001f)
                 {
                     throw new InvalidOperationException(
@@ -995,6 +1215,12 @@ public static class GymChaosPlayModeVerifier
             else if (renderers[i].gameObject.layer == PlanarGymMirror.FirstPersonPlayerLayer)
             {
                 firstPersonArmCount++;
+                if (!renderers[i].enabled || renderers[i].forceRenderingOff)
+                {
+                    throw new InvalidOperationException(
+                        "First-person arms are hidden during neutral gameplay: " +
+                        renderers[i].name + ".");
+                }
                 if (renderers[i].sharedMesh != null)
                 {
                     firstPersonTriangleCount += renderers[i].sharedMesh.triangles.Length / 3;
@@ -1026,19 +1252,38 @@ public static class GymChaosPlayModeVerifier
             if (enemyRenderer != null && TryGetVisibleSkinnedBounds(enemyRenderer, out Bounds enemyBounds) &&
                 enemyBounds.size.y > 0.5f)
             {
-                enemyHeightTotal += enemyBounds.size.y;
+                // A current skinned renderer AABB changes with a stride,
+                // punch or celebration pose. Compare the player's visible
+                // height with each authored FBX's stable fitted height so
+                // the contract cannot fail merely because one enemy is
+                // sampled with raised arms.
+                ExternalRiggedCharacterVisual enemyVisual =
+                    fighters[i] != null
+                        ? fighters[i].GetComponent<ExternalRiggedCharacterVisual>()
+                        : null;
+                float comparableEnemyHeight = enemyVisual != null &&
+                    enemyVisual.RuntimeAuthoredHeight > 0.5f
+                    ? enemyVisual.RuntimeAuthoredHeight
+                    : enemyBounds.size.y;
+                enemyHeightTotal += comparableEnemyHeight;
                 enemyHeightCount++;
             }
         }
         float averageEnemyHeight = enemyHeightCount > 0 ? enemyHeightTotal / enemyHeightCount : 0f;
-        float playerToEnemyHeight = averageEnemyHeight > 0f ? bodyBounds.size.y / averageEnemyHeight : 0f;
+        float playerVisibleHeight = rig.RuntimeVisibleHeight;
+        if (playerVisibleHeight < 0.01f)
+        {
+            playerVisibleHeight = bodyBounds.size.y;
+        }
+        float playerToEnemyHeight = averageEnemyHeight > 0f ? playerVisibleHeight / averageEnemyHeight : 0f;
         if (playerToEnemyHeight < 0.9f || playerToEnemyHeight > 1.12f)
         {
             throw new InvalidOperationException(
-                $"Player height is not comparable to enemies: player={bodyBounds.size.y:F2}, enemyAverage={averageEnemyHeight:F2}, ratio={playerToEnemyHeight:F2}.");
+                $"Player height is not comparable to enemies: player={playerVisibleHeight:F2}, enemyAverage={averageEnemyHeight:F2}, ratio={playerToEnemyHeight:F2}.");
         }
 
         Camera camera = player.playerCamera;
+        ValidateMirrorParity(rig);
         if (!hasAverageEnemyEyeWorldY)
         {
             throw new InvalidOperationException("Average enemy eye line was not captured for mirror validation.");
@@ -1052,15 +1297,24 @@ public static class GymChaosPlayModeVerifier
                 $"delta={mirrorEyeDelta:F2}.");
         }
         string outputPath = CaptureCamera(camera, "player-mirror-verification.png");
-        Transform leftHand = FindDescendant(rig.transform, "mixamorig:LeftHand");
-        Transform rightHand = FindDescendant(rig.transform, "mixamorig:RightHand");
-        Vector3 leftHandCamera = leftHand != null ? camera.transform.InverseTransformPoint(leftHand.position) : Vector3.zero;
-        Vector3 rightHandCamera = rightHand != null ? camera.transform.InverseTransformPoint(rightHand.position) : Vector3.zero;
-        if (leftHand == null || rightHand == null || leftHandCamera.y > -0.42f || rightHandCamera.y > -0.42f)
+        // The player is authored on its own Rigify deform skeleton. The old
+        // Mixamo-name lookup always returned null here and falsely reported a
+        // T-pose even after the authored idle had been sampled.
+        Transform leftHand = rig.RuntimeFirstPersonLeftHand;
+        Transform rightHand = rig.RuntimeFirstPersonRightHand;
+        if (!rig.TryGetFirstPersonHandCameraPositions(
+                out Vector3 leftHandCamera, out Vector3 rightHandCamera) ||
+            leftHandCamera.x > -0.24f || rightHandCamera.x < 0.24f ||
+            leftHandCamera.z < 0.4f || rightHandCamera.z < 0.4f ||
+            leftHandCamera.z > 1.3f || rightHandCamera.z > 1.3f)
         {
             throw new InvalidOperationException(
-                $"Neutral first-person hands are still too high: leftY={leftHandCamera.y:F2}, rightY={rightHandCamera.y:F2}.");
+                $"First-person hands do not frame both camera sides: " +
+                $"left={leftHandCamera}, right={rightHandCamera}.");
         }
+        Debug.Log(
+            $"GYMCHAOS_PLAYER_AUTHORED_IDLE_OK idleHands={leftHand.position}/{rightHand.position} " +
+            $"cameraHands={leftHandCamera}/{rightHandCamera} clips={rig.MixamoAttackClipSummary}", rig);
         Camera mirrorCamera = GameObject.Find("Gym Mirror Camera")?.GetComponent<Camera>();
         MeshRenderer[] proxyRenderers = rig.GetComponentsInChildren<MeshRenderer>(true);
         string proxyDebug = string.Empty;
@@ -1080,13 +1334,449 @@ public static class GymChaosPlayModeVerifier
             $"mixamoClips={rig.MixamoAttackClipSummary} allMixamoAttacksSampled={rig.HasSampledAllMixamoAttackClips} " +
             $"mixamoRunSampled={rig.HasSampledMixamoRunClip} " +
             $"heldEquipmentGripsSampled={rig.HasSampledHeldEquipmentGrips} " +
-            $"averageEnemyHeight={averageEnemyHeight:F2} playerToEnemyHeight={playerToEnemyHeight:F2} " +
+            $"playerVisibleHeight={playerVisibleHeight:F2} averageEnemyHeight={averageEnemyHeight:F2} " +
+            $"playerToEnemyHeight={playerToEnemyHeight:F2} " +
             $"averageEnemyEyeY={averageEnemyEyeWorldY:F2} mirrorEyeDelta={mirrorEyeDelta:F2} " +
             $"firstPersonEyeScreenshot={firstPersonEyeCapturePath} " +
             $"cameraMasks={camera.cullingMask}/{mirrorCamera?.cullingMask} renderers={rendererDebug} " +
             $"proxies={proxyDebug} screenshot={outputPath}");
 
         ValidatePlayerHealthAndDeathContract(player);
+    }
+
+    private static void ValidateRadioPopupAndModel(
+        GymRadio radio, PlayerMovement player)
+    {
+        if (radio == null || !radio.HasPhysicalModel)
+        {
+            throw new InvalidOperationException(
+                "Reception radio physical model was unavailable before popup verification.");
+        }
+        if (radio.IsMusicEnabled || radio.IsLocalMusicEnabled)
+        {
+            throw new InvalidOperationException(
+                "Reception radio started with playback enabled instead of defaulting off.");
+        }
+        radio.ToggleLocalPlayback();
+        if (!radio.IsMusicEnabled || !radio.IsLocalMusicEnabled)
+        {
+            throw new InvalidOperationException(
+                "Radio menu action could not enable the local playlist from the default-off state.");
+        }
+        if (!radio.UsesDistanceRolloff || radio.AudioMaxDistance < 90f ||
+            radio.AudioMinDistance < 1f)
+        {
+            throw new InvalidOperationException(
+                $"Radio is not a gym-wide distance source: " +
+                $"rolloff={radio.UsesDistanceRolloff}, " +
+                $"min={radio.AudioMinDistance:F1}, max={radio.AudioMaxDistance:F1}.");
+        }
+        Renderer lockerFloor =
+            GameObject.Find("Locker Room Floor")?.GetComponent<Renderer>();
+        if (lockerFloor == null ||
+            !GymRadio.IsPositionInsidePlayableGym(lockerFloor.bounds.center))
+        {
+            throw new InvalidOperationException(
+                "Locker room is not included in the radio's playable gym zone.");
+        }
+        bool outsideMuted = radio.ApplyListenerPositionForVerification(
+            lockerFloor.bounds.center + new Vector3(10000f, 0f, 10000f));
+        bool lockerMuted = radio.ApplyListenerPositionForVerification(
+            lockerFloor.bounds.center);
+        radio.ApplyListenerPositionForVerification(
+            player != null ? player.transform.position : lockerFloor.bounds.center);
+        if (!outsideMuted || lockerMuted)
+        {
+            throw new InvalidOperationException(
+                $"Radio zone mute contract failed: outsideMuted={outsideMuted}, " +
+                $"lockerMuted={lockerMuted}.");
+        }
+
+        // ToggleMusic is the same public action used by the in-world radio
+        // interaction. Calling it twice must reuse one modal surface rather
+        // than stacking two full-screen pages on top of each other.
+        radio.ToggleMusic();
+        GymRadioSoundCloudPopup popup =
+            UnityEngine.Object.FindFirstObjectByType<GymRadioSoundCloudPopup>(
+                FindObjectsInactive.Include);
+        if (popup == null || !popup.IsVisible || !GymRadioSoundCloudPopup.IsAnyVisible)
+        {
+            throw new InvalidOperationException(
+                "Radio controls popup did not open from the radio action.");
+        }
+        if (player != null && player.CanShowCursorRecapturePrompt)
+        {
+            throw new InvalidOperationException(
+                "CLICK TO LOOK AROUND remained eligible while the radio modal was open.");
+        }
+
+        radio.ToggleMusic();
+        GymRadioSoundCloudPopup[] popups =
+            UnityEngine.Object.FindObjectsByType<GymRadioSoundCloudPopup>(
+                FindObjectsInactive.Include);
+        if (popups.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"Radio controls stacked duplicate popup surfaces: count={popups.Length}.");
+        }
+
+        Button localButton = null;
+        Button musicButton = null;
+        Button openSoundCloudButton = null;
+        Button loadPlaylistButton = null;
+        Button playPauseButton = null;
+        Button nextButton = null;
+        Button[] buttons = popup.GetComponentsInChildren<Button>(true);
+        for (int i = 0; i < buttons.Length; i++)
+        {
+            if (buttons[i] == null)
+            {
+                continue;
+            }
+
+            switch (buttons[i].gameObject.name)
+            {
+                case "Radio Local Button":
+                    localButton = buttons[i];
+                    break;
+                case "Radio Music Toggle Button":
+                    musicButton = buttons[i];
+                    break;
+                case "Radio Open SoundCloud Button":
+                    openSoundCloudButton = buttons[i];
+                    break;
+                case "Radio Load Playlist Button":
+                    loadPlaylistButton = buttons[i];
+                    break;
+                case "Radio Widget Play Pause Button":
+                    playPauseButton = buttons[i];
+                    break;
+                case "Radio Widget Next Button":
+                    nextButton = buttons[i];
+                    break;
+            }
+        }
+
+        InputField playlistUrlInput = popup.GetComponentInChildren<InputField>(true);
+        if (localButton == null || musicButton == null ||
+            openSoundCloudButton == null || loadPlaylistButton == null ||
+            playPauseButton == null || nextButton == null ||
+            playlistUrlInput == null || !openSoundCloudButton.interactable ||
+            !loadPlaylistButton.interactable || !playPauseButton.interactable ||
+            !nextButton.interactable)
+        {
+            throw new InvalidOperationException(
+                "Radio controls did not build the URL/Open/Load/Play-Pause/Next actions.");
+        }
+
+        string publicUrl =
+            "https://soundcloud.com/gymchaos-verifier/sets/workout";
+        string mobileUrl =
+            "https://m.soundcloud.com/gymchaos-verifier/sets/workout";
+        string secretUrl =
+            "https://soundcloud.com/gymchaos-verifier/sets/workout/s-AbC123";
+        string shortUrl = "https://on.soundcloud.com/AbC123";
+        if (!GymRadio.IsValidSoundCloudPlaylistUrl(publicUrl) ||
+            !GymRadio.IsValidSoundCloudPlaylistUrl(mobileUrl) ||
+            !GymRadio.IsValidSoundCloudPlaylistUrl(secretUrl) ||
+            !GymRadio.IsValidSoundCloudPlaylistUrl(shortUrl) ||
+            GymRadio.IsValidSoundCloudPlaylistUrl(
+                "http://soundcloud.com/gymchaos-verifier/sets/workout") ||
+            GymRadio.IsValidSoundCloudPlaylistUrl(
+                "https://soundcloud.com.evil.example/user/sets/workout") ||
+            GymRadio.IsValidSoundCloudPlaylistUrl(
+                "https://soundcloud.com/user/single-track"))
+        {
+            throw new InvalidOperationException(
+                "SoundCloud playlist URL allowlist accepted an unsafe URL or rejected a supported share URL.");
+        }
+
+        bool preferenceExisted = radio.HasSoundCloudPlaylistPreference;
+        string previousPlaylistUrl = radio.PersistedSoundCloudPlaylistUrl;
+        int nearWidgetVolume = 0;
+        int lockerWidgetVolume = 0;
+        int outsideWidgetVolume = 0;
+        bool widgetLoopContinues = false;
+        try
+        {
+            playlistUrlInput.text = "https://example.com/not-soundcloud";
+            loadPlaylistButton.onClick.Invoke();
+            if (!radio.IsSoundCloudError ||
+                !radio.GetSoundCloudUiStatus().Contains("INVALID URL"))
+            {
+                throw new InvalidOperationException(
+                    "Invalid SoundCloud URL did not produce an actionable error.");
+            }
+
+            playlistUrlInput.text = secretUrl;
+            loadPlaylistButton.onClick.Invoke();
+            if (!string.Equals(
+                    radio.SoundCloudPlaylistUrl, secretUrl,
+                    StringComparison.Ordinal) ||
+                !radio.HasSoundCloudPlaylistPreference ||
+                !string.Equals(
+                    radio.PersistedSoundCloudPlaylistUrl, secretUrl,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "SoundCloud playlist URL was not saved to PlayerPrefs.");
+            }
+
+            nearWidgetVolume = radio.CalculateSoundCloudWidgetVolume(
+                radio.transform.position);
+            lockerWidgetVolume = radio.CalculateSoundCloudWidgetVolume(
+                lockerFloor.bounds.center);
+            outsideWidgetVolume = radio.CalculateSoundCloudWidgetVolume(
+                lockerFloor.bounds.center +
+                new Vector3(10000f, 0f, 10000f));
+            if (nearWidgetVolume <= lockerWidgetVolume ||
+                lockerWidgetVolume <= 0 || outsideWidgetVolume != 0)
+            {
+                throw new InvalidOperationException(
+                    $"SoundCloud widget rolloff failed: near={nearWidgetVolume}, " +
+                    $"locker={lockerWidgetVolume}, outside={outsideWidgetVolume}.");
+            }
+
+            radio.PrepareSoundCloudWidgetForVerification();
+            radio.HandleSoundCloudWidgetReady(string.Empty);
+            if (!radio.IsSoundCloudWidgetReady)
+            {
+                throw new InvalidOperationException(
+                    "SoundCloud READY callback did not update radio state.");
+            }
+            playPauseButton.onClick.Invoke();
+            radio.HandleSoundCloudWidgetPlay(string.Empty);
+            if (!radio.IsSoundCloudWidgetPlaying)
+            {
+                throw new InvalidOperationException(
+                    "SoundCloud PLAY callback did not update radio state.");
+            }
+            nextButton.onClick.Invoke();
+            if (!radio.GetSoundCloudUiStatus().Contains("NEXT TRACK"))
+            {
+                throw new InvalidOperationException(
+                    "SoundCloud NEXT control did not produce playback state.");
+            }
+            radio.HandleSoundCloudWidgetFinish(string.Empty);
+            widgetLoopContinues = radio.IsSoundCloudWidgetPlaying &&
+                radio.GetSoundCloudUiStatus().Contains("CONTINUING");
+            if (!widgetLoopContinues)
+            {
+                throw new InvalidOperationException(
+                    "SoundCloud FINISH callback did not continue/loop the playlist.");
+            }
+            playPauseButton.onClick.Invoke();
+            if (radio.IsSoundCloudWidgetPlaying)
+            {
+                throw new InvalidOperationException(
+                    "SoundCloud PLAY/PAUSE control did not pause widget state.");
+            }
+        }
+        finally
+        {
+            radio.RestoreSoundCloudPlaylistUrlForVerification(
+                previousPlaylistUrl, preferenceExisted);
+        }
+
+        localButton.onClick.Invoke();
+        bool modelAfterLocalAction = radio.HasPhysicalModel;
+        int musicOffWidgetVolume = radio.CalculateSoundCloudWidgetVolume(
+            radio.transform.position);
+        musicButton.onClick.Invoke();
+        bool modelAfterMusicAction = radio.HasPhysicalModel;
+        if (!modelAfterLocalAction || !modelAfterMusicAction ||
+            musicOffWidgetVolume != 0)
+        {
+            throw new InvalidOperationException(
+                $"Radio playback action contract failed: localModel={modelAfterLocalAction}, " +
+                $"musicModel={modelAfterMusicAction}, musicOffWidgetVolume={musicOffWidgetVolume}.");
+        }
+
+        popup.Close();
+        bool modelAfterClose = radio.HasPhysicalModel;
+        if (GymRadioSoundCloudPopup.IsAnyVisible || !modelAfterClose)
+        {
+            throw new InvalidOperationException(
+                "Closing radio controls did not leave the radio model intact.");
+        }
+
+        radio.OpenSoundCloudPopup();
+        bool reopened = GymRadioSoundCloudPopup.IsAnyVisible;
+        popup.Close();
+        if (!reopened || !radio.HasPhysicalModel)
+        {
+            throw new InvalidOperationException(
+                "Radio controls could not reopen without losing the physical model.");
+        }
+
+        int popupCanvasCount = popup.GetComponentsInChildren<Canvas>(true).Length;
+        Debug.Log(
+            $"GYMCHAOS_RADIO_POPUP_MODEL_OK popupCount={popups.Length} " +
+            $"popupCanvases={popupCanvasCount} actions=open,load,play-pause,next,local,music " +
+            $"widgetUrlValidation=true widgetPersistence=true widgetLoop={widgetLoopContinues} " +
+            $"widgetVolume={nearWidgetVolume}/{lockerWidgetVolume}/{outsideWidgetVolume} " +
+            $"audio={radio.AudioMinDistance:F1}-{radio.AudioMaxDistance:F1}m " +
+            $"outsideMuted={outsideMuted} lockerMuted={lockerMuted} " +
+            $"reopened={reopened} modelAliveAfterActions={modelAfterLocalAction && modelAfterMusicAction} " +
+            $"modelAliveAfterClose={modelAfterClose}", radio);
+    }
+
+    private static void ValidatePullUpCameraVariants()
+    {
+        GymExerciseStation[] stations =
+            UnityEngine.Object.FindObjectsByType<GymExerciseStation>(
+                FindObjectsSortMode.None);
+        GymExerciseStation cable = null;
+        GymExerciseStation calisthenics = null;
+        for (int i = 0; i < stations.Length; i++)
+        {
+            GymExerciseStation station = stations[i];
+            if (station == null || station.ExerciseType != GymExerciseType.PullUps)
+            {
+                continue;
+            }
+            if (station.IsCableMachinePullUp)
+            {
+                cable = station;
+            }
+            else
+            {
+                calisthenics = station;
+            }
+        }
+        if (cable == null || calisthenics == null)
+        {
+            throw new InvalidOperationException(
+                $"Expected cable and calisthenics pull-up stations: " +
+                $"cable={cable != null}, calisthenics={calisthenics != null}.");
+        }
+        cable.GetCameraPose(out Vector3 cablePosition, out Quaternion cableRotation);
+        calisthenics.GetCameraPose(
+            out Vector3 calisthenicsPosition, out Quaternion calisthenicsRotation);
+        if (cable.PullUpCameraLowering < 0.25f)
+        {
+            throw new InvalidOperationException(
+                "Cable-machine pull-up camera did not receive its lower framing offset.");
+        }
+
+        Renderer[] renderers = UnityEngine.Object.FindObjectsByType<Renderer>(
+            FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        Vector3 cableCenter = cable.EquipmentRoot != null
+            ? cable.EquipmentRoot.position
+            : cable.PlayerPosition;
+        Vector3 nearestMirrorDirection = Vector3.zero;
+        float bestDistance = float.PositiveInfinity;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null ||
+                !renderer.name.ToLowerInvariant().Contains("mirror"))
+            {
+                continue;
+            }
+            Vector3 candidate = Vector3.ProjectOnPlane(
+                renderer.bounds.center - cableCenter, Vector3.up);
+            if (candidate.sqrMagnitude > 0.01f &&
+                candidate.sqrMagnitude < bestDistance)
+            {
+                bestDistance = candidate.sqrMagnitude;
+                nearestMirrorDirection = candidate.normalized;
+            }
+        }
+        float mirrorDot = Vector3.Dot(
+            cable.PullUpLookDirection, nearestMirrorDirection);
+        if (nearestMirrorDirection.sqrMagnitude < 0.9f || mirrorDot < 0.8f)
+        {
+            throw new InvalidOperationException(
+                $"Cable-machine pull-up camera is not facing the mirrors: " +
+                $"camera={cable.PullUpLookDirection}, mirror={nearestMirrorDirection}.");
+        }
+        Debug.Log(
+            $"GYMCHAOS_PULLUP_CAMERA_VARIANTS_OK cablePosition={cablePosition} " +
+            $"cableRotation={cableRotation.eulerAngles} " +
+            $"calisthenicsPosition={calisthenicsPosition} " +
+            $"calisthenicsRotation={calisthenicsRotation.eulerAngles} " +
+            $"cableMirrorDot={mirrorDot:F3}");
+    }
+
+    private static void ValidateMirrorParity(PlayerHandRig rig)
+    {
+        PlanarGymMirror[] mirrors =
+            UnityEngine.Object.FindObjectsByType<PlanarGymMirror>(
+                FindObjectsSortMode.None);
+        PlanarGymMirror lockerMirror = null;
+        PlanarGymMirror gymMirror = null;
+        for (int i = 0; i < mirrors.Length; i++)
+        {
+            Transform current = mirrors[i] != null ? mirrors[i].transform : null;
+            bool locker = false;
+            while (current != null)
+            {
+                locker |= current.name.IndexOf(
+                    "Locker", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    current.name.IndexOf(
+                        "Gym Back Area", StringComparison.OrdinalIgnoreCase) >= 0;
+                current = current.parent;
+            }
+            if (locker)
+            {
+                lockerMirror = mirrors[i];
+            }
+            else if (gymMirror == null)
+            {
+                gymMirror = mirrors[i];
+            }
+        }
+        if (lockerMirror == null || gymMirror == null ||
+            !lockerMirror.ReflectionIncludesPlayerLayer ||
+            !gymMirror.ReflectionIncludesPlayerLayer ||
+            lockerMirror.ReflectionTexture == null ||
+            gymMirror.ReflectionTexture == null ||
+            !string.Equals(lockerMirror.ReflectionShaderName,
+                gymMirror.ReflectionShaderName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Locker mirror does not match the gym mirror reflection pipeline.");
+        }
+
+        SkinnedMeshRenderer[] playerRenderers =
+            rig.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        int opaquePlayerMaterials = 0;
+        for (int i = 0; i < playerRenderers.Length; i++)
+        {
+            SkinnedMeshRenderer renderer = playerRenderers[i];
+            if (renderer == null ||
+                renderer.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer)
+            {
+                continue;
+            }
+            Material[] materials = renderer.sharedMaterials;
+            for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
+            {
+                Material material = materials[materialIndex];
+                if (material == null ||
+                    (material.HasProperty("_Surface") &&
+                     material.GetFloat("_Surface") > 0.01f) ||
+                    (material.HasProperty("_BaseColor") &&
+                     material.GetColor("_BaseColor").a < 0.99f))
+                {
+                    throw new InvalidOperationException(
+                        "Mirror player still uses a transparent material.");
+                }
+                opaquePlayerMaterials++;
+            }
+        }
+        if (opaquePlayerMaterials == 0)
+        {
+            throw new InvalidOperationException(
+                "No opaque full-player mirror materials were found.");
+        }
+        Debug.Log(
+            $"GYMCHAOS_LOCKER_MIRROR_PLAYER_OK mirrors={mirrors.Length} " +
+            $"shader={lockerMirror.ReflectionShaderName} " +
+            $"texturesCreated={lockerMirror.HasReadyReflectionTexture}/" +
+            $"{gymMirror.HasReadyReflectionTexture} " +
+            $"opaquePlayerMaterials={opaquePlayerMaterials}");
     }
 
     private static void ValidateExternalCharactersAndCapture()
@@ -1115,21 +1805,71 @@ public static class GymChaosPlayModeVerifier
             {
                 continue;
             }
-            SkinnedMeshRenderer body = FindVisibleSkinnedRenderer(fighter);
+            ExternalRiggedCharacterVisual importedVisual =
+                fighter.GetComponent<ExternalRiggedCharacterVisual>();
+            SkinnedMeshRenderer body = importedVisual != null &&
+                importedVisual.RuntimeRenderer != null
+                ? importedVisual.RuntimeRenderer
+                : FindVisibleSkinnedRenderer(fighter);
             MixamoScanRetargetAnimator animator =
                 fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
             if (body == null || animator == null || !animator.HasRunClip ||
                 !animator.HasPunchClip || !animator.HasIdleClip ||
                 !animator.HasCelebrationClip ||
-                (fighter.Identity == BodybuilderIdentity.Goku && !animator.HasFlyClip))
+                    (fighter.Identity == BodybuilderIdentity.Goku && !animator.HasFlyClip))
             {
                 throw new InvalidOperationException(
                     $"{fighter.Identity} is missing its textured body or final Idle/Run/Punch/Celebration clips" +
                     (fighter.Identity == BodybuilderIdentity.Goku ? "/Fly." : "."));
             }
 
+            string expectedResourcePath =
+                "Characters/Enemies/" + fighter.Identity.ToString().ToLowerInvariant() + "_authored";
+            if (importedVisual == null || importedVisual.RuntimeModelRoot == null ||
+                importedVisual.RuntimeRig == null ||
+                !string.Equals(importedVisual.RuntimeResourcePath, expectedResourcePath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(animator.AuthoredAnimationResourcePath,
+                    importedVisual.RuntimeResourcePath, StringComparison.OrdinalIgnoreCase) ||
+                !animator.RuntimeModelRootIsAuthoredInstance)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} is not bound to its own authored model/clip asset: " +
+                    $"modelResource={importedVisual?.RuntimeResourcePath ?? "missing"} " +
+                    $"animationResource={animator.AuthoredAnimationResourcePath}.");
+            }
+            if (!animator.SampleAuthoredClipForVerification(
+                    "walking", 0.37f, out string enemyPoseDetails))
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} authored walking clip did not deform its own rig: " +
+                    enemyPoseDetails);
+            }
+            if (!animator.SampleAuthoredClipRangeForVerification(
+                    "squat", out string enemySquatDetails))
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} authored squat.fbx did not contain one stable " +
+                    $"standing-to-squat-to-standing rep: {enemySquatDetails}");
+            }
+            if (!animator.SampleAllAuthoredClipsForVerification(
+                    out string enemyClipStabilityDetails))
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} authored animation set did not deform its " +
+                    $"own rig on every clip: {enemyClipStabilityDetails}");
+            }
+            Debug.Log(
+                $"GYMCHAOS_ENEMY_AUTHORED_DIRECT_POSE_OK identity={fighter.Identity} " +
+                $"resource={importedVisual.RuntimeResourcePath} " +
+                $"pose={enemyPoseDetails} squatRep={enemySquatDetails} " +
+                $"clipStability={enemyClipStabilityDetails}", animator);
+
             ValidateEnemyAnimationStateContract(fighter, animator);
             animator.ResetToVerificationIdlePose();
+            LogAuthoredBoundsDiagnostic(fighter, importedVisual, body, animator);
+
+            importedVisual?.RefreshFaceCensorForCurrentPose();
 
             int triangles = body.sharedMesh != null ? body.sharedMesh.triangles.Length / 3 : 0;
             if (triangles <= 0)
@@ -1142,30 +1882,21 @@ public static class GymChaosPlayModeVerifier
                 throw new InvalidOperationException($"Could not bake {fighter.Identity} for exact bounds.");
             }
             float expectedHeight = fighter.Identity == BodybuilderIdentity.Arnold ? 2.35f : 2.30f;
-            // Goku is intentionally rotated onto his flight axis, and the
-            // final clip can still be in the landing/punch transition when a
-            // second evidence pass runs. In either case the world-space Y AABB
-            // is not the authored standing height, so compare the largest
-            // extent for Goku instead of rejecting a valid animated pose.
-            bool gokuAnimatedBounds = fighter.Identity == BodybuilderIdentity.Goku;
-            float measuredHeight = gokuAnimatedBounds
-                ? Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z))
+            // The current renderer AABB is pose-dependent: a stride, flight
+            // transition, or punch can change its world-Y extent without
+            // changing the authored model scale. Validate the stable height
+            // captured immediately after this character's own FBX was fitted,
+            // while retaining the current bounds for framing and face checks.
+            float measuredHeight = importedVisual != null
+                ? importedVisual.RuntimeAuthoredHeight
                 : bounds.size.y;
-            bool heightInvalid = gokuAnimatedBounds
-                // The second capture can sample the authored punch/landing
-                // transition a few frames after flight. Keep a generous
-                // rotated-AABB ceiling without allowing a genuinely oversized
-                // imported mesh through.
-                ? measuredHeight < 0.8f || measuredHeight > 3.35f
-                // Idle/run clips legitimately change the baked AABB by a few
-                // centimetres. A few imported scans extend a little further
-                // during their authored pose, so reject only a true
-                // collapsed/oversized mesh, not a valid stride sample.
-                : Mathf.Abs(measuredHeight - expectedHeight) > 0.18f;
+            bool heightInvalid = measuredHeight <= 0.01f ||
+                Mathf.Abs(measuredHeight - expectedHeight) > 0.18f;
             if (heightInvalid)
             {
                 throw new InvalidOperationException(
-                    $"{fighter.Identity} height={measuredHeight:F3}, expected={expectedHeight:F3}.");
+                    $"{fighter.Identity} authoredHeight={measuredHeight:F3}, " +
+                    $"currentPoseHeight={bounds.size.y:F3}, expected={expectedHeight:F3}.");
             }
 
             Texture texture = body.sharedMaterial != null
@@ -1190,6 +1921,7 @@ public static class GymChaosPlayModeVerifier
                 throw new InvalidOperationException(
                     $"{fighter.Identity} is missing its black eye bar FaceCensorSettings renderer.");
             }
+            ValidateFaceCensorPlacement(fighter, body, faceCensor, bounds);
             bool[] previousStates = new bool[characterRenderers.Length];
             for (int rendererIndex = 0; rendererIndex < characterRenderers.Length; rendererIndex++)
             {
@@ -1229,6 +1961,7 @@ public static class GymChaosPlayModeVerifier
             }
             Debug.Log(
                 $"GYMCHAOS_CHARACTER_VISUAL_OK identity={fighter.Identity} height={bounds.size.y:F3} " +
+                $"authoredHeight={measuredHeight:F3} " +
                 $"triangles={triangles} texture={texture.name} state={animator.CurrentState} " +
                 $"faceBar=true deathXRenderers={deathMarkerRendererCount} " +
                 $"screenshot={screenshot} deathScreenshot={deathScreenshot}");
@@ -1240,6 +1973,223 @@ public static class GymChaosPlayModeVerifier
         {
             throw new InvalidOperationException($"Expected six enemy visuals, verified={verified}.");
         }
+    }
+
+    private static void LogAuthoredBoundsDiagnostic(
+        EnemyFighter fighter, ExternalRiggedCharacterVisual importedVisual,
+        SkinnedMeshRenderer body, MixamoScanRetargetAnimator animator)
+    {
+        if (fighter == null || body == null || importedVisual == null ||
+            importedVisual.RuntimeModelRoot == null)
+        {
+            return;
+        }
+
+        Mesh baked = new Mesh { name = "Authored bounds diagnostic mesh" };
+        body.BakeMesh(baked, false);
+        Vector3[] vertices = baked.vertices;
+        Bounds bakedWorld = default;
+        if (vertices != null && vertices.Length > 0)
+        {
+            bakedWorld = new Bounds(
+                body.transform.position + body.transform.rotation * vertices[0],
+                Vector3.zero);
+            for (int vertexIndex = 1; vertexIndex < vertices.Length; vertexIndex++)
+            {
+                bakedWorld.Encapsulate(
+                    body.transform.position + body.transform.rotation * vertices[vertexIndex]);
+            }
+        }
+
+        Transform largestScaleTransform = null;
+        Transform largestPositionTransform = null;
+        Transform largestBoneScaleTransform = null;
+        float largestScale = 0f;
+        float largestPosition = 0f;
+        float largestBoneScale = 0f;
+        Transform[] transforms = importedVisual.RuntimeModelRoot.GetComponentsInChildren<Transform>(true);
+        for (int transformIndex = 0; transformIndex < transforms.Length; transformIndex++)
+        {
+            Transform current = transforms[transformIndex];
+            float scale = Mathf.Max(
+                Mathf.Abs(current.localScale.x),
+                Mathf.Max(Mathf.Abs(current.localScale.y), Mathf.Abs(current.localScale.z)));
+            float position = current.localPosition.magnitude;
+            if (scale > largestScale)
+            {
+                largestScale = scale;
+                largestScaleTransform = current;
+            }
+            if (position > largestPosition)
+            {
+                largestPosition = position;
+                largestPositionTransform = current;
+            }
+        }
+        Transform[] bones = body.bones;
+        for (int boneIndex = 0; boneIndex < bones.Length; boneIndex++)
+        {
+            Transform bone = bones[boneIndex];
+            if (bone == null)
+            {
+                continue;
+            }
+            float scale = Mathf.Max(
+                Mathf.Abs(bone.localScale.x),
+                Mathf.Max(Mathf.Abs(bone.localScale.y), Mathf.Abs(bone.localScale.z)));
+            if (scale > largestBoneScale)
+            {
+                largestBoneScale = scale;
+                largestBoneScaleTransform = bone;
+            }
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_AUTHORED_BOUNDS_DIAGNOSTIC identity={fighter.Identity} " +
+            $"clip={animator.CurrentAnimationClipName} " +
+            $"renderer={body.bounds} local={body.localBounds} bakedLocal={baked.bounds} " +
+            $"bakedWorld={bakedWorld} " +
+            $"modelScale={importedVisual.RuntimeModelRoot.localScale} " +
+            $"largestScale={largestScale:F4}:{largestScaleTransform?.name ?? "none"} " +
+            $"largestBoneScale={largestBoneScale:F4}:{largestBoneScaleTransform?.name ?? "none"} " +
+            $"largestPosition={largestPosition:F4}:{largestPositionTransform?.name ?? "none"}",
+            body);
+        UnityEngine.Object.DestroyImmediate(baked);
+    }
+
+    private static void ValidateFaceCensorPlacement(
+        EnemyFighter fighter, SkinnedMeshRenderer body,
+        FaceCensorSettings faceCensor, Bounds visibleBounds)
+    {
+        if (fighter == null || body == null || faceCensor == null)
+        {
+            throw new InvalidOperationException("Face geometry validation received a missing runtime object.");
+        }
+
+        // Validate against the exact authored head that owns the censor. Every
+        // imported character can use a different skeleton naming scheme, so
+        // never require the old mixamorig:Head name here.
+        ExternalRiggedCharacterVisual importedVisual =
+            fighter.GetComponent<ExternalRiggedCharacterVisual>();
+        Transform head = importedVisual != null && importedVisual.RuntimeRig != null
+            ? importedVisual.RuntimeRig.Head
+            : faceCensor.transform.parent;
+        if (head == null)
+        {
+            throw new InvalidOperationException(
+                $"{fighter.Identity} is missing the authored head used for face calibration.");
+        }
+
+        float headDelta = Mathf.Abs(faceCensor.transform.position.y - head.position.y);
+        bool calibratedTarget = fighter.Identity == BodybuilderIdentity.Ronnie ||
+            fighter.Identity == BodybuilderIdentity.JayCutler ||
+            fighter.Identity == BodybuilderIdentity.Goku;
+        if (calibratedTarget)
+        {
+            Transform visualRoot = importedVisual != null
+                ? importedVisual.RuntimeModelRoot
+                : body.transform;
+            if (visualRoot == null || !TryGetBakedVerticesInRoot(
+                    body, visualRoot, out Vector3[] visibleVertices) ||
+                !BodybuilderEnemyVisual.TryGetImportedFaceTarget(
+                    fighter.Identity, body, visualRoot, head, visibleVertices,
+                    out Vector3 eyeTargetWorld, out Bounds faceBounds))
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} has no visible head geometry for face validation.");
+            }
+
+            bool barInsideFaceBand =
+                faceCensor.transform.position.y >= faceBounds.min.y - 0.06f &&
+                faceCensor.transform.position.y <= faceBounds.max.y + 0.06f;
+            float eyeHeightError = Mathf.Abs(
+                faceCensor.transform.position.y - eyeTargetWorld.y);
+            if (!barInsideFaceBand || eyeHeightError > 0.075f ||
+                faceCensor.ConfiguredFaceDepth > 0.0001f ||
+                faceCensor.ConfiguredFaceDepth < -0.0001f)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} face bar is not on its eye/depth target: " +
+                    $"barY={faceCensor.transform.position.y:F3} " +
+                    $"eyeTargetY={eyeTargetWorld.y:F3} " +
+                    $"faceBandY={faceBounds.min.y:F3}-{faceBounds.max.y:F3} " +
+                    $"eyeHeightError={eyeHeightError:F3} " +
+                    $"faceDepth={faceCensor.ConfiguredFaceDepth:F5}.");
+            }
+
+            Renderer faceRenderer = faceCensor.GetComponent<Renderer>();
+            if (faceRenderer == null || !barInsideFaceBand)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} face bar does not cover the imported visible eye band: " +
+                    $"barBounds={faceRenderer?.bounds.ToString() ?? "missing"} " +
+                    $"rendererBounds={body.bounds}.");
+            }
+
+            // The censor shell is generated symmetrically around its local X
+            // axis. Compare that axis to the sampled facial midline, rather
+            // than assuming the imported head pivot is the face midpoint.
+            Vector3 barLocalToHead = head.InverseTransformPoint(
+                faceCensor.transform.position);
+            Vector3 targetLocalToHead = head.InverseTransformPoint(eyeTargetWorld);
+            // The imported armature can carry non-uniform parent scale. In
+            // that case a world-space dot product against head.right also
+            // includes the head's Y/Z basis and reports a false lateral drift.
+            // The censor is authored in the exact Head-local frame, so compare
+            // the local X coordinates that define its symmetric shell axis.
+            float lateralLocalError = Mathf.Abs(
+                barLocalToHead.x - targetLocalToHead.x);
+            float lateralLocalTolerance = Mathf.Max(
+                0.008f, faceCensor.ConfiguredSize.x * 0.04f);
+            if (lateralLocalError > lateralLocalTolerance)
+            {
+                throw new InvalidOperationException(
+                    $"{fighter.Identity} face bar is laterally asymmetric: " +
+                    $"barLocalX={barLocalToHead.x:F4} " +
+                    $"faceTargetLocalX={targetLocalToHead.x:F4} " +
+                    $"localError={lateralLocalError:F4} " +
+                    $"localTolerance={lateralLocalTolerance:F4}.");
+            }
+
+            // The strict face-band and eye-height checks above are the source
+            // of truth. Do not impose a generic normalized-Y threshold here:
+            // imported face topology can place the eyes below the midpoint of
+            // the sampled skin band, especially on Goku. The old threshold
+            // rejected valid lower eye lines after animation even when the bar
+            // matched the sampled target and remained inside faceBounds.
+        }
+
+        Debug.Log(
+            $"GYMCHAOS_FACE_GEOMETRY_OK identity={fighter.Identity} " +
+            $"barY={faceCensor.transform.position.y:F3} headY={head.position.y:F3} " +
+            $"headDelta={headDelta:F3} faceDepth={faceCensor.ConfiguredFaceDepth:F5} " +
+            $"size={faceCensor.ConfiguredSize}", faceCensor);
+    }
+
+    private static bool TryGetBakedVerticesInRoot(
+        SkinnedMeshRenderer body, Transform visualRoot, out Vector3[] vertices)
+    {
+        vertices = null;
+        if (body == null || visualRoot == null || body.sharedMesh == null)
+        {
+            return false;
+        }
+
+        Mesh baked = new Mesh { name = "Face validation baked mesh" };
+        body.BakeMesh(baked, false);
+        Vector3[] bakedVertices = baked.vertices;
+        vertices = new Vector3[bakedVertices.Length];
+        for (int i = 0; i < bakedVertices.Length; i++)
+        {
+            // Keep this identical to BodybuilderEnemyVisual. BakeMesh(...,
+            // false) already contains the imported skinning scale; applying
+            // TransformPoint would scale these vertices a second time.
+            Vector3 world = body.transform.position +
+                body.transform.rotation * bakedVertices[i];
+            vertices[i] = visualRoot.InverseTransformPoint(world);
+        }
+        UnityEngine.Object.DestroyImmediate(baked);
+        return vertices.Length > 0;
     }
 
     private static SkinnedMeshRenderer FindVisibleSkinnedRenderer(EnemyFighter fighter)
@@ -1286,10 +2236,23 @@ public static class GymChaosPlayModeVerifier
             throw new InvalidOperationException($"{fighter.Identity} did not enter Idle by default.");
         }
 
-        animator.SetMoving(true, 1f);
+        animator.SetMoving(true, 1f, false);
         if (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Running)
         {
-            throw new InvalidOperationException($"{fighter.Identity} did not enter Run while moving.");
+            throw new InvalidOperationException(
+                fighter.Identity + " did not enter locomotion while walking.");
+        }
+        if (animator.IsUsingRunningClip)
+        {
+            throw new InvalidOperationException(
+                fighter.Identity + " selected Run for neutral roaming.");
+        }
+
+        animator.SetMoving(true, 1f, true);
+        if (!animator.IsUsingRunningClip)
+        {
+            throw new InvalidOperationException(
+                fighter.Identity + " did not select Run for chase locomotion.");
         }
 
         if (fighter.Identity == BodybuilderIdentity.Goku)
@@ -1597,6 +2560,11 @@ public static class GymChaosPlayModeVerifier
 
         string outputPath = Path.GetFullPath(Path.Combine(
             Application.dataPath, "../../.tools", fileName));
+        string outputDirectory = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
         File.WriteAllBytes(outputPath, image.EncodeToPNG());
         camera.targetTexture = previousTarget;
         RenderTexture.active = previousActive;
@@ -1604,6 +2572,89 @@ public static class GymChaosPlayModeVerifier
         renderTexture.Release();
         UnityEngine.Object.DestroyImmediate(renderTexture);
         return outputPath;
+    }
+
+    private static string CaptureStablePlayerPose(
+        PlayerHandRig rig, string clipStem, float normalizedTime,
+        bool direct = false)
+    {
+        string directDetails;
+        bool held = direct
+            ? rig.HoldDirectPoseForVerification(
+                clipStem, normalizedTime, out directDetails)
+            : rig.HoldStablePoseForVerification(
+                clipStem, normalizedTime, out directDetails);
+        string details = directDetails;
+        if (!held)
+        {
+            throw new InvalidOperationException(
+                $"Could not hold stable player pose: {details}.");
+        }
+
+        Transform model = rig.RuntimeModelRoot;
+        GameObject cameraObject = new GameObject(
+            "Stable Player Pose Camera " + clipStem);
+        Camera camera = cameraObject.AddComponent<Camera>();
+        RenderTexture renderTexture = new RenderTexture(
+            720, 720, 24, RenderTextureFormat.ARGB32);
+        Texture2D image = null;
+        RenderTexture previousActive = RenderTexture.active;
+        try
+        {
+            Vector3 target = model.position + Vector3.up * 1.15f;
+            bool actionSideView = clipStem == "jumping" ||
+                clipStem.StartsWith("punch_", StringComparison.Ordinal);
+            camera.transform.position = actionSideView
+                ? target + model.right * 4.2f
+                : target + model.forward * 4.2f;
+            camera.transform.LookAt(target, Vector3.up);
+            camera.fieldOfView = 34f;
+            camera.nearClipPlane = 0.05f;
+            camera.farClipPlane = 20f;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = new Color(0.025f, 0.03f, 0.04f, 1f);
+            camera.cullingMask = 1 << PlanarGymMirror.MirrorPlayerLayer;
+            camera.targetTexture = renderTexture;
+            renderTexture.Create();
+            camera.Render();
+            RenderTexture.active = renderTexture;
+            image = new Texture2D(720, 720, TextureFormat.RGB24, false);
+            image.ReadPixels(new Rect(0, 0, 720, 720), 0, 0);
+            image.Apply(false, false);
+            Color32[] pixels = image.GetPixels32();
+            int visiblePixels = 0;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Color32 pixel = pixels[i];
+                if (pixel.r > 18 || pixel.g > 18 || pixel.b > 18)
+                {
+                    visiblePixels++;
+                }
+            }
+            if (visiblePixels < 500)
+            {
+                throw new InvalidOperationException(
+                    $"Stable player pose render was empty: clip={clipStem} " +
+                    $"pixels={visiblePixels} details={details}.");
+            }
+            string outputPath = Path.GetFullPath(Path.Combine(
+                Application.dataPath, "../../.tools",
+                (direct ? "player-direct-" : "player-stable-") +
+                clipStem + ".png"));
+            File.WriteAllBytes(outputPath, image.EncodeToPNG());
+            Debug.Log(
+                $"GYMCHAOS_PLAYER_POSE_CAPTURE clip={clipStem} direct={direct} " +
+                $"pixels={visiblePixels} details={details} path={outputPath}");
+            return outputPath;
+        }
+        finally
+        {
+            RenderTexture.active = previousActive;
+            if (image != null) UnityEngine.Object.DestroyImmediate(image);
+            renderTexture.Release();
+            UnityEngine.Object.DestroyImmediate(renderTexture);
+            UnityEngine.Object.DestroyImmediate(cameraObject);
+        }
     }
 
     private static float ValidateBloodSurfacePlacement(EnemyMeshHitboxRig hitboxRig, Collider hitCollider)

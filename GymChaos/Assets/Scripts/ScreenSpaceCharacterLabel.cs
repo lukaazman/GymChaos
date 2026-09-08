@@ -2,6 +2,9 @@ using UnityEngine;
 
 public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
 {
+    private const float NameRevealDistance = 7.5f;
+    private const float NameRevealDistanceSqr = NameRevealDistance * NameRevealDistance;
+
     private SkinnedMeshRenderer bodyRenderer;
     private Camera playerCamera;
     private string displayName;
@@ -21,7 +24,9 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
 
     private void OnGUI()
     {
-        if (bodyRenderer == null || GymDialogueDirector.IsDialogueActive)
+        if (bodyRenderer == null || !bodyRenderer.enabled ||
+            GymStartScreen.IsMenuVisible || GymDialogueDirector.IsDialogueActive ||
+            GymPauseMenu.IsVisible)
         {
             return;
         }
@@ -35,36 +40,50 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
             return;
         }
 
-        Bounds bounds = bodyRenderer.bounds;
-        Vector3 screen = playerCamera.WorldToScreenPoint(
-            new Vector3(bounds.center.x, bounds.max.y + heightOffset, bounds.center.z));
-        if (screen.z <= 0f)
-        {
-            return;
-        }
-
-        if (style == null)
-        {
-            style = new GUIStyle(GUI.skin.label)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 11,
-                normal = { textColor = Color.white }
-            };
-        }
-
-        const float width = 180f;
-        const float height = 24f;
-        GUI.Label(new Rect(
-            screen.x - width * 0.5f,
-            Screen.height - screen.y - height * 0.5f,
-            width, height), displayName, style);
-
         if (fighter == null)
         {
             fighter = GetComponentInParent<EnemyFighter>();
         }
-        if (fighter != null && fighter.HasTakenDamage)
+        if (fighter == null)
+        {
+            return;
+        }
+
+        Bounds bounds = bodyRenderer.bounds;
+        Vector3 screen = playerCamera.WorldToScreenPoint(
+            new Vector3(bounds.center.x, bounds.max.y + heightOffset, bounds.center.z));
+        if (screen.z <= 0f || screen.x < 0f || screen.x > Screen.width ||
+            screen.y < 0f || screen.y > Screen.height)
+        {
+            return;
+        }
+
+        bool nearby = (fighter.transform.position - playerCamera.transform.position).sqrMagnitude <=
+            NameRevealDistanceSqr;
+        GymDialogueDirector director = GymDialogueDirector.Active;
+        bool isDialogueTarget = director != null && director.Target == fighter;
+        bool showName = nearby || fighter.IsAggressive || isDialogueTarget;
+        if (showName)
+        {
+            if (style == null)
+            {
+                style = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    fontSize = 11,
+                    normal = { textColor = Color.white }
+                };
+            }
+
+            const float width = 180f;
+            const float height = 24f;
+            GUI.Label(new Rect(
+                screen.x - width * 0.5f,
+                Screen.height - screen.y - height * 0.5f,
+                width, height), displayName, style);
+        }
+
+        if (fighter.HasTakenDamage)
         {
             DrawHealthBar(
                 screen, fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth),
