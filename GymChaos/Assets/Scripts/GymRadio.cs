@@ -183,6 +183,19 @@ public sealed class GymRadio : MonoBehaviour
     public string PersistedSoundCloudPlaylistUrl => PlayerPrefs.GetString(
         SoundCloudPlaylistUrlPref, string.Empty);
     public bool IsListenerInsideGym => listenerInsideGym;
+    public bool CanInteractWithPlayer
+    {
+        get
+        {
+            if (listenerPlayer == null)
+            {
+                listenerPlayer = FindAnyObjectByType<PlayerMovement>();
+            }
+
+            return listenerPlayer != null &&
+                IsPositionInsidePlayableGym(listenerPlayer.transform.position);
+        }
+    }
     public float AudioMinDistance => audioSource != null ? audioSource.minDistance : 0f;
     public float AudioMaxDistance => audioSource != null ? audioSource.maxDistance : 0f;
     public bool UsesDistanceRolloff => audioSource != null &&
@@ -238,6 +251,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public static GymRadio FindClosest(Vector3 position, float maxDistance)
     {
+        if (!IsPositionInsidePlayableGym(position))
+        {
+            return null;
+        }
+
         GymRadio radio = FindAnyObjectByType<GymRadio>();
         if (radio == null)
         {
@@ -251,16 +269,26 @@ public sealed class GymRadio : MonoBehaviour
 
     public string GetInteractionPrompt()
     {
-        return "[F] Open radio controls";
+        return CanInteractWithPlayer ? "[F] Open radio controls" : string.Empty;
     }
 
     public void ToggleMusic()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         OpenSoundCloudPopup();
     }
 
     public void ToggleMusicPlayback()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         if (musicEnabled)
         {
             musicEnabled = false;
@@ -297,6 +325,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void ToggleLocalPlayback()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         StopSoundCloudPlayback();
         StopLocalPlaylistPlayback();
         soundCloudMode = false;
@@ -322,6 +355,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void OpenSoundCloudPopup()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         if (soundCloudPopup == null)
         {
             soundCloudPopup = GymRadioSoundCloudPopup.CreateFor(this);
@@ -411,6 +449,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void OpenSoundCloudSite()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
 #if UNITY_WEBGL && !UNITY_EDITOR
         if (GymChaosOpenSoundCloudSite(SoundCloudLibraryUrl) == 0)
         {
@@ -432,6 +475,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public bool LoadSoundCloudPlaylistUrl(string value)
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return false;
+        }
+
         string trimmed = NormalizeSoundCloudUrl(value);
         if (!IsValidSoundCloudPlaylistUrl(trimmed))
         {
@@ -477,6 +525,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void ToggleSoundCloudWidgetPlayback()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         if (soundCloudWidgetPlaying)
         {
             PauseSoundCloudWidget();
@@ -489,6 +542,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void PlaySoundCloudWidget()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         if (!HasSoundCloudPlaylistUrl)
         {
             soundCloudStatus = "LOAD A VALID SOUNDCLOUD PLAYLIST FIRST";
@@ -523,6 +581,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void PauseSoundCloudWidget()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         PauseSoundCloudWidget(true);
     }
 
@@ -542,6 +605,11 @@ public sealed class GymRadio : MonoBehaviour
 
     public void NextSoundCloudWidgetTrack()
     {
+        if (!EnsurePlayerCanInteract())
+        {
+            return;
+        }
+
         if (!soundCloudMode || !soundCloudWidgetReady)
         {
             soundCloudStatus = "LOAD THE SOUNDCLOUD PLAYLIST FIRST";
@@ -843,11 +911,16 @@ public sealed class GymRadio : MonoBehaviour
             (listenerPlayer != null &&
                 IsPositionInsidePlayableGym(listenerPosition));
         widgetListenerPosition = listenerPosition;
-        ApplyMuteState(insideGym);
-        if (!listenerZoneKnown || listenerInsideGym != insideGym)
+        bool zoneChanged = !listenerZoneKnown || listenerInsideGym != insideGym;
+        listenerZoneKnown = true;
+        listenerInsideGym = insideGym;
+        if (!insideGym && soundCloudPopup != null && soundCloudPopup.IsVisible)
         {
-            listenerZoneKnown = true;
-            listenerInsideGym = insideGym;
+            soundCloudPopup.Close();
+        }
+        ApplyMuteState(insideGym);
+        if (zoneChanged)
+        {
             Debug.Log(
                 $"GYMCHAOS_RADIO_ZONE inside={insideGym} muted={!insideGym}", this);
         }
@@ -1153,6 +1226,17 @@ public sealed class GymRadio : MonoBehaviour
             audioSource.mute = !musicEnabled || !insideGym;
         }
         UpdateSoundCloudWidgetVolume(widgetListenerPosition, insideGym);
+    }
+
+    private bool EnsurePlayerCanInteract()
+    {
+        if (CanInteractWithPlayer)
+        {
+            return true;
+        }
+
+        soundCloudPopup?.Close();
+        return false;
     }
 
     private static void ShufflePlaylist(List<string> entries)

@@ -80,7 +80,25 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     // made the old 1.45 m point unreachable when neighbouring bays were occupied.
     // Put him clearly on the aisle side so he dismounts onto the ground, walks,
     // and only mounts again after reaching a collision-safe point by the cloud.
-    public Vector3 PassengerPoint => parkingPoint - transform.forward * (IsCloud ? 2.45f : 2.9f);
+    public Vector3 PassengerPoint
+    {
+        get
+        {
+            Vector3 towardAisle = Vector3.ProjectOnPlane(
+                aislePoint - parkingPoint, Vector3.up);
+            if (towardAisle.sqrMagnitude < 0.01f)
+            {
+                towardAisle = -transform.forward;
+            }
+
+            // Derive the dismount/boarding side from the authored parking
+            // geometry, never from the visual vehicle yaw. Imported vehicle
+            // orientations can be diagonal, which used to place a visitor
+            // behind the car and force the first steering probe around it.
+            return parkingPoint + towardAisle.normalized *
+                (IsCloud ? 2.45f : 2.9f);
+        }
+    }
     public Vector3 AislePassengerPoint => aislePoint;
     public float BoardingReachDistance => IsCloud ? 0.8f : 0.65f;
 #if UNITY_EDITOR
@@ -90,6 +108,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         !engine.playOnAwake && engine.loop && engine.spatialBlend >= 0.99f &&
         engine.rolloffMode == AudioRolloffMode.Logarithmic &&
         engine.maxDistance > engine.minDistance && engine.maxDistance >= 20f;
+    public bool HasCorrectDrivingSoundForVerification => engine != null &&
+        engine.clip != null && engine.clip.name ==
+        (IsCloud ? "Goku day flying loop" : "Car driving loop");
+    public string DrivingSoundClipNameForVerification => engine?.clip?.name ?? "missing";
+    public bool IsEngineMutedForVerification => engine == null || engine.mute;
+    public bool IsHornMutedForVerification => horn == null || horn.mute;
     public bool IsEngineStoppedForVerification => engine == null || !engine.isPlaying;
     public static float SpawnSpacingForVerification => LaneSpawnSpacing;
     public static float SensorMaximumDistanceForVerification => ForwardSensorMaximumDistance;
@@ -244,6 +268,28 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     }
 
     private bool drivingIntoParking;
+
+    public bool IsPedestrianClearForYield(Vector3 pedestrianPosition)
+    {
+        if (!IsDriving || !gameObject.activeInHierarchy)
+        {
+            return true;
+        }
+
+        Vector3 direction = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            return true;
+        }
+
+        direction.Normalize();
+        Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
+        Vector3 relative = Vector3.ProjectOnPlane(
+            pedestrianPosition - transform.position, Vector3.up);
+        float ahead = Vector3.Dot(relative, direction);
+        float lateral = Mathf.Abs(Vector3.Dot(relative, right));
+        return ahead < -1.6f || lateral > ForwardSensorHalfWidth + 1.15f;
+    }
 
     private int CountIncomingTraffic()
     {
@@ -439,6 +485,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 lateral > ForwardSensorHalfWidth + obstacleHalfWidth * 0.65f)
                 continue;
             pedestrianAhead |= IsPerson(hit);
+            RequestPedestrianYield(hit, direction);
             lastTrafficBlocker = hit.name;
             return 0f;
         }
@@ -453,6 +500,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Collider hit = nearPeople[i];
             if (!IsTrafficObstacle(hit)) continue;
             pedestrianAhead |= IsPerson(hit);
+            RequestPedestrianYield(hit, direction);
             lastTrafficBlocker = hit.name;
             return 0f;
         }
@@ -466,6 +514,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Collider hit = roadHits[i].collider;
             if (!IsTrafficObstacle(hit)) continue;
             pedestrianAhead |= IsPerson(hit);
+            RequestPedestrianYield(hit, direction);
             if (roadHits[i].distance < clearance)
             {
                 clearance = roadHits[i].distance;
@@ -504,9 +553,23 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 : 0f;
             float predictedLateral = lateral + lateralSpeed * CrossingPredictionSeconds;
             if (Mathf.Abs(lateral) <= 1.05f || Mathf.Abs(predictedLateral) <= 1.05f)
+            {
+                RequestPedestrianYield(candidate, forward);
                 clearance = Mathf.Min(clearance, Mathf.Max(0f, ahead - 0.55f));
+            }
         }
         return clearance;
+    }
+
+    private void RequestPedestrianYield(Collider hit, Vector3 direction)
+    {
+        if (hit == null || !IsPerson(hit))
+        {
+            return;
+        }
+
+        GymVisitorAgent agent = hit.GetComponentInParent<GymVisitorAgent>();
+        agent?.RequestVehicleYield(this, direction);
     }
 
     private float SameDirectionConvoyClearance(out string blocker)
@@ -586,7 +649,19 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void UpdateHorn(bool blocked)
     {
-        if (!blocked) { blockedSince = -1f; return; }
+        if (!blocked)
+        {
+            blockedSince = -1f;
+            return;
+        }
+
+        if (!IsPlayerOutsideForAudio())
+        {
+            blockedSince = -1f;
+            UpdateVehicleAudioAudibility();
+            return;
+        }
+
         if (blockedSince < 0f) blockedSince = Time.time;
         if (Time.time - blockedSince < 0.35f || Time.time < nextHornTime) return;
         nextHornTime = Time.time + 2.5f;
@@ -596,6 +671,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             horn.playOnAwake = false; horn.spatialBlend = 1f;
             horn.rolloffMode = AudioRolloffMode.Logarithmic;
             horn.minDistance = 3f; horn.maxDistance = 35f; horn.volume = 0.3f;
+            horn.mute = true;
             const int rate = 22050;
             float[] samples = new float[(int)(rate * 0.32f)];
             for (int i = 0; i < samples.Length; i++)
@@ -609,6 +685,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             hornClip.SetData(samples, 0);
         }
         hornPlayCount++;
+        horn.mute = false;
         horn.PlayOneShot(hornClip);
     }
 
@@ -638,22 +715,53 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void Update()
     {
-        if (engine != null && engine.isPlaying) UpdateEngineAudibility();
+        if (engine != null || horn != null) UpdateVehicleAudioAudibility();
     }
 
     private void UpdateEngineAudibility()
     {
-        if (engine == null)
+        UpdateVehicleAudioAudibility();
+    }
+
+    private bool IsPlayerOutsideForAudio()
+    {
+        if (player == null)
         {
-            return;
+            player = FindAnyObjectByType<PlayerMovement>();
         }
-        bool outside = player != null &&
+
+        return player != null &&
             GymOutdoorBuilder.IsPlayerOutsideGym(player.transform.position);
+    }
+
+    private void UpdateVehicleAudioAudibility()
+    {
+        bool outside = IsPlayerOutsideForAudio();
         bool audibleDrivingState = IsDriving && !IsParked && gameObject.activeInHierarchy;
-        engine.mute = !outside || !audibleDrivingState;
-        if (!audibleDrivingState)
+        bool audible = outside && audibleDrivingState;
+        if (engine != null)
         {
-            engine.Stop();
+            engine.mute = !audible;
+            if (audible)
+            {
+                if (!engine.isPlaying)
+                {
+                    engine.Play();
+                }
+            }
+            else if (engine.isPlaying)
+            {
+                engine.Stop();
+            }
+        }
+
+        if (horn != null)
+        {
+            horn.mute = !outside;
+            if (!outside && horn.isPlaying)
+            {
+                horn.Stop();
+            }
         }
     }
 
@@ -785,25 +893,53 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private void CreateEngineAudio()
     {
         engine = gameObject.AddComponent<AudioSource>();
+        engine.mute = true;
         engine.loop = true;
         engine.playOnAwake = false;
         engine.spatialBlend = 1f;
         engine.minDistance = 3f;
-        engine.maxDistance = 24f;
+        engine.maxDistance = IsCloud ? 36f : 30f;
         engine.rolloffMode = AudioRolloffMode.Logarithmic;
         engine.dopplerLevel = 0.35f;
-        engine.volume = IsCloud ? 0.11f : 0.22f;
+        engine.volume = IsCloud ? 0.18f : 0.24f;
         const int sampleRate = 22050;
-        const int sampleCount = sampleRate;
+        const int sampleCount = sampleRate * 2;
         float[] samples = new float[sampleCount];
-        float frequency = IsCloud ? 92f : 54f;
         for (int i = 0; i < sampleCount; i++)
         {
-            float t = i / (float)sampleRate;
-            samples[i] = (Mathf.Sin(t * frequency * Mathf.PI * 2f) * 0.65f +
-                Mathf.Sin(t * frequency * 2f * Mathf.PI * 2f) * 0.2f) * 0.16f;
+            float loop = i / (float)sampleCount;
+            float phase = loop * Mathf.PI * 2f;
+            if (IsCloud)
+            {
+                // A light, airy flight bed for the cloud. Every oscillator
+                // completes an integer number of cycles, so the loop boundary
+                // stays click-free without an imported asset.
+                float wind = Mathf.Sin(phase * 5f) * 0.25f +
+                    Mathf.Sin(phase * 11f + 0.7f) * 0.16f +
+                    Mathf.Sin(phase * 23f + 1.9f) * 0.09f;
+                float shimmer = Mathf.Sin(phase * 41f +
+                    Mathf.Sin(phase * 2f) * 0.45f) * 0.06f;
+                float swell = 0.72f + 0.28f * Mathf.Sin(phase * 2f - 0.8f);
+                samples[i] = (wind + shimmer) * swell * 0.34f;
+            }
+            else
+            {
+                // Layered low-frequency engine harmonics plus road texture.
+                // This is intentionally a looped effect, rather than a pure
+                // sine tone, so parked cars never carry an artificial hum.
+                float rumble = Mathf.Sin(phase * 2f) * 0.46f +
+                    Mathf.Sin(phase * 4f + 0.25f) * 0.19f +
+                    Mathf.Sin(phase * 7f + 1.1f) * 0.11f;
+                float roadTexture = Mathf.Sin(phase * 29f + 0.4f) * 0.08f +
+                    Mathf.Sin(phase * 47f + 2.3f) * 0.055f +
+                    Mathf.Sin(phase * 71f + 0.9f) * 0.035f;
+                float load = 0.84f + 0.16f * Mathf.Sin(phase * 2f - 0.5f);
+                samples[i] = (rumble + roadTexture) * load * 0.25f;
+            }
         }
-        AudioClip clip = AudioClip.Create(identity + " driving", sampleCount, 1, sampleRate, false);
+        AudioClip clip = AudioClip.Create(
+            IsCloud ? "Goku day flying loop" : "Car driving loop",
+            sampleCount, 1, sampleRate, false);
         clip.SetData(samples, 0);
         engine.clip = clip;
     }

@@ -1022,6 +1022,39 @@ public class EnemyFighter : MonoBehaviour
         return MoveVisitorAlongExteriorRoute(destination, speed, null);
     }
 
+    public bool IsVisitorExternalPathClear(Vector3 direction, float distance)
+    {
+        if (body == null || isDead)
+        {
+            return false;
+        }
+
+        Vector3 planarDirection = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (planarDirection.sqrMagnitude < 0.0001f)
+        {
+            return false;
+        }
+
+        planarDirection.Normalize();
+        return IsVisitorPathClear(
+            planarDirection, Mathf.Clamp(distance, 0.2f, 1.55f), true, null);
+    }
+
+    public bool TickVisitorGroundingForMovement()
+    {
+        if (!IsGoku() || isDead || gokuFlightState == GokuFlightState.Grounded)
+        {
+            return true;
+        }
+
+        // Visitor travel owns the FixedUpdate early return, so normal combat
+        // flight ticking is intentionally skipped while an enemy is entering
+        // or leaving the gym. Finish Goku's landing here before writing walk
+        // velocity; otherwise the kinematic flight body can remain frozen at
+        // the doorway until the old timeout fallback fires.
+        return UpdateGokuFlight(false, transform.forward);
+    }
+
     public string LastVisitorRouteBlocker => lastVisitorRouteBlocker;
 
     public bool MoveVisitorAlongExteriorRoute(
@@ -1082,8 +1115,13 @@ public class EnemyFighter : MonoBehaviour
         if (hasOutgoing && distance < 7.2f)
         {
             float cornerBlend = Mathf.InverseLerp(7.2f, completionRadius, distance);
-            desiredDirection = Vector3.Slerp(
-                desiredDirection, outgoing.normalized, cornerBlend * 0.84f).normalized;
+            // Anticipate the following segment without ever steering behind
+            // the active waypoint. A wide parking-lane angle used to let the
+            // look-ahead rotate past 90 degrees here, producing the visible
+            // circle immediately after a visitor left the vehicle.
+            desiredDirection = Vector3.RotateTowards(
+                desiredDirection, outgoing.normalized,
+                Mathf.Deg2Rad * 55f * cornerBlend, 0f).normalized;
         }
         Vector3 direction = FindVisitorMovementDirection(
             desiredDirection, Mathf.Min(distance, 1.55f), true, null);
@@ -1109,9 +1147,18 @@ public class EnemyFighter : MonoBehaviour
         }
         float movementSpeed = Mathf.Clamp(speed, 0.8f, maxSpeed);
         Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-        planarVelocity = Vector3.MoveTowards(
-            planarVelocity, visitorRouteDirection * movementSpeed,
-            Mathf.Max(moveForce * 0.55f, 8f) * Time.fixedDeltaTime);
+        float acceleration = Mathf.Max(moveForce * 0.55f, 8f);
+        float nextSpeed = Mathf.MoveTowards(
+            planarVelocity.magnitude, movementSpeed,
+            acceleration * Time.fixedDeltaTime);
+        Vector3 velocityDirection = visitorRouteDirection;
+        if (planarVelocity.sqrMagnitude > 0.0025f)
+        {
+            velocityDirection = Vector3.RotateTowards(
+                planarVelocity.normalized, visitorRouteDirection,
+                Mathf.Deg2Rad * 32f * Time.fixedDeltaTime, 0f).normalized;
+        }
+        planarVelocity = velocityDirection * nextSpeed;
         body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
         body.MoveRotation(Quaternion.RotateTowards(
             body.rotation,
@@ -2941,10 +2988,9 @@ public class EnemyFighter : MonoBehaviour
             if (
                 HasRoomFloorInHierarchy(hit.transform) ||
                 IsWalkableFloorSurface(hit) ||
-                hit.GetComponentInParent<GymExteriorOnlyVisual>() != null ||
                 hit.name == "Player Road Access Blocker" ||
                 hit.name == "Exterior Courtyard Foundation" ||
-                (allowOutsideRoom && IsVisitorExteriorRouteGuard(hit)))
+                (allowOutsideRoom && IsIgnoredVisitorRouteCollision(hit)))
             {
                 continue;
             }
@@ -2963,32 +3009,25 @@ public class EnemyFighter : MonoBehaviour
         return true;
     }
 
-    private static bool IsVisitorExteriorRouteGuard(Collider hit)
+    private bool IsIgnoredVisitorRouteCollision(Collider hit)
     {
         if (hit == null)
         {
             return false;
         }
 
-        bool belongsToExterior = false;
-        for (Transform current = hit.transform;
-             current != null;
-             current = current.parent)
+        Collider[] visitorColliders = GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < visitorColliders.Length; i++)
         {
-            if (current.name == "Gym Exterior (Runtime)")
+            Collider visitorCollider = visitorColliders[i];
+            if (visitorCollider != null && visitorCollider != hit &&
+                Physics.GetIgnoreCollision(visitorCollider, hit))
             {
-                belongsToExterior = true;
-                break;
+                return true;
             }
         }
 
-        if (!belongsToExterior)
-        {
-            return false;
-        }
-
-        string lowerName = hit.name.ToLowerInvariant();
-        return lowerName.Contains("boundary") || lowerName.Contains("blocker");
+        return false;
     }
 
     private Vector3 StabilizeRoamDirection(

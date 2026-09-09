@@ -6,6 +6,9 @@ using UnityEngine.InputSystem;
 [DefaultExecutionOrder(-40)]
 public sealed class GymDialogueDirector : MonoBehaviour
 {
+    private const float TalkTargetRange = 3.2f;
+    private const float DialogueTargetHeight = 1.45f;
+    private const float DialogueLineOfSightPadding = 0.08f;
     private static GymDialogueDirector instance;
     private PlayerMovement player;
     private EnemyFighter target;
@@ -51,7 +54,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
             return false;
         }
 
-        EnemyFighter nearby = instance.FindNearbyTalkTarget(targetPlayer.transform.position);
+        EnemyFighter nearby = instance.FindNearbyTalkTarget(targetPlayer);
         if (nearby == null)
         {
             return false;
@@ -99,13 +102,41 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
     public EnemyFighter FindNearbyTalkTarget(Vector3 position)
     {
+        return FindNearbyTalkTarget(player, position);
+    }
+
+    public EnemyFighter FindNearbyTalkTarget(PlayerMovement targetPlayer)
+    {
+        if (targetPlayer == null)
+        {
+            return null;
+        }
+
+        return FindNearbyTalkTarget(targetPlayer, targetPlayer.transform.position);
+    }
+
+    private EnemyFighter FindNearbyTalkTarget(
+        PlayerMovement targetPlayer, Vector3 position)
+    {
         var fighters = EnemyFighter.RegisteredFighters;
         EnemyFighter closest = null;
-        float bestDistance = 3.2f * 3.2f;
+        float bestDistance = TalkTargetRange * TalkTargetRange;
         for (int i = 0; i < fighters.Count; i++)
         {
             EnemyFighter fighter = fighters[i];
             if (fighter == null || !fighter.isActiveAndEnabled || fighter.IsDead || fighter.IsAggressive)
+            {
+                continue;
+            }
+
+            if (fighter.Identity == BodybuilderIdentity.Manwithsuit1 &&
+                (targetPlayer == null ||
+                 !IsPlayerInsideMainGym(targetPlayer.transform.position)))
+            {
+                continue;
+            }
+
+            if (!HasDialogueLineOfSight(targetPlayer, fighter))
             {
                 continue;
             }
@@ -118,6 +149,67 @@ public sealed class GymDialogueDirector : MonoBehaviour
             }
         }
         return closest;
+    }
+
+    private static bool IsPlayerInsideMainGym(Vector3 position)
+    {
+        return !GymOutdoorBuilder.IsPlayerOutsideGym(position) &&
+            !GymBackRoomBuilder.IsInsideRoom(position);
+    }
+
+    private static bool HasDialogueLineOfSight(
+        PlayerMovement targetPlayer, EnemyFighter fighter)
+    {
+        if (targetPlayer == null || fighter == null)
+        {
+            return false;
+        }
+
+        Vector3 origin = targetPlayer.playerCamera != null
+            ? targetPlayer.playerCamera.transform.position
+            : targetPlayer.transform.position + Vector3.up * DialogueTargetHeight;
+        Vector3 targetPoint = GetDialogueTargetPoint(fighter);
+        Vector3 toTarget = targetPoint - origin;
+        float distance = toTarget.magnitude;
+        if (distance <= 0.001f)
+        {
+            return true;
+        }
+
+        RaycastHit[] hits = Physics.RaycastAll(
+            origin, toTarget / distance, distance + DialogueLineOfSightPadding,
+            ~0, QueryTriggerInteraction.Ignore);
+        System.Array.Sort(hits, (left, right) =>
+            left.distance.CompareTo(right.distance));
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hit = hits[i].collider;
+            if (hit == null || hit.transform == targetPlayer.transform ||
+                hit.transform.IsChildOf(targetPlayer.transform))
+            {
+                continue;
+            }
+
+            return hit.transform == fighter.transform ||
+                hit.transform.IsChildOf(fighter.transform);
+        }
+
+        return false;
+    }
+
+    private static Vector3 GetDialogueTargetPoint(EnemyFighter fighter)
+    {
+        Transform[] bones = fighter.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < bones.Length; i++)
+        {
+            if (string.Equals(
+                    bones[i].name, "Head", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return bones[i].position;
+            }
+        }
+
+        return fighter.transform.position + Vector3.up * DialogueTargetHeight;
     }
 
     public void DrawDialogueUI()

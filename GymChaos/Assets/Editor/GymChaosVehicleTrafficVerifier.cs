@@ -12,13 +12,15 @@ public static class GymChaosVehicleTrafficVerifier
     private static GymVisitorVehicle first;
     private static GymVisitorVehicle second;
     private static GameObject pedestrian;
+    private static EnemyFighter pedestrianFighter;
+    private static GymVisitorAgent pedestrianAgent;
     private static bool firstDone;
     private static bool secondDone;
     private static bool concurrentObserved;
     private static bool yieldingObserved;
-    private static bool hornObserved;
     private static bool stoppedObserved;
     private static bool resumedObserved;
+    private static bool audioMutedInsideObserved;
     private static float minimumSeparation;
     private static Vector3 minimumFirstPosition;
     private static Vector3 minimumSecondPosition;
@@ -54,13 +56,15 @@ public static class GymChaosVehicleTrafficVerifier
         first = null;
         second = null;
         pedestrian = null;
+        pedestrianFighter = null;
+        pedestrianAgent = null;
         firstDone = false;
         secondDone = false;
         concurrentObserved = false;
         yieldingObserved = false;
-        hornObserved = false;
         stoppedObserved = false;
         resumedObserved = false;
+        audioMutedInsideObserved = false;
         minimumSeparation = float.PositiveInfinity;
         minimumFirstPosition = Vector3.zero;
         minimumSecondPosition = Vector3.zero;
@@ -185,17 +189,39 @@ public static class GymChaosVehicleTrafficVerifier
     {
         firstDone = false;
         yieldingObserved = false;
-        hornObserved = false;
         stoppedObserved = false;
         resumedObserved = false;
+        audioMutedInsideObserved = false;
+        DisableSceneVehicles();
         first = GymVisitorVehicle.Create(BodybuilderIdentity.Cbum, 4, null, false);
+        second = GymVisitorVehicle.Create(BodybuilderIdentity.Arnold, 2, null, true);
         Vector3 direction = Vector3.ProjectOnPlane(
             first.ArrivalRoadTurnPointForVerification - first.RoadPointForVerification,
             Vector3.up).normalized;
-        pedestrian = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        pedestrian = new GameObject("Traffic Verifier Pedestrian");
+        pedestrian.layer = EnemyFighter.EnemyCollisionLayer;
         pedestrian.name = "Traffic Verifier Pedestrian";
-        pedestrian.transform.position = first.RoadPointForVerification + direction * 4.1f + Vector3.up;
-        pedestrian.AddComponent<GymVisitorAgent>();
+        pedestrian.transform.position = first.RoadPointForVerification + direction * 4.1f;
+        CapsuleCollider collider = pedestrian.AddComponent<CapsuleCollider>();
+        collider.center = new Vector3(0f, 1.15f, 0f);
+        collider.height = 2.3f;
+        collider.radius = 0.48f;
+        Rigidbody body = pedestrian.AddComponent<Rigidbody>();
+        body.mass = 85f;
+        body.linearDamping = 1.5f;
+        body.angularDamping = 0.5f;
+        pedestrianFighter = pedestrian.AddComponent<EnemyFighter>();
+        pedestrianFighter.Configure(
+            BodybuilderIdentity.JayCutler, null, 60f, false);
+        pedestrianAgent = pedestrian.AddComponent<GymVisitorAgent>();
+        pedestrianAgent.Configure(pedestrianFighter);
+        pedestrianAgent.PrepareVehicleYieldVerification();
+        if (!pedestrianAgent.BeginVehicleApproach(
+                second.PassengerPoint, second.BoardingReachDistance))
+        {
+            throw new InvalidOperationException(
+                "Traffic verifier pedestrian could not start its external route.");
+        }
         Physics.SyncTransforms();
         first.DriveIn(() => firstDone = true);
         phase = 5;
@@ -204,39 +230,45 @@ public static class GymChaosVehicleTrafficVerifier
 
     private static void TickPedestrianYield()
     {
-        yieldingObserved |= first != null && first.IsYieldingToPedestrian;
-        hornObserved |= first != null && first.HornPlayCountForVerification > 0;
+        yieldingObserved |= pedestrianAgent != null &&
+            pedestrianAgent.VehicleYieldCountForVerification > 0;
+        audioMutedInsideObserved |= first != null &&
+            first.IsEngineMutedForVerification && first.IsHornMutedForVerification;
         stoppedObserved |= yieldingObserved && first != null &&
             first.CurrentDriveSpeedForVerification < 0.12f;
-        if (stoppedObserved && pedestrian != null)
-        {
-            Vector3 direction = Vector3.ProjectOnPlane(
-                first.ArrivalRoadTurnPointForVerification - first.RoadPointForVerification,
-                Vector3.up).normalized;
-            Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
-            pedestrian.transform.position += right * 5f;
-            Physics.SyncTransforms();
-        }
-        resumedObserved |= stoppedObserved && first != null &&
+        resumedObserved |= yieldingObserved && pedestrianAgent != null &&
+            !pedestrianAgent.IsYieldingToVehicle && first != null &&
             first.CurrentDriveSpeedForVerification > 2f;
         if (firstDone)
         {
-            if (!yieldingObserved || !hornObserved || !stoppedObserved || !resumedObserved)
+            bool pedestrianFinished = pedestrianAgent != null &&
+                pedestrianAgent.HasReachedVehicle;
+            if (!yieldingObserved || !stoppedObserved || !resumedObserved ||
+                !pedestrianFinished || !audioMutedInsideObserved)
                 throw new InvalidOperationException(
-                    $"Pedestrian yield contract failed yield={yieldingObserved} horn={hornObserved} " +
-                    $"stopped={stoppedObserved} resumed={resumedObserved}.");
+                    $"Pedestrian yield contract failed yield={yieldingObserved} " +
+                    $"stopped={stoppedObserved} resumed={resumedObserved} " +
+                    $"pedestrianFinished={pedestrianFinished} " +
+                    $"audioMutedInside={audioMutedInsideObserved}.");
             Debug.Log(
                 "GYMCHAOS_VEHICLE_TRAFFIC_OK arrivalConvoy=True spawnSeparated=True " +
-                "bidirectional=True oppositeLaneIgnored=True pedestrianYield=True horn=True immediateResume=True");
+                "bidirectional=True oppositeLaneIgnored=True pedestrianYield=True " +
+                "pedestrianRouteResumed=True audioMutedInside=True");
             CleanupVehicles();
             if (pedestrian != null) UnityEngine.Object.Destroy(pedestrian);
+            pedestrian = null;
+            pedestrianFighter = null;
+            pedestrianAgent = null;
             EditorPrefs.DeleteKey(RequestedKey);
             EditorApplication.Exit(0);
         }
         else if (EditorApplication.timeSinceStartup - phaseStarted > 28d)
             throw new InvalidOperationException(
-                $"Pedestrian yield timed out yield={yieldingObserved} horn={hornObserved} " +
-                $"stopped={stoppedObserved} resumed={resumedObserved} speed={first?.CurrentDriveSpeedForVerification:F2} " +
+                $"Pedestrian yield timed out yield={yieldingObserved} " +
+                $"stopped={stoppedObserved} resumed={resumedObserved} " +
+                $"pedestrianFinished={pedestrianAgent?.HasReachedVehicle} " +
+                $"audioMutedInside={audioMutedInsideObserved} " +
+                $"speed={first?.CurrentDriveSpeedForVerification:F2} " +
                 $"blocker={first?.LastTrafficBlockerForVerification}.");
     }
 

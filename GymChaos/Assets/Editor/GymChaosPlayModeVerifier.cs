@@ -1392,6 +1392,33 @@ public static class GymChaosPlayModeVerifier
                 $"lockerMuted={lockerMuted}.");
         }
 
+        bool outsideInteractionBlocked = false;
+        if (player != null)
+        {
+            Vector3 savedPlayerPosition = player.transform.position;
+            Quaternion savedPlayerRotation = player.transform.rotation;
+            try
+            {
+                player.transform.position = lockerFloor.bounds.center +
+                    new Vector3(10000f, 0f, 10000f);
+                Physics.SyncTransforms();
+                radio.ToggleMusic();
+                outsideInteractionBlocked = !GymRadioSoundCloudPopup.IsAnyVisible &&
+                    !radio.CanInteractWithPlayer;
+            }
+            finally
+            {
+                player.transform.SetPositionAndRotation(
+                    savedPlayerPosition, savedPlayerRotation);
+                Physics.SyncTransforms();
+            }
+        }
+        if (!outsideInteractionBlocked)
+        {
+            throw new InvalidOperationException(
+                "Radio interaction remained available while the player was outside.");
+        }
+
         // ToggleMusic is the same public action used by the in-world radio
         // interaction. Calling it twice must reuse one modal surface rather
         // than stacking two full-screen pages on top of each other.
@@ -1617,6 +1644,7 @@ public static class GymChaosPlayModeVerifier
             $"widgetVolume={nearWidgetVolume}/{lockerWidgetVolume}/{outsideWidgetVolume} " +
             $"audio={radio.AudioMinDistance:F1}-{radio.AudioMaxDistance:F1}m " +
             $"outsideMuted={outsideMuted} lockerMuted={lockerMuted} " +
+            $"outsideInteractionBlocked={outsideInteractionBlocked} " +
             $"reopened={reopened} modelAliveAfterActions={modelAfterLocalAction && modelAfterMusicAction} " +
             $"modelAliveAfterClose={modelAfterClose}", radio);
     }

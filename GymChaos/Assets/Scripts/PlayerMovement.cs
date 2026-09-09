@@ -400,7 +400,7 @@ public class PlayerMovement : MonoBehaviour
         {
             nearbyPickup = heldItem == null ? FindBestPickup() : null;
             nearbyTalkTarget = GymDialogueDirector.Active != null
-                ? GymDialogueDirector.Active.FindNearbyTalkTarget(transform.position)
+                ? GymDialogueDirector.Active.FindNearbyTalkTarget(this)
                 : null;
             nearbyBackRoomInteractable = GymExperienceService.Active != null
                 ? GymExperienceService.Active.FindNearbyInteractable(transform.position, 3.1f)

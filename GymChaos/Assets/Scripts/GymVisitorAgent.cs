@@ -19,6 +19,11 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private const float DoorwayBodyRadius = 0.58f;
     private const float DoorwayExitStallTimeout = 4f;
     private const float VehicleRouteStallTimeout = 2.4f;
+    private const float VehicleYieldSideStep = 3.2f;
+    private const float VehicleYieldBackwardOffset = 0.6f;
+    private const float VehicleYieldSpeed = 3.2f;
+    private const float VehicleYieldHoldSeconds = 0.25f;
+    private const float VehicleYieldTimeout = 4.5f;
 
     public enum VisitorState
     {
@@ -68,6 +73,11 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private int vehicleRerouteAttempt;
     private int vehicleRouteDetourCount;
     private GymVisitorVehicle routeVehicleWithIgnoredCollision;
+    private GymVisitorVehicle yieldingToVehicle;
+    private Vector3 vehicleYieldPoint;
+    private float vehicleYieldStartedAt;
+    private float vehicleYieldReachedAt = -1f;
+    private int vehicleYieldCount;
     private bool entryRoomClearPointPending;
     private bool exitRoomClearPointPending;
     private bool doorOpenRequestHeld;
@@ -79,6 +89,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
     private float lastRoomTravelDistance = float.PositiveInfinity;
     private float doorwayExitStalledSeconds;
     private float lastDoorwayExitDistance = float.PositiveInfinity;
+    private int doorwayExitRecoveryCount;
     private float workoutApproachStartedAt;
     private float workoutApproachStalledSeconds;
     private float lastWorkoutApproachDistance = float.PositiveInfinity;
@@ -118,9 +129,11 @@ public sealed class GymVisitorAgent : MonoBehaviour
         state == VisitorState.Dormant;
     public bool HasReachedVehicle => reachedVehicle && state == VisitorState.Dormant;
     public int CompletedVehicleApproaches => completedVehicleApproaches;
+    public int DoorwayExitRecoveryCountForVerification => doorwayExitRecoveryCount;
     public bool IsUsingSharedParkingConnector =>
         state == VisitorState.ApproachingVehicle &&
         vehicleExitWaypoints != null && vehicleExitWaypointIndex < 4;
+    public bool IsYieldingToVehicle => yieldingToVehicle != null;
     public bool CanDeactivate => HasCompletedDoorExit ||
         (!hasSuccessfulEntry && !enteredGym && leftGym && state == VisitorState.Dormant);
     public bool IsEntryPending => state == VisitorState.EnteringDoor ||
@@ -132,8 +145,20 @@ public sealed class GymVisitorAgent : MonoBehaviour
     public Vector3 TravelTargetForVerification => travelTarget;
     public int VehicleEntryWaypointForVerification => vehicleEntryWaypointIndex;
     public int VehicleRouteDetourCountForVerification => vehicleRouteDetourCount;
+    public int VehicleYieldCountForVerification => vehicleYieldCount;
     public string VehicleStageForVerification =>
         $"entryWaypoint={vehicleEntryWaypointIndex},exitWaypoint={vehicleExitWaypointIndex}";
+
+    public void PrepareVehicleYieldVerification()
+    {
+        CancelVehicleYield();
+        state = VisitorState.Dormant;
+        enteredGym = false;
+        leftGym = true;
+        hasSuccessfulEntry = false;
+        completedDoorExit = false;
+        doorway = GymDoorway.Instance;
+    }
 #endif
 
     public void Configure(EnemyFighter owner)
@@ -151,6 +176,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
     public void MarkInitialInside()
     {
+        CancelVehicleYield();
         ReleaseDoorOpenRequest();
         EndWorkoutStationRelease();
         ReleasePendingStationApproach();
@@ -166,6 +192,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
         squatStartPending = false;
         entryRoomClearPointPending = false;
         exitRoomClearPointPending = false;
+        doorwayExitRecoveryCount = 0;
         ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
         roomTravelStalledSeconds = 0f;
@@ -185,6 +212,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return;
         }
 
+        CancelVehicleYield();
         RestoreRouteVehicleCollision();
         EndWorkoutStationRelease();
         doorway = door;
@@ -200,6 +228,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
         reachedVehicle = false;
         entryRoomClearPointPending = false;
         exitRoomClearPointPending = false;
+        doorwayExitRecoveryCount = 0;
         ResetDoorwayExitTracking();
         postWorkoutFreeRoamUntil = 0f;
         roomTravelStalledSeconds = 0f;
@@ -216,7 +245,6 @@ public sealed class GymVisitorAgent : MonoBehaviour
         vehicleRouteDetourCount = 0;
         RestoreVisitorVehicleCollisions();
         IgnoreRouteVehicleCollision(vehicleSpawnPoint);
-        AllowVisitorThroughExteriorRouteGuards();
 
         float y = fighter.transform.position.y;
         // Use the center of the authored connector for both directions. A
@@ -231,9 +259,16 @@ public sealed class GymVisitorAgent : MonoBehaviour
         vehicleEntrySpawnPoint = new Vector3(
             vehicleSpawnPoint.x, y, vehicleSpawnPoint.z);
         vehicleEntrySpawnPending = true;
+        Vector3 aisleApproach = new Vector3(
+            parkingAislePoint.x, y, parkingAislePoint.z);
+        float aisleExitDirection = Mathf.Sign(
+            GymOutdoorBuilder.VisitorParkingEntryPoint.x - aisleApproach.x);
+        aisleApproach.x += aisleExitDirection * Mathf.Min(
+            5.5f, Mathf.Abs(GymOutdoorBuilder.VisitorParkingEntryPoint.x -
+                aisleApproach.x));
         vehicleEntryWaypoints = new[]
         {
-            new Vector3(parkingAislePoint.x, y, parkingAislePoint.z),
+            aisleApproach,
             new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, y,
                 GymOutdoorBuilder.VisitorParkingEntryPoint.z),
             safeTurn,
@@ -242,7 +277,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
         };
         vehicleEntryWaypointIndex = FindInitialRouteWaypoint(
             vehicleEntryWaypoints, vehicleEntrySpawnPoint, 2.2f);
-        travelTarget = vehicleEntryWaypoints[0];
+        travelTarget = vehicleEntryWaypoints[vehicleEntryWaypointIndex];
         state = VisitorState.ApproachingGymFromVehicle;
     }
 
@@ -304,17 +339,18 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return;
         }
 
+        CancelVehicleYield();
         doorway = door;
         hasDoorwayClearPoint = false;
         HoldDoorOpenRequest();
         // Initial visitors can already be inside the gym and therefore never
-        // passed through BeginEntryFromVehicle. Let their body cross the
-        // authored exterior guard colliders on the way out as well.
-        AllowVisitorThroughExteriorRouteGuards();
+        // passed through BeginEntryFromVehicle. Their exit still uses the
+        // same authored exterior route and normal perimeter collisions.
         pendingStation = null;
         entryRoomClearPointPending = false;
         exitRoomClearPointPending = true;
         travelTarget = GetDoorwayClearPoint();
+        doorwayExitRecoveryCount = 0;
         ResetDoorwayExitTracking();
         state = VisitorState.ExitingDoor;
         fighter.StopVisitorMovement();
@@ -326,6 +362,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
         {
             return false;
         }
+        CancelVehicleYield();
         // Pedestrians may take their independently varied exterior paths at
         // the same time. Vehicle serialization remains in GymVisitorVehicle;
         // reserving this entire walk made later visitors freeze by the door.
@@ -335,7 +372,6 @@ public sealed class GymVisitorAgent : MonoBehaviour
         AllowVisitorThroughPlayerRoadBlocker();
         RestoreVisitorVehicleCollisions();
         IgnoreRouteVehicleCollision(vehiclePoint);
-        AllowVisitorThroughExteriorRouteGuards();
         finalVehicleTarget.y = fighter.transform.position.y;
         // Arrival and departure must share the same stable connector lane.
         // Keep the route deterministic so a visitor never alternates sides
@@ -365,7 +401,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
         };
         vehicleExitWaypointIndex = FindInitialRouteWaypoint(
             vehicleExitWaypoints, fighter.transform.position, 2.2f);
-        travelTarget = vehicleExitWaypoints[0];
+        travelTarget = vehicleExitWaypoints[vehicleExitWaypointIndex];
         vehicleTurnPending = true;
         vehicleEntryPending = true;
         vehicleAislePending = true;
@@ -380,6 +416,157 @@ public sealed class GymVisitorAgent : MonoBehaviour
         fighter.StopVisitorMovement();
         Debug.Log($"GYMCHAOS_VISITOR_WALK_TO_VEHICLE enemy={fighter.Identity} target={travelTarget}", this);
         return true;
+    }
+
+    public bool RequestVehicleYield(
+        GymVisitorVehicle vehicle, Vector3 vehicleDirection)
+    {
+        if (vehicle == null || fighter == null || fighter.IsDead ||
+            yieldingToVehicle != null)
+        {
+            return yieldingToVehicle == vehicle;
+        }
+
+        bool isExteriorTravel = state == VisitorState.ApproachingGymFromVehicle ||
+            state == VisitorState.ExitingDoor ||
+            state == VisitorState.LeavingGym ||
+            state == VisitorState.ApproachingVehicle;
+        bool isOutsideFreeRoam = state == VisitorState.FreeRoaming &&
+            GymOutdoorBuilder.IsPlayerOutsideGym(fighter.transform.position);
+        if ((!isExteriorTravel && !isOutsideFreeRoam) || !vehicle.IsDriving)
+        {
+            return false;
+        }
+
+        Vector3 direction = Vector3.ProjectOnPlane(vehicleDirection, Vector3.up);
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            direction = Vector3.ProjectOnPlane(vehicle.transform.forward, Vector3.up);
+        }
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            return false;
+        }
+
+        direction.Normalize();
+        Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
+        Vector3 current = fighter.transform.position;
+        Vector3 relative = Vector3.ProjectOnPlane(
+            current - vehicle.transform.position, Vector3.up);
+        float signedSide = Vector3.Dot(relative, right);
+        float preferredSide = Mathf.Abs(signedSide) > 0.2f
+            ? Mathf.Sign(signedSide)
+            : 1f;
+
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            float side = preferredSide * (attempt == 0 ? 1f : -1f);
+            Vector3 candidate = current + right * (side * VehicleYieldSideStep) -
+                direction * VehicleYieldBackwardOffset;
+            candidate = ClampVehicleYieldPoint(candidate, current.y);
+            Vector3 step = Vector3.ProjectOnPlane(candidate - current, Vector3.up);
+            if (step.sqrMagnitude < 1f ||
+                !fighter.IsVisitorExternalPathClear(
+                    step, Mathf.Min(step.magnitude, 1.55f)))
+            {
+                continue;
+            }
+
+            yieldingToVehicle = vehicle;
+            vehicleYieldPoint = candidate;
+            vehicleYieldStartedAt = Time.time;
+            vehicleYieldReachedAt = -1f;
+            vehicleYieldCount++;
+            Debug.Log(
+                $"GYMCHAOS_VISITOR_VEHICLE_YIELD_REQUESTED enemy={fighter.Identity} " +
+                $"vehicle={vehicle.name} point={vehicleYieldPoint} " +
+                $"attempt={attempt + 1}", this);
+            return true;
+        }
+
+        return false;
+    }
+
+    private Vector3 ClampVehicleYieldPoint(Vector3 point, float y)
+    {
+        Bounds accessible = GymOutdoorBuilder.AccessibleBounds;
+        if (accessible.size.x > 3f && accessible.size.z > 3f)
+        {
+            const float boundaryPadding = 1.25f;
+            point.x = Mathf.Clamp(
+                point.x, accessible.min.x + boundaryPadding,
+                accessible.max.x - boundaryPadding);
+            point.z = Mathf.Clamp(
+                point.z, accessible.min.z + boundaryPadding,
+                accessible.max.z - boundaryPadding);
+        }
+
+        point.y = y;
+        return point;
+    }
+
+    private void TickVehicleYield()
+    {
+        GymVisitorVehicle vehicle = yieldingToVehicle;
+        if (vehicle == null || fighter == null)
+        {
+            ClearVehicleYield(false);
+            return;
+        }
+
+        if (!vehicle.IsDriving || !vehicle.gameObject.activeInHierarchy)
+        {
+            ClearVehicleYield(true);
+            return;
+        }
+
+        if (fighter.MoveVisitorAlongExteriorRoute(
+                vehicleYieldPoint, VehicleYieldSpeed))
+        {
+            if (vehicleYieldReachedAt < 0f)
+            {
+                vehicleYieldReachedAt = Time.time;
+            }
+
+            bool vehicleCanPass = vehicle.IsPedestrianClearForYield(
+                fighter.transform.position);
+            bool holdExpired = Time.time - vehicleYieldReachedAt >=
+                VehicleYieldHoldSeconds;
+            bool timeout = Time.time - vehicleYieldStartedAt >= VehicleYieldTimeout;
+            if ((vehicleCanPass && holdExpired) || timeout)
+            {
+                ClearVehicleYield(true);
+            }
+        }
+    }
+
+    private void ClearVehicleYield(bool log)
+    {
+        GymVisitorVehicle vehicle = yieldingToVehicle;
+        yieldingToVehicle = null;
+        vehicleYieldReachedAt = -1f;
+        if (state == VisitorState.ApproachingVehicle)
+        {
+            ResetVehicleRouteProgress();
+        }
+
+        if (fighter != null)
+        {
+            fighter.StopVisitorMovement();
+        }
+
+        if (log && vehicle != null)
+        {
+            Debug.Log(
+                $"GYMCHAOS_VISITOR_VEHICLE_YIELD_RELEASED enemy={fighter?.Identity} " +
+                $"vehicle={vehicle.name} point={vehicleYieldPoint}", this);
+        }
+    }
+
+    private void CancelVehicleYield()
+    {
+        yieldingToVehicle = null;
+        vehicleYieldReachedAt = -1f;
     }
 
     private Vector3 GetExteriorDoorClearPoint(float y)
@@ -561,28 +748,6 @@ public sealed class GymVisitorAgent : MonoBehaviour
         }
     }
 
-    private void AllowVisitorThroughExteriorRouteGuards()
-    {
-        if (fighter == null) return;
-        GameObject exterior = GameObject.Find("Gym Exterior (Runtime)");
-        if (exterior == null) return;
-        Collider[] visitorColliders = fighter.GetComponentsInChildren<Collider>(true);
-        Collider[] exteriorColliders = exterior.GetComponentsInChildren<Collider>(true);
-        for (int e = 0; e < exteriorColliders.Length; e++)
-        {
-            Collider guard = exteriorColliders[e];
-            if (guard == null ||
-                (guard.name.IndexOf("Boundary", System.StringComparison.OrdinalIgnoreCase) < 0 &&
-                 guard.name.IndexOf("Blocker", System.StringComparison.OrdinalIgnoreCase) < 0))
-                continue;
-            for (int i = 0; i < visitorColliders.Length; i++)
-            {
-                if (visitorColliders[i] != null)
-                    Physics.IgnoreCollision(visitorColliders[i], guard, true);
-            }
-        }
-    }
-
     public void AbortEntryAndReturnThroughDoor(GymDoorway door)
     {
         if (fighter == null || door == null || !IsEntryPending)
@@ -633,6 +798,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return;
         }
 
+        CancelVehicleYield();
         RestoreRouteVehicleCollision();
         ReleaseDoorOpenRequest();
         state = VisitorState.Dormant;
@@ -662,6 +828,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return;
         }
 
+        CancelVehicleYield();
         RestoreRouteVehicleCollision();
         ReleaseDoorOpenRequest();
         EndWorkoutStationRelease();
@@ -689,6 +856,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
     public void CancelForCombat()
     {
+        CancelVehicleYield();
         RestoreRouteVehicleCollision();
         ReleaseDoorOpenRequest();
         squatStartPending = false;
@@ -733,6 +901,20 @@ public sealed class GymVisitorAgent : MonoBehaviour
             return true;
         }
 
+        if ((state == VisitorState.ExitingDoor ||
+             state == VisitorState.LeavingGym ||
+             state == VisitorState.ApproachingVehicle) &&
+            !fighter.TickVisitorGroundingForMovement())
+        {
+            return true;
+        }
+
+        if (yieldingToVehicle != null)
+        {
+            TickVehicleYield();
+            return true;
+        }
+
         switch (state)
         {
             case VisitorState.ApproachingGymFromVehicle:
@@ -750,8 +932,6 @@ public sealed class GymVisitorAgent : MonoBehaviour
                     : (Vector3?)null;
                 bool isRoundedExteriorCorner = vehicleEntryWaypointIndex >= 1 &&
                     vehicleEntryWaypointIndex <= 2;
-                bool requiresWallClearanceTurn = vehicleEntryWaypointIndex == 3;
-                if (requiresWallClearanceTurn) entryLookAhead = null;
                 bool isExteriorDoorPoint = vehicleEntryWaypoints != null &&
                     vehicleEntryWaypointIndex == vehicleEntryWaypoints.Length - 1;
                 // The first handoff is the center of the parking aisle. A
@@ -761,6 +941,8 @@ public sealed class GymVisitorAgent : MonoBehaviour
                 // leave the agent circling forever around an already clear
                 // waypoint. Keep the door and corner waypoints precise.
                 bool isParkingAislePoint = vehicleEntryWaypointIndex == 0;
+                bool requiresWallClearanceTurn = vehicleEntryWaypointIndex == 3;
+                if (isParkingAislePoint) entryLookAhead = null;
                 float entryCompletionRadius = isParkingAislePoint
                     ? 2.2f
                     : isRoundedExteriorCorner
@@ -958,8 +1140,8 @@ public sealed class GymVisitorAgent : MonoBehaviour
                     {
                         // Approach the door from the clear side of the
                         // reception desk before taking the straight doorway
-                        // segment. This avoids routing the capsule through the
-                        // desk when the visitor is leaving the gym.
+                        // segment. This keeps the whole exit physical while
+                        // avoiding the desk footprint.
                         exitRoomClearPointPending = false;
                         travelTarget = doorway != null
                             ? doorway.InteriorPoint
@@ -979,9 +1161,11 @@ public sealed class GymVisitorAgent : MonoBehaviour
                 return true;
 
             case VisitorState.LeavingGym:
-                // Exterior steering still probes the full capsule and may
-                // choose a side-step; it never phases through the wall.
-                if (fighter.MoveVisitorAlongExteriorRoute(travelTarget, 2.2f))
+                // Crossing the narrow frame uses the same precise physical
+                // steering as entry. Parking steering retains its previous
+                // heading and wide turning radius, which can drive a visitor
+                // into a jamb after the lateral approach beside reception.
+                if (fighter.MoveVisitorTo(travelTarget, 2.2f, true))
                 {
                     ReleaseDoorOpenRequest();
                     state = VisitorState.Dormant;
@@ -1018,9 +1202,15 @@ public sealed class GymVisitorAgent : MonoBehaviour
                 bool isFinalVehicleWaypoint = !vehicleDetourActive &&
                     vehicleExitWaypoints != null &&
                     vehicleExitWaypointIndex == vehicleExitWaypoints.Length - 1;
+                bool isExteriorClearWaypoint = !vehicleDetourActive &&
+                    vehicleExitWaypointIndex <= 1;
                 float exitCompletionRadius = isFinalVehicleWaypoint
                     ? vehicleBoardingRadius
                     : 2.1f;
+                if (isExteriorClearWaypoint)
+                {
+                    exitCompletionRadius = 6.5f;
+                }
                 if (fighter.MoveVisitorAlongExteriorRoute(
                         travelTarget, 2.35f, exitLookAhead,
                         exitCompletionRadius))
@@ -1622,17 +1812,27 @@ public sealed class GymVisitorAgent : MonoBehaviour
             direction = Vector3.forward;
         }
 
-        // This is only a last-resort handoff after a real stalled physics
-        // route. The target is always one of the authored clear/interior/
-        // exterior doorway points, so the visitor cannot remain trapped at
-        // the threshold indefinitely.
-        fighter.SetVisitorSpawnPose(
-            travelTarget,
-            Quaternion.LookRotation(direction.normalized, Vector3.up));
+        // Never resolve a doorway stall by writing the target into the
+        // Rigidbody. That hid the underlying route failure as a visible
+        // teleport, especially for Goku at the inside edge of the door.
+        // Rebuild the route target and let the normal capsule steering cross
+        // the passage on a later physics tick.
+        doorwayExitRecoveryCount++;
+        if (state == VisitorState.ExitingDoor)
+        {
+            hasDoorwayClearPoint = false;
+            exitRoomClearPointPending = true;
+            travelTarget = GetDoorwayClearPoint();
+        }
+        else
+        {
+            travelTarget = GetExteriorDoorClearPoint(fighter.transform.position.y);
+        }
         fighter.StopVisitorMovement();
         Debug.LogWarning(
             $"GYMCHAOS_VISITOR_EXIT_ROUTE_FALLBACK enemy={fighter.Identity} " +
-            $"state={state} target={travelTarget}",
+            $"state={state} target={travelTarget} recovery={doorwayExitRecoveryCount} " +
+            "mode=reroute_no_teleport",
             this);
         ResetDoorwayExitTracking();
     }
@@ -1674,6 +1874,7 @@ public sealed class GymVisitorAgent : MonoBehaviour
 
     private void OnDisable()
     {
+        CancelVehicleYield();
         RestoreRouteVehicleCollision();
         ReleaseDoorOpenRequest();
         squatStartPending = false;

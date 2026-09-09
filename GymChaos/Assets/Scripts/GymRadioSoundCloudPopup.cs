@@ -88,6 +88,11 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
 
     public void Open()
     {
+        if (radio == null || !radio.CanInteractWithPlayer)
+        {
+            return;
+        }
+
         BuildInterface();
 
         if (activePopup != null && activePopup != this)
@@ -148,6 +153,12 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
     {
         if (!built || radio == null)
         {
+            return;
+        }
+
+        if (!radio.CanInteractWithPlayer)
+        {
+            Close();
             return;
         }
 
@@ -437,6 +448,12 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
     {
         if (!IsVisible)
         {
+            return;
+        }
+
+        if (radio == null || !radio.CanInteractWithPlayer)
+        {
+            Close();
             return;
         }
 
