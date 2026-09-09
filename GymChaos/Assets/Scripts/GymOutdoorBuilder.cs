@@ -1272,7 +1272,9 @@ public static class GymOutdoorBuilder
                 boundaryRibMaterial);
         }
 
-        float openingHalfWidth = PathWidth * 0.5f + 0.35f;
+        // This is the vehicle-road opening, not the narrower pedestrian path.
+        // Matching the collision opening keeps both driving lanes visually clear.
+        float openingHalfWidth = VehicleRoadWidth * 0.5f + 0.45f;
         float eastSouthLength = parkingCenterZ - openingHalfWidth - parkingMinZ;
         if (eastSouthLength > 0.4f)
         {

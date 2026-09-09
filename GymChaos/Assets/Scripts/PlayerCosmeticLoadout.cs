@@ -40,6 +40,22 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     public void Initialize(PlayerMovement targetPlayer)
     {
         player = targetPlayer != null ? targetPlayer : GetComponent<PlayerMovement>();
+        if (!initialized)
+        {
+            foreach (GymHeadwear item in Enum.GetValues(typeof(GymHeadwear)))
+            {
+                if (item == GymHeadwear.None) continue;
+                RuntimeGlbModelLoader.Request(GetHeadwearAssetPath(item), transform,
+                    transform.position, Quaternion.identity, Vector3.one,
+                    "Preload Headwear " + item, PlanarGymMirror.MirrorPlayerLayer,
+                    onLoaded: loaded =>
+                    {
+                        if (loaded == null) return;
+                        loaded.SetActive(false);
+                        Destroy(loaded);
+                    });
+            }
+        }
         initialized = true;
     }
 
@@ -54,6 +70,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         GymHeadwear nextHeadwear = currentHeadwear;
         Enum.TryParse(state.shirt, true, out nextShirt);
         Enum.TryParse(state.headwear, true, out nextHeadwear);
+        bool headwearChanged = !hasAppliedState || nextHeadwear != currentHeadwear;
         bool changed = !hasAppliedState || nextShirt != currentShirt ||
             nextHeadwear != currentHeadwear;
         currentShirt = nextShirt;
@@ -63,7 +80,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         if (changed)
         {
             visualReady = false;
-            ClearHeadwear();
+            if (headwearChanged) ClearHeadwear();
         }
 
         bool headwearNeedsVisual = currentHeadwear != GymHeadwear.None &&
@@ -278,33 +295,100 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         return false;
     }
 
-    private static void FitHeadwearToPlayerHead(
+    private void FitHeadwearToPlayerHead(
         GameObject loaded, Transform head, GymHeadwear headwear)
     {
-        Renderer[] renderers = loaded.GetComponentsInChildren<Renderer>(true);
-        if (!TryGetRendererBounds(renderers, out Bounds sourceBounds))
-        {
-            return;
-        }
-
+        // Mesh bounds must be measured in an upright frame, not in the
+        // imported head bone's axes (the FBX head axis is not world up).
         HeadwearFit fit = GetHeadwearFit(headwear);
-        float playerHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight;
-        float sourceWidth = Mathf.Max(0.001f,
-            Mathf.Max(sourceBounds.size.x, sourceBounds.size.z));
-        loaded.transform.localScale *= playerHeight * fit.Width / sourceWidth;
-        loaded.transform.localRotation = Quaternion.Euler(fit.EulerAngles);
-
-        if (!TryGetRendererBounds(renderers, out Bounds fittedBounds))
+        Quaternion correction = headwear == GymHeadwear.Headband
+            ? Quaternion.FromToRotation(new Vector3(-0.403753f, 0.914509f, 0.025610f), Vector3.up)
+            : Quaternion.Euler(fit.EulerAngles);
+        loaded.transform.rotation = player.transform.rotation * correction;
+        Renderer[] renderers = loaded.GetComponentsInChildren<Renderer>(true);
+        if (!TryGetWearableBounds(renderers, out Bounds sourceBounds))
         {
             return;
         }
 
-        Vector3 desiredBottomCenter = head.position +
-            head.up * (playerHeight * fit.BottomOffset) +
-            head.forward * (playerHeight * fit.ForwardOffset);
+        Bounds skull = GetSkullBounds(head);
+        float sourceWidth = Mathf.Max(0.001f, sourceBounds.size.x);
+        float targetWidth = Mathf.Max(0.15f, skull.size.x) * fit.Width;
+        loaded.transform.localScale *= targetWidth / sourceWidth;
+
+        if (!TryGetWearableBounds(renderers, out Bounds fittedBounds))
+        {
+            return;
+        }
+
+        float inset = skull.size.y * fit.BottomOffset;
+        Vector3 desiredBottomCenter = player.transform.TransformPoint(new Vector3(
+            skull.center.x, skull.max.y - inset,
+            skull.center.z + skull.size.z * fit.ForwardOffset));
         Vector3 currentBottomCenter = new Vector3(
             fittedBounds.center.x, fittedBounds.min.y, fittedBounds.center.z);
-        loaded.transform.position += desiredBottomCenter - currentBottomCenter;
+        loaded.transform.position += desiredBottomCenter -
+            player.transform.TransformPoint(currentBottomCenter);
+    }
+
+    private Bounds GetSkullBounds(Transform head)
+    {
+        Bounds result = new Bounds(player.transform.InverseTransformPoint(head.position) + Vector3.up * 0.12f,
+            new Vector3(0.25f, 0.28f, 0.25f));
+        bool found = false;
+        foreach (var renderer in player.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (renderer.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer ||
+                renderer.sharedMesh == null) continue;
+            var weights = renderer.sharedMesh.boneWeights;
+            var bones = renderer.bones;
+            Mesh baked = new Mesh();
+            renderer.BakeMesh(baked, true);
+            var vertices = baked.vertices;
+            for (int i = 0; i < vertices.Length && i < weights.Length; i++)
+            {
+                var w = weights[i];
+                float influence = HeadWeight(bones, head, w.boneIndex0, w.weight0) +
+                    HeadWeight(bones, head, w.boneIndex1, w.weight1) +
+                    HeadWeight(bones, head, w.boneIndex2, w.weight2) +
+                    HeadWeight(bones, head, w.boneIndex3, w.weight3);
+                if (influence < 0.5f) continue;
+                Vector3 point = player.transform.InverseTransformPoint(
+                    renderer.transform.TransformPoint(vertices[i]));
+                if (!found) { result = new Bounds(point, Vector3.zero); found = true; }
+                else result.Encapsulate(point);
+            }
+            Destroy(baked);
+        }
+        return result;
+    }
+
+    private bool TryGetWearableBounds(Renderer[] renderers, out Bounds bounds)
+    {
+        bounds = default;
+        bool found = false;
+        foreach (var renderer in renderers)
+        {
+            MeshFilter filter = renderer.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null) continue;
+            // The headband is authored on a tilted plane. Rotating its AABB
+            // measures empty corners and lifts the real band off the scalp.
+            // Fit the actual vertices after the per-item rotation instead.
+            foreach (Vector3 vertex in filter.sharedMesh.vertices)
+            {
+                Vector3 point = player.transform.InverseTransformPoint(
+                    renderer.transform.TransformPoint(vertex));
+                if (!found) { bounds = new Bounds(point, Vector3.zero); found = true; }
+                else bounds.Encapsulate(point);
+            }
+        }
+        return found;
+    }
+
+    private static float HeadWeight(Transform[] bones, Transform head, int index, float weight)
+    {
+        if (index < 0 || index >= bones.Length || bones[index] == null) return 0f;
+        return bones[index] == head || bones[index].IsChildOf(head) ? weight : 0f;
     }
 
     private static HeadwearFit GetHeadwearFit(GymHeadwear headwear)
@@ -312,18 +396,21 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         switch (headwear)
         {
             case GymHeadwear.Beanie:
-                return new HeadwearFit { Width = 0.122f, BottomOffset = 0.018f,
-                    ForwardOffset = -0.002f, EulerAngles = Vector3.zero };
-            case GymHeadwear.Headband:
-                return new HeadwearFit { Width = 0.113f, BottomOffset = 0.025f,
+                return new HeadwearFit { Width = 1.12f, BottomOffset = 0.55f,
                     ForwardOffset = 0f, EulerAngles = Vector3.zero };
-            case GymHeadwear.Visor:
-                return new HeadwearFit { Width = 0.145f, BottomOffset = 0.032f,
-                    ForwardOffset = 0.004f, EulerAngles = Vector3.zero };
+            case GymHeadwear.Headband:
+                return new HeadwearFit { Width = 1.10f, BottomOffset = 0.52f,
+                    ForwardOffset = 0f, EulerAngles = Vector3.zero };
+            case GymHeadwear.BucketHat:
+                return new HeadwearFit { Width = 1.65f, BottomOffset = 0.57f,
+                    ForwardOffset = 0f, EulerAngles = Vector3.zero };
+            case GymHeadwear.JollyCap:
+                return new HeadwearFit { Width = 1.20f, BottomOffset = 0.54f,
+                    ForwardOffset = 0.12f, EulerAngles = Vector3.zero };
             case GymHeadwear.Cap:
             default:
-                return new HeadwearFit { Width = 0.142f, BottomOffset = 0.03f,
-                    ForwardOffset = 0.006f, EulerAngles = Vector3.zero };
+                return new HeadwearFit { Width = 1.12f, BottomOffset = 0.54f,
+                    ForwardOffset = 0.20f, EulerAngles = Vector3.zero };
         }
     }
 
@@ -363,10 +450,25 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                 return "BodyBuilders/wearables/beanie.glb";
             case GymHeadwear.Headband:
                 return "BodyBuilders/wearables/headband.glb";
-            case GymHeadwear.Visor:
+            case GymHeadwear.BucketHat:
                 return "BodyBuilders/wearables/bucket_hat.glb";
+            case GymHeadwear.JollyCap:
+                return "BodyBuilders/wearables/jolly_cap.glb";
             default:
                 return string.Empty;
+        }
+    }
+
+    public static string GetHeadwearDisplayName(GymHeadwear item)
+    {
+        switch (item)
+        {
+            case GymHeadwear.Cap: return "Baseball cap";
+            case GymHeadwear.Beanie: return "Beanie";
+            case GymHeadwear.BucketHat: return "Bucket hat";
+            case GymHeadwear.Headband: return "Headband";
+            case GymHeadwear.JollyCap: return "Jolly cap";
+            default: return "None";
         }
     }
 

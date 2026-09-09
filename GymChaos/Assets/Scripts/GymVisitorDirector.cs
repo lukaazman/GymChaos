@@ -831,19 +831,18 @@ public sealed class GymVisitorDirector : MonoBehaviour
             ? Quaternion.LookRotation(approach.normalized, Vector3.up)
             : record.fighter.transform.rotation;
         record.fighter.gameObject.SetActive(true);
-        if (record.vehicle != null && record.vehicle.IsCloud)
-            record.vehicle.DismountRider(outside, rotation);
-        else
-            record.fighter.SetVisitorSpawnPose(outside, rotation);
-        Physics.SyncTransforms();
         if (record.vehicle != null)
         {
+            if (record.vehicle.IsCloud)
+                record.vehicle.DismountRider(outside, rotation);
             record.agent.BeginEntryFromVehicle(
                 doorway, ChooseRoomTarget(record.fighter.Identity),
                 record.vehicle.PassengerPoint, record.vehicle.AislePassengerPoint);
         }
         else
         {
+            record.fighter.SetVisitorSpawnPose(outside, rotation);
+            Physics.SyncTransforms();
             record.agent.BeginEntry(doorway, ChooseRoomTarget(record.fighter.Identity));
         }
         record.waitingForVehicle = false;

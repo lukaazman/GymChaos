@@ -24,7 +24,8 @@ public enum GymHeadwear
     Cap,
     Beanie,
     Headband,
-    Visor
+    BucketHat,
+    JollyCap
 }
 
 /// <summary>
@@ -87,6 +88,8 @@ public sealed class GymProgressionState
             shirt = parsedShirt.ToString();
         }
 
+        if (string.Equals(headwear, "Visor", StringComparison.OrdinalIgnoreCase))
+            headwear = nameof(GymHeadwear.BucketHat);
         if (!Enum.TryParse(headwear, true, out GymHeadwear parsedHeadwear))
         {
             headwear = nameof(GymHeadwear.None);

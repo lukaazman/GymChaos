@@ -337,7 +337,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     private const float CurrentMedicineBallScale = 0.95f;
     private const float FoamRollerScale = CurrentFoamRollerScale * 0.75f;
     private const float MedicineBallScale = CurrentMedicineBallScale * 1.25f;
-    private const float MedicineBallMass = 0.5f;
+    private const float MedicineBallMass = 0.8f;
     private const float MedicineBallEntryClearance = 1.15f;
     private const float MedicineBallFloorHalfExtent = 0.24f;
     private const int MedicineBallCandidateGridResolution = 7;
@@ -1897,15 +1897,33 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
 
         Collider collider = AddCollider(itemObject, asset.LocalBounds, spec);
         collider.sharedMaterial = CreatePhysicsMaterial(spec);
+        if (spec.ItemType == WeightType.Ball && spec.SettleOnSupport)
+        {
+            // The sphere uses the largest mesh extent, which can reach lower
+            // than the rendered ball. Settle the actual collider so it never
+            // starts intersecting the floor and receives a depenetration kick.
+            float colliderLift = spec.SupportY + 0.008f - collider.bounds.min.y;
+            if (colliderLift > 0f)
+            {
+                itemObject.transform.position += Vector3.up * colliderLift;
+                Physics.SyncTransforms();
+            }
+        }
 
         if (spec.Pickable)
         {
             Rigidbody body = itemObject.AddComponent<Rigidbody>();
             PickupItem pickup = itemObject.AddComponent<PickupItem>();
-            pickup.Configure(body, spec.ItemType, new[] { collider }, true, spec.DisplayName);
+            float massOverride = spec.ItemType == WeightType.Ball
+                ? MedicineBallMass
+                : -1f;
+            pickup.Configure(
+                body, spec.ItemType, new[] { collider }, true,
+                spec.DisplayName, massOverride);
             if (spec.ItemType == WeightType.Ball)
             {
                 ConfigureMedicineBallPhysics(body);
+                StartCoroutine(SettleMedicineBallAfterSpawn(body, collider, spec.SupportY));
             }
         }
     }
@@ -2089,10 +2107,54 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         body.useGravity = true;
         body.constraints = RigidbodyConstraints.None;
         body.linearDamping = 0.35f;
-        body.angularDamping = 0.15f;
+        body.angularDamping = 0.55f;
+        body.sleepThreshold = 0.02f;
         body.interpolation = RigidbodyInterpolation.Interpolate;
         body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-        body.WakeUp();
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        Physics.SyncTransforms();
+        body.Sleep();
+    }
+
+    private static IEnumerator SettleMedicineBallAfterSpawn(
+        Rigidbody body, Collider collider, float supportY)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            yield return new WaitForFixedUpdate();
+        }
+        if (body == null || collider == null)
+        {
+            yield break;
+        }
+
+        float physicalSupportY = supportY;
+        Vector3 rayOrigin = collider.bounds.center + Vector3.up * 0.25f;
+        RaycastHit[] supportHits = Physics.RaycastAll(
+            rayOrigin, Vector3.down, 5f, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < supportHits.Length; i++)
+        {
+            Collider hitCollider = supportHits[i].collider;
+            if (hitCollider == null ||
+                hitCollider.transform == body.transform ||
+                hitCollider.transform.IsChildOf(body.transform) ||
+                body.transform.IsChildOf(hitCollider.transform))
+            {
+                continue;
+            }
+            if (supportHits[i].point.y <= collider.bounds.center.y + 0.05f)
+            {
+                physicalSupportY = Mathf.Max(
+                    physicalSupportY, supportHits[i].point.y);
+            }
+        }
+        float correction = physicalSupportY + 0.008f - collider.bounds.min.y;
+        body.position += Vector3.up * correction;
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        Physics.SyncTransforms();
+        body.Sleep();
     }
 
     private PhysicsMaterial CreatePhysicsMaterial(ItemSpec spec)

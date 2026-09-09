@@ -33,7 +33,7 @@ public sealed class GymExperienceService : MonoBehaviour
     private static readonly GymHeadwear[] LockerHeadwearOptions =
     {
         GymHeadwear.None, GymHeadwear.Cap, GymHeadwear.Beanie,
-        GymHeadwear.Headband, GymHeadwear.Visor
+        GymHeadwear.Headband, GymHeadwear.BucketHat, GymHeadwear.JollyCap
     };
 
     private readonly HashSet<string> oneShotRewards = new HashSet<string>();
@@ -695,7 +695,7 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public bool IsCosmeticUnlocked(GymHeadwear headwear)
     {
-        if (headwear == GymHeadwear.Visor)
+        if (headwear == GymHeadwear.BucketHat)
         {
             return MasteryRank >= 2;
         }
@@ -1472,10 +1472,11 @@ public sealed class GymExperienceService : MonoBehaviour
             GymHeadwear item = LockerHeadwearOptions[i];
             bool selected = string.Equals(state.headwear, item.ToString(), StringComparison.OrdinalIgnoreCase);
             bool unlocked = IsCosmeticUnlocked(item);
-            string label = selected ? $"✓ {item}" : unlocked ? item.ToString() :
-                item == GymHeadwear.Visor
-                    ? $"{item} · M2"
-                    : $"{item} · L{GetHeadwearUnlockLevel(item)}";
+            string name = PlayerCosmeticLoadout.GetHeadwearDisplayName(item);
+            string label = selected ? $"✓ {name}" : unlocked ? name :
+                item == GymHeadwear.BucketHat
+                    ? $"{name} · M2"
+                    : $"{name} · L{GetHeadwearUnlockLevel(item)}";
             int column = i % columns;
             int row = i / columns;
             Rect buttonRect = new Rect(
@@ -1491,7 +1492,7 @@ public sealed class GymExperienceService : MonoBehaviour
         }
 
         GUI.Label(new Rect(panel.x + left, panel.y + 350f, panel.width - left * 2f, 22f),
-            $"Wearing  {state.shirt}  ·  {state.headwear}", lockerFooterStyle);
+            $"Wearing  {state.shirt}  ·  {(cosmetics != null ? PlayerCosmeticLoadout.GetHeadwearDisplayName(cosmetics.CurrentHeadwear) : state.headwear)}", lockerFooterStyle);
         GUI.Label(new Rect(panel.x + left, panel.y + 372f, panel.width - left * 2f, 22f),
             MasteryChallengeLabel, lockerFooterStyle);
 
@@ -1518,7 +1519,8 @@ public sealed class GymExperienceService : MonoBehaviour
     private static int GetHeadwearUnlockLevel(GymHeadwear headwear)
     {
         return headwear == GymHeadwear.Cap ? 3 :
-            headwear == GymHeadwear.Headband ? 5 : headwear == GymHeadwear.Beanie ? 8 : 1;
+            headwear == GymHeadwear.Headband ? 5 :
+            headwear == GymHeadwear.Beanie || headwear == GymHeadwear.JollyCap ? 8 : 1;
     }
 
     private void OnApplicationQuit()
