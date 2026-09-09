@@ -344,7 +344,7 @@ public static class GymChaosProgressionVerifier
                 progression.State.level = Mathf.Max(progression.State.level, 8);
                 progression.State.masteryRank = Mathf.Max(progression.State.masteryRank, 2);
                 if (!progression.IsCosmeticUnlocked(GymShirtColor.Gold) ||
-                    !progression.IsCosmeticUnlocked(GymHeadwear.Visor))
+                    !progression.IsCosmeticUnlocked(GymHeadwear.BucketHat))
                 {
                     Fail("Mastery cosmetics did not unlock at their mastery thresholds.");
                     return;
@@ -370,7 +370,7 @@ public static class GymChaosProgressionVerifier
                 }
 
                 progression.EquipShirt(GymShirtColor.Blue);
-                progression.EquipHeadwear(GymHeadwear.Visor);
+                progression.EquipHeadwear(GymHeadwear.BucketHat);
 
                 // The GLB is loaded asynchronously. Do not capture the mirror
                 // until the selected wearable has a live renderer; otherwise
