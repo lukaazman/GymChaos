@@ -17,6 +17,21 @@ public static class GymBackRoomBuilder
     private static float roomFloorY;
     private static Vector3 roomCenter;
 
+    public static bool TryGetRoomBounds(out Bounds bounds)
+    {
+        if (!roomBoundsReady)
+        {
+            GameObject existingRoot = GameObject.Find(RootName);
+            if (existingRoot != null)
+            {
+                RebuildBoundsFromExistingRoot(existingRoot);
+            }
+        }
+
+        bounds = roomBounds;
+        return roomBoundsReady;
+    }
+
     public static bool IsInsideRoom(Vector3 position)
     {
         if (!roomBoundsReady)

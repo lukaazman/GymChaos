@@ -306,9 +306,9 @@ public static class GymOutdoorBuilder
             landscape,
             false);
 
-        CreateNeighbourhood(root.transform, roomFloor.center.x, floorY, parkingCenterZ, parkingWidth,
-            parkingMaxX + 42f,
-            landscape, foliageMaterial, curbMaterial, boundaryMaterial, lampMaterial);
+        // The gym shell, parking, fences and vehicle route above remain the gameplay
+        // space.  The former neighbourhood buildings/foliage are intentionally
+        // not generated; the authored city ring is added after its bounds are known.
 
         // Visible road continues east through the parking opening. Cars can
         // cross the invisible blocker; the player cannot enter traffic.
@@ -548,6 +548,24 @@ public static class GymOutdoorBuilder
         AccessibleBounds = new Bounds(
             new Vector3((courtyardMinX + courtyardMaxX) * 0.5f, floorY, (courtyardMinZ + courtyardMaxZ) * 0.5f),
             new Vector3(courtyardMaxX - courtyardMinX, BoundaryHeight, courtyardMaxZ - courtyardMinZ));
+
+        GymCityDystopiaSurroundings.Build(
+            root.transform,
+            roomFloor,
+            floorY,
+            parkingMinX,
+            parkingMaxX,
+            parkingCenterZ,
+            doorZ,
+            pathCenterX,
+            pathSouthZ,
+            pathNorthZ,
+            outerPathX,
+            roadStartX,
+            roadEndX,
+            roadExit,
+            PathWidth,
+            roadWidth);
         IsBuilt = true;
 
         Debug.Log(
@@ -1756,3 +1774,4 @@ public sealed class GymExteriorOnlyVisual : MonoBehaviour
         visibilityApplied = true;
     }
 }
+

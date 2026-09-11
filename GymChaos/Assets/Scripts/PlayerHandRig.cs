@@ -1777,19 +1777,83 @@ public sealed class PlayerHandRig : MonoBehaviour
 
     private static Material[] CreateFirstPersonMaterials(Material[] sourceMaterials)
     {
-        Material[] materials = CreateOpaqueMaterials(sourceMaterials);
-        for (int i = 0; i < sourceMaterials.Length; i++)
+        Material[] opaqueMaterials = CreateOpaqueMaterials(sourceMaterials);
+        Shader firstPersonShader = Shader.Find("Universal Render Pipeline/Unlit") ??
+            Shader.Find("Unlit/Texture");
+        if (firstPersonShader == null)
         {
-            Material material = materials[i];
-            material.name = (sourceMaterials[i] != null ? sourceMaterials[i].name : "Player") +
-                " (First Person Arms)";
+            return opaqueMaterials;
+        }
+
+        Material[] materials = new Material[opaqueMaterials.Length];
+        for (int i = 0; i < opaqueMaterials.Length; i++)
+        {
+            Material litMaterial = opaqueMaterials[i];
+            Texture baseColor = null;
+            Color sourceColor = Color.white;
+            if (litMaterial != null)
+            {
+                if (litMaterial.HasProperty("_BaseMap"))
+                {
+                    baseColor = litMaterial.GetTexture("_BaseMap");
+                }
+                if (baseColor == null && litMaterial.HasProperty("_MainTex"))
+                {
+                    baseColor = litMaterial.GetTexture("_MainTex");
+                }
+                if (litMaterial.HasProperty("_BaseColor"))
+                {
+                    sourceColor = litMaterial.GetColor("_BaseColor");
+                }
+                else if (litMaterial.HasProperty("_Color"))
+                {
+                    sourceColor = litMaterial.GetColor("_Color");
+                }
+            }
+
+            Material material = new Material(firstPersonShader)
+            {
+                name = (sourceMaterials[i] != null ? sourceMaterials[i].name : "Player") +
+                    " (First Person Arms)"
+            };
+            sourceColor.a = 1f;
+            if (baseColor != null && material.HasProperty("_BaseMap"))
+            {
+                material.SetTexture("_BaseMap", baseColor);
+            }
+            if (baseColor != null && material.HasProperty("_MainTex"))
+            {
+                material.SetTexture("_MainTex", baseColor);
+            }
+            if (material.HasProperty("_BaseColor"))
+            {
+                material.SetColor("_BaseColor", sourceColor);
+            }
+            if (material.HasProperty("_Color"))
+            {
+                material.SetColor("_Color", sourceColor);
+            }
+            if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0f);
+            if (material.HasProperty("_AlphaClip")) material.SetFloat("_AlphaClip", 0f);
+            if (material.HasProperty("_ZWrite")) material.SetFloat("_ZWrite", 1f);
             if (material.HasProperty("_Cull"))
             {
                 material.SetFloat("_Cull", (float)CullMode.Back);
             }
+            if (material.HasProperty("_SrcBlend")) material.SetFloat("_SrcBlend", (float)BlendMode.One);
+            if (material.HasProperty("_DstBlend")) material.SetFloat("_DstBlend", (float)BlendMode.Zero);
             material.EnableKeyword("_SURFACE_TYPE_OPAQUE");
             material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
             material.DisableKeyword("_ALPHATEST_ON");
+            material.DisableKeyword("FOG_LINEAR");
+            material.DisableKeyword("FOG_EXP");
+            material.DisableKeyword("FOG_EXP2");
+            material.SetOverrideTag("RenderType", "Opaque");
+            material.renderQueue = (int)RenderQueue.Geometry;
+            if (litMaterial != null)
+            {
+                UnityEngine.Object.Destroy(litMaterial);
+            }
             materials[i] = material;
         }
         return materials;
