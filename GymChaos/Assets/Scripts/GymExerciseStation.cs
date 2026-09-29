@@ -161,8 +161,9 @@ public class GymExerciseStation : MonoBehaviour
     public Vector3 PullUpLookDirection => pullUpLookDirection;
     public float PullUpCameraLowering => cableMachinePullUp ? 0.48f : 0f;
     public bool IsOccupied => playerOccupant != null || enemyOccupant != null ||
-        enemySquatReleaseOccupant != null;
-    public bool IsOccupiedByEnemy => enemyOccupant != null || enemySquatReleaseOccupant != null;
+        enemySquatReleaseOccupant != null || HasApproachLeaver();
+    public bool IsOccupiedByEnemy => enemyOccupant != null || enemySquatReleaseOccupant != null ||
+        HasApproachLeaver();
     public bool IsAvailableForPlayer => !IsOccupied;
     public EnemyFighter EnemyOccupant => enemyOccupant;
     // Treadmills use the same authored center/facing correction as the player
@@ -175,6 +176,10 @@ public class GymExerciseStation : MonoBehaviour
             Vector3 position = playerPosition;
             if (IsTreadmill && treadmillBeltRenderer != null)
             {
+                // The player's authored treadmill point sits over the motor
+                // hood at the console end. A visible runner must stand on the
+                // open black belt behind it.
+                position = GetTreadmillDeckCenter(position);
                 // The animator grounds the visible skeleton against the
                 // fighter root. Extra clearance here lifts both feet.
                 position.y = treadmillBeltRenderer.bounds.max.y -
@@ -183,7 +188,90 @@ public class GymExerciseStation : MonoBehaviour
             return position;
         }
     }
+
+    private bool treadmillDeckCenterResolved;
+    private Vector3 treadmillDeckCenter;
+
+    // Center of the longest stretch of belt along the running direction that
+    // is not covered by a part standing on the deck (motor hood, covers).
+    private Vector3 GetTreadmillDeckCenter(Vector3 fallback)
+    {
+        if (treadmillDeckCenterResolved)
+        {
+            return new Vector3(treadmillDeckCenter.x, fallback.y, treadmillDeckCenter.z);
+        }
+
+        Bounds belt = treadmillBeltRenderer.bounds;
+        Vector3 forward = Vector3.ProjectOnPlane(playerRotation * Vector3.forward, Vector3.up);
+        if (forward.sqrMagnitude < 0.0001f || equipmentRoot == null)
+        {
+            return fallback;
+        }
+        forward.Normalize();
+        ProjectBounds(belt, forward, out float deckMin, out float deckMax);
+
+        List<Vector2> covered = new List<Vector2>();
+        const float margin = 0.02f;
+        foreach (Renderer part in equipmentRoot.GetComponentsInChildren<Renderer>(true))
+        {
+            if (part == treadmillBeltRenderer || part == null) continue;
+            Bounds b = part.bounds;
+            bool overDeck = b.max.x > belt.min.x + margin && b.min.x < belt.max.x - margin &&
+                b.max.z > belt.min.z + margin && b.min.z < belt.max.z - margin;
+            bool standsOnDeck = b.max.y > belt.max.y + 0.05f && b.min.y < belt.max.y + 0.05f;
+            if (!overDeck || !standsOnDeck) continue;
+            ProjectBounds(b, forward, out float partMin, out float partMax);
+            covered.Add(new Vector2(partMin, partMax));
+        }
+        covered.Sort((a, b) => a.x.CompareTo(b.x));
+
+        float bestStart = deckMin;
+        float bestEnd = deckMin;
+        float cursor = deckMin;
+        foreach (Vector2 span in covered)
+        {
+            if (span.x > cursor && span.x - cursor > bestEnd - bestStart)
+            {
+                bestStart = cursor;
+                bestEnd = Mathf.Min(span.x, deckMax);
+            }
+            cursor = Mathf.Max(cursor, span.y);
+        }
+        if (deckMax - cursor > bestEnd - bestStart)
+        {
+            bestStart = cursor;
+            bestEnd = deckMax;
+        }
+        if (bestEnd - bestStart < 0.4f)
+        {
+            return fallback;
+        }
+
+        // Center across the belt width and along its open stretch.
+        float along = (bestStart + bestEnd) * 0.5f;
+        Vector3 lateralOrigin = belt.center - forward * Vector3.Dot(belt.center, forward);
+        treadmillDeckCenter = lateralOrigin + forward * along;
+        treadmillDeckCenterResolved = true;
+        return new Vector3(treadmillDeckCenter.x, fallback.y, treadmillDeckCenter.z);
+    }
+
+    private static void ProjectBounds(Bounds bounds, Vector3 axis, out float min, out float max)
+    {
+        min = float.PositiveInfinity;
+        max = float.NegativeInfinity;
+        for (int i = 0; i < 8; i++)
+        {
+            Vector3 corner = new Vector3(
+                (i & 1) == 0 ? bounds.min.x : bounds.max.x,
+                bounds.center.y,
+                (i & 2) == 0 ? bounds.min.z : bounds.max.z);
+            float value = Vector3.Dot(corner, axis);
+            min = Mathf.Min(min, value);
+            max = Mathf.Max(max, value);
+        }
+    }
     public Quaternion EnemyRotation => playerRotation;
+    internal Renderer TreadmillBeltRendererForVerification => treadmillBeltRenderer;
     public float CurrentTreadmillSpeed => currentSpeed;
     public bool IsSessionActive => sessionActive;
     public string EquipmentName => equipmentRoot != null ? equipmentRoot.name : string.Empty;
@@ -549,7 +637,8 @@ public class GymExerciseStation : MonoBehaviour
     {
         return (IsTreadmill || IsSquat) && enemy != null &&
             (enemyOccupant == null || enemyOccupant == enemy) &&
-            enemySquatReleaseOccupant == null && playerOccupant == null;
+            enemySquatReleaseOccupant == null && playerOccupant == null &&
+            (!HasApproachLeaver() || approachLeaver == enemy);
     }
 
     public bool ContainsEquipmentCollider(Collider collider)
@@ -685,10 +774,57 @@ public class GymExerciseStation : MonoBehaviour
             return;
         }
 
-        IgnoreEquipmentCollisions(enemy, false);
         enemyOccupant = null;
         sessionActive = false;
         enemySquatApproachReserved = false;
+        if (IsInsideEquipmentFootprint(enemy))
+        {
+            // The reservation let this enemy walk through the cage. Restoring
+            // the cage colliders now would trap it inside, and the next
+            // visitor would then wedge into it. Keep it passable and keep the
+            // station blocked until it has walked out.
+            ReleaseApproachLeaver();
+            approachLeaver = enemy;
+            enemy.SetEquipmentEgressStation(this);
+            return;
+        }
+        IgnoreEquipmentCollisions(enemy, false);
+    }
+
+    private const float EquipmentFootprintRadius = 1.3f;
+    private EnemyFighter approachLeaver;
+
+    private bool IsInsideEquipmentFootprint(EnemyFighter enemy)
+    {
+        return enemy != null && Vector3.ProjectOnPlane(
+            enemy.VisitorPhysicsPosition - EnemyPosition, Vector3.up).sqrMagnitude <
+            EquipmentFootprintRadius * EquipmentFootprintRadius;
+    }
+
+    private bool HasApproachLeaver()
+    {
+        if (approachLeaver == null)
+        {
+            return false;
+        }
+        if (approachLeaver.IsDead || !approachLeaver.isActiveAndEnabled ||
+            !IsInsideEquipmentFootprint(approachLeaver))
+        {
+            ReleaseApproachLeaver();
+            return false;
+        }
+        return true;
+    }
+
+    private void ReleaseApproachLeaver()
+    {
+        if (approachLeaver != null && approachLeaver != enemyOccupant &&
+            approachLeaver != enemySquatReleaseOccupant)
+        {
+            IgnoreEquipmentCollisions(approachLeaver, false);
+        }
+        approachLeaver?.ClearEquipmentEgressStation(this);
+        approachLeaver = null;
     }
 
     public bool TickEnemySquat(EnemyFighter enemy, float motion)

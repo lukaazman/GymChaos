@@ -56,6 +56,84 @@ public partial class EnemyFighter
             body.rotation, lookRotation, 260f * Time.fixedDeltaTime));
         SetAnimatedMovementFromVelocity(roamSpeed);
     }
+    // One enemy per machine. A station is off limits when someone is using or
+    // has reserved it, or when another neutral enemy is already walking to /
+    // standing at it and is closer. Without this, several visitors picked the
+    // same interaction point (the Smith machine squat spot) and pushed into
+    // each other inside the cage.
+    private bool IsStationClaimedByOther(GymExerciseStation station)
+    {
+        if (station == null)
+        {
+            return false;
+        }
+        if (station.IsOccupied && station.EnemyOccupant != this)
+        {
+            return true;
+        }
+
+        Vector3 spot = station.EnemyPosition;
+        float myDistance = Vector3.ProjectOnPlane(spot - transform.position, Vector3.up).sqrMagnitude;
+        for (int i = 0; i < Fighters.Count; i++)
+        {
+            EnemyFighter other = Fighters[i];
+            if (other == null || other == this || other.isDead || other.isAggressive ||
+                !other.isActiveAndEnabled)
+            {
+                continue;
+            }
+            bool otherTargets = other.hasRoamTarget && other.roamTargetStation == station;
+            float otherDistance = Vector3.ProjectOnPlane(
+                spot - other.transform.position, Vector3.up).sqrMagnitude;
+            bool otherStandsThere = otherDistance < StationPersonalSpace * StationPersonalSpace;
+            if (!otherTargets && !otherStandsThere)
+            {
+                continue;
+            }
+            // Deterministic tie-break so two enemies never both yield.
+            if (otherStandsThere || otherDistance < myDistance ||
+                (Mathf.Approximately(otherDistance, myDistance) &&
+                 i < Fighters.IndexOf(this)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    private const float StationPersonalSpace = 1.1f;
+    private bool IsIdlingOnAnotherEnemysStation()
+    {
+        for (int i = 0; i < roamInterests.Count; i++)
+        {
+            GymExerciseStation station = roamInterests[i] != null ? roamInterests[i].station : null;
+            if (station == null || !station.IsOccupiedByEnemy || station.EnemyOccupant == this)
+            {
+                continue;
+            }
+            if (Vector3.ProjectOnPlane(station.EnemyPosition - transform.position, Vector3.up).sqrMagnitude <
+                StationPersonalSpace * StationPersonalSpace)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    internal GymExerciseStation RoamTargetStationForVerification => roamTargetStation;
+    internal bool HasRoamTargetForVerification => hasRoamTarget;
+    internal void SelectRoamDestinationForVerification()
+    {
+        SelectRoamDestination();
+    }
+    internal void SetRoamTargetStationForVerification(GymExerciseStation station)
+    {
+        SelectRoamDestination();
+        roamTargetStation = station;
+        roamTarget = station.EnemyPosition;
+        hasRoamTarget = true;
+        roamState = RoamState.Walking;
+        ClearRoamRoute();
+    }
+
     private void SelectRoamDestination()
     {
         roamState = RoamState.Walking;
@@ -867,6 +945,10 @@ public partial class EnemyFighter
             }
             if (interest.station != null && interest.station.IsTreadmill &&
                 !interest.station.IsAvailableForEnemy(this))
+            {
+                continue;
+            }
+            if (interest.station != null && IsStationClaimedByOther(interest.station))
             {
                 continue;
             }

@@ -51,10 +51,8 @@ public partial class EnemyFighter
         }
         if (direction.sqrMagnitude < 0.001f)
         {
-            // The flying Goku mesh is intentionally rotated so its local +Y
-            // axis leads the flight direction; its forward axis can therefore
-            // be vertical.  Keep zero-distance steering/landing deterministic
-            // instead of passing a zero vector to LookRotation.
+            // Keep zero-distance steering/landing deterministic instead of
+            // passing a zero vector to LookRotation.
             direction = Vector3.ProjectOnPlane(transform.up, Vector3.up);
         }
         if (direction.sqrMagnitude < 0.001f)
@@ -69,9 +67,11 @@ public partial class EnemyFighter
             gokuFlightTransition = 0f;
             gokuFlightStartY = transform.position.y;
             gokuFlightStartRotation = transform.rotation;
-            // The local +Y axis is the model's head direction. Rotating it onto
-            // the chase vector makes the head lead the 90-degree horizontal turn.
             gokuFlightTargetRotation = GetGokuFlightRotation(direction);
+            gokuFlightProgressCheckAt = 0f;
+            gokuFlightBoxedTime = 0f;
+            gokuFlightRoute.Clear();
+            gokuFlightRouteIndex = 0;
             SetGokuFlightPhysics(true);
         }
         else if (!shouldFly &&
@@ -111,15 +111,31 @@ public partial class EnemyFighter
 
         if (gokuFlightState == GokuFlightState.Flying)
         {
-            gokuFlightTargetRotation = GetGokuFlightRotation(direction);
-            body.rotation = Quaternion.RotateTowards(
-                body.rotation, gokuFlightTargetRotation, 1440f * Time.fixedDeltaTime);
             Vector3 flightTarget = new Vector3(
                 currentTarget != null ? currentTarget.position.x : transform.position.x,
                 standingRootY + GokuFlightHeight,
                 currentTarget != null ? currentTarget.position.z : transform.position.z);
-            MoveGokuFlightPosition(Vector3.MoveTowards(
-                body.position, flightTarget, GetChaseSpeed() * Time.fixedDeltaTime));
+            Vector3 toTarget = Vector3.ProjectOnPlane(flightTarget - body.position, Vector3.up);
+            float step = GetChaseSpeed() * Time.fixedDeltaTime;
+            TrackGokuFlightProgress();
+            Vector3 steerGoal = toTarget;
+            if (TryGetGokuFlightWaypoint(flightTarget, toTarget, out Vector3 waypoint))
+            {
+                steerGoal = Vector3.ProjectOnPlane(waypoint - body.position, Vector3.up);
+            }
+            Vector3 steer = ChooseGokuFlightDirection(steerGoal);
+            // Turn the flight heading at a bounded rate and travel along it,
+            // so detours read as arcs with the head leading instead of the
+            // body snapping left/right every physics step.
+            Vector3 heading = Vector3.ProjectOnPlane(body.rotation * Vector3.forward, Vector3.up);
+            heading = heading.sqrMagnitude > 0.0001f ? heading.normalized : steer;
+            heading = Vector3.RotateTowards(
+                heading, steer, GokuFlightTurnRate * Mathf.Deg2Rad * Time.fixedDeltaTime, 0f);
+            gokuFlightTargetRotation = GetGokuFlightRotation(heading);
+            body.rotation = gokuFlightTargetRotation;
+            Vector3 next = body.position + heading * Mathf.Min(step, toTarget.magnitude);
+            next.y = Mathf.MoveTowards(body.position.y, flightTarget.y, step);
+            MoveGokuFlightPosition(next);
             KeepGokuAboveGround();
             externalBodyAnimator?.SetFlying(true);
             return true;
@@ -202,12 +218,10 @@ public partial class EnemyFighter
         }
 
         // Flight is kinematic so direct position writes are intentional, but
-        // they must still sweep Goku's full horizontal body volume. The broad
-        // root capsule is disabled while alive because the animated limb rig
-        // supplies the detailed compound body colliders; use this dedicated
-        // capsule sweep so flight cannot tunnel through room geometry.
+        // they must still sweep Goku's horizontal flying body so flight cannot
+        // tunnel through room geometry.
         Vector3 direction = delta / distance;
-        if (TryGetGokuCapsule(out Vector3 capsuleBottom, out Vector3 capsuleTop, out float capsuleRadius))
+        if (TryGetGokuFlightProbe(direction, out Vector3 capsuleBottom, out Vector3 capsuleTop, out float capsuleRadius))
         {
             RaycastHit[] hits = Physics.CapsuleCastAll(
                 capsuleBottom, capsuleTop, capsuleRadius, direction, distance,
@@ -215,9 +229,7 @@ public partial class EnemyFighter
             float safeDistance = distance;
             for (int i = 0; i < hits.Length; i++)
             {
-                Collider hitCollider = hits[i].collider;
-                if (hitCollider == null || hitCollider.isTrigger ||
-                    hitCollider.transform == transform || hitCollider.transform.IsChildOf(transform))
+                if (!IsBlockingGokuFlightHit(hits[i], direction, capsuleBottom, false))
                 {
                     continue;
                 }
@@ -233,40 +245,200 @@ public partial class EnemyFighter
 
         body.position = desiredPosition;
     }
-    private bool TryGetGokuCapsule(
-        out Vector3 bottom, out Vector3 top, out float radius)
+    private bool IsBlockingGokuFlightHit(
+        RaycastHit hit, Vector3 direction, Vector3 probePoint, bool ignoreTarget)
     {
-        CapsuleCollider capsule = GetComponent<CapsuleCollider>();
-        if (capsule == null)
+        Collider hitCollider = hit.collider;
+        if (hitCollider == null || hitCollider.isTrigger ||
+            hitCollider.transform == transform || hitCollider.transform.IsChildOf(transform))
         {
-            bottom = top = transform.position;
-            radius = 0f;
+            return false;
+        }
+        if (ignoreTarget && currentTarget != null &&
+            (hitCollider.transform == currentTarget || hitCollider.transform.IsChildOf(currentTarget)))
+        {
             return false;
         }
 
-        Vector3 scale = transform.lossyScale;
-        Vector3 axis = capsule.direction == 0 ? transform.right
-            : capsule.direction == 2 ? transform.forward : transform.up;
-        float axisScale = capsule.direction == 0 ? Mathf.Abs(scale.x)
-            : capsule.direction == 2 ? Mathf.Abs(scale.z) : Mathf.Abs(scale.y);
-        float radialScale = capsule.direction == 0
-            ? Mathf.Max(Mathf.Abs(scale.y), Mathf.Abs(scale.z))
-            : capsule.direction == 2
-                ? Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y))
-                : Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.z));
-        radius = Mathf.Max(0.04f, capsule.radius * radialScale);
-        float height = Mathf.Max(radius * 2f, capsule.height * axisScale);
-        float halfSegment = Mathf.Max(0f, height * 0.5f - radius);
-        Vector3 center = transform.TransformPoint(capsule.center);
-        bottom = center - axis.normalized * halfSegment;
-        top = center + axis.normalized * halfSegment;
+        // CapsuleCast reports colliders that already overlap the start pose
+        // at distance 0 with a zero point. Treating those as blockers froze
+        // Goku mid-air whenever he started inside a rack edge or a wall:
+        // every direction then had a safe distance of zero. Only an overlap
+        // that the move pushes deeper into still blocks.
+        if (hit.distance <= 0f && hit.point == Vector3.zero)
+        {
+            Vector3 intoCollider = Vector3.ProjectOnPlane(
+                hitCollider.bounds.center - probePoint, Vector3.up);
+            return Vector3.Dot(intoCollider, direction) > 0.05f;
+        }
+        return true;
+    }
+    private bool IsGokuFlightPathClear(Vector3 direction, float distance)
+    {
+        if (!TryGetGokuFlightProbe(direction, out Vector3 bottom, out Vector3 top, out float radius))
+        {
+            return true;
+        }
+        RaycastHit[] hits = Physics.CapsuleCastAll(
+            bottom, top, radius, direction, distance,
+            Physics.AllLayers, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < hits.Length; i++)
+        {
+            if (IsBlockingGokuFlightHit(hits[i], direction, bottom, true))
+            {
+                gokuFlightLastBlocker = hits[i].collider.transform.root.name + "/" + hits[i].collider.name;
+                return false;
+            }
+        }
+        return true;
+    }
+    // Detours can oscillate in a tight cluster of racks without ever being
+    // fully boxed in. If flight has not moved at least 0.3 m within the
+    // window, land and let grounded steering take over for a moment.
+    private void TrackGokuFlightProgress()
+    {
+        if (Time.time < gokuFlightProgressCheckAt)
+        {
+            return;
+        }
+        Vector3 position = body != null ? body.position : transform.position;
+        if (gokuFlightProgressCheckAt > 0f &&
+            Vector3.ProjectOnPlane(position - gokuFlightProgressPosition, Vector3.up).magnitude <
+                GokuFlightMinimumProgress)
+        {
+            gokuFlightGroundedUntil = Time.time + GokuFlightBoxedGroundTime;
+        }
+        gokuFlightProgressPosition = position;
+        gokuFlightProgressCheckAt = Time.time + GokuFlightProgressWindow;
+    }
+    // A row of racks cannot be solved by local steering alone. While the
+    // straight line to the target is blocked at body height, follow the room
+    // grid route (the same A* planner visitors use) and steer locally toward
+    // its next waypoint. The route is rebuilt at a bounded rate.
+    private bool TryGetGokuFlightWaypoint(Vector3 flightTarget, Vector3 toTarget, out Vector3 waypoint)
+    {
+        waypoint = flightTarget;
+        float distance = toTarget.magnitude;
+        if (distance < 0.5f ||
+            IsGokuFlightPathClear(toTarget / distance, Mathf.Min(distance, GokuFlightDirectLookahead)))
+        {
+            gokuFlightRoute.Clear();
+            gokuFlightRouteIndex = 0;
+            return false;
+        }
+
+        if (gokuFlightRoute.Count == 0 || Time.time >= gokuFlightRouteRebuildAt)
+        {
+            gokuFlightRouteRebuildAt = Time.time + GokuFlightRouteRebuildInterval;
+            gokuFlightRouteIndex = 0;
+            if (!TryBuildVisitorRoute(flightTarget, gokuFlightRoute))
+            {
+                gokuFlightRoute.Clear();
+            }
+        }
+
+        Vector3 position = body.position;
+        while (gokuFlightRouteIndex < gokuFlightRoute.Count &&
+            Vector3.ProjectOnPlane(gokuFlightRoute[gokuFlightRouteIndex] - position, Vector3.up).magnitude < 0.8f)
+        {
+            gokuFlightRouteIndex++;
+        }
+        if (gokuFlightRouteIndex >= gokuFlightRoute.Count)
+        {
+            return false;
+        }
+        waypoint = gokuFlightRoute[gokuFlightRouteIndex];
+        return true;
+    }
+    // Flight steers around blockers instead of pressing into them: probe the
+    // direct line first, then fan out left/right in growing angles and keep
+    // the side that worked last so Goku does not flip-flop at a wall edge.
+    private Vector3 ChooseGokuFlightDirection(Vector3 toTarget)
+    {
+        float distance = toTarget.magnitude;
+        Vector3 desired = distance > 0.001f
+            ? toTarget / distance
+            : Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+        if (desired.sqrMagnitude < 0.001f)
+        {
+            desired = Vector3.forward;
+        }
+        float probe = Mathf.Clamp(GetChaseSpeed() * 0.3f, 0.9f, 1.6f);
+        probe = Mathf.Min(probe, Mathf.Max(0.25f, distance));
+
+        if (Time.time >= gokuFlightDetourUntil && IsGokuFlightPathClear(desired, probe))
+        {
+            gokuFlightDetourSide = 0f;
+            gokuFlightBoxedTime = 0f;
+            return desired;
+        }
+
+        float preferred = gokuFlightDetourSide != 0f ? gokuFlightDetourSide : 1f;
+        for (float angle = 25f; angle <= 150f; angle += 25f)
+        {
+            for (int pass = 0; pass < 2; pass++)
+            {
+                float side = pass == 0 ? preferred : -preferred;
+                Vector3 candidate = Quaternion.AngleAxis(side * angle, Vector3.up) * desired;
+                if (IsGokuFlightPathClear(candidate, probe))
+                {
+                    gokuFlightDetourSide = side;
+                    gokuFlightDetourUntil = Time.time + 0.6f;
+                    gokuFlightBoxedTime = 0f;
+                    return candidate;
+                }
+            }
+        }
+
+        // Boxed in at body height (rack frames, a crowd, a corner): hovering
+        // there would freeze Goku mid-air. After a short grace period land
+        // and let the grounded obstacle steering walk him out; flight resumes
+        // once the ground cooldown ends.
+        gokuFlightDetourSide = 0f;
+        gokuFlightBoxedTime += Time.fixedDeltaTime;
+        if (gokuFlightBoxedTime >= GokuFlightBoxedLandDelay)
+        {
+            gokuFlightBoxedTime = 0f;
+            gokuFlightGroundedUntil = Time.time + GokuFlightBoxedGroundTime;
+        }
+        return desired;
+    }
+    // The flying clip lays the body horizontally about 0.83-1.71 m above the
+    // root. Sweep that volume, oriented along the travel direction, rather
+    // than the upright root capsule: the standing capsule reaches the floor,
+    // so benches, plates and dumbbells stopped a flight that clears them.
+    private const float GokuFlightProbeHeight = 1.27f * ExternalRiggedCharacterVisual.GokuSizeMultiplier;
+    private const float GokuFlightTurnRate = 420f;
+    private const float GokuFlightDirectLookahead = 5f;
+    private const float GokuFlightRouteRebuildInterval = 0.75f;
+    private const float GokuFlightProbeRadius = 0.4f * ExternalRiggedCharacterVisual.GokuSizeMultiplier;
+    private const float GokuFlightProbeHalfLength = 0.55f * ExternalRiggedCharacterVisual.GokuSizeMultiplier;
+    private bool TryGetGokuFlightProbe(
+        Vector3 direction, out Vector3 bottom, out Vector3 top, out float radius)
+    {
+        Vector3 origin = body != null ? body.position : transform.position;
+        Vector3 axis = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (axis.sqrMagnitude < 0.0001f)
+        {
+            axis = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+        }
+        if (axis.sqrMagnitude < 0.0001f)
+        {
+            axis = Vector3.forward;
+        }
+        axis.Normalize();
+        Vector3 center = origin + Vector3.up * GokuFlightProbeHeight;
+        bottom = center - axis * GokuFlightProbeHalfLength;
+        top = center + axis * GokuFlightProbeHalfLength;
+        radius = GokuFlightProbeRadius;
         return true;
     }
     private static Quaternion GetGokuFlightRotation(Vector3 direction)
     {
-        // The imported Goku scan faces the opposite local horizontal direction
-        // from the older player-shaped test mesh. +90 makes the head lead the
-        // horizontal flight vector instead of sending the feet forward.
+        // The authored flying clip already lays the body horizontal with the
+        // head leading +Z, so the root only yaws toward the flight vector.
+        // Pitching the root as well stacks both rotations and flips Goku
+        // upright and upside down.
         if (direction.sqrMagnitude < 0.0001f ||
             float.IsNaN(direction.x) || float.IsNaN(direction.y) || float.IsNaN(direction.z))
         {

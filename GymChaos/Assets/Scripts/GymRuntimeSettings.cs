@@ -25,11 +25,7 @@ public static class GymRuntimeSettings
     private const string MasterVolumeKey = "GymChaos.UI.MasterVolume.v1";
 
     private static readonly Color Ink = new Color(0.91f, 0.94f, 0.98f, 1f);
-    private static readonly Color MutedInk = new Color(0.61f, 0.69f, 0.78f, 1f);
-    private static readonly Color Surface = new Color(0.035f, 0.065f, 0.1f, 0.98f);
-    private static readonly Color Control = new Color(0.07f, 0.105f, 0.15f, 1f);
     private static readonly Color Accent = new Color(0.98f, 0.34f, 0.13f, 1f);
-    private static readonly Color Rule = new Color(0.82f, 0.89f, 0.97f, 0.22f);
 
     internal static void ConfigureBalancedCanvasScaler(CanvasScaler scaler)
     {
@@ -50,26 +46,23 @@ public static class GymRuntimeSettings
         Font actualFont = font != null
             ? font
             : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        // Same faces as the start and pause menus: Anton for the heading,
+        // Bebas Neue for every label and control.
+        Font titleFont = PersonaMenuStyle.LoadTitleFont(actualFont);
+        Font labelFont = PersonaMenuStyle.LoadButtonFont(actualFont);
 
         GameObject panel = new GameObject("Options Panel", typeof(RectTransform));
         panel.transform.SetParent(parent, false);
         Stretch(panel.GetComponent<RectTransform>());
-        Image surface = CreateImage("Options Surface", panel.transform, Surface);
-        Stretch(surface.rectTransform);
+        // Navy veil like the pause page, then one slanted Persona plate that
+        // holds the whole settings sheet.
+        Image veil = CreateImage("Options Surface", panel.transform, OptionsVeil);
+        Stretch(veil.rectTransform);
+        CreateSettingsSheet(panel.transform, titleFont);
 
-        Image rule = CreateImage("Options Top Rule", panel.transform, Accent);
-        SetAnchors(rule.rectTransform, new Vector2(0.18f, 0.895f),
-            new Vector2(0.82f, 0.895f), 0f, -1f, 0f, -1f);
-        rule.raycastTarget = false;
-        CreateText("Options Heading", panel.transform, actualFont, "OPTIONS", 34,
-            Ink, FontStyle.Bold, TextAnchor.MiddleCenter,
-            new Vector2(0.18f, 0.91f), new Vector2(0.82f, 0.97f));
-
-        CreateText("Display Section", panel.transform, actualFont, "DISPLAY", 13,
-            Accent, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Vector2(0.18f, 0.77f), new Vector2(0.82f, 0.81f));
-        CreateRowLabel(panel.transform, actualFont, "RESOLUTION", 0.68f);
-        CreateRowLabel(panel.transform, actualFont, "WINDOW MODE", 0.59f);
+        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.765f);
+        CreateRowLabel(panel.transform, labelFont, "RESOLUTION", RowY(0));
+        CreateRowLabel(panel.transform, labelFont, "WINDOW MODE", RowY(1));
 
         Resolution[] resolutions = GetResolutionOptions();
         string[] resolutionLabels = GetResolutionLabels(resolutions);
@@ -83,41 +76,39 @@ public static class GymRuntimeSettings
         string[] modeLabels = { "WINDOWED", "BORDERLESS", "FULLSCREEN" };
         FullScreenMode selectedMode = GetStoredWindowMode(modes);
 
-        CreateDropdown("Resolution Dropdown", panel.transform, actualFont,
-            resolutionLabels, FindResolutionIndex(resolutions),
-            new Vector2(0.47f, 0.68f), new Vector2(0.82f, 0.75f), index =>
+        CreateDropdown("Resolution Dropdown", panel.transform, labelFont,
+            resolutionLabels, FindResolutionIndex(resolutions), RowY(0), index =>
             {
                 selectedResolution = resolutions[Mathf.Clamp(index, 0, resolutions.Length - 1)];
                 ApplyDisplay(selectedResolution, selectedMode);
             });
-        CreateDropdown("Window Mode Dropdown", panel.transform, actualFont,
-            modeLabels, GetWindowModeIndex(modes, selectedMode),
-            new Vector2(0.47f, 0.59f), new Vector2(0.82f, 0.66f), index =>
+        CreateDropdown("Window Mode Dropdown", panel.transform, labelFont,
+            modeLabels, GetWindowModeIndex(modes, selectedMode), RowY(1), index =>
             {
                 selectedMode = modes[Mathf.Clamp(index, 0, modes.Length - 1)];
                 ApplyDisplay(selectedResolution, selectedMode);
             });
 
-        CreateText("Graphics Section", panel.transform, actualFont, "GRAPHICS", 13,
-            Accent, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Vector2(0.18f, 0.51f), new Vector2(0.82f, 0.55f));
-        CreateRowLabel(panel.transform, actualFont, "TEXTURE", 0.42f);
-        CreateRowLabel(panel.transform, actualFont, "POST FX", 0.33f);
-        CreateRowLabel(panel.transform, actualFont, "ANTI-ALIASING", 0.24f);
+        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.545f);
+        CreateRowLabel(panel.transform, labelFont, "TEXTURE", RowY(2));
+        CreateRowLabel(panel.transform, labelFont, "POST FX", RowY(3));
+        CreateRowLabel(panel.transform, labelFont, "ANTI-ALIASING", RowY(4));
 
         string[] textureLabels = { "FULL", "HALF", "QUARTER", "LOW" };
-        CreateDropdown("Texture Quality Dropdown", panel.transform, actualFont,
+        CreateDropdown("Texture Quality Dropdown", panel.transform, labelFont,
             textureLabels,
             Mathf.Clamp(PlayerPrefs.GetInt(TextureQualityKey,
                 QualitySettings.globalTextureMipmapLimit), 0, textureLabels.Length - 1),
-            new Vector2(0.47f, 0.42f), new Vector2(0.82f, 0.49f), ApplyTextureQuality);
+            RowY(2), ApplyTextureQuality);
 
         bool postEnabled = PlayerPrefs.GetInt(PostProcessingKey, 1) != 0;
-        Text postValue = CreateText("Post FX Value", panel.transform, actualFont,
-            postEnabled ? "ON" : "OFF", 16, Ink, FontStyle.Bold,
-            TextAnchor.MiddleRight, new Vector2(0.78f, 0.33f), new Vector2(0.84f, 0.40f));
+        Text postValue = CreateText("Post FX Value", panel.transform, labelFont,
+            postEnabled ? "ON" : "OFF", 26, Ink, FontStyle.Normal,
+            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(3)),
+            new Vector2(ControlMaxX, RowY(3) + RowHeight));
         Toggle postToggle = CreateToggle("Post FX Toggle", panel.transform, postEnabled,
-            new Vector2(0.70f, 0.34f), new Vector2(0.76f, 0.39f));
+            new Vector2(ControlMinX, RowY(3) + 0.008f),
+            new Vector2(ControlMinX + 0.04f, RowY(3) + RowHeight - 0.008f));
         postToggle.onValueChanged.AddListener(value =>
         {
             postValue.text = value ? "ON" : "OFF";
@@ -125,28 +116,103 @@ public static class GymRuntimeSettings
         });
 
         string[] aaLabels = { "OFF", "FXAA", "SMAA", "TAA" };
-        CreateDropdown("Anti Aliasing Dropdown", panel.transform, actualFont, aaLabels,
+        CreateDropdown("Anti Aliasing Dropdown", panel.transform, labelFont, aaLabels,
             Mathf.Clamp(GetStoredAntiAliasing(), 0, aaLabels.Length - 1),
-            new Vector2(0.47f, 0.24f), new Vector2(0.82f, 0.31f), ApplyAntiAliasing);
+            RowY(4), ApplyAntiAliasing);
 
-        CreateText("Audio Section", panel.transform, actualFont, "AUDIO", 13,
-            Accent, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Vector2(0.18f, 0.16f), new Vector2(0.82f, 0.20f));
-        CreateRowLabel(panel.transform, actualFont, "MASTER", 0.08f);
-        Text volumeValue = CreateText("Master Value", panel.transform, actualFont,
-            FormatVolume(AudioListener.volume), 16, Ink, FontStyle.Bold,
-            TextAnchor.MiddleRight, new Vector2(0.78f, 0.08f), new Vector2(0.84f, 0.15f));
+        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.25f);
+        CreateRowLabel(panel.transform, labelFont, "MASTER", RowY(5));
+        Text volumeValue = CreateText("Master Value", panel.transform, labelFont,
+            FormatVolume(AudioListener.volume), 26, Ink, FontStyle.Normal,
+            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(5)),
+            new Vector2(ControlMaxX, RowY(5) + RowHeight));
         CreateSlider("Master Volume Slider", panel.transform, AudioListener.volume,
-            new Vector2(0.47f, 0.09f), new Vector2(0.76f, 0.14f), value =>
+            new Vector2(ControlMinX, RowY(5) + 0.012f),
+            new Vector2(ValueMinX - 0.008f, RowY(5) + RowHeight - 0.012f), value =>
             {
                 volumeValue.text = FormatVolume(value);
                 ApplyMasterVolume(value);
             });
 
-        CreateButton("Options Back Button", panel.transform, actualFont, "BACK", Control,
-            new Vector2(0.40f, 0.015f), new Vector2(0.60f, 0.065f), backAction);
+        // Downscaled copy of the menu buttons, centred under the sheet.
+        Button back = PersonaMenuStyle.CreateButton(panel.transform, "Options Back Button",
+            labelFont, "BACK", PersonaMenuStyle.ArtWidth * 0.5f,
+            PersonaMenuStyle.ArtHeight * 0.875f, 190f, 52f, 44, -1f, backAction);
+        PersonaMenuButton backPersona = back.GetComponent<PersonaMenuButton>();
+        if (backPersona != null) backPersona.SetFocusMotion(1.06f, 2f);
         panel.SetActive(false);
         return panel;
+    }
+
+    // Settings layout, in fractions of the 1920x1080 reference canvas.
+    private const float SheetMinX = 0.3f;
+    private const float SheetMaxX = 0.7f;
+    private const float LabelMinX = 0.335f;
+    private const float ControlMinX = 0.49f;
+    private const float ControlMaxX = 0.665f;
+    private const float ValueMinX = 0.61f;
+    private const float RowHeight = 0.058f;
+    private static readonly float[] RowBottoms = { 0.69f, 0.615f, 0.47f, 0.395f, 0.32f, 0.175f };
+    private static readonly Color OptionsVeil = new Color(0.012f, 0.05f, 0.13f, 0.72f);
+    private static readonly Color SheetColor = new Color(0.03f, 0.036f, 0.058f, 1f);
+
+    // Two display rows, three graphics rows, one audio row.
+    private static float RowY(int row)
+    {
+        return RowBottoms[Mathf.Clamp(row, 0, RowBottoms.Length - 1)];
+    }
+
+    private static void CreateSettingsSheet(Transform parent, Font titleFont)
+    {
+        GameObject sheet = new GameObject("Options Sheet", typeof(RectTransform));
+        sheet.transform.SetParent(parent, false);
+        RectTransform sheetRect = sheet.GetComponent<RectTransform>();
+        SetAnchors(sheetRect, new Vector2(SheetMinX, 0.085f), new Vector2(SheetMaxX, 0.905f));
+        sheetRect.localRotation = Quaternion.Euler(0f, 0f, -0.8f);
+        PersonaShape edge = PersonaMenuStyle.CreateShape("Sheet Accent Edge", sheet.transform,
+            PersonaMenuStyle.Accent);
+        Stretch(edge.rectTransform);
+        edge.SetCorners(new Vector2(-0.012f, -0.012f), new Vector2(-0.02f, 0.01f),
+            new Vector2(0.03f, 0.018f), new Vector2(0.012f, -0.02f));
+        PersonaShape plate = PersonaMenuStyle.CreateShape("Sheet Plate", sheet.transform, SheetColor);
+        Stretch(plate.rectTransform);
+        plate.SetCorners(Vector2.zero, Vector2.zero, new Vector2(0.018f, 0f), Vector2.zero);
+
+        // Title: a red slanted plate with the Anton heading, like the title
+        // cut-outs of the start menu but at a fraction of their size.
+        GameObject title = new GameObject("Options Heading Plate", typeof(RectTransform));
+        title.transform.SetParent(parent, false);
+        RectTransform titleRect = title.GetComponent<RectTransform>();
+        SetAnchors(titleRect, new Vector2(0.315f, 0.84f), new Vector2(0.47f, 0.93f));
+        titleRect.localRotation = Quaternion.Euler(0f, 0f, 2.5f);
+        PersonaShape titleBacking = PersonaMenuStyle.CreateShape("Heading Backing", title.transform,
+            Color.white);
+        Stretch(titleBacking.rectTransform);
+        titleBacking.SetCorners(new Vector2(-0.04f, -0.12f), new Vector2(-0.03f, 0.1f),
+            new Vector2(0.06f, 0.12f), new Vector2(0.04f, -0.1f));
+        PersonaShape titlePlate = PersonaMenuStyle.CreateShape("Heading Plate", title.transform,
+            PersonaMenuStyle.Accent);
+        Stretch(titlePlate.rectTransform);
+        titlePlate.SetCorners(Vector2.zero, new Vector2(0.01f, 0f), new Vector2(0.04f, 0f),
+            new Vector2(0.02f, 0f));
+        Text heading = CreateText("Options Heading", title.transform, titleFont, "SETTINGS", 56,
+            Color.white, FontStyle.Normal, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one);
+        Shadow shadow = heading.gameObject.AddComponent<Shadow>();
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.85f);
+        shadow.effectDistance = new Vector2(3f, -3f);
+    }
+
+    private static void CreateSectionHeader(Transform parent, Font font, string name,
+        string label, float y)
+    {
+        CreateText(name, parent, font, label, 30, PersonaMenuStyle.Accent, FontStyle.Normal,
+            TextAnchor.MiddleLeft, new Vector2(LabelMinX, y), new Vector2(ControlMaxX, y + 0.04f));
+        PersonaShape rule = PersonaMenuStyle.CreateShape(name + " Rule", parent,
+            new Color(PersonaMenuStyle.Accent.r, PersonaMenuStyle.Accent.g,
+                PersonaMenuStyle.Accent.b, 0.55f));
+        SetAnchors(rule.rectTransform, new Vector2(LabelMinX + 0.07f, y + 0.017f),
+            new Vector2(ControlMaxX, y + 0.021f));
+        rule.SetSlant(0.004f);
     }
 
     public static void ApplyPersistedSettings()
@@ -276,34 +342,56 @@ public static class GymRuntimeSettings
 
     private static void CreateRowLabel(Transform parent, Font font, string label, float y)
     {
-        CreateText(label + " Label", parent, font, label, 15, MutedInk, FontStyle.Bold,
-            TextAnchor.MiddleLeft, new Vector2(0.18f, y), new Vector2(0.45f, y + 0.07f));
-        Image rule = CreateImage(label + " Rule", parent, Rule);
-        SetAnchors(rule.rectTransform, new Vector2(0.18f, y), new Vector2(0.45f, y),
-            0f, -1f, 0f, -1f);
-        rule.raycastTarget = false;
+        CreateText(label + " Label", parent, font, label, 27, Ink, FontStyle.Normal,
+            TextAnchor.MiddleLeft, new Vector2(LabelMinX, y),
+            new Vector2(ControlMinX - 0.01f, y + RowHeight));
+    }
+
+    // Slanted control plate shared by dropdowns, the toggle and the slider:
+    // idle navy face with red outline, red face and white slab on focus.
+    private static PersonaShape CreateControlPlate(GameObject root)
+    {
+        PersonaShape backing = PersonaMenuStyle.CreateShape("Focus Backing", root.transform, Color.white);
+        Stretch(backing.rectTransform);
+        backing.SetCorners(new Vector2(-0.03f, -0.16f), new Vector2(-0.035f, 0.16f),
+            new Vector2(0.055f, 0.16f), new Vector2(0.035f, -0.16f));
+        PersonaShape outline = PersonaMenuStyle.CreateShape("Outline", root.transform,
+            PersonaMenuStyle.Accent);
+        Stretch(outline.rectTransform);
+        outline.SetCorners(new Vector2(-0.012f, -0.08f), new Vector2(-0.012f, 0.08f),
+            new Vector2(0.035f, 0.08f), new Vector2(0.015f, -0.08f));
+        PersonaShape face = PersonaMenuStyle.CreateShape("Face", root.transform,
+            PersonaMenuStyle.ButtonIdle);
+        Stretch(face.rectTransform);
+        face.SetCorners(Vector2.zero, Vector2.zero, new Vector2(0.02f, 0f), Vector2.zero);
+        face.raycastTarget = true;
+        PersonaMenuButton persona = root.AddComponent<PersonaMenuButton>();
+        persona.Configure(face, outline, backing, null, PersonaMenuStyle.ButtonIdle,
+            PersonaMenuStyle.Accent, PersonaMenuStyle.Accent, Color.black);
+        persona.SetFocusMotion(1.035f, 1f);
+        return face;
     }
 
     private static Dropdown CreateDropdown(string name, Transform parent, Font font,
-        string[] options, int initialValue, Vector2 anchorMin, Vector2 anchorMax,
-        UnityAction<int> onChanged)
+        string[] options, int initialValue, float rowY, UnityAction<int> onChanged)
     {
         GameObject dropdownObject = new GameObject(
-            name, typeof(RectTransform), typeof(Image), typeof(Dropdown));
+            name, typeof(RectTransform), typeof(Dropdown));
         dropdownObject.transform.SetParent(parent, false);
-        SetAnchors(dropdownObject.GetComponent<RectTransform>(), anchorMin, anchorMax);
-        Image background = dropdownObject.GetComponent<Image>();
-        background.color = Control;
+        SetAnchors(dropdownObject.GetComponent<RectTransform>(),
+            new Vector2(ControlMinX, rowY + 0.006f),
+            new Vector2(ControlMaxX, rowY + RowHeight - 0.006f));
+        PersonaShape face = CreateControlPlate(dropdownObject);
         Dropdown dropdown = dropdownObject.GetComponent<Dropdown>();
-        dropdown.targetGraphic = background;
-        dropdown.transition = Selectable.Transition.ColorTint;
-        dropdown.colors = CreateColorBlock(Control);
+        dropdown.targetGraphic = face;
+        dropdown.transition = Selectable.Transition.None;
 
-        Text caption = CreateText("Caption", dropdownObject.transform, font, "", 16, Ink,
-            FontStyle.Bold, TextAnchor.MiddleLeft, new Vector2(0.06f, 0f), new Vector2(0.84f, 1f));
-        Text arrow = CreateText("Arrow", dropdownObject.transform, font, "v", 16, Accent,
-            FontStyle.Bold, TextAnchor.MiddleCenter, new Vector2(0.86f, 0f), new Vector2(0.98f, 1f));
-        arrow.raycastTarget = false;
+        Text caption = CreateText("Caption", dropdownObject.transform, font, "", 26, Color.white,
+            FontStyle.Normal, TextAnchor.MiddleLeft, new Vector2(0.06f, 0f), new Vector2(0.84f, 1f));
+        PersonaShape arrow = PersonaMenuStyle.CreateShape("Arrow", dropdownObject.transform, Color.white);
+        SetAnchors(arrow.rectTransform, new Vector2(0.86f, 0.36f), new Vector2(0.93f, 0.64f));
+        // Collapse the two bottom corners to the middle: a down-pointing wedge.
+        arrow.SetCorners(new Vector2(0.5f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.5f, 0f));
 
         RectTransform template = CreateDropdownTemplate(dropdownObject.transform, font);
         dropdown.template = template;
@@ -329,8 +417,8 @@ public static class GymRuntimeSettings
         templateRect.anchorMax = new Vector2(1f, 0f);
         templateRect.pivot = new Vector2(0.5f, 1f);
         templateRect.sizeDelta = new Vector2(0f, 220f);
-        templateRect.anchoredPosition = Vector2.zero;
-        templateObject.GetComponent<Image>().color = Control;
+        templateRect.anchoredPosition = new Vector2(0f, -6f);
+        templateObject.GetComponent<Image>().color = PersonaMenuStyle.Accent;
         ScrollRect scroll = templateObject.GetComponent<ScrollRect>();
         scroll.horizontal = false;
         scroll.vertical = true;
@@ -340,8 +428,8 @@ public static class GymRuntimeSettings
             "Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
         viewportObject.transform.SetParent(templateObject.transform, false);
         RectTransform viewport = viewportObject.GetComponent<RectTransform>();
-        Stretch(viewport);
-        viewportObject.GetComponent<Image>().color = Control;
+        SetAnchors(viewport, Vector2.zero, Vector2.one, 3f, 3f, 3f, 3f);
+        viewportObject.GetComponent<Image>().color = SheetColor;
         viewportObject.GetComponent<Mask>().showMaskGraphic = true;
         scroll.viewport = viewport;
 
@@ -352,6 +440,11 @@ public static class GymRuntimeSettings
         content.anchorMin = new Vector2(0f, 1f);
         content.anchorMax = new Vector2(1f, 1f);
         content.pivot = new Vector2(0.5f, 1f);
+        // A new RectTransform defaults to a 100x100 sizeDelta; with stretched
+        // anchors that makes the list 100 px wider than the masked viewport
+        // and the mask clips the first letters of every option.
+        content.sizeDelta = Vector2.zero;
+        content.anchoredPosition = Vector2.zero;
         VerticalLayoutGroup layout = contentObject.GetComponent<VerticalLayoutGroup>();
         layout.childForceExpandWidth = true;
         layout.childForceExpandHeight = false;
@@ -364,13 +457,14 @@ public static class GymRuntimeSettings
         itemObject.transform.SetParent(contentObject.transform, false);
         itemObject.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 44f);
         Image itemImage = itemObject.GetComponent<Image>();
-        itemImage.color = Control;
+        itemImage.color = Color.white;
         itemObject.GetComponent<LayoutElement>().preferredHeight = 44f;
         Toggle itemToggle = itemObject.GetComponent<Toggle>();
         itemToggle.targetGraphic = itemImage;
-        itemToggle.colors = CreateColorBlock(Control);
-        Text itemText = CreateText("Item Label", itemObject.transform, font, "", 16, Ink,
-            FontStyle.Bold, TextAnchor.MiddleLeft, new Vector2(0.06f, 0f), new Vector2(0.94f, 1f));
+        itemToggle.transition = Selectable.Transition.ColorTint;
+        itemToggle.colors = CreateListColorBlock();
+        Text itemText = CreateText("Item Label", itemObject.transform, font, "", 26, Color.white,
+            FontStyle.Normal, TextAnchor.MiddleLeft, new Vector2(0.06f, 0f), new Vector2(0.94f, 1f));
         itemText.raycastTarget = false;
 
         templateObject.SetActive(false);
@@ -380,19 +474,17 @@ public static class GymRuntimeSettings
     private static Toggle CreateToggle(string name, Transform parent, bool initialValue,
         Vector2 anchorMin, Vector2 anchorMax)
     {
-        GameObject toggleObject = new GameObject(
-            name, typeof(RectTransform), typeof(Image), typeof(Toggle));
+        GameObject toggleObject = new GameObject(name, typeof(RectTransform), typeof(Toggle));
         toggleObject.transform.SetParent(parent, false);
         SetAnchors(toggleObject.GetComponent<RectTransform>(), anchorMin, anchorMax);
-        Image background = toggleObject.GetComponent<Image>();
-        background.color = Control;
+        PersonaShape face = CreateControlPlate(toggleObject);
         Toggle toggle = toggleObject.GetComponent<Toggle>();
-        toggle.targetGraphic = background;
-        toggle.transition = Selectable.Transition.ColorTint;
-        toggle.colors = CreateColorBlock(Control);
-        Image indicator = CreateImage("Toggle Indicator", toggleObject.transform, Accent);
-        SetAnchors(indicator.rectTransform, new Vector2(0.22f, 0.22f), new Vector2(0.78f, 0.78f));
-        indicator.raycastTarget = false;
+        toggle.targetGraphic = face;
+        toggle.transition = Selectable.Transition.None;
+        PersonaShape indicator = PersonaMenuStyle.CreateShape("Toggle Indicator",
+            toggleObject.transform, Color.white);
+        SetAnchors(indicator.rectTransform, new Vector2(0.24f, 0.24f), new Vector2(0.76f, 0.76f));
+        indicator.SetSlant(0.12f);
         toggle.graphic = indicator;
         toggle.isOn = initialValue;
         return toggle;
@@ -401,40 +493,53 @@ public static class GymRuntimeSettings
     private static Slider CreateSlider(string name, Transform parent, float initialValue,
         Vector2 anchorMin, Vector2 anchorMax, UnityAction<float> onChanged)
     {
-        GameObject sliderObject = new GameObject(
-            name, typeof(RectTransform), typeof(Image), typeof(Slider));
+        GameObject sliderObject = new GameObject(name, typeof(RectTransform), typeof(Slider));
         sliderObject.transform.SetParent(parent, false);
         SetAnchors(sliderObject.GetComponent<RectTransform>(), anchorMin, anchorMax);
-        sliderObject.GetComponent<Image>().color = Control;
+        CreateControlPlate(sliderObject);
         Slider slider = sliderObject.GetComponent<Slider>();
         slider.minValue = 0f;
         slider.maxValue = 1f;
         slider.value = Mathf.Clamp01(initialValue);
         slider.direction = Slider.Direction.LeftToRight;
-        slider.transition = Selectable.Transition.ColorTint;
-        slider.colors = CreateColorBlock(Control);
+        slider.transition = Selectable.Transition.None;
 
         GameObject fillAreaObject = new GameObject("Fill Area", typeof(RectTransform));
         fillAreaObject.transform.SetParent(sliderObject.transform, false);
         RectTransform fillArea = fillAreaObject.GetComponent<RectTransform>();
-        SetAnchors(fillArea, new Vector2(0.04f, 0.25f), new Vector2(0.96f, 0.75f));
-        GameObject fillObject = new GameObject("Fill", typeof(RectTransform), typeof(Image));
-        fillObject.transform.SetParent(fillAreaObject.transform, false);
-        RectTransform fill = fillObject.GetComponent<RectTransform>();
-        Stretch(fill);
-        fillObject.GetComponent<Image>().color = Accent;
+        SetAnchors(fillArea, new Vector2(0.03f, 0.3f), new Vector2(0.97f, 0.7f));
+        PersonaShape fill = PersonaMenuStyle.CreateShape("Fill", fillAreaObject.transform, Color.white);
+        Stretch(fill.rectTransform);
+        fill.SetSlant(0.01f);
 
-        GameObject handleObject = new GameObject("Handle", typeof(RectTransform), typeof(Image));
-        handleObject.transform.SetParent(sliderObject.transform, false);
-        RectTransform handle = handleObject.GetComponent<RectTransform>();
-        SetAnchors(handle, new Vector2(0f, 0.05f), new Vector2(0f, 0.95f), -7f, 0f, 7f, 0f);
-        Image handleImage = handleObject.GetComponent<Image>();
-        handleImage.color = Ink;
-        slider.fillRect = fill;
-        slider.handleRect = handle;
-        slider.targetGraphic = handleImage;
+        GameObject handleArea = new GameObject("Handle Slide Area", typeof(RectTransform));
+        handleArea.transform.SetParent(sliderObject.transform, false);
+        SetAnchors(handleArea.GetComponent<RectTransform>(), new Vector2(0.03f, 0f),
+            new Vector2(0.97f, 1f));
+        PersonaShape handle = PersonaMenuStyle.CreateShape("Handle", handleArea.transform, Color.white);
+        SetAnchors(handle.rectTransform, new Vector2(0f, -0.12f), new Vector2(0f, 1.12f), -6f, 0f, -6f, 0f);
+        handle.SetSlant(0.35f);
+        handle.raycastTarget = true;
+        slider.fillRect = fill.rectTransform;
+        slider.handleRect = handle.rectTransform;
+        slider.targetGraphic = handle;
         slider.onValueChanged.AddListener(onChanged);
         return slider;
+    }
+
+    // Dropdown list rows: navy idle, red when highlighted or selected.
+    private static ColorBlock CreateListColorBlock()
+    {
+        return new ColorBlock
+        {
+            normalColor = PersonaMenuStyle.ButtonIdle,
+            highlightedColor = PersonaMenuStyle.Accent,
+            pressedColor = Color.Lerp(PersonaMenuStyle.Accent, Color.black, 0.25f),
+            selectedColor = PersonaMenuStyle.Accent,
+            disabledColor = new Color(0.055f, 0.07f, 0.12f, 0.35f),
+            colorMultiplier = 1f,
+            fadeDuration = 0.08f
+        };
     }
 
     private static ColorBlock CreateColorBlock(Color normal)

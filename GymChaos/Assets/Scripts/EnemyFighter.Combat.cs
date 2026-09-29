@@ -281,10 +281,21 @@ public partial class EnemyFighter
         {
             StopMovingPhysicsImmediately();
             SetAnimatedMovement(false);
-            if (Time.time >= roamIdleUntil)
+            // Idling on a machine spot that someone else now uses would box
+            // the exercising enemy in; step away instead of waiting it out.
+            if (Time.time >= roamIdleUntil || IsIdlingOnAnotherEnemysStation())
             {
                 SelectRoamDestination();
             }
+            return;
+        }
+
+        if (roamTargetStation != null && IsStationClaimedByOther(roamTargetStation))
+        {
+            // The machine was taken while this enemy was walking to it.
+            hasRoamTarget = false;
+            ClearRoamRoute();
+            SelectRoamDestination();
             return;
         }
 

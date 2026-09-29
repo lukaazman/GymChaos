@@ -13,6 +13,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 {
     public const float StandardGameplayHeight = 2.30f * EnemyFighter.GameplayScale;
     public const float ArnoldGameplayHeight = 2.35f * EnemyFighter.GameplayScale;
+    public const float GokuSizeMultiplier = 1.15f;
 
     public float GroundContactError => runtimeRenderer == null
         ? float.PositiveInfinity
@@ -568,6 +569,10 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         if (identity == BodybuilderIdentity.Manwithsuit1)
         {
             return 1.82f * 1.125f * EnemyFighter.GameplayScale;
+        }
+        if (identity == BodybuilderIdentity.Goku)
+        {
+            return StandardGameplayHeight * GokuSizeMultiplier;
         }
         return identity == BodybuilderIdentity.Arnold
             ? ArnoldGameplayHeight

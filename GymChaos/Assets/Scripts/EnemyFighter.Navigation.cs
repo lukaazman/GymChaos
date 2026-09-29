@@ -247,6 +247,14 @@ public partial class EnemyFighter
             {
                 continue;
             }
+            // Walking out of a cage whose colliders are still ignored for
+            // this enemy: the probes must ignore that cage too, otherwise
+            // every direction reads as blocked and the enemy never leaves.
+            if (equipmentEgressStation != null &&
+                equipmentEgressStation.ContainsEquipmentCollider(hit))
+            {
+                continue;
+            }
             if (HasRoomFloorInHierarchy(hit.transform) ||
                 IsWalkableFloorSurface(hit))
             {
@@ -401,6 +409,18 @@ public partial class EnemyFighter
 
         return best;
     }
+    private GymExerciseStation equipmentEgressStation;
+    internal void SetEquipmentEgressStation(GymExerciseStation station)
+    {
+        equipmentEgressStation = station;
+    }
+    internal void ClearEquipmentEgressStation(GymExerciseStation station)
+    {
+        if (equipmentEgressStation == station)
+        {
+            equipmentEgressStation = null;
+        }
+    }
     private bool IsMovementPathClear(Vector3 direction, float distance, bool allowTargetEquipment)
     {
         Vector3 origin = body != null ? body.position : transform.position;
@@ -429,6 +449,14 @@ public partial class EnemyFighter
             }
             if (allowTargetEquipment && pendingTreadmillStation != null &&
                 pendingTreadmillStation.ContainsEquipmentCollider(hit))
+            {
+                continue;
+            }
+            // Walking out of a cage whose colliders are still ignored for
+            // this enemy: the probes must ignore that cage too, otherwise
+            // every direction reads as blocked and the enemy never leaves.
+            if (equipmentEgressStation != null &&
+                equipmentEgressStation.ContainsEquipmentCollider(hit))
             {
                 continue;
             }
@@ -605,7 +633,9 @@ public partial class EnemyFighter
     }
     public static float GetBodyRadiusForIdentity(BodybuilderIdentity value)
     {
-        return value == BodybuilderIdentity.Cbum || value == BodybuilderIdentity.Ronnie
+        // Goku is scaled 1.15x, so he needs the heavy clearance too.
+        return value == BodybuilderIdentity.Cbum || value == BodybuilderIdentity.Ronnie ||
+            value == BodybuilderIdentity.Goku
             ? EnemyHeavyRadius
             : EnemyStandardRadius;
     }

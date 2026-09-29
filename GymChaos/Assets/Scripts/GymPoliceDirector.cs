@@ -18,7 +18,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private const float PoliceCarProbeRadius = 1.05f;
     private const float PoliceCarArrivalTimeout = 35f;
     private const float PoliceCarBlockedSnapSeconds = 8f;
-    private const float PoliceCarGroundClearance = 0.02f;
+    private const float PoliceCarGroundClearance = -0.01f;
     private const float OfficerHealthFraction = 2f / 3f;
     private const string PoliceSirenAsset =
         "BodyBuilders/sound/sfx/police_siren.mp3";

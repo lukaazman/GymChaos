@@ -23,6 +23,9 @@ public sealed class GymBackRoomInteractable : MonoBehaviour
     }
     public GymBackRoomInteractionType InteractionType { get; private set; }
     public string DisplayName { get; private set; }
+    // Extra reach for large props such as the bench prep points; zero keeps
+    // the caller's default interaction distance.
+    public float InteractionRange { get; private set; }
 
     private void OnEnable()
     {
@@ -42,9 +45,11 @@ public sealed class GymBackRoomInteractable : MonoBehaviour
         RegisteredItems.Remove(this);
     }
 
-    public void Configure(GymBackRoomInteractionType type, string displayName)
+    public void Configure(GymBackRoomInteractionType type, string displayName,
+        float interactionRange = 0f)
     {
         InteractionType = type;
         DisplayName = displayName;
+        InteractionRange = Mathf.Max(0f, interactionRange);
     }
 }

@@ -10,8 +10,10 @@ public sealed class GymPoliceWeapon : MonoBehaviour
     private const string GlockAsset = "BodyBuilders/items/glock17.glb";
     private const float GlockScale = 0.35f;
     // Real Glock 17 length is 0.186 m; sized up to match the policeman's
-    // oversized hands and forearms.
-    public const float GlockWorldLength = 0.235f;
+    // oversized hands and forearms (0.235 m base, then 1.15x on request).
+    public const float GlockBaseWorldLength = 0.235f;
+    public const float GlockScaleMultiplier = 1.15f;
+    public const float GlockWorldLength = GlockBaseWorldLength * GlockScaleMultiplier;
     public const float BulletDamage = 16f;
 
     private EnemyFighter owner;

@@ -1863,9 +1863,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             bodyRenderer, head, vertices, out Bounds weightedHeadBounds);
         float importedEyeOffset = 0f;
         float importedEyeBandDrop = GetImportedEyeBandDrop(identity);
-        float faceDepthScale = 1f;
         float faceCenterOffset = 0f;
-        bool useZeroDepthFacePlane = false;
         switch (identity)
         {
             // Every imported asset gets its own eye-line and face-depth
@@ -1876,7 +1874,6 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 break;
             case BodybuilderIdentity.Arnold:
                 importedEyeOffset = -0.037f;
-                faceDepthScale = 0.96f;
                 faceCenterOffset = -0.002f;
                 break;
             case BodybuilderIdentity.Zyzz:
@@ -1884,36 +1881,28 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 // baseline used by the first pass; keep the bar on the eye
                 // band instead of across the upper forehead.
                 importedEyeOffset = -0.062f;
-                faceDepthScale = 1.03f;
                 faceCenterOffset = 0.0015f;
                 break;
             case BodybuilderIdentity.Ronnie:
                 importedEyeOffset = -0.058f;
-                faceDepthScale = 1.08f;
                 // Keep the shell centered on the imported head pivot. The
                 // screenshot reference is low-angle, so height is corrected
                 // through the eye-line ratio, never by shifting it sideways.
                 faceCenterOffset = 0f;
-                useZeroDepthFacePlane = true;
                 break;
             case BodybuilderIdentity.Manwithsuit1:
                 importedEyeOffset = -0.031f;
-                faceDepthScale = 0.94f;
                 faceCenterOffset = -0.0035f;
                 break;
             case BodybuilderIdentity.JayCutler:
                 importedEyeOffset = -0.064f;
-                faceDepthScale = 1.0f;
                 // Jay's visible hair/ear bounds are not a lateral face
                 // midpoint; use the head pivot so both sides cover evenly.
                 faceCenterOffset = 0f;
-                useZeroDepthFacePlane = true;
                 break;
             case BodybuilderIdentity.Goku:
                 importedEyeOffset = -0.064f;
-                faceDepthScale = 0.92f;
                 faceCenterOffset = 0f;
-                useZeroDepthFacePlane = true;
                 break;
         }
         float eyeY = headLocal.y + localHeight *
@@ -2121,14 +2110,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             faceSurfaceWorld = head.TransformPoint(surfaceLocal);
         }
         float faceSurfaceZ = visualRoot.InverseTransformPoint(faceSurfaceWorld).z;
-        float faceSpread = Mathf.Max(0f, frontDepth - backDepth);
-        float arcDrop = 1f - Mathf.Cos(Mathf.Clamp(coverage, 55f, 82f) * Mathf.Deg2Rad);
-        float faceDepth = useZeroDepthFacePlane
-            ? 0f
-            : Mathf.Clamp(
-                faceSpread * faceDepthScale / Mathf.Max(0.2f, arcDrop),
-                height * 0.0015f,
-                height * 0.08f);
+        // One bar style for every enemy: the same curved shell that wraps
+        // around the sides of the head. Per-scan depth sampling used to give
+        // Ronnie/Jay/Goku a flat strip while the others wrapped.
+        float faceDepth = height * UnifiedEyeBarDepth;
 
         // The shell's centre lands exactly on the sampled front boundary;
         // its curved sides follow the asset's measured depth spread instead
@@ -2164,6 +2149,9 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             localPosition, faceRotation.eulerAngles, size, faceDepth, coverage, Color.black);
     }
 
+    // Fraction of body height; the depth all other enemies already hit.
+    private const float UnifiedEyeBarDepth = 0.08f;
+
     private static bool IsAssetSpecificFaceCalibration(BodybuilderIdentity identity)
     {
         return identity == BodybuilderIdentity.Ronnie ||
@@ -2194,6 +2182,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
     // World metres pushed out along the face direction.
     private static float GetEyeBarPush(BodybuilderIdentity identity)
     {
+        // Goku's scan has a pronounced nose that pierced the curved shell.
+        if (identity == BodybuilderIdentity.Goku)
+        {
+            return 0.035f;
+        }
         return identity == BodybuilderIdentity.Arnold ||
             identity == BodybuilderIdentity.JayCutler
             ? 0.012f

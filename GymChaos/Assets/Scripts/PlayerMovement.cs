@@ -52,6 +52,11 @@ public class PlayerMovement : MonoBehaviour
     [Header("Health")]
     [SerializeField] private float maxHealth = 200f;
     [SerializeField] private float currentHealth = 200f;
+    // Out of combat the player slowly heals; any aggressive enemy or active
+    // police dispatch pauses it, and every hit restarts the delay.
+    [SerializeField] private float healthRegenDelay = 4f;
+    [SerializeField] private float healthRegenPerSecond = 5f;
+    [SerializeField] private float perfectRepHeal = 6f;
 
     [Header("Interaction")]
     public float interactRange = 5.5f;
@@ -118,6 +123,9 @@ public class PlayerMovement : MonoBehaviour
     private PickupItem nearbyPickup;
     private EnemyFighter nearbyTalkTarget;
     private GymBackRoomInteractable nearbyBackRoomInteractable;
+    private float lastDamageTime = float.NegativeInfinity;
+    private float nextCombatThreatScanTime;
+    private bool combatThreatActive;
     private float nextPickupPromptScanTime;
     private GymExerciseStation activeExerciseStation;
     private GymExerciseStation pendingWeightStation;
@@ -159,6 +167,9 @@ public class PlayerMovement : MonoBehaviour
         pendingWeightStation != null || pullUpMountTransitionActive;
     public float MaxHealth => maxHealth;
     public float CurrentHealth => currentHealth;
+    public float PerfectRepHealAmount => perfectRepHeal;
+    public bool IsHealthRegenerating { get; private set; }
+    public bool IsCombatThreatActive => combatThreatActive;
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
     public float SprintEnergy => sprintEnergy;
     public bool IsDead { get; private set; }
@@ -347,6 +358,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         suppressGameplayInputThisFrame = false;
+        TickHealthRegeneration();
 
         if (GymDialogueDirector.IsDialogueActive)
         {
@@ -485,11 +497,70 @@ public class PlayerMovement : MonoBehaviour
         }
 
         currentHealth = Mathf.Clamp(currentHealth - damage, 0f, maxHealth);
+        lastDamageTime = Time.time;
         ReceiveImpact(impulse);
         if (currentHealth <= 0f)
         {
             Die(attacker);
         }
+    }
+
+    public void RestoreHealth(float amount)
+    {
+        if (IsDead || amount <= 0f)
+        {
+            return;
+        }
+
+        currentHealth = Mathf.Min(maxHealth, currentHealth + amount);
+    }
+
+    public void RestorePerfectRepHealth()
+    {
+        RestoreHealth(perfectRepHeal);
+    }
+
+    private void TickHealthRegeneration()
+    {
+        IsHealthRegenerating = false;
+        if (IsDead || currentHealth >= maxHealth)
+        {
+            return;
+        }
+
+        if (Time.time >= nextCombatThreatScanTime)
+        {
+            combatThreatActive = IsAnyEnemyAttacking();
+            nextCombatThreatScanTime = Time.time + 0.25f;
+        }
+        if (combatThreatActive || Time.time - lastDamageTime < healthRegenDelay)
+        {
+            return;
+        }
+
+        IsHealthRegenerating = true;
+        currentHealth = Mathf.Min(maxHealth,
+            currentHealth + healthRegenPerSecond * Time.deltaTime);
+    }
+
+    private static bool IsAnyEnemyAttacking()
+    {
+        if (GymPoliceDirector.IsDispatchActive)
+        {
+            return true;
+        }
+
+        IReadOnlyList<EnemyFighter> fighters = EnemyFighter.RegisteredFighters;
+        for (int i = 0; i < fighters.Count; i++)
+        {
+            EnemyFighter fighter = fighters[i];
+            if (fighter != null && fighter.isActiveAndEnabled &&
+                !fighter.IsDead && fighter.IsAggressive)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void OnControllerColliderHit(ControllerColliderHit hit)

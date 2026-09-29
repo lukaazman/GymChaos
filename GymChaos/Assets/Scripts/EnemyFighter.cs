@@ -291,16 +291,33 @@ public partial class EnemyFighter : MonoBehaviour
         Landing
     }
 
-    private const float GokuFlightHeight = 2.35f;
+    // Root lift during flight. The authored flying clip already raises the
+    // horizontal body about 0.85 m above the root, so this keeps the body at
+    // the player's chest/eye height (about 1.2-2.1 m) instead of the ceiling.
+    private const float GokuFlightHeight = 0.4f;
     private const float GokuFlightGroundClearance = 0.08f;
     private const float GokuFlightMinimumDistance = 5.2f;
     private const float GokuSpeedMultiplier = 1.5f;
     private const float GokuFlightTransitionDuration = 0.42f;
-    private const float GokuFlightModelRotation = 90f;
+    private const float GokuFlightModelRotation = 0f;
     private GokuFlightState gokuFlightState;
     private float gokuFlightTransition;
     private float standingRootY;
     private float gokuFlightStartY;
+    private float gokuFlightDetourSide;
+    private float gokuFlightDetourUntil;
+    private string gokuFlightLastBlocker;
+    private float gokuFlightBoxedTime;
+    private float gokuFlightGroundedUntil;
+    private const float GokuFlightBoxedLandDelay = 0.35f;
+    private const float GokuFlightBoxedGroundTime = 1.5f;
+    private const float GokuFlightProgressWindow = 1.2f;
+    private const float GokuFlightMinimumProgress = 0.3f;
+    private float gokuFlightProgressCheckAt;
+    private Vector3 gokuFlightProgressPosition;
+    private readonly List<Vector3> gokuFlightRoute = new List<Vector3>();
+    private int gokuFlightRouteIndex;
+    private float gokuFlightRouteRebuildAt;
     private Quaternion gokuFlightStartRotation;
     private Quaternion gokuFlightTargetRotation;
     private CollisionDetectionMode gokuGroundCollisionMode = CollisionDetectionMode.Discrete;
@@ -357,6 +374,7 @@ public partial class EnemyFighter : MonoBehaviour
     public BodybuilderIdentity Identity => identity;
     public bool HasVisitorAgent => visitorAgent != null;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
+    public string GokuFlightLastBlocker => gokuFlightLastBlocker;
     public bool IsGokuGrounded => identity == BodybuilderIdentity.Goku &&
         gokuFlightState == GokuFlightState.Grounded;
     public bool IsGokuFlightActive => identity == BodybuilderIdentity.Goku &&
@@ -818,7 +836,8 @@ public partial class EnemyFighter : MonoBehaviour
             return;
         }
 
-        bool shouldGokuFly = IsGoku() && distance > GokuFlightMinimumDistance;
+        bool shouldGokuFly = IsGoku() && distance > GokuFlightMinimumDistance &&
+            Time.time >= gokuFlightGroundedUntil;
         if (IsGoku() && !UpdateGokuFlight(shouldGokuFly, planarToTarget))
         {
             return;

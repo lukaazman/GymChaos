@@ -109,35 +109,21 @@ public sealed partial class GymVisitorAgent
 		//IL_00e3: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
 		float y = (((UnityEngine.Object)(object)fighter != (UnityEngine.Object)null) ? ((Component)fighter).transform.position.y : roomTarget.y);
-		Vector3 south = GymOutdoorBuilder.ProteinStoreSouthCurvePointE;
-		Vector3 west = GymOutdoorBuilder.ProteinStoreSouthCurvePointD;
 		Vector3 approach = GymOutdoorBuilder.ProteinStoreVisitApproachPoint;
 		Vector3 front = GymOutdoorBuilder.ProteinStoreFrontClearPoint;
-		Vector3 gymPathSouth = GymOutdoorBuilder.ProteinStoreGymPathSouthClearPoint;
 		Vector3 gymPath = GymOutdoorBuilder.ProteinStoreGymPathClearPoint;
-		Vector3 exterior = (((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null) ? doorway.ExteriorPoint : south);
-		south.y = y;
-		west.y = y;
+		Vector3 exterior = (((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null) ? doorway.ExteriorPoint : gymPath);
 		approach.y = y;
 		front.y = y;
-		gymPathSouth.y = y;
 		gymPath.y = y;
 		exterior.y = y;
+		// Straight through the fenced entry walkway: the old dog-leg through
+		// the yard south of the shop is closed off.
 		if (returning)
 		{
-			return (Vector3[])(object)new Vector3[6] { approach, west, south, gymPathSouth, gymPath, exterior };
+			return (Vector3[])(object)new Vector3[3] { approach, gymPath, exterior };
 		}
-		return (Vector3[])(object)new Vector3[6] { gymPath, gymPathSouth, south, west, approach, front };
-	}
-	// Walkable strip between the store's north wall (z ~17.8) and the road
-	// south wall (z ~19.8). Used instead of the closed east road opening.
-	internal static void GetStoreNorthStripWaypoints(Vector3 westGateRoadPoint, Vector3 storeSouthEastCorner, float y,
-		out Vector3 westGateInside, out Vector3 northStripEast, out Vector3 eastStripNorth)
-	{
-		float stripZ = GymOutdoorBuilder.ProteinStoreEastRoutePoint.z - 0.7f;
-		westGateInside = new Vector3(westGateRoadPoint.x, y, stripZ);
-		northStripEast = new Vector3(storeSouthEastCorner.x - 2f, y, stripZ);
-		eastStripNorth = new Vector3(storeSouthEastCorner.x + 0.75f, y, stripZ - 1.2f);
+		return (Vector3[])(object)new Vector3[3] { gymPath, approach, front };
 	}
 	private bool MoveAlongAuthoredExteriorRoute(Vector3 target, float speed, Vector3? nextWaypoint = null, float requestedCompletionRadius = -1f)
 	{

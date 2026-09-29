@@ -18,6 +18,11 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private const float TurnSpeed = 5f;
     private const float MaxGroundRouteDeltaTime = 0.05f;
     private const float MaxGroundRouteStep = 0.4f;
+    // Ground routes run this far above the asphalt top; the visual body is
+    // placed back on the asphalt, with the tyres pressed in very slightly so
+    // no gap shows under the wheels.
+    private const float RouteHeightAboveFloor = 0.08f;
+    public const float TyreContactSink = 0.015f;
     private const float LaneSpawnSpacing = 7.5f;
     private const float ForwardSensorMinimumDistance = 2.35f;
     private const float ForwardSensorMaximumDistance = 3.35f;
@@ -248,7 +253,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 "Davie Bus Visitor Vehicle",
                 root.layer,
                 settleOnSupport: true,
-                supportY: vehicle.parkingPoint.y,
+                supportY: vehicle.VisualSupportY,
                 onLoaded: vehicle.FinalizeRuntimeBus);
         }
         else if (vehicle.IsArnold)
@@ -262,7 +267,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 "Arnold Hummer Visitor Vehicle",
                 root.layer,
                 settleOnSupport: true,
-                supportY: vehicle.parkingPoint.y,
+                supportY: vehicle.VisualSupportY,
                 onLoaded: vehicle.FinalizeRuntimeArnold);
         }
         else if (prefab != null)
@@ -367,8 +372,15 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         if (UsesRoadsideBusRoute)
         {
-            driveRoutine = StartCoroutine(
+            // When the turnaround is already clear the wait finishes inside
+            // StartCoroutine and has itself started the drive, so only keep
+            // the wait's handle while it is really still waiting.
+            Coroutine wait = StartCoroutine(
                 WaitForBusTurnaroundThenDriveOut(onGone));
+            if (waitingForBusTurnaround)
+            {
+                driveRoutine = wait;
+            }
             return;
         }
         Vector3[] route = new[] {
@@ -456,23 +468,32 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     }
 
     // Departure: pull forward out of the bay, make a left U-turn across the
-    // road and return east on the opposite lane.
+    // road, return east on the opposite (right-hand) lane, then turn left
+    // onto the outbound lane of the side road and leave at the same road
+    // spawn point every other departing vehicle uses.
     private Vector3[] CreateDavieBusDepartureRoute()
     {
         float y = parkingPoint.y;
         float returnZ = GymRoadsideBusStop.DavieBusReturnLanePoint.z;
         float turnX = parkingPoint.x - 9f;
-        Vector3 returnRoad = GymRoadsideBusStop.DavieBusReturnRoadPoint;
+        Vector3 exitTurn = departureRoadTurnPoint;
+        Vector3 exitRoad = departureRoadPoint;
         return new[]
         {
             new Vector3(parkingPoint.x, y, parkingPoint.z),
             new Vector3(turnX + 5.5f, y, parkingPoint.z),
             new Vector3(turnX, y, (parkingPoint.z + returnZ) * 0.5f),
             new Vector3(turnX + 5.5f, y, returnZ),
-            new Vector3(returnRoad.x - 8f, y, returnZ),
-            new Vector3(returnRoad.x, y, returnZ)
+            // Start the left turn early: the 10.4 m body swings its nose
+            // wide, and the corner's east wall sits just past the lane.
+            new Vector3(exitTurn.x - BusExitTurnLead, y, returnZ),
+            new Vector3(exitRoad.x, y, returnZ + BusExitTurnRise),
+            new Vector3(exitRoad.x, y, exitRoad.z)
         };
     }
+
+    private const float BusExitTurnLead = 3.5f;
+    private const float BusExitTurnRise = 7f;
 
     // Bus path following: the body always moves along its nose and yaws at a
     // speed-limited rate (v / minimum turn radius), so it turns while it
@@ -1649,7 +1670,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private void ConfigureRoute(int slot)
     {
         Bounds parking = GymOutdoorBuilder.ParkingBounds;
-        float floorY = parking.center.y + 0.08f;
+        float floorY = parking.center.y + RouteHeightAboveFloor;
         if (IsBus && GymRoadsideBusStop.IsBuilt)
         {
             ConfigureDavieBusRoute(floorY);
@@ -1755,8 +1776,17 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Physics.SyncTransforms();
             bounds = CombinedBounds(renderers);
         }
-        visual.transform.position += Vector3.up * -bounds.min.y;
+        // Relative to the vehicle root: the old absolute y=0 target left the
+        // body floating above the lowered asphalt.
+        float groundY = transform.position.y - RouteHeightAboveFloor - TyreContactSink;
+        visual.transform.position += Vector3.up * (groundY - bounds.min.y);
     }
+
+    // The roadside bus route already runs on the asphalt top; every other
+    // ground route is lifted by RouteHeightAboveFloor.
+    private float VisualSupportY => (IsBus && UsesRoadsideBusRoute
+        ? parkingPoint.y
+        : parkingPoint.y - RouteHeightAboveFloor) - TyreContactSink;
 
     private void CreateRiderAnchor(GameObject visual)
     {

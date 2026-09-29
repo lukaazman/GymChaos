@@ -54,6 +54,12 @@ public static class GymProteinStoreEnvironment
     public static float EntryFenceLargestGap { get; private set; }
     public static Bounds StoreBounds { get; private set; }
     public static Bounds SiteBounds { get; private set; }
+    // World footprint of the shop's collision shell (side and back walls).
+    public static Bounds ShellFootprint { get; private set; }
+    // x of the authored facade (pillars and display panels) in front of it.
+    public static float FacadeX { get; private set; }
+    // The facade pillars stand this far in front of the shell side walls.
+    private const float FacadeInsetFromShell = 0.45f;
     public static Bounds OuterRouteBounds { get; private set; }
     public static Vector3 StoreEntrancePoint { get; private set; }
     public static Vector3 StoreFrontClearPoint { get; private set; }
@@ -108,10 +114,10 @@ public static class GymProteinStoreEnvironment
         EntryFenceLargestGap = measuredLargestGap;
         bool south = root != null &&
             FindChildRecursive(root,
-                "Protein Store Entry Fence South Junction Collision") != null;
+                "Protein Store Entry Fence South Collision") != null;
         bool north = root != null &&
             FindChildRecursive(root,
-                "Protein Store Entry Fence North Junction Collision") != null;
+                "Protein Store Entry Fence North Collision") != null;
         bool roadWidth = GymOutdoorBuilder.VehicleRoadWidthForVerification >= 7.5f;
         bool routeClear = StoreGateWestClearPoint != Vector3.zero &&
             GymOutdoorBuilder.VehicleRoadJunctionPoint != Vector3.zero &&
@@ -154,9 +160,9 @@ public static class GymProteinStoreEnvironment
         }
 
         BoxCollider south = FindFenceCollision(root,
-            "Protein Store Entry Fence South Junction");
+            "Protein Store Entry Fence South");
         BoxCollider north = FindFenceCollision(root,
-            "Protein Store Entry Fence North Junction");
+            "Protein Store Entry Fence North");
         if (south != null)
         {
             junctionCount++;
@@ -198,9 +204,9 @@ public static class GymProteinStoreEnvironment
         }
 
         BoxCollider south = FindFenceCollision(root,
-            "Protein Store Entry Fence South Junction");
+            "Protein Store Entry Fence South");
         BoxCollider north = FindFenceCollision(root,
-            "Protein Store Entry Fence North Junction");
+            "Protein Store Entry Fence North");
         if (south == null || north == null)
         {
             return;
@@ -387,6 +393,10 @@ public static class GymProteinStoreEnvironment
             new Vector3(worldDepth, worldHeight, worldWidth));
         SiteBounds = new Bounds(new Vector3(platformMinX + PlatformWidth * 0.5f, floorY, centerZ),
             new Vector3(PlatformWidth, 0.20f, PlatformDepth));
+        ShellFootprint = new Bounds(
+            new Vector3(centerX, floorY, centerZ),
+            new Vector3(ShellDepth * StoreDepthScale, 0.2f, ShellWidth * StoreScale));
+        FacadeX = ShellFootprint.min.x - FacadeInsetFromShell;
         StoreEntrancePoint = new Vector3(frontX + 0.05f, floorY, centerZ);
         StoreFrontClearPoint = new Vector3(
             frontX + RouteClearance, floorY, centerZ);
@@ -458,56 +468,34 @@ public static class GymProteinStoreEnvironment
         // Keep a physical gate between the shared path and storefront.
         // The rails remain collision-aware; the opening lets visitors cross
         // the outer path without entering the shop facade.
-        float entryFenceStartX = pathCenterX + pathWidth * 0.5f;
+        // The walkway is a closed corridor from the path wall to the shop
+        // facade. Its fences start on the path wall's outer face, so nothing
+        // sticks out into the shared path, and end on the facade.
+        float entryFenceStartX = outerPathX - GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
         float entryFenceGateCenterX = outerPathX + 2.20f;
-        const float entryFenceGateHalfWidth = 2.20f;
         entryFenceExpectedStartX = entryFenceStartX;
-        entryFenceExpectedEndX = outerPathX;
+        entryFenceExpectedEndX = FacadeX;
         entryFenceCenterZ = centerZ;
         entryFenceHalfOffset = connectorFenceHalfOffset;
-        // Keep the visitor capsule inside the authored gate opening before it
-        // turns west toward the gym door. The point is derived from the same
-        // fence geometry below, so a future gate resize keeps the route safe.
+        // Keep the visitor capsule inside the corridor before it turns west
+        // toward the gym door.
         float gateVisitorClearance = Mathf.Max(
             0.82f,
             EnemyFighter.GetBodyRadiusForIdentity(BodybuilderIdentity.Cbum) + 0.18f);
         StoreGateWestClearPoint = new Vector3(
-            entryFenceGateCenterX - entryFenceGateHalfWidth + gateVisitorClearance,
+            entryFenceGateCenterX - 2.20f + gateVisitorClearance,
             floorY,
             centerZ);
-        CreateAccessFence(parent, floorY, entryFenceStartX,
-            entryFenceGateCenterX - entryFenceGateHalfWidth,
+        CreateAccessFence(parent, floorY, entryFenceStartX, FacadeX,
             centerZ - connectorFenceHalfOffset,
             centerZ - connectorFenceHalfOffset,
             boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-            "Protein Store Entry Fence South West");
-        CreateAccessFence(parent, floorY,
-            entryFenceGateCenterX + entryFenceGateHalfWidth, platformMinX,
-            centerZ - connectorFenceHalfOffset,
-            centerZ - connectorFenceHalfOffset,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-            "Protein Store Entry Fence South East");
-        CreateAccessFence(parent, floorY, pathCenterX + pathWidth * 0.5f, platformMinX,
+            "Protein Store Entry Fence South");
+        CreateAccessFence(parent, floorY, entryFenceStartX, FacadeX,
             centerZ + connectorFenceHalfOffset, centerZ + connectorFenceHalfOffset,
             boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
             "Protein Store Entry Fence North");
-        // The shared path's outer wall is offset 0.55 m beyond the path
-        // edge. Close that small endpoint gap with short physical/visible
-        // returns. They meet the store gate's two side rails but stay on the
-        // walkway edges, so the intended center road and store opening remain
-        // open.
-        CreateAccessFence(parent, floorY,
-            entryFenceStartX, outerPathX,
-            centerZ - connectorFenceHalfOffset,
-            centerZ - connectorFenceHalfOffset,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-            "Protein Store Entry Fence South Junction");
-        CreateAccessFence(parent, floorY,
-            entryFenceStartX, outerPathX,
-            centerZ + connectorFenceHalfOffset,
-            centerZ + connectorFenceHalfOffset,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-            "Protein Store Entry Fence North Junction");
+        CreateFacadeGuards(parent, floorY, centerZ);
         int measuredJunctions;
         float measuredLargestGap;
         bool measuredRouteClear;
@@ -843,8 +831,8 @@ public static class GymProteinStoreEnvironment
     private static void EnsureEntryLowWalls(GameObject root)
     {
         if (root == null ||
-            (root.transform.Find("Protein Store Entry Fence South West Low Wall") != null &&
-             root.transform.Find("Protein Store Entry Fence South East Low Wall") != null))
+            (root.transform.Find("Protein Store Entry Fence South Low Wall") != null &&
+             root.transform.Find("Protein Store Entry Fence North Low Wall") != null))
         {
             return;
         }
@@ -870,19 +858,35 @@ public static class GymProteinStoreEnvironment
         Bounds bounds = walkway.bounds;
         float halfWidth = ConnectorWidth * 0.5f +
             GymOutdoorBuilder.SharedFenceWallThickness * 0.1f;
-        float gateCenterX = bounds.min.x + 2.20f;
-        const float gateHalfWidth = 1.35f;
-        CreateAccessFence(root.transform, bounds.max.y, bounds.min.x,
-            gateCenterX - gateHalfWidth,
+        float endX = FacadeX > bounds.max.x ? FacadeX : bounds.max.x;
+        CreateAccessFence(root.transform, bounds.max.y, bounds.min.x + 0.3f, endX,
             bounds.center.z - halfWidth, bounds.center.z - halfWidth,
-            wall, coping, ribs, "Protein Store Entry Fence South West");
-        CreateAccessFence(root.transform, bounds.max.y,
-            gateCenterX + gateHalfWidth, bounds.max.x,
-            bounds.center.z - halfWidth, bounds.center.z - halfWidth,
-            wall, coping, ribs, "Protein Store Entry Fence South East");
-        CreateAccessFence(root.transform, bounds.max.y, bounds.min.x, bounds.max.x,
+            wall, coping, ribs, "Protein Store Entry Fence South");
+        CreateAccessFence(root.transform, bounds.max.y, bounds.min.x + 0.3f, endX,
             bounds.center.z + halfWidth, bounds.center.z + halfWidth,
             wall, coping, ribs, "Protein Store Entry Fence North");
+    }
+
+    // The facade's display panels have no physics. Invisible guards behind
+    // them keep the open front limited to the doorway, so the corridor is
+    // the only way in and out of the shop.
+    private static void CreateFacadeGuards(Transform parent, float floorY, float centerZ)
+    {
+        float doorHalfWidth = ConnectorWidth * 0.5f;
+        float thickness = ShellFootprint.min.x - FacadeX;
+        float x = FacadeX + thickness * 0.5f;
+        float height = GymOutdoorBuilder.SharedFenceCollisionHeight;
+        void Guard(string name, float minZ, float maxZ)
+        {
+            if (maxZ - minZ < 0.1f) return;
+            GameObject guard = new GameObject(name);
+            guard.transform.SetParent(parent, true);
+            guard.transform.position = new Vector3(x, floorY + height * 0.5f, (minZ + maxZ) * 0.5f);
+            BoxCollider collider = guard.AddComponent<BoxCollider>();
+            collider.size = new Vector3(thickness, height, maxZ - minZ);
+        }
+        Guard("Protein Store Facade Guard South", ShellFootprint.min.z, centerZ - doorHalfWidth);
+        Guard("Protein Store Facade Guard North", centerZ + doorHalfWidth, ShellFootprint.max.z);
     }
 
     private static void AddCollider(

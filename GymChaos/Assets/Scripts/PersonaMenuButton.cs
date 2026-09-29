@@ -10,8 +10,9 @@ using UnityEngine.UI;
 public sealed class PersonaMenuButton : MonoBehaviour,
     IPointerEnterHandler, ISelectHandler, IDeselectHandler
 {
-    private const float FocusScale = 1.08f;
     private const float Sharpness = 18f;
+    private float focusScale = 1.08f;
+    private float focusTilt = 2.5f;
 
     private PersonaShape face;
     private PersonaShape outline;
@@ -43,6 +44,14 @@ public sealed class PersonaMenuButton : MonoBehaviour,
         idleOutline = idleOutlineColor;
         focusOutline = focusOutlineColor;
         idleRotation = transform.localEulerAngles.z;
+        Apply();
+    }
+
+    // Smaller controls (settings rows) use a gentler scale and tilt.
+    public void SetFocusMotion(float scale, float tiltDegrees)
+    {
+        focusScale = Mathf.Max(1f, scale);
+        focusTilt = tiltDegrees;
         Apply();
     }
 
@@ -80,10 +89,11 @@ public sealed class PersonaMenuButton : MonoBehaviour,
     {
         // A short overshoot on focus gives the snappy Persona "punch".
         float overshoot = Mathf.Sin(pop * Mathf.PI) * 0.05f;
-        float scale = Mathf.Lerp(1f, FocusScale, focus) + overshoot;
+        float scale = Mathf.Lerp(1f, focusScale, focus) +
+            overshoot * (focusScale - 1f) / 0.08f;
         transform.localScale = new Vector3(scale, scale, 1f);
         transform.localRotation = Quaternion.Euler(0f, 0f,
-            Mathf.Lerp(idleRotation, idleRotation - 2.5f, focus));
+            Mathf.Lerp(idleRotation, idleRotation - focusTilt, focus));
         if (face != null) face.color = Color.Lerp(idleFace, focusFace, focus);
         if (outline != null) outline.color = Color.Lerp(idleOutline, focusOutline, focus);
         if (backing != null)

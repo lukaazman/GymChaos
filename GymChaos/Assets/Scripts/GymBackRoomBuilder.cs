@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -22,6 +23,10 @@ public static class GymBackRoomBuilder
     // onto an assumed standing-height marker.
     private const float BenchSeatSupportHeight = 0.52f;
     private const float BenchBagScale = 0.78f;
+    private const float BenchOffsetX = -4.15f;
+    private const float BenchOffsetZ = 2.65f;
+    public const float PrepInteractionRange = 3.6f;
+    public const float BenchPrepInteractionRange = 3.9f;
     private static Bounds roomBounds;
     private static bool roomBoundsReady;
     private static float roomFloorY;
@@ -202,7 +207,17 @@ public static class GymBackRoomBuilder
         CreateInteractable(rootObject.transform, "Locker Room Prep Point",
             new Vector3(roomCenter.x, floorY + 1.0f, northZ - 1.0f),
             new Vector3(DoorWidth - 0.3f, 2f, 1.8f),
-            GymBackRoomInteractionType.Prep, "Get ready");
+            GymBackRoomInteractionType.Prep, "Get ready", PrepInteractionRange);
+        // Each bench is its own prep spot with a wide reach, so the player
+        // can get ready anywhere around either bench, not only the door one.
+        for (int benchIndex = 0; benchIndex < 2; benchIndex++)
+        {
+            CreateInteractable(rootObject.transform,
+                "Locker Bench Prep Point " + (benchIndex == 0 ? "Left" : "Right"),
+                GetBenchCenter(roomCenter, floorY, benchIndex) + Vector3.up * 1.0f,
+                new Vector3(3.4f, 2f, 1.8f),
+                GymBackRoomInteractionType.Prep, "Get ready", BenchPrepInteractionRange);
+        }
         CreateInteractable(rootObject.transform, "Changing Locker",
             new Vector3(minX + 1.5f, floorY + 1.1f, roomCenter.z + 0.4f),
             new Vector3(2.2f, 2.1f, 1.8f),
@@ -560,7 +575,11 @@ public static class GymBackRoomBuilder
                 bounds.min.x <= bench.max.x + 0.25f &&
                 bounds.max.z >= bench.min.z - 0.25f &&
                 bounds.min.z <= bench.max.z + 0.25f;
-            bool verticalSupport = Mathf.Abs(bounds.min.y - (bench.max.y + 0.005f)) <= 0.02f;
+            GameObject benchObject = loadedBenches[node.name.StartsWith("Left ") ? 0 : 1];
+            float seatSurface = benchObject != null
+                ? GetSeatSurfaceY(benchObject, bounds, bench.max.y)
+                : bench.max.y;
+            bool verticalSupport = Mathf.Abs(bounds.min.y - (seatSurface + 0.005f)) <= 0.02f;
             if (!dimensions || !horizontalSupport || !verticalSupport)
             {
                 return false;
@@ -792,13 +811,13 @@ public static class GymBackRoomBuilder
     {
         _ = trim;
         _ = accent;
-        float benchX = center.x - 4.15f;
+        float benchX = center.x + BenchOffsetX;
         for (int benchIndex = 0; benchIndex < 2; benchIndex++)
         {
             int slot = benchIndex;
             benchBags[slot].Clear();
             loadedBenches[slot] = null;
-            float z = center.z + (benchIndex == 0 ? -2.65f : 2.65f);
+            float z = GetBenchCenter(center, floorY, benchIndex).z;
             string label = benchIndex == 0 ? "Left" : "Right";
             RequestLockerProp(WoodenBenchAsset, parent, new Vector3(benchX, floorY, z),
                 Quaternion.identity, Vector3.one * 2.7f, "Authored wooden locker bench " + label,
@@ -812,6 +831,12 @@ public static class GymBackRoomBuilder
             CreateBenchBag(parent, benchIndex, new Vector3(benchX + 0.52f, floorY + 1.34f, z), BlackBagAsset, label + " black bag");
         }
         HideBenchBags();
+    }
+
+    internal static Vector3 GetBenchCenter(Vector3 center, float floorY, int benchIndex)
+    {
+        return new Vector3(center.x + BenchOffsetX, floorY,
+            center.z + (benchIndex == 0 ? -BenchOffsetZ : BenchOffsetZ));
     }
 
     private static void CreateBenchBag(Transform parent, int benchIndex, Vector3 position, string assetPath, string objectName)
@@ -835,27 +860,117 @@ public static class GymBackRoomBuilder
         for (int index = 0; index < benchBags[benchIndex].Count; index++)
         {
             GameObject bag = benchBags[benchIndex][index];
-            if (bag != null && loadedBenches[benchIndex] != null)
-            {
-                Renderer[] seatRenderers = loadedBenches[benchIndex].GetComponentsInChildren<Renderer>(true);
-                Renderer[] bagRenderers = bag.GetComponentsInChildren<Renderer>(true);
-                if (seatRenderers.Length > 0 && bagRenderers.Length > 0)
-                {
-                    Bounds seat = seatRenderers[0].bounds;
-                    foreach (Renderer renderer in seatRenderers) seat.Encapsulate(renderer.bounds);
-                    Bounds bounds = bagRenderers[0].bounds;
-                    foreach (Renderer renderer in bagRenderers) bounds.Encapsulate(renderer.bounds);
-                    Vector3 offset = new Vector3(
-                        seat.center.x - bounds.center.x,
-                        seat.max.y + 0.005f - bounds.min.y,
-                        seat.center.z - bounds.center.z);
-                    bag.transform.position += offset;
-                }
-            }
             bool visible = visibleCount >= 2 ||
                 (visibleCount == 1 && index == selectedSingleBag);
-            if (bag != null) bag.SetActive(visible && loadedBenches[benchIndex] != null);
+            if (bag == null)
+            {
+                continue;
+            }
+            bool show = visible && loadedBenches[benchIndex] != null;
+            if (loadedBenches[benchIndex] != null)
+            {
+                // Measure only while active: an inactive renderer does not
+                // report its real bounds, and the old refresh moved hidden
+                // bags by that stale measurement on every call.
+                bag.SetActive(true);
+                RestBagOnSeat(bag, loadedBenches[benchIndex]);
+            }
+            bag.SetActive(show);
         }
+    }
+
+    private static void RestBagOnSeat(GameObject bag, GameObject bench)
+    {
+        if (!TryGetRendererBounds(bench, out Bounds seat) ||
+            !TryGetRendererBounds(bag, out Bounds bounds))
+        {
+            return;
+        }
+
+        // Keep the authored left/right slot along the bench and only snap the
+        // bag's base onto the seat top, centered across the seat depth.
+        float depthShift = seat.center.z - bounds.center.z;
+        Bounds footprint = bounds;
+        footprint.center += new Vector3(0f, 0f, depthShift);
+        Vector3 offset = new Vector3(
+            0f,
+            GetSeatSurfaceY(bench, footprint, seat.max.y) + 0.005f - bounds.min.y,
+            depthShift);
+        bag.transform.position += offset;
+    }
+
+    // The authored bench mesh has a stray raised spike at one end, so its
+    // renderer bounds top sits ~0.24 m above the slats. Read the slat surface
+    // from the vertices directly under the bag, trimming isolated outliers.
+    private static float GetSeatSurfaceY(GameObject bench, Bounds footprint, float fallback)
+    {
+        List<float> heights = new List<float>();
+        foreach (MeshFilter filter in bench.GetComponentsInChildren<MeshFilter>(true))
+        {
+            Mesh mesh = filter.sharedMesh;
+            if (mesh == null || !mesh.isReadable) continue;
+            Matrix4x4 matrix = filter.transform.localToWorldMatrix;
+            Vector3[] vertices = mesh.vertices;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector3 world = matrix.MultiplyPoint3x4(vertices[i]);
+                if (world.x >= footprint.min.x && world.x <= footprint.max.x &&
+                    world.z >= footprint.min.z && world.z <= footprint.max.z)
+                {
+                    heights.Add(world.y);
+                }
+            }
+        }
+        if (heights.Count < 8)
+        {
+            return fallback;
+        }
+        heights.Sort();
+        return heights[Mathf.Min(heights.Count - 1, Mathf.FloorToInt(heights.Count * 0.995f))];
+    }
+
+    private static bool TryGetRendererBounds(GameObject root, out Bounds bounds)
+    {
+        bounds = default;
+        bool found = false;
+        foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>(false))
+        {
+            if (!renderer.enabled) continue;
+            if (!found)
+            {
+                bounds = renderer.bounds;
+                found = true;
+            }
+            else
+            {
+                bounds.Encapsulate(renderer.bounds);
+            }
+        }
+        return found;
+    }
+
+    internal static float MaxVisibleBenchBagSeatGapForVerification()
+    {
+        float worst = 0f;
+        for (int bench = 0; bench < benchBags.Length; bench++)
+        {
+            if (loadedBenches[bench] == null ||
+                !TryGetRendererBounds(loadedBenches[bench], out Bounds seat))
+            {
+                continue;
+            }
+            foreach (GameObject bag in benchBags[bench])
+            {
+                if (bag == null || !bag.activeInHierarchy ||
+                    !TryGetRendererBounds(bag, out Bounds bounds))
+                {
+                    continue;
+                }
+                worst = Mathf.Max(worst, Mathf.Abs(bounds.min.y -
+                    GetSeatSurfaceY(loadedBenches[bench], bounds, seat.max.y)));
+            }
+        }
+        return worst;
     }
 
     private static GameObject RequestLockerProp(
@@ -1063,7 +1178,7 @@ public static class GymBackRoomBuilder
 
     private static GymBackRoomInteractable CreateInteractable(
         Transform parent, string name, Vector3 position, Vector3 size,
-        GymBackRoomInteractionType type, string displayName)
+        GymBackRoomInteractionType type, string displayName, float interactionRange = 0f)
     {
         GameObject objectRoot = new GameObject(name);
         objectRoot.transform.SetParent(parent, true);
@@ -1072,7 +1187,7 @@ public static class GymBackRoomBuilder
         trigger.size = size;
         trigger.isTrigger = true;
         GymBackRoomInteractable interactable = objectRoot.AddComponent<GymBackRoomInteractable>();
-        interactable.Configure(type, displayName);
+        interactable.Configure(type, displayName, interactionRange);
         return interactable;
     }
 

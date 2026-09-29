@@ -14,7 +14,8 @@ public static class GymRoadsideBusStop
     private const float DavieBusEstimatedHalfWidth = 1.45f;
     public const float BusBayStartOffset = 18.0f;
     public const float BusBayEndInset = 7.0f;
-    public const float BusBayDepth = 6.0f;
+    // The outer bay fence continues the parking north wall line.
+    public const float BusBayDepth = GymOutdoorBuilder.NorthBoundaryOffsetFromRoadEdge;
     private const float MinimumBayExtraLength = 2.0f;
     private const float MinimumRoadWidth = 7.5f;
     private const float FenceClearance = 0.45f;
@@ -143,22 +144,9 @@ public static class GymRoadsideBusStop
             bayEndX,
             bayOuterZ,
             boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
-        const float pedestrianGateHalfWidth = 0.90f;
-        CreateBusStopFenceSegment(
-            root.transform, floorY,
-            new Vector3(bayStartX, floorY,
-                passengerZ + pedestrianGateHalfWidth),
-            new Vector3(bayStartX, floorY,
-                bayOuterZ - GymOutdoorBuilder.SharedFenceWallThickness * 0.5f),
-            "Bus Stop West Return Fence",
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
-        CreateBusStopFenceSegment(
-            root.transform, floorY,
-            new Vector3(bayEndX, floorY, platformInnerZ),
-            new Vector3(bayEndX, floorY,
-                bayOuterZ - GymOutdoorBuilder.SharedFenceWallThickness * 0.5f),
-            "Bus Stop East Return Fence",
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
+        // No side return fences: the paved pockets west and east of the bay
+        // stay open to it, so the bay, pockets and road read as one area
+        // closed only by the continuous north boundary line.
         BusBayOuterZ = bayOuterZ;
 
         CreateMarkingBox(
@@ -285,7 +273,7 @@ public static class GymRoadsideBusStop
             "Davie Bus - Temporary Roadside Stop",
             root.layer,
             true,
-            floorY,
+            floorY - GymVisitorVehicle.TyreContactSink,
             loaded => FinalizeDavieBus(
                 loaded,
                 roadCenterZ,

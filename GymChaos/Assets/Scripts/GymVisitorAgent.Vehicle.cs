@@ -373,18 +373,13 @@ public sealed partial class GymVisitorAgent
 			}
 			bool isDavieBusDropoff = (byte)num != 0;
 			vehicleEntryUsesDavieBusGate = isDavieBusDropoff;
-			vehicleEntryUsesProteinStoreRoute = GymOutdoorBuilder.HasProteinStoreRoute && !isDavieBusDropoff;
+			// The store is only reached through its west entry walkway; arrivals
+			// walk the direct parking-to-door route, never round the shop.
+			vehicleEntryUsesProteinStoreRoute = false;
 			Vector3 genericSafeTurn = ResolveSafeExteriorLane(GymOutdoorBuilder.VisitorParkingTurnPoint, y, laneVariation);
 			Vector3 exteriorClear = GetExteriorDoorClearPoint(y);
 			genericSafeTurn = KeepLaneOutsideDoorWall(genericSafeTurn, exteriorClear, y);
 			Vector3 safeTurn = genericSafeTurn;
-			if (vehicleEntryUsesProteinStoreRoute)
-			{
-				Vector3 proteinStoreParkingBypassPoint = GymOutdoorBuilder.ProteinStoreParkingBypassPoint;
-				Vector3 parkingEntryPoint = GymOutdoorBuilder.VisitorParkingEntryPoint;
-				safeTurn = Vector3.Lerp(proteinStoreParkingBypassPoint, parkingEntryPoint, 0.5f);
-				safeTurn.y = y;
-			}
 			vehicleEntrySpawnPoint = new Vector3(vehicleSpawnPoint.x, y, vehicleSpawnPoint.z);
 			vehicleEntrySpawnPending = true;
 			Vector3 aisleApproach = default(Vector3);
@@ -411,152 +406,25 @@ public sealed partial class GymVisitorAgent
 			aisleApproach.x += aisleExitDirection * Mathf.Min(5.5f, Mathf.Abs(GymOutdoorBuilder.VisitorParkingEntryPoint.x - aisleApproach.x));
 			Vector3 doorwayExterior = default(Vector3);
 			doorwayExterior = new Vector3(doorway.ExteriorPoint.x, y, doorway.ExteriorPoint.z);
-			if (vehicleEntryUsesProteinStoreRoute)
+			vehicleEntryWaypoints = (Vector3[])(object)(isDavieBusDropoff ? new Vector3[9]
 			{
-				Vector3 storeNorthPath = GymOutdoorBuilder.ProteinStoreParkingBypassPoint;
-				Vector3 storeSouthPath = GymOutdoorBuilder.ProteinStoreWestApproachPoint;
-				Vector3 storeSouthCurveB = GymOutdoorBuilder.ProteinStoreSouthCurvePointB;
-				Vector3 storeSouthCurveC = GymOutdoorBuilder.ProteinStoreSouthCurvePointC;
-				Vector3 storeSouthCurveD = GymOutdoorBuilder.ProteinStoreSouthCurvePointD;
-				Vector3 storeSouthCurveE = GymOutdoorBuilder.ProteinStoreSouthCurvePointE;
-				Vector3 storeGymPathClear = GymOutdoorBuilder.ProteinStoreGymPathClearPoint;
-				Vector3 storeGateWestClear = GymOutdoorBuilder.ProteinStoreGateWestClearPoint;
-				Vector3 storeGymPathSouthClear = GymOutdoorBuilder.ProteinStoreGymPathSouthClearPoint;
-				storeNorthPath.y = y;
-				storeSouthPath.y = y;
-				storeSouthCurveB.y = y;
-				storeSouthCurveC.y = y;
-				storeSouthCurveD.y = y;
-				storeSouthCurveE.y = y;
-				storeGymPathClear.y = y;
-				storeGateWestClear.y = y;
-				storeGymPathSouthClear.y = y;
-				storeSouthCurveB.z = (storeSouthPath.z = (storeNorthPath.z = GymOutdoorBuilder.VehicleRoadTurnPoint.z - GymOutdoorBuilder.VehicleRoadWidthForVerification * 0.5f + 3.8f));
-				float routeY = ((Component)fighter).transform.position.y;
-				Vector3 routeParkingEntry = default(Vector3);
-				routeParkingEntry = new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, routeY, GymOutdoorBuilder.VisitorParkingEntryPoint.z);
-				Vector3 parkingCurve0 = default(Vector3);
-				parkingCurve0 = new Vector3(storeNorthPath.x - 2.25f, routeY, storeNorthPath.z - 0.24f);
-				Vector3 parkingCurve1 = default(Vector3);
-				parkingCurve1 = new Vector3(storeNorthPath.x - 4.75f, routeY, storeNorthPath.z + 1.2f);
-				Vector3 parkingCurve2 = default(Vector3);
-				parkingCurve2 = new Vector3(storeNorthPath.x - 7.25f, routeY, storeNorthPath.z + 2.7f);
-				Vector3 storeSouthEastArc = default(Vector3);
-				storeSouthEastArc = new Vector3(storeSouthCurveC.x + 1.35f, ((Component)fighter).transform.position.y, storeSouthCurveC.z + 1.35f);
-				Vector3 storeNorthEastArcMid0 = default(Vector3);
-				storeNorthEastArcMid0 = new Vector3(storeSouthCurveC.x + 1.35f + 0.5f, ((Component)fighter).transform.position.y, storeSouthCurveC.z + 1.35f + 0.87f);
-				Vector3 storeNorthEastArcMid1 = default(Vector3);
-				// Keep the south-gate crossing centered inside the authored opening so the visitor capsule clears the after-gate wall corner.
-				storeNorthEastArcMid1 = new Vector3(storeSouthCurveC.x + 0.75f, ((Component)fighter).transform.position.y, storeSouthCurveC.z + 1.35f + 2.62f);
-				Vector3 storeNorthEastApproach = default(Vector3);
-				storeNorthEastApproach = new Vector3(storeSouthCurveC.x + 1.35f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 1.35f);
-				Vector3 storeNorthEastTurn0 = default(Vector3);
-				storeNorthEastTurn0 = new Vector3(storeSouthCurveC.x + 0.85f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 0.5f);
-				Vector3 storeNorthEastTurn1 = default(Vector3);
-				storeNorthEastTurn1 = new Vector3(storeSouthCurveC.x + 0.05f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 0.05f);
-				Vector3 storeNorthEastTurn2 = default(Vector3);
-				storeNorthEastTurn2 = new Vector3(storeSouthCurveC.x - 2f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 0.05f);
-				Vector3 storeNorthEastExit = default(Vector3);
-				storeNorthEastExit = new Vector3(storeSouthCurveB.x - 2.8f, ((Component)fighter).transform.position.y, storeSouthCurveB.z);
-				Vector3 storeSouthWestArc0 = default(Vector3);
-				storeSouthWestArc0 = new Vector3(storeSouthCurveD.x, ((Component)fighter).transform.position.y, storeSouthCurveD.z + 1.5f);
-				Vector3 storeSouthWestArc1 = default(Vector3);
-				storeSouthWestArc1 = new Vector3(storeSouthCurveD.x + 0.5f, ((Component)fighter).transform.position.y, storeSouthCurveD.z + 0.7f);
-				Vector3 storeSouthWestArc2 = default(Vector3);
-				storeSouthWestArc2 = new Vector3(storeSouthCurveD.x + 1.3f, ((Component)fighter).transform.position.y, storeSouthCurveD.z + 0.2f);
-				Vector3 storeSouthWestArc3 = default(Vector3);
-				storeSouthWestArc3 = new Vector3(storeSouthCurveD.x + 2.1f, ((Component)fighter).transform.position.y, storeSouthCurveD.z);
-				Vector3 storeSouthCorner0 = default(Vector3);
-				storeSouthCorner0 = new Vector3(storeSouthWestArc3.x + 0.3f, ((Component)fighter).transform.position.y, storeSouthWestArc3.z - 0.9f);
-				Vector3 storeSouthCorner1 = default(Vector3);
-				storeSouthCorner1 = new Vector3(storeSouthWestArc3.x + 0.9f, ((Component)fighter).transform.position.y, storeSouthWestArc3.z - 1.3f);
-				Vector3 storeSouthCorner2 = default(Vector3);
-				storeSouthCorner2 = new Vector3(storeSouthWestArc3.x + 2.4f, ((Component)fighter).transform.position.y, storeSouthWestArc3.z - 1.6f);
-				Vector3 storeSouthCorner3 = default(Vector3);
-				storeSouthCorner3 = new Vector3(storeSouthCurveC.x - 5f, ((Component)fighter).transform.position.y, storeSouthCurveC.z - 1.8f);
-				Vector3 storeSouthCorner4 = default(Vector3);
-				storeSouthCorner4 = new Vector3(storeSouthCurveC.x - 2f, ((Component)fighter).transform.position.y, storeSouthCurveC.z - 1f);
-				Vector3 storeGymPathTurn0 = default(Vector3);
-				storeGymPathTurn0 = new Vector3(storeGymPathClear.x + 0.6f, ((Component)fighter).transform.position.y, storeGymPathClear.z);
-				Vector3 storeGymPathTurn1 = default(Vector3);
-				storeGymPathTurn1 = new Vector3(storeGymPathClear.x + 1.03f, ((Component)fighter).transform.position.y, storeGymPathClear.z - 0.25f);
-				Vector3 storeGymPathTurn2 = default(Vector3);
-				storeGymPathTurn2 = new Vector3(storeGymPathClear.x + 1.95f, ((Component)fighter).transform.position.y, storeGymPathClear.z - 0.68f);
-				Vector3 storeGymPathSouthTurn = default(Vector3);
-				storeGymPathSouthTurn = new Vector3(storeGymPathClear.x + 1.95f, ((Component)fighter).transform.position.y, storeGymPathSouthClear.z);
-				Vector3 storeGymPathSouthArc0 = default(Vector3);
-				storeGymPathSouthArc0 = new Vector3(storeGymPathTurn2.x + 0.5f, ((Component)fighter).transform.position.y, storeGymPathTurn2.z - 0.45f);
-				Vector3 storeGymPathSouthArc1 = default(Vector3);
-				storeGymPathSouthArc1 = new Vector3(storeGymPathTurn2.x + 0.1f, ((Component)fighter).transform.position.y, storeGymPathSouthTurn.z + 0.32f);
-				// The east road opening is closed. Enter the store yard through the
-				// west road gate and follow the strip between the store's north
-				// wall and the road wall to the east side.
-				GetStoreNorthStripWaypoints(storeSouthPath, storeSouthCurveC, ((Component)fighter).transform.position.y,
-					out Vector3 storeWestGateInside, out Vector3 storeNorthStripEast, out Vector3 storeEastStripNorth);
-				vehicleEntryWaypoints = (Vector3[])(object)(isDavieBusDropoff ? new Vector3[36]
-				{
-					busFrontApproach, busPedestrianExit, busPedestrianRoadCrossing, parkingNorthGate, parkingNorthLane, routeParkingEntry, parkingCurve2, parkingCurve1, parkingCurve0, storeNorthPath,
-					storeSouthPath, storeWestGateInside, storeNorthStripEast, storeEastStripNorth, storeNorthEastArcMid1, storeNorthEastArcMid0, storeSouthEastArc, storeSouthCurveC,
-					storeSouthCorner4, storeSouthCorner3, storeSouthCorner2, storeSouthCorner1, storeSouthCorner0, storeSouthWestArc3, storeSouthWestArc2, storeSouthWestArc1, storeSouthWestArc0, storeGymPathSouthTurn,
-					storeGymPathSouthArc1, storeGymPathSouthArc0, storeGymPathTurn2, storeGymPathTurn1, storeGymPathTurn0, storeGymPathClear, GetExteriorDoorQueuePoint(y), doorwayExterior
-				} : new Vector3[33]
-				{
-					aisleApproach, routeParkingEntry, parkingCurve2, parkingCurve1, parkingCurve0, storeNorthPath, storeSouthPath, storeWestGateInside, storeNorthStripEast, storeEastStripNorth,
-					storeNorthEastArcMid1, storeNorthEastArcMid0, storeSouthEastArc, storeSouthCurveC, storeSouthCorner4, storeSouthCorner3, storeSouthCorner2, storeSouthCorner1,
-					storeSouthCorner0, storeSouthWestArc3, storeSouthWestArc2, storeSouthWestArc1, storeSouthWestArc0, storeGymPathSouthTurn, storeGymPathSouthArc1, storeGymPathSouthArc0, storeGymPathTurn2, storeGymPathTurn1,
-					storeGymPathTurn0, storeGymPathClear, storeGateWestClear, GetExteriorDoorQueuePoint(y), doorwayExterior
-				});
-			}
-			else
+				busFrontApproach,
+				busPedestrianExit,
+				busPedestrianRoadCrossing,
+				parkingNorthGate,
+				parkingNorthLane,
+				new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, y, GymOutdoorBuilder.VisitorParkingEntryPoint.z),
+				safeTurn,
+				GetExteriorDoorQueuePoint(y),
+				new Vector3(doorway.ExteriorPoint.x, y, doorway.ExteriorPoint.z)
+			} : new Vector3[5]
 			{
-				vehicleEntryWaypoints = (Vector3[])(object)(isDavieBusDropoff ? new Vector3[9]
-				{
-					busFrontApproach,
-					busPedestrianExit,
-					busPedestrianRoadCrossing,
-					parkingNorthGate,
-					parkingNorthLane,
-					new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, y, GymOutdoorBuilder.VisitorParkingEntryPoint.z),
-					safeTurn,
-					GetExteriorDoorQueuePoint(y),
-					new Vector3(doorway.ExteriorPoint.x, y, doorway.ExteriorPoint.z)
-				} : new Vector3[5]
-				{
-					aisleApproach,
-					new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, y, GymOutdoorBuilder.VisitorParkingEntryPoint.z),
-					safeTurn,
-					GetExteriorDoorQueuePoint(y),
-					new Vector3(doorway.ExteriorPoint.x, y, doorway.ExteriorPoint.z)
-				});
-			}
-			if (vehicleEntryUsesProteinStoreRoute && !isDavieBusDropoff)
-			{
-				Vector3 genericParkingEntry = new Vector3(
-					GymOutdoorBuilder.VisitorParkingEntryPoint.x, y,
-					GymOutdoorBuilder.VisitorParkingEntryPoint.z);
-				Vector3[] genericGymRoute =
-				{
-					aisleApproach,
-					genericParkingEntry,
-					genericSafeTurn,
-					GetExteriorDoorQueuePoint(y),
-					doorwayExterior
-				};
-				if (IsStaticCollisionCheckedVehicleRouteClear(vehicleEntrySpawnPoint, genericGymRoute))
-				{
-					vehicleEntryUsesProteinStoreRoute = false;
-					vehicleEntryWaypoints = genericGymRoute;
-					Debug.Log(
-						$"GYMCHAOS_VISITOR_ENTRY_ROUTE_SELECTED enemy={fighter.Identity} route=generic points={genericGymRoute.Length} staticClear=1",
-						this);
-				}
-				else
-				{
-					Debug.Log(
-						$"GYMCHAOS_VISITOR_ENTRY_ROUTE_SELECTED enemy={fighter.Identity} route=protein_bypass points={vehicleEntryWaypoints.Length} staticClear=0",
-						this);
-				}
-			}
+				aisleApproach,
+				new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, y, GymOutdoorBuilder.VisitorParkingEntryPoint.z),
+				safeTurn,
+				GetExteriorDoorQueuePoint(y),
+				new Vector3(doorway.ExteriorPoint.x, y, doorway.ExteriorPoint.z)
+			});
 			vehicleEntryWaypointIndex = FindInitialRouteWaypoint(vehicleEntryWaypoints, vehicleEntrySpawnPoint, 2.2f);
 			travelTarget = vehicleEntryWaypoints[vehicleEntryWaypointIndex];
 			vehicleDetourActive = false;
@@ -1007,13 +875,6 @@ public sealed partial class GymVisitorAgent
 		busFrontApproach.y = ((Component)fighter).transform.position.y;
 		Vector3 exteriorClear = (((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null) ? GetExteriorDoorClearPoint(fighter.VisitorPhysicsPosition.y) : ((Component)fighter).transform.position);
 		safeTurn = KeepLaneOutsideDoorWall(safeTurn, exteriorClear, ((Component)fighter).transform.position.y);
-		if (GymOutdoorBuilder.HasProteinStoreRoute && !isDavieBusPickup)
-		{
-			Vector3 proteinStoreParkingBypassPoint = GymOutdoorBuilder.ProteinStoreParkingBypassPoint;
-			Vector3 parkingEntryPoint = GymOutdoorBuilder.VisitorParkingEntryPoint;
-			safeTurn = Vector3.Lerp(proteinStoreParkingBypassPoint, parkingEntryPoint, 0.5f);
-			safeTurn.y = ((Component)fighter).transform.position.y;
-		}
 		if (isDavieBusPickup)
 		{
 			Vector3 parkingEntry = default(Vector3);
@@ -1043,102 +904,6 @@ public sealed partial class GymVisitorAgent
 				safeTurn.y = parkingEntry2.y;
 			}
 			vehicleExitWaypoints = (Vector3[])(object)(externalVehicleRouteVerification ? new Vector3[7] { arrivalTurn, arrivalJunction, safeTurn, parkingConnector, parkingEntry2, vehicleAisleTarget, finalVehicleTarget } : new Vector3[7] { exteriorClear, arrivalTurn, arrivalJunction, safeTurn, parkingEntry2, vehicleAisleTarget, finalVehicleTarget });
-		}
-		else if (GymOutdoorBuilder.HasProteinStoreRoute)
-		{
-			vehicleExitUsesProteinStoreRoute = true;
-			Vector3 storeSouthPath = GymOutdoorBuilder.ProteinStoreWestApproachPoint;
-			Vector3 storeSouthCurveB = GymOutdoorBuilder.ProteinStoreSouthCurvePointB;
-			Vector3 storeSouthCurveC = GymOutdoorBuilder.ProteinStoreSouthCurvePointC;
-			Vector3 storeSouthCurveD = GymOutdoorBuilder.ProteinStoreSouthCurvePointD;
-			Vector3 storeSouthCurveE = GymOutdoorBuilder.ProteinStoreSouthCurvePointE;
-			Vector3 storeGymPathClear = GymOutdoorBuilder.ProteinStoreGymPathClearPoint;
-			Vector3 storeGateWestClear = GymOutdoorBuilder.ProteinStoreGateWestClearPoint;
-			Vector3 storeGymPathSouthClear = GymOutdoorBuilder.ProteinStoreGymPathSouthClearPoint;
-			Vector3 storeNorthPath = GymOutdoorBuilder.ProteinStoreParkingBypassPoint;
-			storeSouthPath.y = ((Component)fighter).transform.position.y;
-			storeSouthCurveB.y = ((Component)fighter).transform.position.y;
-			storeSouthCurveC.y = ((Component)fighter).transform.position.y;
-			storeSouthCurveD.y = ((Component)fighter).transform.position.y;
-			storeSouthCurveE.y = ((Component)fighter).transform.position.y;
-			storeGymPathClear.y = ((Component)fighter).transform.position.y;
-			storeGateWestClear.y = ((Component)fighter).transform.position.y;
-			storeGymPathSouthClear.y = ((Component)fighter).transform.position.y;
-			storeSouthCurveB.z = (storeSouthPath.z = (storeNorthPath.z = GymOutdoorBuilder.VehicleRoadTurnPoint.z - GymOutdoorBuilder.VehicleRoadWidthForVerification * 0.5f + 3.8f));
-			float routeY = ((Component)fighter).transform.position.y;
-			Vector3 routeParkingEntry = default(Vector3);
-			routeParkingEntry = new Vector3(GymOutdoorBuilder.VisitorParkingEntryPoint.x, routeY, GymOutdoorBuilder.VisitorParkingEntryPoint.z);
-			Vector3 parkingCurve0 = default(Vector3);
-			parkingCurve0 = new Vector3(storeNorthPath.x - 2.25f, routeY, storeNorthPath.z - 0.24f);
-			Vector3 parkingCurve1 = default(Vector3);
-			parkingCurve1 = new Vector3(storeNorthPath.x - 4.75f, routeY, storeNorthPath.z + 1.2f);
-			Vector3 parkingCurve2 = default(Vector3);
-			parkingCurve2 = new Vector3(storeNorthPath.x - 7.25f, routeY, storeNorthPath.z + 2.7f);
-			Vector3 storeSouthEastArc = default(Vector3);
-			storeSouthEastArc = new Vector3(storeSouthCurveC.x + 1.35f, ((Component)fighter).transform.position.y, storeSouthCurveC.z + 1.35f);
-			Vector3 storeNorthEastArcMid0 = default(Vector3);
-			storeNorthEastArcMid0 = new Vector3(storeSouthCurveC.x + 1.35f + 0.5f, ((Component)fighter).transform.position.y, storeSouthCurveC.z + 1.35f + 0.87f);
-			Vector3 storeNorthEastArcMid1 = default(Vector3);
-			// Keep the south-gate crossing centered inside the authored opening so the visitor capsule clears the after-gate wall corner.
-				storeNorthEastArcMid1 = new Vector3(storeSouthCurveC.x + 0.75f, ((Component)fighter).transform.position.y, storeSouthCurveC.z + 1.35f + 2.62f);
-			Vector3 storeNorthEastApproach = default(Vector3);
-			storeNorthEastApproach = new Vector3(storeSouthCurveC.x + 1.35f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 1.35f);
-			Vector3 storeNorthEastTurn0 = default(Vector3);
-			storeNorthEastTurn0 = new Vector3(storeSouthCurveC.x + 0.85f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 0.5f);
-			Vector3 storeNorthEastTurn1 = default(Vector3);
-			storeNorthEastTurn1 = new Vector3(storeSouthCurveC.x + 0.05f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 0.05f);
-			Vector3 storeNorthEastTurn2 = default(Vector3);
-			storeNorthEastTurn2 = new Vector3(storeSouthCurveC.x - 2f, ((Component)fighter).transform.position.y, storeSouthCurveB.z - 0.05f);
-			Vector3 storeNorthEastExit = default(Vector3);
-			storeNorthEastExit = new Vector3(storeSouthCurveB.x - 2.8f, ((Component)fighter).transform.position.y, storeSouthCurveB.z);
-			Vector3 storeSouthWestArc0 = default(Vector3);
-			storeSouthWestArc0 = new Vector3(storeSouthCurveD.x, ((Component)fighter).transform.position.y, storeSouthCurveD.z + 1.5f);
-			Vector3 storeSouthWestArc1 = default(Vector3);
-			storeSouthWestArc1 = new Vector3(storeSouthCurveD.x + 0.5f, ((Component)fighter).transform.position.y, storeSouthCurveD.z + 0.7f);
-			Vector3 storeSouthWestArc2 = default(Vector3);
-			storeSouthWestArc2 = new Vector3(storeSouthCurveD.x + 1.3f, ((Component)fighter).transform.position.y, storeSouthCurveD.z + 0.2f);
-			Vector3 storeSouthWestArc3 = default(Vector3);
-			storeSouthWestArc3 = new Vector3(storeSouthCurveD.x + 2.1f, ((Component)fighter).transform.position.y, storeSouthCurveD.z);
-			Vector3 storeSouthCorner0 = default(Vector3);
-			storeSouthCorner0 = new Vector3(storeSouthWestArc3.x + 0.3f, ((Component)fighter).transform.position.y, storeSouthWestArc3.z - 0.9f);
-			Vector3 storeSouthCorner1 = default(Vector3);
-			storeSouthCorner1 = new Vector3(storeSouthWestArc3.x + 0.9f, ((Component)fighter).transform.position.y, storeSouthWestArc3.z - 1.3f);
-			Vector3 storeSouthCorner2 = default(Vector3);
-			storeSouthCorner2 = new Vector3(storeSouthWestArc3.x + 2.4f, ((Component)fighter).transform.position.y, storeSouthWestArc3.z - 1.6f);
-			Vector3 storeSouthCorner3 = default(Vector3);
-			storeSouthCorner3 = new Vector3(storeSouthCurveC.x - 5f, ((Component)fighter).transform.position.y, storeSouthCurveC.z - 1.8f);
-			Vector3 storeSouthCorner4 = default(Vector3);
-			storeSouthCorner4 = new Vector3(storeSouthCurveC.x - 2f, ((Component)fighter).transform.position.y, storeSouthCurveC.z - 1f);
-			Vector3 storeGymPathTurn0 = default(Vector3);
-			storeGymPathTurn0 = new Vector3(storeGymPathClear.x + 0.6f, ((Component)fighter).transform.position.y, storeGymPathClear.z);
-			Vector3 storeGymPathTurn1 = default(Vector3);
-			storeGymPathTurn1 = new Vector3(storeGymPathClear.x + 1.03f, ((Component)fighter).transform.position.y, storeGymPathClear.z - 0.25f);
-			Vector3 storeGymPathTurn2 = default(Vector3);
-			storeGymPathTurn2 = new Vector3(storeGymPathClear.x + 1.95f, ((Component)fighter).transform.position.y, storeGymPathClear.z - 0.68f);
-			Vector3 storeGymPathSouthTurn = default(Vector3);
-			storeGymPathSouthTurn = new Vector3(storeGymPathClear.x + 1.95f, ((Component)fighter).transform.position.y, storeGymPathSouthClear.z);
-			Vector3 storeGymPathSouthArc0 = default(Vector3);
-			storeGymPathSouthArc0 = new Vector3(storeGymPathTurn2.x + 0.5f, ((Component)fighter).transform.position.y, storeGymPathTurn2.z - 0.45f);
-			Vector3 storeGymPathSouthArc1 = default(Vector3);
-			storeGymPathSouthArc1 = new Vector3(storeGymPathTurn2.x + 0.67f, ((Component)fighter).transform.position.y, storeGymPathSouthTurn.z + 0.32f);
-			storeNorthPath.y = ((Component)fighter).transform.position.y;
-			// Mirror of the entry route: leave the store yard through the west
-			// road gate; the east road opening is closed.
-			GetStoreNorthStripWaypoints(storeSouthPath, storeSouthCurveC, ((Component)fighter).transform.position.y,
-				out Vector3 storeWestGateInside, out Vector3 storeNorthStripEast, out Vector3 storeEastStripNorth);
-			vehicleExitWaypoints = (Vector3[])(object)(isDavieBusPickup ? new Vector3[34]
-			{
-				exteriorClear, storeGymPathClear, storeGymPathTurn0, storeGymPathTurn1, storeGymPathTurn2, storeGymPathSouthArc0, storeGymPathSouthArc1, storeGymPathSouthTurn, storeSouthWestArc0, storeSouthWestArc1,
-				storeSouthWestArc2, storeSouthWestArc3, storeSouthCorner0, storeSouthCorner1, storeSouthCorner2, storeSouthCorner3, storeSouthCorner4, storeSouthCurveC, storeSouthEastArc, storeNorthEastArcMid0,
-				storeNorthEastArcMid1, storeEastStripNorth, storeNorthStripEast, storeWestGateInside, storeSouthPath, storeNorthPath, parkingCurve0, parkingCurve1,
-				parkingCurve2, routeParkingEntry, vehicleAisleTarget, parkingNorthGate, busFrontApproach, finalVehicleTarget
-			} : new Vector3[33]
-			{
-				exteriorClear, storeGateWestClear, storeGymPathClear, storeGymPathTurn0, storeGymPathTurn1, storeGymPathTurn2, storeGymPathSouthArc0, storeGymPathSouthArc1, storeGymPathSouthTurn, storeSouthWestArc0,
-				storeSouthWestArc1, storeSouthWestArc2, storeSouthWestArc3, storeSouthCorner0, storeSouthCorner1, storeSouthCorner2, storeSouthCorner3, storeSouthCorner4, storeSouthCurveC, storeSouthEastArc,
-				storeNorthEastArcMid0, storeNorthEastArcMid1, storeEastStripNorth, storeNorthStripEast, storeWestGateInside, storeSouthPath, storeNorthPath, parkingCurve0,
-				parkingCurve1, parkingCurve2, routeParkingEntry, vehicleAisleTarget, finalVehicleTarget
-			});
 		}
 		else
 		{

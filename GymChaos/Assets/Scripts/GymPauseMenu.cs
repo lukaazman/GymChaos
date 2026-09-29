@@ -77,27 +77,19 @@ public sealed class GymPauseMenu : MonoBehaviour
         pausePage = new GameObject("Pause Page", typeof(RectTransform));
         pausePage.transform.SetParent(transform, false);
         GymRuntimeSettings.Stretch(pausePage.GetComponent<RectTransform>());
+        // No title and no art: the frozen game stays visible under a navy
+        // veil, and the buttons sit exactly where the start menu has them.
         Image veil = GymRuntimeSettings.CreateImage("Pause Veil", pausePage.transform,
-            new Color(0.008f, 0.018f, 0.038f, 0.94f));
+            new Color(0.012f, 0.05f, 0.13f, 0.62f));
         GymRuntimeSettings.Stretch(veil.rectTransform);
-        Image rule = GymRuntimeSettings.CreateImage("Pause Rule", pausePage.transform,
-            new Color(0.98f, 0.34f, 0.13f, 1f));
-        GymRuntimeSettings.SetAnchors(rule.rectTransform,
-            new Vector2(0.36f, 0.68f), new Vector2(0.64f, 0.68f), 0f, -1f, 0f, -1f);
-        rule.raycastTarget = false;
-        GymRuntimeSettings.CreateText("Pause Heading", pausePage.transform, font,
-            "PAUSED", 48, new Color(0.91f, 0.94f, 0.98f, 1f), FontStyle.Bold,
-            TextAnchor.MiddleCenter, new Vector2(0.2f, 0.70f), new Vector2(0.8f, 0.80f));
 
-        resumeButton = GymRuntimeSettings.CreateButton("Pause Play Button", pausePage.transform,
-            font, "PLAY", new Color(0.98f, 0.34f, 0.13f, 1f),
-            new Vector2(0.34f, 0.50f), new Vector2(0.66f, 0.59f), Resume);
-        GymRuntimeSettings.CreateButton("Pause Options Button", pausePage.transform,
-            font, "OPTIONS", new Color(0.07f, 0.105f, 0.15f, 1f),
-            new Vector2(0.34f, 0.38f), new Vector2(0.66f, 0.47f), ShowOptions);
-        GymRuntimeSettings.CreateButton("Pause Exit Button", pausePage.transform,
-            font, "EXIT", new Color(0.07f, 0.105f, 0.15f, 1f),
-            new Vector2(0.34f, 0.26f), new Vector2(0.66f, 0.35f), Exit);
+        Font buttonFont = PersonaMenuStyle.LoadButtonFont(font);
+        resumeButton = PersonaMenuStyle.CreatePrimaryButton(
+            pausePage.transform, "Pause Play Button", buttonFont, "RESUME", Resume);
+        PersonaMenuStyle.CreateSecondaryButton(
+            pausePage.transform, "Pause Options Button", buttonFont, "SETTINGS", ShowOptions);
+        PersonaMenuStyle.CreateTertiaryButton(
+            pausePage.transform, "Pause Exit Button", buttonFont, "EXIT", Exit);
         optionsPanel = GymRuntimeSettings.CreateOptionsPanel(transform, font, ShowPausePage);
     }
 

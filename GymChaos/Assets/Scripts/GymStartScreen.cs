@@ -22,8 +22,7 @@ public sealed class GymStartScreen : MonoBehaviour
     private Button playButton;
     private bool closing;
 
-    // Persona red-orange from the reference title and primary button.
-    private static readonly Color Accent = new Color(0.93f, 0.2f, 0.09f, 1f);
+    private static readonly Color Accent = PersonaMenuStyle.Accent;
 
     public static bool IsMenuVisible =>
         instance != null && !instance.closing && instance.canvasGroup != null &&
@@ -102,10 +101,8 @@ public sealed class GymStartScreen : MonoBehaviour
             return;
         }
         // Persona-style condensed display faces (SIL OFL, Resources/Fonts).
-        Font titleFont = Resources.Load<Font>("Fonts/Anton-Regular");
-        Font buttonFont = Resources.Load<Font>("Fonts/BebasNeue-Regular");
-        if (titleFont == null) titleFont = font;
-        if (buttonFont == null) buttonFont = font;
+        Font titleFont = PersonaMenuStyle.LoadTitleFont(font);
+        Font buttonFont = PersonaMenuStyle.LoadButtonFont(font);
         RectTransform rootRect = gameObject.GetComponent<RectTransform>();
         Stretch(rootRect);
 
@@ -126,14 +123,14 @@ public sealed class GymStartScreen : MonoBehaviour
         CreateTitleLetter("O", titleFont, 806f, 250f, 88f, 138f, -5f, Accent, halftone);
         CreateTitleLetter("S", titleFont, 902f, 254f, 118f, 178f, 6f, Accent, halftone);
 
-        playButton = CreateMenuButton("Play Button", buttonFont, "ENTER THE GYM",
-            262f, 616f, 440f, 96f, 84, -2f, BeginPlay);
+        playButton = PersonaMenuStyle.CreatePrimaryButton(
+            transform, "Play Button", buttonFont, "ENTER THE GYM", BeginPlay);
         GameObject options = null;
         Button exitButton = null;
-        Button optionsButton = CreateMenuButton("Options Button", buttonFont, "SETTINGS",
-            200f, 722f, 310f, 72f, 60, -1f, null);
-        exitButton = CreateMenuButton("Exit Button", buttonFont, "EXIT",
-            176f, 812f, 262f, 70f, 58, -1f, ExitGame);
+        Button optionsButton = PersonaMenuStyle.CreateSecondaryButton(
+            transform, "Options Button", buttonFont, "SETTINGS", null);
+        exitButton = PersonaMenuStyle.CreateTertiaryButton(
+            transform, "Exit Button", buttonFont, "EXIT", ExitGame);
         Button[] menuButtons = { playButton, optionsButton, exitButton };
         // While settings are open, Submit must not trigger a menu entry that
         // still holds focus behind the panel.
@@ -159,12 +156,10 @@ public sealed class GymStartScreen : MonoBehaviour
         }
     }
 
-    // Reference layout size of the supplied background art.
-    private const float ArtWidth = 1672f;
-    private const float ArtHeight = 941f;
+    private const float ArtWidth = PersonaMenuStyle.ArtWidth;
+    private const float ArtHeight = PersonaMenuStyle.ArtHeight;
     private static readonly Color TitleInk = new Color(0.97f, 0.97f, 0.95f, 1f);
     private static readonly Color PlateBlack = new Color(0.035f, 0.035f, 0.045f, 1f);
-    private static readonly Color ButtonIdle = new Color(0.055f, 0.07f, 0.12f, 1f);
 
     private void CreateBackground()
     {
@@ -189,7 +184,7 @@ public sealed class GymStartScreen : MonoBehaviour
         // Fallback until the art is imported: a plain navy field on the art's
         // left side so the menu stays readable.
         Debug.LogWarning("GYMCHAOS_START_SCREEN_BACKGROUND_MISSING path=Resources/UI/menu_background", this);
-        PersonaShape navy = CreateShape("Navy Field", holder.transform, new Color(0.03f, 0.16f, 0.36f, 1f));
+        PersonaShape navy = PersonaMenuStyle.CreateShape("Navy Field", holder.transform, new Color(0.03f, 0.16f, 0.36f, 1f));
         SetAnchors(navy.rectTransform, Vector2.zero, new Vector2(0.6f, 1f));
         navy.SetCorners(Vector2.zero, Vector2.zero, new Vector2(0.02f, 0f), new Vector2(0.05f, 0f));
     }
@@ -201,16 +196,16 @@ public sealed class GymStartScreen : MonoBehaviour
         GameObject root = new GameObject("Title " + letter, typeof(RectTransform));
         root.transform.SetParent(transform, false);
         RectTransform rect = root.GetComponent<RectTransform>();
-        PlaceInArt(rect, centerX, centerY, width, height);
+        PersonaMenuStyle.PlaceInArt(rect, centerX, centerY, width, height);
         rect.localRotation = Quaternion.Euler(0f, 0f, rotation);
 
         // Uneven cut: every plate gets its own slightly skewed corners.
         float jitter = (letter[0] % 5 - 2) * 0.018f;
-        PersonaShape border = CreateShape("Paper Edge", root.transform, TitleInk);
+        PersonaShape border = PersonaMenuStyle.CreateShape("Paper Edge", root.transform, TitleInk);
         Stretch(border.rectTransform);
         border.SetCorners(new Vector2(-0.06f, -0.05f + jitter), new Vector2(-0.04f, 0.05f),
             new Vector2(0.06f, 0.04f - jitter), new Vector2(0.05f, -0.06f));
-        PersonaShape plate = CreateShape("Plate", root.transform, PlateBlack);
+        PersonaShape plate = PersonaMenuStyle.CreateShape("Plate", root.transform, PlateBlack);
         Stretch(plate.rectTransform);
         plate.SetCorners(new Vector2(-0.01f, jitter), new Vector2(0.01f, 0f),
             new Vector2(0f, -jitter), new Vector2(0.01f, 0.01f));
@@ -225,80 +220,10 @@ public sealed class GymStartScreen : MonoBehaviour
         outline.effectDistance = new Vector2(3f, -3f);
 
         // Comic halftone shading across the lower-right of the cut-out.
-        PersonaShape dots = CreateShape("Halftone", root.transform, new Color(0f, 0f, 0f, 0.5f));
+        PersonaShape dots = PersonaMenuStyle.CreateShape("Halftone", root.transform, new Color(0f, 0f, 0f, 0.5f));
         Stretch(dots.rectTransform);
         dots.SetCorners(new Vector2(0.45f, 0f), new Vector2(1f, -0.35f), Vector2.zero, Vector2.zero);
         dots.SetPattern(halftone, 7f);
-    }
-
-    private Button CreateMenuButton(
-        string name, Font font, string label, float centerX, float centerY,
-        float width, float height, int fontSize, float rotation,
-        UnityEngine.Events.UnityAction onClick)
-    {
-        GameObject root = new GameObject(name, typeof(RectTransform), typeof(Button));
-        root.transform.SetParent(transform, false);
-        RectTransform rect = root.GetComponent<RectTransform>();
-        PlaceInArt(rect, centerX, centerY, width, height);
-        rect.localRotation = Quaternion.Euler(0f, 0f, rotation);
-
-        // Focus backing: a white slab offset behind the red plate.
-        PersonaShape backing = CreateShape("Focus Backing", root.transform, Color.white);
-        Stretch(backing.rectTransform);
-        backing.SetCorners(new Vector2(-0.03f, -0.1f), new Vector2(-0.045f, 0.12f),
-            new Vector2(0.015f, 0.08f), new Vector2(0.035f, -0.14f));
-        PersonaShape outline = CreateShape("Outline", root.transform, Accent);
-        Stretch(outline.rectTransform);
-        outline.SetCorners(new Vector2(-0.015f, -0.09f), new Vector2(-0.02f, 0.08f),
-            new Vector2(0.075f, 0.1f), new Vector2(0.015f, -0.06f));
-        PersonaShape face = CreateShape("Face", root.transform, ButtonIdle);
-        Stretch(face.rectTransform);
-        face.SetCorners(Vector2.zero, Vector2.zero, new Vector2(0.05f, 0f), Vector2.zero);
-        face.raycastTarget = true;
-
-        float scale = 1080f / ArtHeight;
-        Text text = CreateText("Label", root.transform, font, label,
-            Mathf.RoundToInt(fontSize * scale), Color.white,
-            FontStyle.Normal, TextAnchor.MiddleLeft, Vector2.zero, Vector2.one);
-        text.horizontalOverflow = HorizontalWrapMode.Overflow;
-        text.rectTransform.offsetMin = new Vector2(width * scale * 0.09f, 0f);
-        Shadow shadow = text.gameObject.AddComponent<Shadow>();
-        shadow.effectColor = new Color(0f, 0f, 0f, 0.8f);
-        shadow.effectDistance = new Vector2(3f, -3f);
-
-        Button button = root.GetComponent<Button>();
-        button.targetGraphic = face;
-        button.transition = Selectable.Transition.None;
-        if (onClick != null) button.onClick.AddListener(onClick);
-        PersonaMenuButton persona = root.AddComponent<PersonaMenuButton>();
-        persona.Configure(face, outline, backing, text, ButtonIdle, Accent, Accent, Color.black);
-        return button;
-    }
-
-    // Places a rect using pixel coordinates of the 1672x941 reference art
-    // (origin top-left) so the overlay lines up with the background image.
-    private static void PlaceInArt(RectTransform rect, float centerX, float centerY,
-        float width, float height)
-    {
-        Vector2 anchor = new Vector2(centerX / ArtWidth, 1f - centerY / ArtHeight);
-        rect.anchorMin = anchor;
-        rect.anchorMax = anchor;
-        rect.pivot = new Vector2(0.5f, 0.5f);
-        rect.anchoredPosition = Vector2.zero;
-        // The canvas reference is 1920x1080, i.e. the art scaled by 1.148.
-        float scale = 1080f / ArtHeight;
-        rect.sizeDelta = new Vector2(width * scale, height * scale);
-        rect.localScale = Vector3.one;
-    }
-
-    private static PersonaShape CreateShape(string name, Transform parent, Color color)
-    {
-        GameObject shapeObject = new GameObject(name, typeof(RectTransform), typeof(PersonaShape));
-        shapeObject.transform.SetParent(parent, false);
-        PersonaShape shape = shapeObject.GetComponent<PersonaShape>();
-        shape.color = color;
-        shape.raycastTarget = false;
-        return shape;
     }
 
     private static Texture2D CreateHalftoneTexture()

@@ -480,6 +480,12 @@ public sealed class GymExperienceService : MonoBehaviour
         int multiplier = Mathf.Clamp(comboMultiplier, 1, 8);
         int reward = baseReward * multiplier;
         string resultLabel = result == WorkoutResult.AutoPerfect ? "AUTO PERFECT" : result.ToString().ToUpperInvariant();
+        if ((result == WorkoutResult.Perfect || result == WorkoutResult.AutoPerfect) &&
+            player != null)
+        {
+            // Every perfect rep of any exercise gives a little health back.
+            player.RestorePerfectRepHealth();
+        }
         UpdateTemporaryFatigue(result);
         ShowFeedback($"{resultLabel}  x{multiplier}  +{reward} XP", 1.15f);
         ShowStatImpact($"{resultLabel} IMPACT   XP +{reward}", 1.15f);
@@ -737,7 +743,7 @@ public sealed class GymExperienceService : MonoBehaviour
         IReadOnlyList<GymBackRoomInteractable> interactables =
             GymBackRoomInteractable.RegisteredInteractables;
         GymBackRoomInteractable closest = null;
-        float best = maxDistance * maxDistance;
+        float best = float.PositiveInfinity;
         for (int i = 0; i < interactables.Count; i++)
         {
             GymBackRoomInteractable candidate = interactables[i];
@@ -746,8 +752,17 @@ public sealed class GymExperienceService : MonoBehaviour
                 continue;
             }
 
-            float distance = (candidate.transform.position - position).sqrMagnitude;
-            if (distance < best)
+            // Planar reach: the prompt must not depend on whether the player
+            // pivot sits at the feet or the capsule centre.
+            Vector3 offset = candidate.transform.position - position;
+            if (Mathf.Abs(offset.y) > 2.5f)
+            {
+                continue;
+            }
+            offset.y = 0f;
+            float reach = Mathf.Max(maxDistance, candidate.InteractionRange);
+            float distance = offset.sqrMagnitude;
+            if (distance <= reach * reach && distance < best)
             {
                 best = distance;
                 closest = candidate;

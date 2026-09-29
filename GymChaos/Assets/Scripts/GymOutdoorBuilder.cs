@@ -14,6 +14,10 @@ public static class GymOutdoorBuilder
     private const string RootName = "Gym Exterior (Runtime)";
     private static Renderer cachedRoomFloorRenderer;
     private const float ParkingDepth = 18f;
+    // Distance from the road's north edge to the parking north wall line.
+    // The bus bay uses it as its depth so the bay fence continues that line.
+    public const float NorthBoundaryOffsetFromRoadEdge =
+        ParkingDepth * 0.5f + 0.55f - VehicleRoadWidth * 0.5f;
     private const float ParkingAisleDepth = 6.8f;
     private const float ParkingLineInset = 0.7f;
     private const float PathWidth = 4.4f;
@@ -530,62 +534,17 @@ public static class GymOutdoorBuilder
         float turnX = VehicleRoadTurnPoint.x;
         float insideCornerX = turnX - roadWidth * 0.5f;
         float outsideCornerX = turnX + roadWidth * 0.5f;
-        // The bus passenger exits through a real pedestrian gate in the
-        // north road wall. Keep a generous capsule-width opening at the
-        // authored gate center; the bus bay fence and road opening remain
-        // separate physical systems.
+        // The north road edge stays open between the gym path and the road
+        // corner: the bus pockets behind it are paved and closed by the one
+        // continuous north boundary line, so extra stub walls here only
+        // formed dead-end U pockets.
         float northGateCenterX = busStopSectionBuilt
             ? GymRoadsideBusStop.DavieBusPedestrianExitPoint.x
             : busBayStartX;
-        const float northGateHalfWidth = 1.15f;
-        float northBeforeGateLength =
-            northGateCenterX - northGateHalfWidth - corridorStartX;
-        if (northBeforeGateLength > 0.4f)
-        {
-            CreateVisibleBoundary(
-                "Visitor Road North Wall", root.transform,
-                new Vector3(corridorStartX + northBeforeGateLength * 0.5f,
-                    floorY + BoundaryHeight * 0.5f,
-                    parkingCenterZ + roadWidth * 0.5f),
-                new Vector3(northBeforeGateLength, BoundaryHeight, 0.5f),
-                BoundaryHeight, floorY,
-                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                exteriorOnly: false, addCollision: true);
-        }
-        float northAfterGateStartX = northGateCenterX + northGateHalfWidth;
-        float northAfterGateLength = busBayStartX - northAfterGateStartX;
-        if (northAfterGateLength > 0.4f)
-        {
-            CreateVisibleBoundary(
-                "Visitor Road North Wall Before Bus Bay", root.transform,
-                new Vector3(northAfterGateStartX + northAfterGateLength * 0.5f,
-                    floorY + BoundaryHeight * 0.5f,
-                    parkingCenterZ + roadWidth * 0.5f),
-                new Vector3(northAfterGateLength, BoundaryHeight, 0.5f),
-                BoundaryHeight, floorY,
-                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                exteriorOnly: false, addCollision: true);
-        }
         Debug.Log(
             $"GYMCHAOS_DAVIE_PEDESTRIAN_GATE_OK centerX={northGateCenterX:F2} " +
-            $"halfWidth={northGateHalfWidth:F2} wallZ={parkingCenterZ + roadWidth * 0.5f:F2} " +
+            $"openRoadEdge=1 wallZ={parkingCenterZ + roadWidth * 0.5f:F2} " +
             $"busGate={busStopSectionBuilt}");
-        float northAfterBayLength = insideCornerX - busBayEndX;
-        if (northAfterBayLength > 0.4f)
-        {
-            // The road-facing side of the pull-off remains the real bus
-            // entry. This segment is beyond the bay and closes the perimeter
-            // without sealing the bus crossing itself.
-            CreateVisibleBoundary(
-                "Visitor Road North Wall After Bus Bay", root.transform,
-                new Vector3(busBayEndX + northAfterBayLength * 0.5f,
-                    floorY + BoundaryHeight * 0.5f,
-                    parkingCenterZ + roadWidth * 0.5f),
-                new Vector3(northAfterBayLength, BoundaryHeight, 0.5f),
-                BoundaryHeight, floorY,
-                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                exteriorOnly: false, addCollision: true);
-        }
         // The bus turnaround uses the real south lane. Keep its edge fence
         // one shoulder-width outside the 8.2 m road envelope so the full
         // collider can arc through the lane without grazing the fence.
@@ -597,120 +556,22 @@ public static class GymOutdoorBuilder
             boundaryTrimMaterial, boundaryRibMaterial);
         float southWallStartX = corridorStartX;
         float southWallEndX = outsideCornerX;
-        bool storePedestrianGates =
-            HasProteinStoreRoute &&
-            GymProteinStoreEnvironment.StoreWestApproachPoint.x >
-                southWallStartX + 2.4f &&
-            GymProteinStoreEnvironment.StoreWestApproachPoint.x <
-                southWallEndX - 3.2f &&
-            GymProteinStoreEnvironment.StoreEastRoutePoint.x >
-                GymProteinStoreEnvironment.StoreWestApproachPoint.x + 6.5f &&
-            GymProteinStoreEnvironment.StoreEastRoutePoint.x <
-                southWallEndX - 3.2f;
-        Debug.Log(
-            $"GYMCHAOS_STORE_ROAD_GATES enabled={storePedestrianGates} " +
-            $"west={GymProteinStoreEnvironment.StoreWestApproachPoint.x:F2} " +
-            $"east={GymProteinStoreEnvironment.StoreEastRoutePoint.x:F2} " +
-            $"start={southWallStartX:F2} end={southWallEndX:F2}");
-        if (storePedestrianGates)
-        {
-            // The store dog-leg crosses the road edge at both ends of its
-            // east-side bypass. Keep each gate wide enough for the heaviest
-            // visitor capsule, while retaining a long solid wall between
-            // them so the road still reads and behaves as a contained lane.
-            float westGateCenterX =
-                GymProteinStoreEnvironment.StoreWestApproachPoint.x;
-            float eastGateCenterX =
-                GymProteinStoreEnvironment.StoreEastRoutePoint.x;
-            const float gateHalfWidth = 3.0f;
-            float beforeGateLength =
-                westGateCenterX - gateHalfWidth - southWallStartX;
-            if (beforeGateLength > 0.4f)
-            {
-                CreateVisibleBoundary(
-                    "Visitor Road South Wall",
-                    root.transform,
-                    new Vector3(
-                        southWallStartX + beforeGateLength * 0.5f,
-                        floorY + BoundaryHeight * 0.5f,
-                        roadSouthWallZ),
-                    new Vector3(beforeGateLength, BoundaryHeight, 0.5f),
-                    BoundaryHeight, floorY,
-                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                    exteriorOnly: false, addCollision: true);
-            }
-            else
-            {
-                // Keep the canonical boundary marker present when the
-                // store gate consumes this short pre-gate segment. The
-                // marker is visual only so it cannot close the real gate.
-                const float markerLength = 0.5f;
-                CreateVisibleBoundary(
-                    "Visitor Road South Wall",
-                    root.transform,
-                    new Vector3(
-                        southWallStartX + markerLength * 0.5f,
-                        floorY + BoundaryHeight * 0.5f,
-                        roadSouthWallZ),
-                    new Vector3(markerLength, BoundaryHeight, 0.5f),
-                    BoundaryHeight, floorY,
-                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                    exteriorOnly: false, addCollision: false);
-            }
-
-            float middleStartX = westGateCenterX + gateHalfWidth;
-            // The east opening only served the retired police/visitor loop
-            // around the store; the two wall runs now meet at its center.
-            float middleEndX = eastGateCenterX;
-            float middleLength = middleEndX - middleStartX;
-            if (middleLength > 0.4f)
-            {
-                CreateVisibleBoundary(
-                    "Visitor Road South Wall Between Protein Store Gates",
-                    root.transform,
-                    new Vector3(
-                        middleStartX + middleLength * 0.5f,
-                        floorY + BoundaryHeight * 0.5f,
-                        roadSouthWallZ),
-                    new Vector3(middleLength, BoundaryHeight, 0.5f),
-                    BoundaryHeight, floorY,
-                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                    exteriorOnly: false, addCollision: true);
-            }
-
-            float afterGateStartX = eastGateCenterX;
-            float afterGateLength = southWallEndX - afterGateStartX;
-            if (afterGateLength > 0.4f)
-            {
-                CreateVisibleBoundary(
-                    "Visitor Road South Wall After Protein Store Gate",
-                    root.transform,
-                    new Vector3(
-                        afterGateStartX + afterGateLength * 0.5f,
-                        floorY + BoundaryHeight * 0.5f,
-                        roadSouthWallZ),
-                    new Vector3(afterGateLength, BoundaryHeight, 0.5f),
-                    BoundaryHeight, floorY,
-                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                    exteriorOnly: false, addCollision: true);
-            }
-        }
-        else
-        {
-            float southStraightLength = Mathf.Max(
-                0.5f, southWallEndX - southWallStartX);
-            CreateVisibleBoundary(
-                "Visitor Road South Wall",
-                root.transform,
-                new Vector3(
-                    southWallStartX + southStraightLength * 0.5f,
-                    floorY + BoundaryHeight * 0.5f,
-                    roadSouthWallZ),
-                new Vector3(southStraightLength, BoundaryHeight, 0.5f),
-                BoundaryHeight, floorY,
-                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
-                exteriorOnly: false, addCollision: true);
-        }
+        // The store is reached only through its west entry walkway. The old
+        // road-side gates led pedestrians round the back of the shop onto an
+        // empty platform, so the road keeps one continuous south wall.
+        float southStraightLength = Mathf.Max(
+            0.5f, southWallEndX - southWallStartX);
+        CreateVisibleBoundary(
+            "Visitor Road South Wall",
+            root.transform,
+            new Vector3(
+                southWallStartX + southStraightLength * 0.5f,
+                floorY + BoundaryHeight * 0.5f,
+                roadSouthWallZ),
+            new Vector3(southStraightLength, BoundaryHeight, 0.5f),
+            BoundaryHeight, floorY,
+            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+            exteriorOnly: false, addCollision: true);
         // The outer edge is a low curb of the pull-off, while the yellow
         // geometry above stays flush with the asphalt and reads as paint.
         CreateBox(
@@ -942,6 +803,7 @@ public static class GymOutdoorBuilder
             courtyardMaxX,
             courtyardMinZ,
             courtyardMaxZ);
+        GymOutdoorFenceFinisher.Finish(root.transform);
         bool layoutContractPassed = ValidateExteriorLayout(
             root,
             floorY,
@@ -2298,12 +2160,11 @@ public static class GymOutdoorBuilder
         Renderer pathOuterNorth = GetPrimaryRenderer(
             root, "Path Outer Boundary Wall North");
         Renderer pathSouth = GetPrimaryRenderer(root, "Path South Boundary Wall");
-        Renderer roadNorth = GetPrimaryRenderer(root, "Visitor Road North Wall");
-        Renderer roadNorthAfterBay = GetPrimaryRenderer(
-            root, "Visitor Road North Wall After Bus Bay");
+        Renderer westPocketNorth = GetPrimaryRenderer(
+            root, "Bus Bay West Pocket North Wall");
+        Renderer eastPocketNorth = GetPrimaryRenderer(
+            root, "Bus Bay East Pocket North Wall");
         Renderer roadSouth = GetPrimaryRenderer(root, "Visitor Road South Wall");
-        Renderer roadSouthAfterGate = GetPrimaryRenderer(
-            root, "Visitor Road South Wall After Protein Store Gate");
         Renderer cornerWest = GetPrimaryRenderer(
             root, "Visitor Road Corner West Wall");
         Renderer cornerEast = GetPrimaryRenderer(
@@ -2341,17 +2202,22 @@ public static class GymOutdoorBuilder
             ref junctionCount,
             ref largestJunctionGap);
         fenceJunctionsPassed &= ValidateFenceJunction(
-            roadNorthAfterBay,
-            SegmentEndpoint(roadNorthAfterBay, true, true),
+            eastPocketNorth,
+            SegmentEndpoint(eastPocketNorth, true, true),
             cornerWest,
             SegmentEndpoint(cornerWest, false, false),
             ref junctionCount,
             ref largestJunctionGap);
         fenceJunctionsPassed &= ValidateFenceJunction(
-            (roadSouthAfterGate != null ? roadSouthAfterGate : roadSouth),
-            SegmentEndpoint(
-                roadSouthAfterGate != null ? roadSouthAfterGate : roadSouth,
-                true, true),
+            parkingNorthExtension,
+            SegmentEndpoint(parkingNorthExtension, true, true),
+            westPocketNorth,
+            SegmentEndpoint(westPocketNorth, true, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            roadSouth,
+            SegmentEndpoint(roadSouth, true, true),
             cornerEast,
             SegmentEndpoint(cornerEast, false, false),
             ref junctionCount,
@@ -2371,14 +2237,17 @@ public static class GymOutdoorBuilder
             ref largestJunctionGap);
         roadOpeningJunctionsPassed &= ValidateFenceJunction(
             pathOuterNorth,
-            FenceCornerEndpoint(pathOuterNorth, true, false),
-            roadNorth,
-            FenceCornerEndpoint(roadNorth, false, true),
+            FenceCornerEndpoint(pathOuterNorth, true, true),
+            westPocketNorth,
+            FenceCornerEndpoint(westPocketNorth, false, false),
             ref junctionCount,
             ref largestJunctionGap);
 
         bool pathSouthEndsAtOuterPath = pathSouth != null &&
-            Mathf.Abs(pathSouth.bounds.max.x - outerPathX) <= 0.001f &&
+            // Ends on the outer path wall: at its centre line, or at its face
+            // once the joint pass has closed the corner.
+            pathSouth.bounds.max.x >= outerPathX - SharedFenceWallThickness * 0.5f - 0.001f &&
+            pathSouth.bounds.max.x <= outerPathX + 0.001f &&
             Mathf.Abs(pathSouth.bounds.center.z - pathSouthZ) <= 0.001f;
         bool contractPassed = surfaceObjectCount == surfaceNames.Length &&
             surfaceTopError <= 0.002f &&
@@ -2614,16 +2483,25 @@ public static class GymOutdoorBuilder
             return false;
         }
 
-        float gap = Vector3.Distance(firstEndpoint, secondEndpoint);
+        // After GymOutdoorFenceFinisher the two boxes must touch (no gap)
+        // without overlapping (no doubled wall or z-fighting coping).
+        Bounds a = first.bounds;
+        Bounds b = second.bounds;
+        float gapX = Mathf.Max(0f, Mathf.Max(a.min.x - b.max.x, b.min.x - a.max.x));
+        float gapZ = Mathf.Max(0f, Mathf.Max(a.min.z - b.max.z, b.min.z - a.max.z));
+        float gap = Mathf.Sqrt(gapX * gapX + gapZ * gapZ);
+        float overlapX = Mathf.Min(a.max.x, b.max.x) - Mathf.Max(a.min.x, b.min.x);
+        float overlapZ = Mathf.Min(a.max.z, b.max.z) - Mathf.Max(a.min.z, b.min.z);
+        bool overlaps = overlapX > 0.035f && overlapZ > 0.035f;
         largestGap = Mathf.Max(largestGap, gap);
-        if (gap > 0.035f)
+        if (gap > 0.035f || overlaps)
         {
             Debug.LogWarning(
                 $"GYMCHAOS_OUTDOOR_JUNCTION_GAP first={first.name} " +
                 $"a={firstEndpoint} second={second.name} b={secondEndpoint} " +
-                $"gap={gap:F3}");
+                $"gap={gap:F3} overlap={(overlaps ? $"{overlapX:F2}x{overlapZ:F2}" : "0")}");
         }
-        return gap <= 0.035f;
+        return gap <= 0.035f && !overlaps;
     }
 
     private static void CreateBoundary(
@@ -2715,6 +2593,23 @@ public static class GymOutdoorBuilder
         return renderer != null ? renderer.bounds.max.x : fallback;
     }
 
+    private static float FindRendererMinX(Transform root, string name, float fallback)
+    {
+        Renderer renderer = FindRendererRecursive(root, name);
+        return renderer != null ? renderer.bounds.min.x : fallback;
+    }
+
+    // The bus stop builds its fence under its own child root.
+    private static Renderer FindRendererRecursive(Transform root, string name)
+    {
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i].name == name) return renderers[i];
+        }
+        return null;
+    }
+
     private static void BuildBusBayPockets(
         Transform root,
         float floorY,
@@ -2757,20 +2652,23 @@ public static class GymOutdoorBuilder
                 true);
         }
 
-        // North links overlap the neighbouring wall ends by 0.25 m so the
-        // runs read as one continuous wall.
-        float westWallStart = parkingNorthEndX - 0.25f;
-        float westWallEnd = busBayStartX + 0.25f;
+        // North links continue the parking north wall and the bus bay fence
+        // on the same line, end to end, so the run reads as one wall.
+        float westWallStart = parkingNorthEndX;
+        float westWallEnd = FindRendererMinX(root, "Bus Stop Outer Fence Low Wall", busBayStartX);
         CreateVisibleBoundary(
             "Bus Bay West Pocket North Wall", root,
             new Vector3((westWallStart + westWallEnd) * 0.5f,
-                floorY + BoundaryHeight * 0.5f, busBayOuterZ - 0.25f),
+                floorY + BoundaryHeight * 0.5f, busBayOuterZ),
             new Vector3(westWallEnd - westWallStart, BoundaryHeight, 0.5f),
             BoundaryHeight, floorY,
             boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
             exteriorOnly: false, addCollision: true);
-        float eastWallStart = busBayEndX - 0.25f;
-        float eastWallEnd = cornerWallOuterX;
+        Renderer busFence = FindRendererRecursive(root, "Bus Stop Outer Fence Low Wall");
+        float eastWallStart = busFence != null ? busFence.bounds.max.x : busBayEndX;
+        // Ends on the corner wall's centre line; the joint pass trims it to
+        // the corner wall face.
+        float eastWallEnd = cornerWallOuterX - 0.5f;
         CreateVisibleBoundary(
             "Bus Bay East Pocket North Wall", root,
             new Vector3((eastWallStart + eastWallEnd) * 0.5f,
