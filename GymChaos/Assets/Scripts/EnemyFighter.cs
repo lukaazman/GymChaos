@@ -7,6 +7,12 @@ public partial class EnemyFighter : MonoBehaviour
 {
     // Profiling scopes for the hot AI paths (see GymChaosPerformanceVerifier).
     private static readonly ProfilerMarker FixedUpdateMarker = new ProfilerMarker("GymChaos.FixedUpdate");
+    private const float DeadliftIgnoreRefreshInterval = 0.4f;
+    private float nextDeadliftIgnoreRefreshTime;
+    private bool deadliftCollisionIgnoreReady;
+    private static readonly ProfilerMarker PunchContactMarker = new ProfilerMarker("GymChaos.PunchContact");
+    private static readonly ProfilerMarker GroundedRootMarker = new ProfilerMarker("GymChaos.GroundedRoot");
+    private static readonly ProfilerMarker VisitorTickMarker = new ProfilerMarker("GymChaos.VisitorTick");
     private static readonly ProfilerMarker TickRoamingMarker = new ProfilerMarker("GymChaos.TickRoaming");
     private static readonly ProfilerMarker BuildRoamRouteMarker = new ProfilerMarker("GymChaos.BuildRoamRoute");
     private static readonly ProfilerMarker FindRoamPointMarker = new ProfilerMarker("GymChaos.FindRoamPoint");
@@ -583,8 +589,16 @@ public partial class EnemyFighter : MonoBehaviour
         // for the complete session, not only the initial retry window; an
         // enemy can otherwise walk back onto the platform after the one-shot
         // escape has already expired.
-        bool collisionIgnoreReady =
-            GymLooseItemSpawner.EnsureDeadliftStationCollisionIgnore(this);
+        // Re-asserting the ignore pairs walks every collider of both sides,
+        // so refresh it a few times per second instead of on every physics
+        // step; the pairs persist between refreshes.
+        if (Time.time >= nextDeadliftIgnoreRefreshTime)
+        {
+            nextDeadliftIgnoreRefreshTime = Time.time + DeadliftIgnoreRefreshInterval;
+            deadliftCollisionIgnoreReady =
+                GymLooseItemSpawner.EnsureDeadliftStationCollisionIgnore(this);
+        }
+        bool collisionIgnoreReady = deadliftCollisionIgnoreReady;
         // Keep the deadlift platform collision exception, but never teleport an
         // enemy out of a route collision. Steer toward the nearest safe point
         // for one physics tick and let the normal visitor/roaming controller
@@ -637,7 +651,7 @@ public partial class EnemyFighter : MonoBehaviour
             return;
         }
 
-        ProcessPunchContact();
+        using (PunchContactMarker.Auto()) ProcessPunchContact();
 
         if (isDead)
         {
@@ -647,7 +661,7 @@ public partial class EnemyFighter : MonoBehaviour
             return;
         }
 
-        KeepGroundedRoot();
+        using (GroundedRootMarker.Auto()) KeepGroundedRoot();
 
         if (visitorPoseSnapFramesRemaining > 0)
         {
@@ -659,8 +673,13 @@ public partial class EnemyFighter : MonoBehaviour
             }
         }
 
-        if (visitorAgent != null && visitorAgent.isActiveAndEnabled &&
-            visitorAgent.TickPhysics(this))
+        bool visitorHandled;
+        using (VisitorTickMarker.Auto())
+        {
+            visitorHandled = visitorAgent != null && visitorAgent.isActiveAndEnabled &&
+                visitorAgent.TickPhysics(this);
+        }
+        if (visitorHandled)
         {
             return;
         }

@@ -202,6 +202,17 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
         {
             return false;
         }
+        // Cheap reject before walking the enemy's colliders: a fighter whose
+        // root is well clear of the platform cannot overlap it.
+        Vector3 enemyLocal = transform.InverseTransformPoint(enemy.transform.position);
+        const float overlapReach = 3f;
+        if (enemyLocal.x < localFootprint.min.x - overlapReach ||
+            enemyLocal.x > localFootprint.max.x + overlapReach ||
+            enemyLocal.z < localFootprint.min.z - overlapReach ||
+            enemyLocal.z > localFootprint.max.z + overlapReach)
+        {
+            return false;
+        }
 
         Collider[] enemyColliders = enemy.GetComponentsInChildren<Collider>(true);
         Bounds enemyFootprint = default;
@@ -677,6 +688,8 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
     }
 
+    private float nextDeadliftColliderRegistrationTime;
+
     private void RegisterDeadliftStationCollidersInternal()
     {
         if (deadliftStationMarker == null)
@@ -688,6 +701,13 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         {
             return;
         }
+        // Every enemy asks for this; one hierarchy scan per second covers
+        // runtime-added plate colliders without a GameObject.Find per enemy.
+        if (Time.time < nextDeadliftColliderRegistrationTime)
+        {
+            return;
+        }
+        nextDeadliftColliderRegistrationTime = Time.time + 1f;
 
         // EnsureSceneColliders can add a convex collider to a generated mesh
         // visual after the station's own factory colliders were registered.

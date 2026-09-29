@@ -266,6 +266,9 @@ public sealed class GymTimeOfDay : MonoBehaviour
 
         sunLight.type = LightType.Directional;
         moonLight.type = LightType.Directional;
+        // Moon shadows were drawn at 0.22 strength: a full cascaded shadow
+        // pass every night frame for barely visible shading.
+        moonLight.shadows = LightShadows.None;
         sunLight.enabled = true;
         moonLight.enabled = false;
 

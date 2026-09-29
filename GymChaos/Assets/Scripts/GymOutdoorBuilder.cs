@@ -1251,6 +1251,15 @@ public static class GymOutdoorBuilder
                         {
                             bounds.Encapsulate(loadedRenderers[rendererIndex].bounds);
                         }
+                        // ~114k triangles per lamp: a thin pole's shadow is
+                        // not worth drawing that mesh into every cascade.
+                        for (int rendererIndex = 0;
+                             rendererIndex < loadedRenderers.Length;
+                             rendererIndex++)
+                        {
+                            loadedRenderers[rendererIndex].shadowCastingMode =
+                                UnityEngine.Rendering.ShadowCastingMode.Off;
+                        }
 
                         GameObject lightObject = new GameObject("Parking Light Source");
                         lightObject.transform.SetParent(loaded.transform, true);

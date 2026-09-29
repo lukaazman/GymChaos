@@ -6,6 +6,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
     public const int MirrorSurfaceLayer = 28;
     public const int MirrorPlayerLayer = 29;
     public const int FirstPersonPlayerLayer = 30;
+    private const float MirrorFarClip = 40f;
 
     private static readonly int ReflectionTextureId = Shader.PropertyToID("_ReflectionTex");
     private static readonly int MirrorViewProjectionId = Shader.PropertyToID("_MirrorVP");
@@ -142,6 +143,15 @@ public sealed class PlanarGymMirror : MonoBehaviour
         reflectionCamera.backgroundColor = sourceCamera.backgroundColor;
         reflectionCamera.allowHDR = false;
         reflectionCamera.allowMSAA = false;
+        // A reflection is a small secondary view: skip its own shadow-map
+        // pass, post stack and depth/colour copies. The main camera keeps all.
+        UnityEngine.Rendering.Universal.UniversalAdditionalCameraData reflectionData =
+            UnityEngine.Rendering.Universal.CameraExtensions
+                .GetUniversalAdditionalCameraData(reflectionCamera);
+        reflectionData.renderShadows = false;
+        reflectionData.renderPostProcessing = false;
+        reflectionData.requiresDepthTexture = false;
+        reflectionData.requiresColorTexture = false;
 
         for (int i = 0; i < mirrorRenderers.Length; i++)
         {
@@ -220,7 +230,8 @@ public sealed class PlanarGymMirror : MonoBehaviour
         reflectionCamera.fieldOfView = sourceCamera.fieldOfView;
         reflectionCamera.aspect = sourceCamera.aspect;
         reflectionCamera.nearClipPlane = Mathf.Min(sourceCamera.nearClipPlane, 0.03f);
-        reflectionCamera.farClipPlane = sourceCamera.farClipPlane;
+        // Mirrors hang indoors; nothing past the room needs a second draw.
+        reflectionCamera.farClipPlane = Mathf.Min(sourceCamera.farClipPlane, MirrorFarClip);
         reflectionCamera.projectionMatrix = sourceCamera.projectionMatrix;
         reflectionCamera.rect = new Rect(0f, 0f, 1f, 1f);
         reflectionCamera.pixelRect = new Rect(

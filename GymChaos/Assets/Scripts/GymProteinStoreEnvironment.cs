@@ -659,8 +659,10 @@ public static class GymProteinStoreEnvironment
             Light light = lightObject.AddComponent<Light>();
             light.type = LightType.Point;
             light.color = new Color(1f, 0.96f, 0.87f);
-            light.intensity = 180f;
-            light.range = 6.5f;
+            // Toned down from 180/6.5 m: less glare on the glossy shelves and
+            // fewer lit pixels per light.
+            light.intensity = 120f;
+            light.range = 5.5f;
             light.shadows = LightShadows.None;
         }
         RuntimeInteriorLightCount = 2;

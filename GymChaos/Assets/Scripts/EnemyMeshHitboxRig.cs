@@ -167,7 +167,15 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
                combatColliders.Contains(collider);
     }
 
+    private static readonly Unity.Profiling.ProfilerMarker LateUpdateMarker =
+        new Unity.Profiling.ProfilerMarker("GymChaos.Late.EnemyMeshHitboxRig");
+
     private void LateUpdate()
+    {
+        using (LateUpdateMarker.Auto()) LateUpdateBody();
+    }
+
+    private void LateUpdateBody()
     {
         UpdateSegments();
         Physics.SyncTransforms();

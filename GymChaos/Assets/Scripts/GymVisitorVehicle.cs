@@ -291,6 +291,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public void DriveIn(Action onParked)
     {
         if (driveRoutine != null) StopCoroutine(driveRoutine);
+        followingBusPath = false;
         gameObject.SetActive(true);
         if (IsBus)
         {
@@ -309,6 +310,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void BeginDriveIn(Action onParked)
     {
+        followingBusPath = false;
         waitingForRuntimeVisual = false;
         waitingForBusTurnaround = false;
         HasCompletedDeparture = false;
@@ -325,21 +327,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             return;
         }
         Vector3[] route = IsBus && UsesRoadsideBusRoute
-            // Approach the bay through the road leg, then make the bus
-            // cross the road-facing gate before turning north. The bus is
-            // 10.4 m long, so turning at the gate's east edge makes its
-            // swept body overlap the short corner wall; the extra clear
-            // waypoint keeps the complete collider west of that wall while
-            // preserving the physical gate and all real wall collisions.
-            ? new[] { roadPoint,
-                new Vector3(roadTurnPoint.x, roadPoint.y, roadPoint.z),
-                new Vector3(roadTurnPoint.x, roadPoint.y, junctionPoint.z),
-                junctionPoint,
-                new Vector3(busBayEntryPoint.x - 2.25f,
-                    junctionPoint.y, junctionPoint.z),
-                new Vector3(busBayEntryPoint.x - 2.25f,
-                    junctionPoint.y, busBayEntryPoint.z),
-                parkingPoint }
+            ? CreateDavieBusArrivalRoute()
             : new[] { roadPoint, roadTurnPoint, junctionPoint, aislePoint, parkingPoint };
         driveRoutine = StartCoroutine(DriveRoute(route, true, onParked, 0f, IsBus));
     }
@@ -347,6 +335,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public void DriveOut(Action onGone)
     {
         if (driveRoutine != null) StopCoroutine(driveRoutine);
+        followingBusPath = false;
         gameObject.SetActive(true);
         if (IsBus)
         {
@@ -365,6 +354,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void BeginDriveOut(Action onGone)
     {
+        followingBusPath = false;
         waitingForRuntimeVisual = false;
         waitingForBusTurnaround = false;
         IsParked = false;
@@ -431,36 +421,261 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             this);
     }
 
+    // Arrival: swing slightly wide on the side road, turn right into the
+    // inbound lane, then pull into the bay on a lane-change S-curve so the
+    // 10.4 m body clears the short wall east of the bay mouth. Offsets were
+    // tuned in a swept-body simulation against the bay/road colliders.
+    private Vector3[] CreateDavieBusArrivalRoute()
+    {
+        float y = parkingPoint.y;
+        float approachX = roadTurnPoint.x + 2f;
+        float laneZ = junctionPoint.z;
+        Vector3 start = transform.position;
+        start.x = approachX;
+        start.y = y;
+        transform.position = start;
+        List<Vector3> route = new List<Vector3>(18)
+        {
+            start,
+            new Vector3(approachX, y, laneZ)
+        };
+        float curveStartX = GymRoadsideBusStop.BusBayEndX + 1f;
+        float curveEndX = parkingPoint.x + 4f;
+        const int curveSamples = 12;
+        for (int i = 0; i <= curveSamples; i++)
+        {
+            float t = i / (float)curveSamples;
+            float blend = 0.5f - 0.5f * Mathf.Cos(Mathf.PI * t);
+            route.Add(new Vector3(
+                Mathf.Lerp(curveStartX, curveEndX, t),
+                y,
+                Mathf.Lerp(laneZ, parkingPoint.z, blend)));
+        }
+        route.Add(new Vector3(parkingPoint.x, y, parkingPoint.z));
+        return route.ToArray();
+    }
+
+    // Departure: pull forward out of the bay, make a left U-turn across the
+    // road and return east on the opposite lane.
     private Vector3[] CreateDavieBusDepartureRoute()
     {
         float y = parkingPoint.y;
-        Vector3 start = GymRoadsideBusStop.DavieBusTurnaroundStartPoint;
-        Vector3 center = GymRoadsideBusStop.DavieBusTurnaroundCenterPoint;
-        start.y = y;
-        center.y = y;
-        float radiusX = GymRoadsideBusStop.DavieBusTurnaroundRadiusX;
-        float radiusZ = GymRoadsideBusStop.DavieBusTurnaroundRadiusZ;
-        const int arcSamples = 14;
-        List<Vector3> route = new List<Vector3>(arcSamples + 4)
+        float returnZ = GymRoadsideBusStop.DavieBusReturnLanePoint.z;
+        float turnX = parkingPoint.x - 9f;
+        Vector3 returnRoad = GymRoadsideBusStop.DavieBusReturnRoadPoint;
+        return new[]
         {
             new Vector3(parkingPoint.x, y, parkingPoint.z),
-            start
+            new Vector3(turnX + 5.5f, y, parkingPoint.z),
+            new Vector3(turnX, y, (parkingPoint.z + returnZ) * 0.5f),
+            new Vector3(turnX + 5.5f, y, returnZ),
+            new Vector3(returnRoad.x - 8f, y, returnZ),
+            new Vector3(returnRoad.x, y, returnZ)
         };
-        for (int i = 1; i <= arcSamples; i++)
+    }
+
+    // Bus path following: the body always moves along its nose and yaws at a
+    // speed-limited rate (v / minimum turn radius), so it turns while it
+    // drives instead of sliding sideways between waypoints.
+    private const float BusArrivalMinTurnRadius = 6f;
+    private const float BusDepartureMinTurnRadius = 4f;
+    private const float BusCornerFillet = 3f;
+    private const float BusLookaheadMin = 1.2f;
+    private const float BusLookaheadPerSpeed = 0.35f;
+    private bool followingBusPath;
+
+    private IEnumerator FollowBusPath(Vector3[] points, bool park, float speed)
+    {
+        List<Vector3> path = BuildFilletedPath(points, BusCornerFillet);
+        float[] lengths = new float[path.Count];
+        for (int i = 1; i < path.Count; i++)
         {
-            float angle = Mathf.PI * i / arcSamples;
-            route.Add(new Vector3(
-                center.x - radiusX * Mathf.Sin(angle),
-                y,
-                center.z + radiusZ * Mathf.Cos(angle)));
+            lengths[i] = lengths[i - 1] + Vector3.Distance(path[i - 1], path[i]);
         }
-        Vector3 returnTurn = GymRoadsideBusStop.DavieBusReturnRoadTurnPoint;
-        Vector3 returnRoad = GymRoadsideBusStop.DavieBusReturnRoadPoint;
-        returnTurn.y = y;
-        returnRoad.y = y;
-        route.Add(returnTurn);
-        route.Add(returnRoad);
-        return route.ToArray();
+        float total = lengths[path.Count - 1];
+        float reach = park ? 0.15f : 1.25f;
+        float minTurnRadius = park ? BusArrivalMinTurnRadius : BusDepartureMinTurnRadius;
+        float progress = 0f;
+        followingBusPath = true;
+        if (park)
+        {
+            // A freshly spawned bus starts aligned with its first leg.
+            Vector3 firstLeg = Vector3.ProjectOnPlane(path[1] - path[0], Vector3.up);
+            if (firstLeg.sqrMagnitude > 0.01f)
+            {
+                transform.rotation = Quaternion.LookRotation(firstLeg, Vector3.up);
+            }
+        }
+        while (total - progress > reach)
+        {
+            int steps = Mathf.Max(1, Mathf.CeilToInt(Time.deltaTime / MaxGroundRouteDeltaTime));
+            float dt = Time.deltaTime / steps;
+            float clearance = float.PositiveInfinity;
+            float travelled = 0f;
+            for (int step = 0; step < steps && total - progress > reach; step++)
+            {
+                travelled += AdvanceBusPathStep(
+                    path, lengths, total, ref progress, park, speed,
+                    minTurnRadius, dt, out clearance);
+            }
+#if UNITY_EDITOR
+            currentRouteRemaining = total - progress;
+            currentRouteClearance = clearance;
+            currentRouteActualTravel = travelled;
+            currentRouteClearanceSource = lastTrafficClearanceSource;
+#endif
+            if (Time.time >= nextRouteStallLogTime && travelled <= 0.0001f && Time.deltaTime > 0f)
+            {
+                Debug.Log(
+                    $"GYMCHAOS_VEHICLE_ROUTE_STALL identity={identity} park={park} " +
+                    $"position={transform.position} remaining={total - progress:F2} " +
+                    $"clearance={clearance:F3} speed={currentDriveSpeed:F2} " +
+                    $"blocker={lastTrafficBlocker} source={lastTrafficClearanceSource}", this);
+                nextRouteStallLogTime = Time.time + 2.5f;
+            }
+            if (engine != null) engine.pitch = Mathf.Lerp(0.72f, 1.15f, currentDriveSpeed / speed);
+            UpdateEngineAudibility();
+            yield return null;
+        }
+        followingBusPath = false;
+        if (park)
+        {
+            transform.position = path[path.Count - 1];
+        }
+    }
+
+    private float AdvanceBusPathStep(
+        List<Vector3> path, float[] lengths, float total, ref float progress,
+        bool park, float speed, float minTurnRadius, float dt, out float clearance)
+    {
+        progress = ProjectOntoPath(path, lengths, transform.position, progress);
+        float remaining = Mathf.Max(0f, total - progress);
+        float lookahead = BusLookaheadMin + currentDriveSpeed * BusLookaheadPerSpeed;
+        Vector3 aim = SamplePath(path, lengths, progress + lookahead);
+        Vector3 forward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+        Vector3 toAim = Vector3.ProjectOnPlane(aim - transform.position, Vector3.up);
+        float headingError = toAim.sqrMagnitude > 0.0001f
+            ? Vector3.SignedAngle(forward, toAim, Vector3.up)
+            : 0f;
+        float maxYaw = currentDriveSpeed / minTurnRadius * Mathf.Rad2Deg * dt;
+        forward = Quaternion.AngleAxis(
+            Mathf.Clamp(headingError, -maxYaw, maxYaw), Vector3.up) * forward;
+        transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+
+        clearance = TrafficClearance(forward, remaining, out bool pedestrianAhead);
+        float cornerFactor = 1f - 0.6f * Mathf.InverseLerp(10f, 60f, Mathf.Abs(headingError));
+        float targetSpeed = speed * cornerFactor;
+        if (park)
+        {
+            targetSpeed = Mathf.Min(targetSpeed,
+                Mathf.Sqrt(2f * 2.5f * Mathf.Max(0f, remaining - 0.05f)));
+        }
+        targetSpeed = Mathf.Min(targetSpeed,
+            Mathf.Sqrt(2f * 7f * Mathf.Max(0f, clearance - 0.5f)));
+        currentDriveSpeed = Mathf.MoveTowards(
+            currentDriveSpeed, targetSpeed,
+            (targetSpeed < currentDriveSpeed ? 10f : 6.5f) * dt);
+        IsYieldingToPedestrian = pedestrianAhead && clearance < 3f;
+        UpdateHorn(IsYieldingToPedestrian);
+
+        float travel = Mathf.Min(
+            currentDriveSpeed * dt,
+            Mathf.Max(0f, clearance - 0.45f),
+            MaxGroundRouteStep);
+        if (park)
+        {
+            travel = Mathf.Min(travel, remaining);
+        }
+        transform.position += forward * travel;
+        return travel;
+    }
+
+    // Rounds each interior corner with a quadratic Bezier fillet.
+    private static List<Vector3> BuildFilletedPath(Vector3[] points, float maxFillet)
+    {
+        List<Vector3> path = new List<Vector3>(points.Length * 9) { points[0] };
+        for (int i = 1; i < points.Length - 1; i++)
+        {
+            Vector3 previous = points[i - 1];
+            Vector3 corner = points[i];
+            Vector3 next = points[i + 1];
+            Vector3 inbound = corner - previous;
+            Vector3 outbound = next - corner;
+            float inLength = inbound.magnitude;
+            float outLength = outbound.magnitude;
+            if (inLength < 0.001f || outLength < 0.001f)
+            {
+                continue;
+            }
+            inbound /= inLength;
+            outbound /= outLength;
+            if (Vector3.Dot(inbound, outbound) > 0.996f)
+            {
+                path.Add(corner);
+                continue;
+            }
+            float fillet = Mathf.Min(maxFillet, inLength * 0.5f, outLength * 0.5f);
+            Vector3 filletStart = corner - inbound * fillet;
+            Vector3 filletEnd = corner + outbound * fillet;
+            for (int k = 0; k <= 8; k++)
+            {
+                float t = k / 8f;
+                float u = 1f - t;
+                path.Add(u * u * filletStart + 2f * u * t * corner + t * t * filletEnd);
+            }
+        }
+        path.Add(points[points.Length - 1]);
+        return path;
+    }
+
+    private static float ProjectOntoPath(
+        List<Vector3> path, float[] lengths, Vector3 position, float progress)
+    {
+        float bestDistance = float.PositiveInfinity;
+        float bestProgress = progress;
+        for (int i = 1; i < path.Count; i++)
+        {
+            if (lengths[i] < progress - 0.5f || lengths[i - 1] > progress + 15f)
+            {
+                continue;
+            }
+            Vector3 a = path[i - 1];
+            Vector3 segment = Vector3.ProjectOnPlane(path[i] - a, Vector3.up);
+            float length = segment.magnitude;
+            float t = length < 0.0001f
+                ? 0f
+                : Mathf.Clamp01(Vector3.Dot(
+                    Vector3.ProjectOnPlane(position - a, Vector3.up), segment) / (length * length));
+            float distance = Vector3.ProjectOnPlane(
+                a + segment * t - position, Vector3.up).sqrMagnitude;
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestProgress = lengths[i - 1] + (lengths[i] - lengths[i - 1]) * t;
+            }
+        }
+        return Mathf.Max(progress, bestProgress);
+    }
+
+    // Point at arc length s; beyond the end it extends the final leg so the
+    // lookahead keeps the nose aligned while the bus settles.
+    private static Vector3 SamplePath(List<Vector3> path, float[] lengths, float s)
+    {
+        int last = path.Count - 1;
+        if (s >= lengths[last])
+        {
+            Vector3 direction = (path[last] - path[last - 1]).normalized;
+            return path[last] + direction * (s - lengths[last]);
+        }
+        for (int i = 1; i <= last; i++)
+        {
+            if (lengths[i] >= s)
+            {
+                float span = Mathf.Max(0.0001f, lengths[i] - lengths[i - 1]);
+                return Vector3.Lerp(path[i - 1], path[i], (s - lengths[i - 1]) / span);
+            }
+        }
+        return path[last];
     }
 
     private bool IsDavieBusTurnaroundClear()
@@ -768,7 +983,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         if (engine != null) engine.Play();
         float speed = IsCloud ? CloudSpeed : DriveSpeed;
         currentDriveSpeed = 0f;
-        for (int i = 0; i < points.Length; i++)
+        bool followBusPath = IsBus && UsesRoadsideBusRoute && !IsCloud;
+        if (followBusPath)
+        {
+            yield return FollowBusPath(points, park, speed);
+        }
+        for (int i = 0; !followBusPath && i < points.Length; i++)
         {
             Vector3 target = points[i];
 #if UNITY_EDITOR
@@ -1016,6 +1236,13 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             return false;
         }
         if (collider.GetComponentInParent<GymVisitorVehicle>() != null)
+        {
+            return true;
+        }
+        // The bus's smoothed route is laid out clear of walls and fences;
+        // while the nose sweeps through a curve it must not brake for a fence
+        // the path turns away from.
+        if (followingBusPath)
         {
             return true;
         }
@@ -1311,6 +1538,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void OnDisable()
     {
+        followingBusPath = false;
         activeGroundTraffic.Remove(this);
     }
 

@@ -433,7 +433,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         activeAttackClip = clip == punchLeftClip || clip == punchRightClip ||
             clip == throwHardClip || clip == throwFrisbeeClip ? clip : null;
         SampleDirectClip(clip, Mathf.Clamp01(normalizedTime) * Mathf.Max(0.01f, clip.length - 0.001f));
-        StabilizeSampledPoseOnFloor();
+        StabilizeSampledPoseOnFloor(true);
         UpdateBakedRenderers();
         return true;
     }
@@ -607,7 +607,15 @@ public sealed class PlayerHandRig : MonoBehaviour
     }
 #endif
 
+    private static readonly Unity.Profiling.ProfilerMarker LateUpdateMarker =
+        new Unity.Profiling.ProfilerMarker("GymChaos.Late.PlayerHandRig");
+
     private void LateUpdate()
+    {
+        using (LateUpdateMarker.Auto()) LateUpdateBody();
+    }
+
+    private void LateUpdateBody()
     {
         if (modelRoot == null || playerCamera == null)
         {
@@ -633,32 +641,48 @@ public sealed class PlayerHandRig : MonoBehaviour
             SampleLocomotion();
             poseTransition.Apply(Time.deltaTime);
         }
-        StabilizeSampledPoseOnFloor();
+        StabilizeSampledPoseOnFloor(false);
         UpdateBakedRenderers();
     }
 
-    private void StabilizeSampledPoseOnFloor()
+    // Baking the whole skinned body is the costliest step of the player rig,
+    // so the sole height is re-measured every few frames (and on every clip
+    // change or jump edge); in between the last sole offset below the model
+    // root is reused, which a walk cycle changes only by millimetres.
+    private const int SoleMeasureInterval = 3;
+    private int nextSoleMeasureFrame;
+    private float soleBelowRoot;
+    private bool hasSoleMeasurement;
+    private AnimationClip soleMeasuredClip;
+    private bool soleMeasuredJumping;
+
+    private void StabilizeSampledPoseOnFloor(bool forceMeasure)
     {
         if (modelRoot == null)
         {
             return;
         }
 
-        // Renderer bounds are culling bounds, not the animated soles.
-        // Measure evaluated vertices so crouches and idle contact use the mesh.
-        float lowestPoint = float.PositiveInfinity;
-        if (contactMesh == null) contactMesh = new Mesh { name = "Player foot contact" };
-        foreach (SkinnedMeshRenderer renderer in mirrorBodyRenderers)
+        AnimationClip currentClip = activeAttackClip != null ? activeAttackClip : lastSampledClip;
+        bool measure = forceMeasure || !hasSoleMeasurement ||
+            Time.frameCount >= nextSoleMeasureFrame ||
+            !ReferenceEquals(currentClip, soleMeasuredClip) ||
+            jumping != soleMeasuredJumping;
+        float lowestPoint;
+        if (measure)
         {
-            if (renderer == null || !renderer.enabled) continue;
-            // Explicit scaled bake returns vertices in this imported renderer
-            // space. The default bake already contains the FBX scale.
-            renderer.BakeMesh(contactMesh, true);
-            contactMesh.GetVertices(contactVertices);
-            foreach (Vector3 vertex in contactVertices)
-                lowestPoint = Mathf.Min(lowestPoint, renderer.transform.TransformPoint(vertex).y);
+            lowestPoint = MeasureLowestBodyPoint();
+            if (float.IsInfinity(lowestPoint)) return;
+            soleBelowRoot = lowestPoint - modelRoot.transform.position.y;
+            hasSoleMeasurement = true;
+            soleMeasuredClip = currentClip;
+            soleMeasuredJumping = jumping;
+            nextSoleMeasureFrame = Time.frameCount + SoleMeasureInterval;
         }
-        if (float.IsInfinity(lowestPoint)) return;
+        else
+        {
+            lowestPoint = modelRoot.transform.position.y + soleBelowRoot;
+        }
         float floorY = controller != null
             ? controller.transform.TransformPoint(controller.center).y - controller.height * 0.5f
             : transform.position.y - 1f;
@@ -669,6 +693,31 @@ public sealed class PlayerHandRig : MonoBehaviour
         float contactOffset = floorY - lowestPoint;
         if (!jumping || contactOffset > 0f)
             modelRoot.transform.position += Vector3.up * contactOffset;
+    }
+
+    // Renderer bounds are culling bounds, not the animated soles.
+    // Measure evaluated vertices so crouches and idle contact use the mesh.
+    private float MeasureLowestBodyPoint()
+    {
+        float lowestPoint = float.PositiveInfinity;
+        if (contactMesh == null) contactMesh = new Mesh { name = "Player foot contact" };
+        foreach (SkinnedMeshRenderer renderer in mirrorBodyRenderers)
+        {
+            if (renderer == null || !renderer.enabled) continue;
+            // Explicit scaled bake returns vertices in this imported renderer
+            // space. The default bake already contains the FBX scale.
+            renderer.BakeMesh(contactMesh, true);
+            contactMesh.GetVertices(contactVertices);
+            Matrix4x4 toWorld = renderer.transform.localToWorldMatrix;
+            float m10 = toWorld.m10, m11 = toWorld.m11, m12 = toWorld.m12, m13 = toWorld.m13;
+            for (int i = 0; i < contactVertices.Count; i++)
+            {
+                Vector3 vertex = contactVertices[i];
+                float y = m10 * vertex.x + m11 * vertex.y + m12 * vertex.z + m13;
+                if (y < lowestPoint) lowestPoint = y;
+            }
+        }
+        return lowestPoint;
     }
 
     private void PreparePoseTransition(AnimationClip nextClip, bool attackMode)

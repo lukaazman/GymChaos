@@ -783,7 +783,15 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     }
 #endif
 
+    private static readonly Unity.Profiling.ProfilerMarker LateUpdateMarker =
+        new Unity.Profiling.ProfilerMarker("GymChaos.Late.MixamoScanRetargetAnimator");
+
     private void LateUpdate()
+    {
+        using (LateUpdateMarker.Auto()) LateUpdateBody();
+    }
+
+    private void LateUpdateBody()
     {
         if (!configured || modelRoot == null)
         {

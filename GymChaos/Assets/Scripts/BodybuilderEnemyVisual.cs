@@ -2052,6 +2052,9 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Vector3 eyeAnchorWorld = hasImportedFaceTarget
             ? importedEyeTargetWorld
             : visualRoot.TransformPoint(eyeAnchorLocal);
+        // Final per-scan correction measured from face close-up renders.
+        // Applied before the depth pass so the bar hugs the eye-line surface.
+        eyeAnchorWorld += faceUpWorld * (height * GetEyeBarLift(identity));
         float eyeHalfHeight = Mathf.Max(localHeight * 0.022f, size.y * 0.65f);
         float eyeHalfWidth = Mathf.Max(
             localHeight * rigProfile.HeadHalfWidth * 0.95f, size.x * 0.6f);
@@ -2131,6 +2134,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         // its curved sides follow the asset's measured depth spread instead
         // of floating in front of the face or following a collision box.
         Vector3 barOriginWorld = faceSurfaceWorld - faceDirectionWorld * faceDepth;
+        // A lowered/raised bar can meet a nose tip below the sampled band.
+        barOriginWorld += faceDirectionWorld * GetEyeBarPush(identity);
         Vector3 faceDirectionLocal = head.InverseTransformDirection(faceDirectionWorld).normalized;
         Vector3 upLocal = head.InverseTransformDirection(faceUpWorld).normalized;
         Quaternion faceRotation = Quaternion.LookRotation(faceDirectionLocal, upLocal);
@@ -2164,6 +2169,35 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         return identity == BodybuilderIdentity.Ronnie ||
             identity == BodybuilderIdentity.JayCutler ||
             identity == BodybuilderIdentity.Goku;
+    }
+
+    // Fraction of body height; positive raises the bar.
+    public static float GetEyeBarLift(BodybuilderIdentity identity)
+    {
+        switch (identity)
+        {
+            case BodybuilderIdentity.Zyzz:
+                return 0.048f;
+            case BodybuilderIdentity.Arnold:
+                return 0.021f;
+            case BodybuilderIdentity.Cbum:
+                return 0.047f;
+            case BodybuilderIdentity.JayCutler:
+                return -0.037f;
+            case BodybuilderIdentity.Goku:
+                return -0.038f;
+            default:
+                return 0f;
+        }
+    }
+
+    // World metres pushed out along the face direction.
+    private static float GetEyeBarPush(BodybuilderIdentity identity)
+    {
+        return identity == BodybuilderIdentity.Arnold ||
+            identity == BodybuilderIdentity.JayCutler
+            ? 0.012f
+            : 0f;
     }
 
     private static float GetImportedEyeBandDrop(BodybuilderIdentity identity)

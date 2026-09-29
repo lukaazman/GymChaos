@@ -234,7 +234,9 @@ public static class GymRoadsideBusStop
             markingY + 0.004f,
             yellow);
 
-        float busCenterX = bayEndX - DavieBusTargetLength * 0.5f - 0.8f;
+        // Parked 3.3 m inside the bay's east end: a forward pull-in then keeps
+        // the bus tail clear of the road wall beside the bay mouth.
+        float busCenterX = bayEndX - DavieBusTargetLength * 0.5f - 3.3f;
         DavieBusCenterPoint = new Vector3(busCenterX, floorY, busCenterZ);
         DavieBusPassengerPoint = new Vector3(
             busCenterX - DavieBusTargetLength * 0.5f + 1.75f,

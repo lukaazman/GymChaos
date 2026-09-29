@@ -1055,7 +1055,9 @@ public sealed class GymRadio : MonoBehaviour
         filter.sharedMesh = mesh;
         MeshRenderer renderer = model.AddComponent<MeshRenderer>();
         renderer.sharedMaterial = CreateRadioMaterial(gltf, binary);
-        renderer.shadowCastingMode = ShadowCastingMode.On;
+        // 141k-triangle scan on a counter: its shadow is a few pixels, so do
+        // not redraw the whole mesh into every shadow cascade.
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
         renderer.receiveShadows = true;
         radioModel = model;
         radioModelRenderer = renderer;
