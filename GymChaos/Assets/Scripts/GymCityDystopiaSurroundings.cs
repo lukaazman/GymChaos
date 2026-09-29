@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 /// <summary>
 /// Places the authored city_dystopia Blender export outside the unchanged gym
@@ -8,6 +9,7 @@ using UnityEngine;
 /// </summary>
 public static class GymCityDystopiaSurroundings
 {
+    public const int CityBackgroundLayer = 27;
     private const string RootName = "City Dystopia Surroundings (Runtime)";
     private const string AssetPath = "BodyBuilders/outside/city_dystopia_backdrop.glb";
 
@@ -36,6 +38,9 @@ public static class GymCityDystopiaSurroundings
     public static int ReadyPlacements { get; private set; }
     public static int LoadFailures { get; private set; }
     public static int HorizontalOverlaps { get; private set; }
+    public static int CityRendererCount { get; private set; }
+    public static int CheapRendererCount { get; private set; }
+    public static int CityColliderCount { get; private set; }
 
     public static void Build(
         Transform parent,
@@ -51,7 +56,7 @@ public static class GymCityDystopiaSurroundings
         float outerPathX,
         float roadStartX,
         float roadEndX,
-        Vector3 roadExit,
+        Vector3 roadOcclusionStart,
         float pathWidth,
         float roadWidth)
     {
@@ -81,7 +86,10 @@ public static class GymCityDystopiaSurroundings
             roomFloor.max.z + 1.1f,
             parkingMaxZ,
             pathNorthZ + 1.1f,
-            roadExit.z + 3.2f,
+            // Keep the protected/playable envelope tied to the point where
+            // the road disappears behind the city. The vehicle spawn point
+            // is intentionally farther inside the city ring.
+            roadOcclusionStart.z + 3.2f,
             parkingCenterZ + roadWidth * 0.5f + 1.1f);
 
         bool lockerRoomIncluded = false;
@@ -111,6 +119,9 @@ public static class GymCityDystopiaSurroundings
         ReadyPlacements = 0;
         LoadFailures = 0;
         HorizontalOverlaps = 0;
+        CityRendererCount = 0;
+        CheapRendererCount = 0;
+        CityColliderCount = 0;
 
         GameObject root = new GameObject(RootName);
         root.transform.SetParent(parent, true);
@@ -218,8 +229,8 @@ public static class GymCityDystopiaSurroundings
         Bounds protectedBounds,
         float floorY)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ??
-            Shader.Find("Standard");
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
+            Shader.Find("Unlit/Color") ?? Shader.Find("Unlit/Texture");
         if (shader == null)
         {
             return;
@@ -228,7 +239,8 @@ public static class GymCityDystopiaSurroundings
         Material material = new Material(shader)
         {
             name = "City Dystopia Ground Infill",
-            color = new Color(0.012f, 0.031f, 0.036f, 1f)
+            color = new Color(0.012f, 0.031f, 0.036f, 1f),
+            enableInstancing = true
         };
         if (material.HasProperty("_BaseColor"))
         {
@@ -301,6 +313,10 @@ public static class GymCityDystopiaSurroundings
         if (renderer != null)
         {
             renderer.sharedMaterial = material;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.lightProbeUsage = LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
         }
         Collider collider = ground.GetComponent<Collider>();
         if (collider != null)
@@ -325,10 +341,11 @@ public static class GymCityDystopiaSurroundings
             rotation,
             Vector3.one * scale,
             objectName,
-            0,
+            CityBackgroundLayer,
             settleOnSupport: true,
             supportY: tracker.FloorY,
-            onLoaded: loaded => tracker.Record(objectName, side, loaded));
+            onLoaded: loaded => tracker.Record(objectName, side, loaded),
+            renderProfile: RuntimeGlbRenderProfile.CheapBackground);
     }
 
     private sealed class CityDystopiaBuildTracker
@@ -361,6 +378,30 @@ public static class GymCityDystopiaSurroundings
                 return;
             }
 
+            MeshRenderer[] cityRenderers =
+                loaded.GetComponentsInChildren<MeshRenderer>(true);
+            int cheapRendererCount = 0;
+            for (int rendererIndex = 0;
+                rendererIndex < cityRenderers.Length; rendererIndex++)
+            {
+                MeshRenderer renderer = cityRenderers[rendererIndex];
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+                renderer.lightProbeUsage = LightProbeUsage.Off;
+                renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                renderer.allowOcclusionWhenDynamic = false;
+                if (renderer.sharedMaterial != null &&
+                    renderer.sharedMaterial.shader != null &&
+                    renderer.sharedMaterial.shader.name.IndexOf(
+                        "Unlit", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    cheapRendererCount++;
+                }
+            }
+            int colliderCount = loaded.GetComponentsInChildren<Collider>(true).Length;
+            CityRendererCount += cityRenderers.Length;
+            CheapRendererCount += cheapRendererCount;
+            CityColliderCount += colliderCount;
             Bounds cityBounds = CalculateRendererBounds(loaded);
             bool horizontalOverlap =
                 cityBounds.min.x < protectedBounds.max.x &&
@@ -378,8 +419,9 @@ public static class GymCityDystopiaSurroundings
             HorizontalOverlaps = horizontalOverlaps;
             Debug.Log(
                 $"GYMCHAOS_CITY_DYSTOPIA_PLACED object={objectName} side={side} " +
-                $"bounds={cityBounds} horizontalOverlap={(horizontalOverlap ? 1 : 0)} " +
-                $"renderers={loaded.GetComponentsInChildren<MeshRenderer>(true).Length}",
+                    $"bounds={cityBounds} horizontalOverlap={(horizontalOverlap ? 1 : 0)} " +
+                    $"renderers={cityRenderers.Length} cheapRenderers={cheapRendererCount} " +
+                    $"colliders={colliderCount}",
                 loaded);
 
             if (ready >= Expected)
@@ -388,7 +430,9 @@ public static class GymCityDystopiaSurroundings
                     $"GYMCHAOS_CITY_DYSTOPIA_CONTRACT_" +
                     $"{(failed == 0 && horizontalOverlaps == 0 ? "OK" : "FAIL")} " +
                     $"expected={Expected} ready={ready} failed={failed} " +
-                    $"horizontalOverlaps={horizontalOverlaps} sides=4 corners=4",
+                    $"horizontalOverlaps={horizontalOverlaps} sides=4 corners=4 " +
+                    $"renderers={CityRendererCount} cheapRenderers={CheapRendererCount} " +
+                    $"colliders={CityColliderCount}",
                     loaded);
             }
         }
@@ -412,7 +456,6 @@ public static class GymCityDystopiaSurroundings
         }
     }
 }
-
 
 
 

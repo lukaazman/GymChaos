@@ -7,12 +7,19 @@ using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.Rendering;
 
+public enum RuntimeGlbRenderProfile
+{
+    Default,
+    CheapBackground
+}
+
 /// <summary>
 /// Runtime loader for a compact multi-material GLB scene.
 ///
 /// The city backdrop is exported from the authored Blender scene as one mesh
-/// with several material primitives.  This loader keeps all primitives and
-/// their glTF PBR/emission colors, unlike RuntimeGlbModelLoader which is
+/// with several material primitives, while the protein store is exported as
+/// many named mesh nodes. This loader keeps every referenced node/primitive
+/// and their glTF PBR/emission colors, unlike RuntimeGlbModelLoader which is
 /// intentionally limited to the first primitive of a single-mesh prop.
 /// </summary>
 public sealed class RuntimeGlbSceneLoader : MonoBehaviour
@@ -28,6 +35,8 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
 
     private static readonly Dictionary<string, Texture2D> FacadeFallbackTextures =
         new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<Material, Material> CheapMaterialCache =
+        new Dictionary<Material, Material>();
 
     private readonly HashSet<string> pending =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -36,6 +45,10 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
     {
         public Mesh Mesh;
         public Material Material;
+        public string Name;
+        public Vector3 LocalPosition;
+        public Quaternion LocalRotation;
+        public Vector3 LocalScale;
     }
 
     private sealed class RuntimeSceneAsset
@@ -78,6 +91,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
     [Serializable]
     private sealed class GltfMesh
     {
+        public string name;
         public GltfPrimitive[] primitives;
     }
 
@@ -100,6 +114,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
     [Serializable]
     private sealed class GltfNode
     {
+        public string name;
         public int mesh = -1;
         public float[] translation;
         public float[] rotation;
@@ -113,6 +128,8 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         public GltfPbrMetallicRoughness pbrMetallicRoughness;
         public float[] emissiveFactor;
         public bool doubleSided;
+        public string alphaMode;
+        public float alphaCutoff = 0.5f;
         public GltfMaterialExtensions extensions;
     }
 
@@ -173,7 +190,8 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         int layer = 0,
         bool settleOnSupport = false,
         float supportY = 0f,
-        Action<GameObject> onLoaded = null)
+        Action<GameObject> onLoaded = null,
+        RuntimeGlbRenderProfile renderProfile = RuntimeGlbRenderProfile.Default)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
         {
@@ -191,6 +209,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             root,
             settleOnSupport,
             supportY,
+            renderProfile,
             onLoaded));
         return root;
     }
@@ -232,6 +251,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         GameObject root,
         bool settleOnSupport,
         float supportY,
+        RuntimeGlbRenderProfile renderProfile,
         Action<GameObject> onLoaded)
     {
         RuntimeSceneAsset asset = null;
@@ -254,14 +274,17 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             }
         }
 
-        if (root == null || asset == null || asset.Parts == null ||
-            asset.Parts.Length == 0)
+        // A consumer can be destroyed while the async GLB request is pending.
+        // Unity's overloaded null check identifies that cancellation case; do
+        // not call the consumer callback with a false asset failure.
+        if (root == null)
         {
-            if (root != null)
-            {
-                DestroyRuntimeObject(root);
-            }
+            yield break;
+        }
 
+        if (asset == null || asset.Parts == null || asset.Parts.Length == 0)
+        {
+            DestroyRuntimeObject(root);
             onLoaded?.Invoke(null);
             yield break;
         }
@@ -275,6 +298,9 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
 
         Bounds combinedBounds = default;
         bool hasBounds = false;
+        bool cheapBackgroundProfile = renderProfile ==
+            RuntimeGlbRenderProfile.CheapBackground;
+        int partsPerYield = cheapBackgroundProfile ? 2 : 24;
         for (int partIndex = 0; partIndex < asset.Parts.Length; partIndex++)
         {
             RuntimeScenePart part = asset.Parts[partIndex];
@@ -284,17 +310,34 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             }
 
             GameObject child = new GameObject(
-                string.IsNullOrEmpty(part.Mesh.name)
-                    ? "City material primitive"
-                    : part.Mesh.name);
+                string.IsNullOrEmpty(part.Name)
+                    ? (string.IsNullOrEmpty(part.Mesh.name)
+                        ? "GLB material primitive"
+                        : part.Mesh.name)
+                    : part.Name);
             child.transform.SetParent(contentRoot.transform, false);
+            child.transform.localPosition = part.LocalPosition;
+            child.transform.localRotation = part.LocalRotation;
+            child.transform.localScale = part.LocalScale;
             child.layer = root.layer;
             MeshFilter filter = child.AddComponent<MeshFilter>();
             filter.sharedMesh = part.Mesh;
             MeshRenderer renderer = child.AddComponent<MeshRenderer>();
-            renderer.sharedMaterial = part.Material;
-            renderer.shadowCastingMode = ShadowCastingMode.On;
-            renderer.receiveShadows = true;
+            renderer.sharedMaterial = cheapBackgroundProfile
+                ? GetCheapBackgroundMaterial(part.Material)
+                : part.Material;
+            renderer.shadowCastingMode = cheapBackgroundProfile
+                ? ShadowCastingMode.Off
+                : ShadowCastingMode.On;
+            renderer.receiveShadows = !cheapBackgroundProfile;
+            if (cheapBackgroundProfile)
+            {
+                renderer.lightProbeUsage = LightProbeUsage.Off;
+                renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                renderer.motionVectorGenerationMode =
+                    MotionVectorGenerationMode.ForceNoMotion;
+                renderer.allowOcclusionWhenDynamic = false;
+            }
 
             if (!hasBounds)
             {
@@ -304,6 +347,10 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             else
             {
                 combinedBounds.Encapsulate(renderer.bounds);
+            }
+            if ((partIndex + 1) % partsPerYield == 0)
+            {
+                yield return null;
             }
         }
 
@@ -375,51 +422,122 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             yield break;
         }
 
-        cache[relativePath] = CreateAsset(relativePath, gltf, binary);
+        RuntimeSceneAsset createdAsset = null;
+        yield return StartCoroutine(CreateAssetIncrementally(
+            relativePath,
+            gltf,
+            binary,
+            asset => createdAsset = asset));
+        cache[relativePath] = createdAsset;
         yield return null;
     }
 
-    private static RuntimeSceneAsset CreateAsset(
+    private static IEnumerator CreateAssetIncrementally(
         string relativePath,
         GltfRoot gltf,
-        byte[] binary)
+        byte[] binary,
+        Action<RuntimeSceneAsset> completed)
     {
         if (gltf.meshes == null || gltf.meshes.Length == 0)
         {
-            return null;
+            completed(null);
+            yield break;
         }
 
-        int meshIndex = 0;
-        GltfNode node = null;
-        if (gltf.nodes != null)
+        List<RuntimeScenePart> parts = new List<RuntimeScenePart>();
+        Dictionary<int, Material> materials = new Dictionary<int, Material>();
+        double sliceStarted = Time.realtimeSinceStartupAsDouble;
+        if (gltf.nodes != null && gltf.nodes.Length > 0)
         {
             for (int nodeIndex = 0; nodeIndex < gltf.nodes.Length; nodeIndex++)
             {
-                if (gltf.nodes[nodeIndex] != null &&
-                    gltf.nodes[nodeIndex].mesh >= 0)
+                GltfNode node = gltf.nodes[nodeIndex];
+                if (node == null || node.mesh < 0 || node.mesh >= gltf.meshes.Length)
                 {
-                    meshIndex = gltf.nodes[nodeIndex].mesh;
-                    node = gltf.nodes[nodeIndex];
-                    break;
+                    continue;
+                }
+
+                AddMeshParts(
+                    relativePath,
+                    gltf,
+                    binary,
+                    gltf.meshes[node.mesh],
+                    node,
+                    parts, materials);
+                if (Time.realtimeSinceStartupAsDouble - sliceStarted >= 0.003)
+                {
+                    yield return null;
+                    sliceStarted = Time.realtimeSinceStartupAsDouble;
                 }
             }
         }
 
-        if (meshIndex < 0 || meshIndex >= gltf.meshes.Length)
+        if (parts.Count == 0)
         {
-            return null;
+            for (int meshIndex = 0; meshIndex < gltf.meshes.Length; meshIndex++)
+            {
+                AddMeshParts(
+                    relativePath,
+                    gltf,
+                    binary,
+                    gltf.meshes[meshIndex],
+                    null,
+                    parts, materials);
+                if (Time.realtimeSinceStartupAsDouble - sliceStarted >= 0.003)
+                {
+                    yield return null;
+                    sliceStarted = Time.realtimeSinceStartupAsDouble;
+                }
+            }
         }
 
-        GltfPrimitive[] primitives = gltf.meshes[meshIndex].primitives;
-        if (primitives == null || primitives.Length == 0)
+        if (parts.Count == 0)
         {
-            return null;
+            completed(null);
+            yield break;
         }
 
-        List<RuntimeScenePart> parts = new List<RuntimeScenePart>(primitives.Length);
-        for (int primitiveIndex = 0; primitiveIndex < primitives.Length; primitiveIndex++)
+        completed(new RuntimeSceneAsset
         {
-            GltfPrimitive primitive = primitives[primitiveIndex];
+            Parts = parts.ToArray(),
+            LocalPosition = Vector3.zero,
+            LocalRotation = Quaternion.identity,
+            LocalScale = Vector3.one
+        });
+    }
+
+    private static void AddMeshParts(
+        string relativePath,
+        GltfRoot gltf,
+        byte[] binary,
+        GltfMesh meshSource,
+        GltfNode node,
+        List<RuntimeScenePart> parts,
+        Dictionary<int, Material> materials)
+    {
+        if (meshSource == null || meshSource.primitives == null)
+        {
+            return;
+        }
+
+        Vector3 localPosition = node != null
+            ? ConvertPosition(ToVector3(node.translation, Vector3.zero))
+            : Vector3.zero;
+        Quaternion localRotation = node != null
+            ? ConvertRotation(node.rotation)
+            : Quaternion.identity;
+        Vector3 localScale = node != null
+            ? ToVector3(node.scale, Vector3.one)
+            : Vector3.one;
+        string nodeName = node != null && !string.IsNullOrEmpty(node.name)
+            ? node.name
+            : meshSource.name;
+
+        for (int primitiveIndex = 0;
+            primitiveIndex < meshSource.primitives.Length;
+            primitiveIndex++)
+        {
+            GltfPrimitive primitive = meshSource.primitives[primitiveIndex];
             if (primitive == null || primitive.attributes == null ||
                 primitive.attributes.POSITION < 0)
             {
@@ -446,7 +564,9 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             Vector2[] uvs = sourceUvs.Length == sourcePositions.Length
                 ? new Vector2[sourceUvs.Length]
                 : null;
-            for (int vertexIndex = 0; vertexIndex < sourcePositions.Length; vertexIndex++)
+            for (int vertexIndex = 0;
+                vertexIndex < sourcePositions.Length;
+                vertexIndex++)
             {
                 Vector3 source = sourcePositions[vertexIndex];
                 positions[vertexIndex] = ConvertPosition(source);
@@ -473,7 +593,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
 
             Mesh mesh = new Mesh
             {
-                name = $"Runtime GLB scene mesh {primitiveIndex} - {relativePath}",
+                name = $"Runtime GLB scene mesh {parts.Count} - {relativePath}",
                 indexFormat = IndexFormat.UInt32,
                 vertices = positions,
                 triangles = triangles
@@ -493,34 +613,30 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             }
 
             mesh.RecalculateBounds();
+            string partName = string.IsNullOrEmpty(nodeName)
+                ? $"GLB material primitive {parts.Count}"
+                : nodeName;
+            if (meshSource.primitives.Length > 1)
+            {
+                partName += $" Primitive {primitiveIndex}";
+            }
+            if (!materials.TryGetValue(primitive.material, out Material sharedMaterial))
+            {
+                sharedMaterial = CreateMaterial(gltf, binary, primitive.material,
+                    relativePath, primitiveIndex);
+                materials.Add(primitive.material, sharedMaterial);
+            }
             parts.Add(new RuntimeScenePart
             {
                 Mesh = mesh,
-                Material = CreateMaterial(gltf, binary, primitive.material, relativePath,
-                    primitiveIndex)
+                Material = sharedMaterial,
+                Name = partName,
+                LocalPosition = localPosition,
+                LocalRotation = localRotation,
+                LocalScale = localScale
             });
         }
-
-        if (parts.Count == 0)
-        {
-            return null;
-        }
-
-        return new RuntimeSceneAsset
-        {
-            Parts = parts.ToArray(),
-            LocalPosition = node != null
-                ? ConvertPosition(ToVector3(node.translation, Vector3.zero))
-                : Vector3.zero,
-            LocalRotation = node != null
-                ? ConvertRotation(node.rotation)
-                : Quaternion.identity,
-            LocalScale = node != null
-                ? ToVector3(node.scale, Vector3.one)
-                : Vector3.one
-        };
     }
-
     private static Material CreateMaterial(
         GltfRoot gltf,
         byte[] binary,
@@ -546,6 +662,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             ? source.pbrMetallicRoughness
             : null;
         bool isFacadeMaterial = source != null &&
+            !string.IsNullOrEmpty(source.name) &&
             source.name.StartsWith("MAT_Facade_Procedural_", StringComparison.OrdinalIgnoreCase);
         Color baseColor = ToColor(
             pbr != null ? pbr.baseColorFactor : null,
@@ -585,6 +702,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         }
         material.SetColor("_BaseColor", baseColor);
         material.SetColor("_Color", baseColor);
+        ConfigureAlphaMode(material, source);
         if (pbr != null)
         {
             if (material.HasProperty("_Metallic"))
@@ -634,6 +752,128 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         return material;
     }
 
+    private static Material GetCheapBackgroundMaterial(Material source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        if (CheapMaterialCache.TryGetValue(source, out Material cached) &&
+            cached != null)
+        {
+            return cached;
+        }
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
+            Shader.Find("Unlit/Texture") ?? Shader.Find("Unlit/Color");
+        if (shader == null)
+        {
+            return source;
+        }
+
+        Material material = new Material(shader)
+        {
+            name = source.name + " (Cheap Background)",
+            enableInstancing = true
+        };
+        Texture sourceTexture = source.HasProperty("_BaseMap")
+            ? source.GetTexture("_BaseMap")
+            : source.HasProperty("_MainTex")
+                ? source.GetTexture("_MainTex")
+                : null;
+        if (sourceTexture != null)
+        {
+            if (material.HasProperty("_BaseMap"))
+            {
+                material.SetTexture("_BaseMap", sourceTexture);
+            }
+            if (material.HasProperty("_MainTex"))
+            {
+                material.SetTexture("_MainTex", sourceTexture);
+            }
+        }
+
+        Color color = source.HasProperty("_BaseColor")
+            ? source.GetColor("_BaseColor")
+            : source.HasProperty("_Color")
+                ? source.GetColor("_Color")
+                : Color.white;
+        if (material.HasProperty("_BaseColor"))
+        {
+            material.SetColor("_BaseColor", color);
+        }
+        if (material.HasProperty("_Color"))
+        {
+            material.SetColor("_Color", color);
+        }
+
+        CheapMaterialCache[source] = material;
+        return material;
+    }
+
+    private static void ConfigureAlphaMode(Material material, GltfMaterial source)
+    {
+        if (material == null || source == null ||
+            string.IsNullOrEmpty(source.alphaMode))
+        {
+            return;
+        }
+
+        bool transparent = string.Equals(
+            source.alphaMode, "BLEND", StringComparison.OrdinalIgnoreCase);
+        bool alphaClip = string.Equals(
+            source.alphaMode, "MASK", StringComparison.OrdinalIgnoreCase);
+        if (!transparent && !alphaClip)
+        {
+            return;
+        }
+
+        if (material.HasProperty("_Surface"))
+        {
+            material.SetFloat("_Surface", transparent ? 1f : 0f);
+        }
+        if (material.HasProperty("_AlphaClip"))
+        {
+            material.SetFloat("_AlphaClip", alphaClip ? 1f : 0f);
+        }
+        if (material.HasProperty("_Cutoff"))
+        {
+            material.SetFloat("_Cutoff", Mathf.Clamp01(source.alphaCutoff));
+        }
+
+        if (transparent)
+        {
+            material.SetOverrideTag("RenderType", "Transparent");
+            if (material.HasProperty("_Blend"))
+            {
+                material.SetFloat("_Blend", 0f);
+            }
+            if (material.HasProperty("_SrcBlend"))
+            {
+                material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+            }
+            if (material.HasProperty("_DstBlend"))
+            {
+                material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+            }
+            if (material.HasProperty("_ZWrite"))
+            {
+                material.SetInt("_ZWrite", 0);
+            }
+            material.DisableKeyword("_ALPHATEST_ON");
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.renderQueue = (int)RenderQueue.Transparent;
+        }
+        else
+        {
+            material.SetOverrideTag("RenderType", "TransparentCutout");
+            material.EnableKeyword("_ALPHATEST_ON");
+            material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.renderQueue = (int)RenderQueue.AlphaTest;
+        }
+    }
     private static Texture2D LoadGlbTexture(
         GltfRoot gltf,
         byte[] binary,
@@ -1033,4 +1273,3 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         }
     }
 }
-

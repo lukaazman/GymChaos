@@ -109,6 +109,6 @@ ModelImporter:
   importBlendShapeDeformPercent: 1
   remapMaterialsIfMaterialImportModeIsNone: 0
   additionalBone: 0
-  userData: 
+  userData: gymchaosCanonicalSquatSourcePath=Assets/BodyBuilders/enemies/anims/squat.fbx;gymchaosCanonicalSquatSourceSha256=C2817FEA7F9AA411BB7EC6493EC78B789EB2FDF2FD882946AEE3F8B9B9E8FD04;gymchaosCanonicalSquatRuntimeClip=rig.001|squat
   assetBundleName: 
   assetBundleVariant: 

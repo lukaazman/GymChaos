@@ -8,14 +8,84 @@ using UnityEngine.Rendering;
 public static class GymBackRoomBuilder
 {
     private const string RootName = "Gym Back Area (Runtime)";
-    private const float BackWidth = 12f;
-    private const float BackDepth = 10f;
-    private const float BackHeight = 4.2f;
+    private const float BackWidth = 17.5f;
+    private const float BackDepth = 13f;
+    private const float BackHeight = 4.4f;
     private const float DoorWidth = 2.8f;
+    private const string WoodenBenchAsset = "BodyBuilders/items/wooden_bench.glb";
+    private const string ToiletAsset = "BodyBuilders/items/toilet.glb";
+    private const string SinkAsset = "BodyBuilders/items/sink.glb";
+    private const string ColorBagAsset = "BodyBuilders/items/color_bag.glb";
+    private const string BlackBagAsset = "BodyBuilders/items/black_bag.glb";
+    // The authored bench is imported at 2.7x and its runtime top is about
+    // 0.51 m above the room floor.  Bags are settled onto that surface, not
+    // onto an assumed standing-height marker.
+    private const float BenchSeatSupportHeight = 0.52f;
+    private const float BenchBagScale = 0.78f;
     private static Bounds roomBounds;
     private static bool roomBoundsReady;
     private static float roomFloorY;
     private static Vector3 roomCenter;
+    private static Vector3 lockerVisitPoint;
+    private static Quaternion lockerVisitRotation = Quaternion.identity;
+    private const int LockerVisitSlotCount = 4;
+    private static readonly bool[] lockerSlotReserved = new bool[LockerVisitSlotCount];
+    private static readonly BodybuilderIdentity[] lockerSlotOwners = new BodybuilderIdentity[LockerVisitSlotCount];
+    private static readonly System.Collections.Generic.List<GameObject>[] benchBags =
+    {
+        new System.Collections.Generic.List<GameObject>(2),
+        new System.Collections.Generic.List<GameObject>(2)
+    };
+    private static readonly int[] visibleBagCounts = new int[2];
+    private static readonly int[] visibleBagStartIndices = new int[2];
+    private static readonly System.Collections.Generic.Dictionary<BodybuilderIdentity, int> bagOwnerBench =
+        new System.Collections.Generic.Dictionary<BodybuilderIdentity, int>();
+    private static readonly GameObject[] loadedBenches = new GameObject[2];
+    private static readonly System.Collections.Generic.HashSet<BodybuilderIdentity> activeBagVisitors =
+        new System.Collections.Generic.HashSet<BodybuilderIdentity>();
+    private static int authoredLockerPropRequests;
+    private static int authoredLockerPropsLoaded;
+
+    public static bool HasAuthoredLockerProps =>
+        authoredLockerPropRequests > 0 &&
+        authoredLockerPropsLoaded >= authoredLockerPropRequests;
+    public static int VisibleBenchBagCount
+    {
+        get
+        {
+            int visible = 0;
+            for (int bench = 0; bench < benchBags.Length; bench++)
+            {
+                for (int i = 0; i < benchBags[bench].Count; i++)
+                {
+                    if (benchBags[bench][i] != null && benchBags[bench][i].activeSelf) visible++;
+                }
+            }
+            return visible;
+        }
+    }
+    public static int GetVisibleBagCountForBench(int benchIndex)
+    {
+        if (benchIndex < 0 || benchIndex >= benchBags.Length) return 0;
+        int visible = 0;
+        for (int i = 0; i < benchBags[benchIndex].Count; i++)
+        {
+            if (benchBags[benchIndex][i] != null && benchBags[benchIndex][i].activeSelf) visible++;
+        }
+        return visible;
+    }
+    public static bool HasActiveBagVisitor => activeBagVisitors.Count > 0;
+    public static BodybuilderIdentity ActiveBagVisitor
+    {
+        get
+        {
+            foreach (BodybuilderIdentity identity in activeBagVisitors)
+            {
+                return identity;
+            }
+            return BodybuilderIdentity.Mark;
+        }
+    }
 
     public static bool TryGetRoomBounds(out Bounds bounds)
     {
@@ -71,14 +141,16 @@ public static class GymBackRoomBuilder
             roomCenter + Vector3.up * (BackHeight * 0.5f),
             new Vector3(BackWidth, BackHeight, BackDepth));
         roomBoundsReady = true;
+        lockerVisitPoint = GetLockerSlotPosition(0);
+        lockerVisitRotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
         GameObject rootObject = new GameObject(RootName);
         rootObject.transform.SetParent(parent, true);
 
-        Material floorMaterial = CreateMaterial("Locker room rubber floor", new Color(0.025f, 0.04f, 0.075f), 0.1f, 0.38f);
+        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", new Color(0.025f, 0.04f, 0.075f));
         Material wallMaterial = CreateMaterial("Locker room wall", new Color(0.22f, 0.25f, 0.29f), 0f, 0.28f);
         Material trimMaterial = CreateMaterial("Locker room trim", new Color(0.035f, 0.045f, 0.06f), 0.35f, 0.64f);
         Material accentMaterial = CreateMaterial("Locker room accent", new Color(0.82f, 0.13f, 0.08f), 0.05f, 0.42f);
-        Material tileMaterial = CreateMaterial("Bathroom tile", new Color(0.26f, 0.33f, 0.41f), 0.02f, 0.52f);
+        Material tileMaterial = GymSurfaceMaterialFactory.CreateBathroomTile("Bathroom tile", new Color(0.26f, 0.33f, 0.41f));
         Material mirrorMaterial = CreateMaterial("Locker room mirror", new Color(0.58f, 0.68f, 0.76f), 0.9f, 0.95f);
         Material metalMaterial = CreateMaterial("Locker metal", new Color(0.12f, 0.15f, 0.19f), 0.72f, 0.48f);
         SetEmission(accentMaterial, new Color(0.55f, 0.025f, 0.01f));
@@ -122,7 +194,9 @@ public static class GymBackRoomBuilder
             new Vector3(0.16f, 3.6f, 0.18f), accentMaterial, false);
         CreateLockerBays(rootObject.transform, roomCenter, floorY, minX, maxX, metalMaterial, accentMaterial);
         CreateBenches(rootObject.transform, roomCenter, floorY, trimMaterial, accentMaterial);
-        CreateBathroom(rootObject.transform, roomCenter, floorY, tileMaterial, metalMaterial, accentMaterial);
+        CreateBathroom(
+            rootObject.transform, roomCenter, floorY, tileMaterial, metalMaterial,
+            accentMaterial, mirrorMaterial, player);
         CreateMirror(rootObject.transform, roomCenter, floorY, mirrorMaterial, trimMaterial, player);
 
         CreateInteractable(rootObject.transform, "Locker Room Prep Point",
@@ -136,7 +210,8 @@ public static class GymBackRoomBuilder
 
         Debug.Log(
             $"GYMCHAOS_BACK_ROOM_OK center={roomCenter} size={BackWidth:F1}x{BackDepth:F1} " +
-            $"doorWidth={DoorWidth:F1} bathroom=1 mirror=1",
+            $"doorWidth={DoorWidth:F1} bathroom=1 lockerBanks=1 lockers=7 lockerDoors=14 lockerSlots=4 bags=4 " +
+            $"benches=2 bathroomMirrors=3 mirror=1",
             rootObject);
     }
 
@@ -212,21 +287,456 @@ public static class GymBackRoomBuilder
         return true;
     }
 
+    public static bool TryGetLockerVisitPose(
+        out Vector3 visitorPosition, out Quaternion visitorRotation)
+    {
+        visitorPosition = lockerVisitPoint;
+        visitorRotation = lockerVisitRotation;
+        if (!roomBoundsReady)
+        {
+            GameObject existingRoot = GameObject.Find(RootName);
+            if (existingRoot != null)
+            {
+                RebuildBoundsFromExistingRoot(existingRoot);
+            }
+        }
+
+        if (!roomBoundsReady)
+        {
+            visitorPosition = default;
+            visitorRotation = Quaternion.identity;
+            return false;
+        }
+
+        if (visitorPosition == Vector3.zero)
+        {
+            visitorPosition = new Vector3(
+                roomCenter.x - 5.65f,
+                roomFloorY,
+                roomCenter.z + 0.90f);
+            visitorRotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
+        }
+        return true;
+    }
+
+    public static bool TryGetLockerVisitPose(
+        BodybuilderIdentity identity,
+        out Vector3 visitorPosition,
+        out Quaternion visitorRotation)
+    {
+        visitorPosition = default;
+        visitorRotation = Quaternion.identity;
+        Vector3 ignoredPosition;
+        Quaternion ignoredRotation;
+        if (!TryGetLockerVisitPose(out ignoredPosition, out ignoredRotation))
+        {
+            return false;
+        }
+        if (!TryReserveLockerSlot(identity, out int slot))
+        {
+            return false;
+        }
+
+        visitorPosition = GetLockerSlotPosition(slot);
+        visitorRotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
+        return true;
+    }
+
+    // Clear gap between the two bathroom divider segments.
+    public static float BathroomPassageWidthForVerification
+    {
+        get
+        {
+            GameObject root = GameObject.Find(RootName);
+            if (root == null ||
+                !TryGetNamedBounds(root.transform, "Bathroom divider south", out Bounds south) ||
+                !TryGetNamedBounds(root.transform, "Bathroom divider north", out Bounds north))
+            {
+                return 0f;
+            }
+            return north.min.z - south.max.z;
+        }
+    }
+
+    public static bool HasRequiredLockerLayoutForVerification(out string details)
+    {
+        GameObject root = GameObject.Find(RootName);
+        if (root == null)
+        {
+            details = "root=missing";
+            return false;
+        }
+        Transform[] nodes = root.GetComponentsInChildren<Transform>(true);
+        int lockers = 0;
+        int lockerDoors = 0;
+        int benches = 0;
+        int bathroomMirrors = 0;
+        int sinks = 0;
+        int toilets = 0;
+        int bagObjects = 0;
+        for (int index = 0; index < nodes.Length; index++)
+        {
+            string name = nodes[index].name;
+            if (name == "Locker cabinet") lockers++;
+            if (name == "Inset locker door") lockerDoors++;
+            if (name.StartsWith("Authored wooden locker bench ")) benches++;
+            if (name.StartsWith("Bathroom mirror ") && !name.Contains("frame")) bathroomMirrors++;
+            if (name.StartsWith("Authored sink ")) sinks++;
+            if (name == "Authored toilet") toilets++;
+            if (name.EndsWith("color bag") || name.EndsWith("black bag")) bagObjects++;
+        }
+        TryGetRoomBounds(out Bounds bounds);
+        bool dimensions = bounds.size.x >= 17.4f && bounds.size.z >= 12.9f;
+        bool centerClear = root.transform.Find("Central Locker Bank Header") == null;
+        for (int index = 0; index < nodes.Length && centerClear; index++)
+        {
+            Transform node = nodes[index];
+            if (node.name == "Locker cabinet" &&
+                Mathf.Abs(node.position.x - roomCenter.x) < 1.2f)
+            {
+                centerClear = false;
+            }
+        }
+        bool partition = TryGetNamedBounds(
+            root.transform, "Bathroom divider south", out Bounds partitionSouth) &&
+            TryGetNamedBounds(
+                root.transform, "Bathroom divider north", out Bounds partitionNorth) &&
+            partitionSouth.size.y >= BackHeight - 0.1f &&
+            partitionNorth.size.y >= BackHeight - 0.1f &&
+            // Full-run divider except the one entry passage (at most 2.3 m).
+            partitionSouth.size.z + partitionNorth.size.z >= BackDepth - 2.3f;
+        bool fixturesWallFlush = AreBathroomFixturesWallFlush(root.transform);
+        bool separateStall =
+            TryGetNamedBounds(root.transform, "Bathroom stall west wall", out Bounds _) &&
+            TryGetNamedBounds(root.transform, "Bathroom stall south wall left", out Bounds _) &&
+            TryGetNamedBounds(root.transform, "Bathroom stall south wall right", out Bounds _);
+        bool fixturesGrounded = AreNamedPropsGrounded(
+            root.transform, "Authored sink ", "Authored toilet");
+        PlanarGymMirror[] mirrors =
+            root.GetComponentsInChildren<PlanarGymMirror>(true);
+        bool mirrorView = mirrors.Length >= 2;
+        for (int index = 0; index < mirrors.Length && mirrorView; index++)
+        {
+            mirrorView &= mirrors[index] != null &&
+                mirrors[index].ReflectionIncludesPlayerLayer;
+        }
+        bool bagsGrounded = AreBagsGrounded(root.transform);
+        bool passed = dimensions && lockers >= 7 && lockerDoors >= 14 &&
+            benches == 2 &&
+            bathroomMirrors >= 3 && sinks >= 3 && toilets >= 1 &&
+            root.transform.Find("Locker Room Ceiling") != null &&
+            centerClear && partition && fixturesWallFlush && separateStall &&
+            fixturesGrounded && mirrorView &&
+            bagObjects >= 4 && bagsGrounded;
+        details = $"size={bounds.size} lockers={lockers} doors={lockerDoors} " +
+            $"benches={benches} " +
+            $"bathroomMirrors={bathroomMirrors} sinks={sinks} toilets={toilets} " +
+            $"centerClear={centerClear} partition={partition} " +
+            $"fixturesWallFlush={fixturesWallFlush} separateStall={separateStall} " +
+            $"fixturesGrounded={fixturesGrounded} mirrorView={mirrorView} " +
+            $"bagObjects={bagObjects} bagsGrounded={bagsGrounded}";
+        return passed;
+    }
+
+    private static bool AreBathroomFixturesWallFlush(Transform root)
+    {
+        float eastWallInsideX = roomCenter.x + BackWidth * 0.5f - 0.12f;
+        Transform[] nodes = root.GetComponentsInChildren<Transform>(true);
+        int sinks = 0;
+        int mirrors = 0;
+        bool soapShelf = false;
+        for (int index = 0; index < nodes.Length; index++)
+        {
+            Transform node = nodes[index];
+            if (node.name.StartsWith("Authored sink "))
+            {
+                sinks++;
+                if (eastWallInsideX - node.position.x > 1.15f)
+                {
+                    return false;
+                }
+            }
+            else if (node.name.StartsWith("Bathroom mirror ") &&
+                !node.name.Contains("frame"))
+            {
+                mirrors++;
+                if (Mathf.Abs(node.position.x - eastWallInsideX) > 0.18f)
+                {
+                    return false;
+                }
+            }
+            else if (node.name == "Bathroom soap shelf")
+            {
+                soapShelf = Mathf.Abs(node.position.x - eastWallInsideX) <= 0.75f;
+            }
+        }
+        return sinks >= 3 && mirrors >= 3 && soapShelf;
+    }
+
+    private static bool TryGetNamedBounds(
+        Transform root, string name, out Bounds bounds)
+    {
+        Transform target = root != null ? root.Find(name) : null;
+        Renderer[] renderers = target != null
+            ? target.GetComponentsInChildren<Renderer>(true)
+            : new Renderer[0];
+        if (renderers.Length == 0)
+        {
+            bounds = default;
+            return false;
+        }
+
+        bounds = renderers[0].bounds;
+        for (int index = 1; index < renderers.Length; index++)
+        {
+            bounds.Encapsulate(renderers[index].bounds);
+        }
+        return true;
+    }
+
+    private static bool AreNamedPropsGrounded(
+        Transform root, string sinkPrefix, string toiletName)
+    {
+        Transform[] nodes = root.GetComponentsInChildren<Transform>(true);
+        int fixtureCount = 0;
+        for (int index = 0; index < nodes.Length; index++)
+        {
+            Transform node = nodes[index];
+            if (node == null ||
+                (!node.name.StartsWith(sinkPrefix) && node.name != toiletName))
+            {
+                continue;
+            }
+
+            if (!TryGetNamedBounds(root, node.name, out Bounds bounds) ||
+                Mathf.Abs(bounds.min.y - roomFloorY) > 0.06f)
+            {
+                return false;
+            }
+            fixtureCount++;
+        }
+
+        return fixtureCount >= 4;
+    }
+
+    private static bool AreBagsGrounded(Transform root)
+    {
+        Transform[] nodes = root.GetComponentsInChildren<Transform>(true);
+        bool leftBenchReady = TryGetNamedBounds(
+            root, "Authored wooden locker bench Left", out Bounds leftBench);
+        bool rightBenchReady = TryGetNamedBounds(
+            root, "Authored wooden locker bench Right", out Bounds rightBench);
+        int bagCount = 0;
+        for (int index = 0; index < nodes.Length; index++)
+        {
+            Transform node = nodes[index];
+            if (node == null ||
+                (!node.name.EndsWith("color bag") &&
+                 !node.name.EndsWith("black bag")))
+            {
+                continue;
+            }
+
+            Renderer[] renderers = node.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+            {
+                return false;
+            }
+            Bounds bounds = renderers[0].bounds;
+            for (int rendererIndex = 1;
+                rendererIndex < renderers.Length; rendererIndex++)
+            {
+                bounds.Encapsulate(renderers[rendererIndex].bounds);
+            }
+            bool dimensions = bounds.size.x >= 0.10f &&
+                bounds.size.y >= 0.10f && bounds.size.z >= 0.10f &&
+                bounds.size.x <= 1.60f && bounds.size.y <= 1.60f &&
+                bounds.size.z <= 1.60f;
+            Bounds bench = node.name.StartsWith("Left ")
+                ? leftBench : rightBench;
+            bool horizontalSupport = (node.name.StartsWith("Left ")
+                    ? leftBenchReady : rightBenchReady) &&
+                bounds.max.x >= bench.min.x - 0.25f &&
+                bounds.min.x <= bench.max.x + 0.25f &&
+                bounds.max.z >= bench.min.z - 0.25f &&
+                bounds.min.z <= bench.max.z + 0.25f;
+            bool verticalSupport = Mathf.Abs(bounds.min.y - (bench.max.y + 0.005f)) <= 0.02f;
+            if (!dimensions || !horizontalSupport || !verticalSupport)
+            {
+                return false;
+            }
+            bagCount++;
+        }
+
+        return bagCount >= 4;
+    }
+
+    public static int LockerSlotCapacity => LockerVisitSlotCount;
+
+    public static int ReservedLockerSlotCount
+    {
+        get
+        {
+            int count = 0;
+            for (int index = 0; index < lockerSlotReserved.Length; index++)
+            {
+                if (lockerSlotReserved[index])
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+
+    public static bool TryReserveLockerSlot(
+        BodybuilderIdentity identity, out int slot)
+    {
+        for (int index = 0; index < lockerSlotReserved.Length; index++)
+        {
+            if (lockerSlotReserved[index] &&
+                lockerSlotOwners[index] == identity)
+            {
+                slot = index;
+                return true;
+            }
+        }
+        for (int index = 0; index < lockerSlotReserved.Length; index++)
+        {
+            if (!lockerSlotReserved[index])
+            {
+                lockerSlotReserved[index] = true;
+                lockerSlotOwners[index] = identity;
+                slot = index;
+                Debug.Log(
+                    $"GYMCHAOS_LOCKER_SLOT_RESERVED identity={identity} " +
+                    $"slot={slot} reserved={ReservedLockerSlotCount}");
+                return true;
+            }
+        }
+        slot = -1;
+        return false;
+    }
+
+    public static void ReleaseLockerSlot(BodybuilderIdentity identity)
+    {
+        for (int index = 0; index < lockerSlotReserved.Length; index++)
+        {
+            if (lockerSlotReserved[index] &&
+                lockerSlotOwners[index] == identity)
+            {
+                lockerSlotReserved[index] = false;
+                Debug.Log(
+                    $"GYMCHAOS_LOCKER_SLOT_RELEASED identity={identity} " +
+                    $"slot={index} reserved={ReservedLockerSlotCount}");
+                return;
+            }
+        }
+    }
+
+    private static Vector3 GetLockerSlotPosition(int slot)
+    {
+        int safeSlot = Mathf.Clamp(slot, 0, LockerVisitSlotCount - 1);
+        float xOffset = -6.35f;
+        float zOffset = (safeSlot - 1.5f) * 1.55f;
+        return new Vector3(roomCenter.x + xOffset, roomFloorY, roomCenter.z + zOffset);
+    }
+
+    public static bool TryGetLockerVisitRoute(
+        Vector3 destination,
+        out Vector3[] route,
+        out Quaternion visitorRotation)
+    {
+        route = null;
+        visitorRotation = lockerVisitRotation;
+        if (!roomBoundsReady)
+        {
+            GameObject existingRoot = GameObject.Find(RootName);
+            if (existingRoot != null)
+            {
+                RebuildBoundsFromExistingRoot(existingRoot);
+            }
+        }
+
+        if (!roomBoundsReady)
+        {
+            return false;
+        }
+
+        float northWallZ = roomCenter.z + BackDepth * 0.5f;
+        float floorY = roomFloorY;
+        Vector3 gymSideOfDoor = new Vector3(
+            roomCenter.x, floorY, northWallZ + 1.25f);
+        Vector3 roomSideOfDoor = new Vector3(
+            roomCenter.x, floorY, northWallZ - 1.25f);
+        destination.y = floorY;
+        route = new[]
+        {
+            gymSideOfDoor,
+            roomSideOfDoor,
+            destination
+        };
+        visitorRotation = lockerVisitRotation;
+        Debug.Log(
+            $"GYMCHAOS_LOCKER_ROUTE_OK points={route.Length} " +
+            $"gymSide={gymSideOfDoor} roomSide={roomSideOfDoor} target={destination}");
+        return true;
+    }
+
+    public static void ShowBenchBagsForVisitor(BodybuilderIdentity identity)
+    {
+        if (!activeBagVisitors.Add(identity)) return;
+        if (Random.value > 0.15f) return;
+        for (int bench = 0; bench < 2; bench++)
+        {
+            if (visibleBagCounts[bench] != 0) continue;
+            bagOwnerBench.Add(identity, bench);
+            visibleBagCounts[bench] = 1;
+            visibleBagStartIndices[bench] = Random.Range(0, 2);
+            RefreshBenchBagVisibility(bench);
+            break;
+        }
+        RefreshBenchBagVisibility(0);
+        RefreshBenchBagVisibility(1);
+        Debug.Log($"GYMCHAOS_LOCKER_BAGS_VISIBLE identity={identity} left={visibleBagCounts[0]} right={visibleBagCounts[1]} owners={activeBagVisitors.Count}");
+    }
+
+    public static void HideBenchBagsForVisitor(BodybuilderIdentity identity)
+    {
+        if (!activeBagVisitors.Remove(identity))
+        {
+            return;
+        }
+
+        if (bagOwnerBench.TryGetValue(identity, out int bench))
+        {
+            bagOwnerBench.Remove(identity);
+            visibleBagCounts[bench] = 0;
+            RefreshBenchBagVisibility(bench);
+        }
+    }
+
+    public static void HideBenchBags()
+    {
+        bool hadVisibleBags = VisibleBenchBagCount > 0 || activeBagVisitors.Count > 0;
+        for (int bench = 0; bench < benchBags.Length; bench++)
+        {
+            visibleBagCounts[bench] = 0;
+            visibleBagStartIndices[bench] = 0;
+            RefreshBenchBagVisibility(bench);
+        }
+        activeBagVisitors.Clear();
+        bagOwnerBench.Clear();
+        if (hadVisibleBags) Debug.Log("GYMCHAOS_LOCKER_BAGS_HIDDEN");
+    }
+
     private static void CreateLockerBays(
         Transform parent, Vector3 center, float floorY, float minX, float maxX,
         Material metal, Material accent)
     {
-        CreateModernLockerBank(
-            parent, center.z, floorY, minX + 0.58f, -1, 5, 1.45f, metal, accent);
-        // The east (+X) wall belongs to the bathroom/toilet zone. Keeping a
-        // second full locker bank there intersected the divider, stall and
-        // toilet props, so lockers intentionally remain on the west wall only.
+        CreateModernLockerBank(parent, center.z, floorY, minX + 0.58f, -1, 7, 1.28f, metal, accent);
     }
 
-    /// <summary>
-    /// Reuses the locker-room's current double-door/vented cabinet design for
-    /// another wall without duplicating an older single-box locker variant.
-    /// </summary>
     public static void CreateModernLockerBank(
         Transform parent,
         float centerZ,
@@ -280,74 +790,255 @@ public static class GymBackRoomBuilder
     private static void CreateBenches(
         Transform parent, Vector3 center, float floorY, Material trim, Material accent)
     {
-        for (int i = -1; i <= 1; i += 2)
+        _ = trim;
+        _ = accent;
+        float benchX = center.x - 4.15f;
+        for (int benchIndex = 0; benchIndex < 2; benchIndex++)
         {
-            float x = center.x + i * 2.2f;
-            CreateBox("Locker room bench", parent,
-                new Vector3(x, floorY + 0.52f, center.z + 0.15f),
-                new Vector3(2.7f, 0.18f, 0.58f), trim, true);
-            CreateBox("Locker room bench leg", parent,
-                new Vector3(x - 0.92f, floorY + 0.24f, center.z + 0.15f),
-                new Vector3(0.14f, 0.56f, 0.42f), accent, true);
-            CreateBox("Locker room bench leg", parent,
-                new Vector3(x + 0.92f, floorY + 0.24f, center.z + 0.15f),
-                new Vector3(0.14f, 0.56f, 0.42f), accent, true);
+            int slot = benchIndex;
+            benchBags[slot].Clear();
+            loadedBenches[slot] = null;
+            float z = center.z + (benchIndex == 0 ? -2.65f : 2.65f);
+            string label = benchIndex == 0 ? "Left" : "Right";
+            RequestLockerProp(WoodenBenchAsset, parent, new Vector3(benchX, floorY, z),
+                Quaternion.identity, Vector3.one * 2.7f, "Authored wooden locker bench " + label,
+                new Vector3(1f, 0.38f, 0.27f), settleOnSupport: true, addCollider: true,
+                onLoaded: loaded =>
+                {
+                    loadedBenches[slot] = loaded;
+                    RefreshBenchBagVisibility(slot);
+                });
+            CreateBenchBag(parent, benchIndex, new Vector3(benchX - 0.52f, floorY + 1.34f, z), ColorBagAsset, label + " color bag");
+            CreateBenchBag(parent, benchIndex, new Vector3(benchX + 0.52f, floorY + 1.34f, z), BlackBagAsset, label + " black bag");
+        }
+        HideBenchBags();
+    }
+
+    private static void CreateBenchBag(Transform parent, int benchIndex, Vector3 position, string assetPath, string objectName)
+    {
+        RequestLockerProp(assetPath, parent, position, Quaternion.Euler(0f, 90f, 0f),
+            Vector3.one * BenchBagScale, objectName, Vector3.zero,
+            settleOnSupport: true, addCollider: false,
+            supportY: roomFloorY + BenchSeatSupportHeight,
+            onLoaded: loaded =>
+            {
+                benchBags[benchIndex].Add(loaded);
+                RefreshBenchBagVisibility(benchIndex);
+            });
+    }
+
+    private static void RefreshBenchBagVisibility(int benchIndex)
+    {
+        if (benchIndex < 0 || benchIndex >= benchBags.Length) return;
+        int visibleCount = activeBagVisitors.Count > 0 ? visibleBagCounts[benchIndex] : 0;
+        int selectedSingleBag = visibleBagStartIndices[benchIndex];
+        for (int index = 0; index < benchBags[benchIndex].Count; index++)
+        {
+            GameObject bag = benchBags[benchIndex][index];
+            if (bag != null && loadedBenches[benchIndex] != null)
+            {
+                Renderer[] seatRenderers = loadedBenches[benchIndex].GetComponentsInChildren<Renderer>(true);
+                Renderer[] bagRenderers = bag.GetComponentsInChildren<Renderer>(true);
+                if (seatRenderers.Length > 0 && bagRenderers.Length > 0)
+                {
+                    Bounds seat = seatRenderers[0].bounds;
+                    foreach (Renderer renderer in seatRenderers) seat.Encapsulate(renderer.bounds);
+                    Bounds bounds = bagRenderers[0].bounds;
+                    foreach (Renderer renderer in bagRenderers) bounds.Encapsulate(renderer.bounds);
+                    Vector3 offset = new Vector3(
+                        seat.center.x - bounds.center.x,
+                        seat.max.y + 0.005f - bounds.min.y,
+                        seat.center.z - bounds.center.z);
+                    bag.transform.position += offset;
+                }
+            }
+            bool visible = visibleCount >= 2 ||
+                (visibleCount == 1 && index == selectedSingleBag);
+            if (bag != null) bag.SetActive(visible && loadedBenches[benchIndex] != null);
         }
     }
 
+    private static GameObject RequestLockerProp(
+        string assetPath,
+        Transform parent,
+        Vector3 position,
+        Quaternion rotation,
+        Vector3 scale,
+        string objectName,
+        Vector3 colliderSize,
+        bool settleOnSupport,
+        bool addCollider,
+        float supportY = float.NaN,
+        System.Action<GameObject> onLoaded = null)
+    {
+        authoredLockerPropRequests++;
+        return RuntimeGlbSceneLoader.Request(
+            assetPath,
+            parent,
+            position,
+            rotation,
+            scale,
+            objectName,
+            0,
+            settleOnSupport,
+            float.IsNaN(supportY) ? roomFloorY : supportY,
+            loaded =>
+            {
+                if (loaded == null)
+                {
+                    Debug.LogError(
+                        $"GYMCHAOS_LOCKER_PROP_LOAD_FAIL path={assetPath} " +
+                        $"object={objectName}", parent);
+                    return;
+                }
+
+                if (addCollider && colliderSize.sqrMagnitude > 0.001f)
+                {
+                    BoxCollider collider = loaded.AddComponent<BoxCollider>();
+                    collider.size = colliderSize;
+                    collider.isTrigger = false;
+                }
+
+                authoredLockerPropsLoaded++;
+                onLoaded?.Invoke(loaded);
+                Debug.Log(
+                    $"GYMCHAOS_LOCKER_PROP_READY path={assetPath} " +
+                    $"object={objectName} loaded={authoredLockerPropsLoaded}/" +
+                    $"{authoredLockerPropRequests}", loaded);
+            });
+    }
     private static void CreateBathroom(
         Transform parent, Vector3 center, float floorY,
-        Material tile, Material metal, Material accent)
+        Material tile, Material metal, Material accent, Material mirror,
+        PlayerMovement player)
     {
-        float x = center.x + 3.0f;
-        CreateBox("Bathroom divider", parent,
-            new Vector3(x, floorY + 1.45f, center.z - 1.7f),
-            new Vector3(0.18f, 2.9f, 5.4f), tile, true);
+        float dividerX = center.x + 3.0f;
+        float southZ = center.z - BackDepth * 0.5f;
+        float northZ = center.z + BackDepth * 0.5f;
+        float doorwayCenterZ = center.z + 1.65f;
+        const float doorwayWidth = 2.0f;
+        float doorwayMinZ = doorwayCenterZ - doorwayWidth * 0.5f;
+        float doorwayMaxZ = doorwayCenterZ + doorwayWidth * 0.5f;
+        float southLength = doorwayMinZ - southZ;
+        float northLength = northZ - doorwayMaxZ;
+        CreateBox("Bathroom divider south", parent,
+            new Vector3(
+                dividerX, floorY + BackHeight * 0.5f,
+                southZ + southLength * 0.5f),
+            new Vector3(0.18f, BackHeight, southLength), tile, true);
+        CreateBox("Bathroom divider north", parent,
+            new Vector3(
+                dividerX, floorY + BackHeight * 0.5f,
+                doorwayMaxZ + northLength * 0.5f),
+            new Vector3(0.18f, BackHeight, northLength), tile, true);
+
+        float eastWallInsideX = center.x + BackWidth * 0.5f - 0.12f;
 
         for (int i = -1; i <= 1; i++)
         {
             float z = center.z - 1.9f + i * 1.45f;
-            Vector3 basin = new Vector3(center.x + 4.5f, floorY + 1.02f, z);
-            Material porcelain = CreateMaterial("Porcelain basin", new Color(0.87f, 0.87f, 0.82f), 0f, 0.7f);
-            CreateBox("Basin bottom", parent, basin, new Vector3(0.62f, 0.07f, 0.54f), porcelain, true);
-            for (int edge = -1; edge <= 1; edge += 2)
-            {
-                CreateBox("Basin rim", parent, basin + new Vector3(edge * 0.32f, 0.08f, 0f), new Vector3(0.07f, 0.17f, 0.65f), porcelain, false);
-                CreateBox("Basin rim", parent, basin + new Vector3(0f, 0.08f, edge * 0.29f), new Vector3(0.65f, 0.17f, 0.07f), porcelain, false);
-            }
-            CreateBox("Chrome drain", parent, basin + Vector3.up * 0.042f, new Vector3(0.07f, 0.01f, 0.07f), metal, false);
-            CreateBox("Tap stem", parent, basin + new Vector3(0.28f, 0.23f, 0f), new Vector3(0.045f, 0.29f, 0.045f), metal, false);
-            CreateBox("Tap spout", parent, basin + new Vector3(0.18f, 0.36f, 0f), new Vector3(0.24f, 0.04f, 0.045f), metal, false);
-            CreateBox("Waste pipe", parent, basin - Vector3.up * 0.32f, new Vector3(0.07f, 0.6f, 0.07f), metal, false);
-            CreateBox("Soap dispenser", parent, basin + new Vector3(0.28f, 0.19f, 0.22f), new Vector3(0.1f, 0.18f, 0.08f), accent, false);
+            RequestLockerProp(
+                SinkAsset,
+                parent,
+                new Vector3(eastWallInsideX - 0.78f, floorY + 1.02f, z),
+                Quaternion.Euler(0f, -90f, 0f),
+                Vector3.one,
+                "Authored sink " + (i + 2),
+                new Vector3(0.76f, 1f, 0.59f),
+                settleOnSupport: true,
+                addCollider: true);
         }
 
-        CreateBox("Bathroom stall block", parent,
-            new Vector3(center.x + 4.45f, floorY + 1.25f, center.z + 2.25f),
-            new Vector3(2.2f, 2.5f, 0.18f), tile, true);
-        CreateBox("Bathroom stall side", parent,
-            new Vector3(center.x + 5.4f, floorY + 1.25f, center.z + 1.25f),
-            new Vector3(0.18f, 2.5f, 2.0f), tile, true);
-        Material ceramic = CreateMaterial("Toilet porcelain", new Color(0.86f, 0.86f, 0.8f), 0f, 0.6f);
-        Vector3 toilet = new Vector3(center.x + 4.5f, floorY, center.z + 1.2f);
-        CreateBox("Toilet cistern", parent, toilet + new Vector3(0f, 0.76f, 0.44f), new Vector3(0.58f, 0.7f, 0.22f), ceramic, true);
-        CreateBox("Toilet pedestal", parent, toilet + new Vector3(0f, 0.24f, 0f), new Vector3(0.3f, 0.48f, 0.4f), ceramic, true);
-        for (int side = -1; side <= 1; side += 2)
-            CreateBox("Toilet seat side", parent, toilet + new Vector3(side * 0.23f, 0.49f, 0f), new Vector3(0.1f, 0.08f, 0.63f), ceramic, false);
-        CreateBox("Toilet seat front", parent, toilet + new Vector3(0f, 0.49f, -0.29f), new Vector3(0.52f, 0.08f, 0.12f), ceramic, false);
-        CreateBox("Toilet seat back", parent, toilet + new Vector3(0f, 0.49f, 0.29f), new Vector3(0.52f, 0.08f, 0.12f), ceramic, false);
-        CreateBox("Stall door", parent, toilet + new Vector3(-0.76f, 1.3f, 0f), new Vector3(0.08f, 2.25f, 0.82f), metal, true);
-        CreateBox("Stall latch", parent, toilet + new Vector3(-0.82f, 1.25f, -0.24f), new Vector3(0.06f, 0.08f, 0.14f), accent, false);
-        CreateBox("Paper holder", parent, toilet + new Vector3(0.68f, 0.78f, 0f), new Vector3(0.14f, 0.14f, 0.24f), ceramic, false);
-        CreateBox("Bathroom towel shelf", parent, new Vector3(center.x + 3.8f, floorY + 1.48f, center.z - 3.3f), new Vector3(0.75f, 0.05f, 0.32f), metal, false);
+        float stallWestX = center.x + 5.55f;
+        float stallSouthZ = center.z + 2.15f;
+        CreateBox("Bathroom stall west wall", parent,
+            new Vector3(
+                stallWestX, floorY + BackHeight * 0.5f,
+                (stallSouthZ + northZ) * 0.5f),
+            new Vector3(0.18f, BackHeight, northZ - stallSouthZ), tile, true);
+        float stallDoorMinX = center.x + 5.72f;
+        float stallDoorMaxX = center.x + 6.92f;
+        float stallEastX = eastWallInsideX;
+        float stallLeftLength = stallDoorMinX - stallWestX;
+        float stallRightLength = stallEastX - stallDoorMaxX;
+        CreateBox("Bathroom stall south wall left", parent,
+            new Vector3(
+                stallWestX + stallLeftLength * 0.5f,
+                floorY + BackHeight * 0.5f, stallSouthZ),
+            new Vector3(stallLeftLength, BackHeight, 0.18f), tile, true);
+        CreateBox("Bathroom stall south wall right", parent,
+            new Vector3(
+                stallDoorMaxX + stallRightLength * 0.5f,
+                floorY + BackHeight * 0.5f, stallSouthZ),
+            new Vector3(stallRightLength, BackHeight, 0.18f), tile, true);
+        RequestLockerProp(
+            ToiletAsset,
+            parent,
+            new Vector3(eastWallInsideX - 1.0f, floorY, center.z + 4.25f),
+            Quaternion.Euler(0f, -90f, 0f),
+            Vector3.one,
+            "Authored toilet",
+            new Vector3(0.56f, 1f, 0.83f),
+            settleOnSupport: true,
+            addCollider: true);
+
+        CreateBox("Bathroom soap shelf", parent,
+            new Vector3(eastWallInsideX - 0.34f,
+                floorY + 1.18f, center.z - 1.9f),
+            new Vector3(0.58f, 0.07f, 5.05f), metal, false);
+        CreateBox("Bathroom towel shelf", parent,
+            new Vector3(eastWallInsideX - 0.34f,
+                floorY + 1.48f, center.z - 4.65f),
+            new Vector3(0.58f, 0.05f, 0.72f), metal, false);
         for (int towel = 0; towel < 3; towel++)
-            CreateBox("Folded towel", parent, new Vector3(center.x + 3.8f, floorY + 1.54f + towel * 0.06f, center.z - 3.3f), new Vector3(0.48f, 0.055f, 0.27f), ceramic, false);
+        {
+            CreateBox("Folded towel", parent,
+                new Vector3(eastWallInsideX - 0.36f,
+                    floorY + 1.54f + towel * 0.06f, center.z - 4.65f),
+                new Vector3(0.42f, 0.055f, 0.55f), accent, false);
+        }
+
+        CreateBathroomMirrors(
+            parent, center, floorY, eastWallInsideX, mirror, metal, player);
         CreateInteractable(parent, "Bathroom Cooldown",
             new Vector3(center.x + 4.15f, floorY + 1.0f, center.z - 0.85f),
             new Vector3(1.2f, 2f, 1.4f),
             GymBackRoomInteractionType.Bathroom, "Use bathroom");
     }
-
+    private static void CreateBathroomMirrors(
+        Transform parent, Vector3 center, float floorY, float eastWallInsideX,
+        Material mirror, Material frame, PlayerMovement player)
+    {
+        // Three low-cost reflective panels sit above the three sinks. They are
+        // intentionally separate from the large changing-room mirror so the
+        // bathroom reads as its own sub-space without stealing attention.
+        Renderer[] renderers = new Renderer[3];
+        for (int i = -1; i <= 1; i++)
+        {
+            float z = center.z - 1.9f + i * 1.45f;
+            Vector3 panelCenter = new Vector3(
+                eastWallInsideX - 0.03f, floorY + 2.05f, z);
+            GameObject panel = CreateBox("Bathroom mirror " + (i + 2), parent,
+                panelCenter, new Vector3(0.055f, 1.55f, 0.92f), mirror, false);
+            renderers[i + 1] = panel.GetComponent<Renderer>();
+            CreateBox("Bathroom mirror frame top " + (i + 2), parent,
+                panelCenter + Vector3.up * 0.83f,
+                new Vector3(0.07f, 0.08f, 1.02f), frame, false);
+            CreateBox("Bathroom mirror frame bottom " + (i + 2), parent,
+                panelCenter - Vector3.up * 0.83f,
+                new Vector3(0.07f, 0.08f, 1.02f), frame, false);
+        }
+        if (player != null && player.playerCamera != null)
+        {
+            PlanarGymMirror.Create(
+                parent,
+                player.playerCamera,
+                renderers,
+                new Vector3(eastWallInsideX - 0.06f,
+                    floorY + 2.05f, center.z - 1.9f),
+                Vector3.left);
+        }
+    }
     private static void CreateMirror(
         Transform parent, Vector3 center, float floorY,
         Material mirror, Material trim, PlayerMovement player)

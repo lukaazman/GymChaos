@@ -13,6 +13,13 @@ AGENTS.md
 /unity-face-censor-batch.log
 /unity-face-censor-batch-2.log
 
+# Agent verifier logs and screenshots in the repository root
+/*.log
+/codex-*.png
+
+# Local Claude Code settings
+.claude/settings.local.json
+
 # Local worker/executor runtime state and handoff reports
 .agents/runtime/
 
@@ -20,3 +27,6 @@ AGENTS.md
 /GymChaos/*.csproj
 /GymChaos/*.slnx
 /GymChaos/.vscode/
+
+# Parallel regression mirror projects (Tools/Invoke-UnityRegression.ps1)
+/.lanes/

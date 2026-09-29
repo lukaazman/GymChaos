@@ -6,9 +6,18 @@ using UnityEngine;
 /// <summary>Visible, textured, collidable arrival/parking/departure for one visitor.</summary>
 public sealed class GymVisitorVehicle : MonoBehaviour
 {
-    private const float DriveSpeed = 8.5f;
+    public const float NormalDriveSpeed = 8.5f;
+    private const float DriveSpeed = NormalDriveSpeed;
     private const float CloudSpeed = 48f;
+    private const string DavieBusAsset =
+        "BodyBuilders/vehicles/Davie_Bus.glb";
+    private const float DavieBusTargetLength = 10.4f;
+    private const string ArnoldHummerAsset =
+        "BodyBuilders/vehicles/Arnold_Hummer.glb";
+    private const float ArnoldHummerTargetLength = 4.0f;
     private const float TurnSpeed = 5f;
+    private const float MaxGroundRouteDeltaTime = 0.05f;
+    private const float MaxGroundRouteStep = 0.4f;
     private const float LaneSpawnSpacing = 7.5f;
     private const float ForwardSensorMinimumDistance = 2.35f;
     private const float ForwardSensorMaximumDistance = 3.35f;
@@ -27,6 +36,17 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private float blockedSince = -1f;
     private float nextHornTime;
     private string lastTrafficBlocker = "none";
+    private string lastTrafficClearanceSource = "none";
+    private float nextRouteStallLogTime;
+#if UNITY_EDITOR
+    private float nextRouteProgressLogTime;
+    private int currentRouteWaypointIndex = -1;
+    private Vector3 currentRouteTarget;
+    private float currentRouteRemaining;
+    private float currentRouteClearance = float.PositiveInfinity;
+    private float currentRouteActualTravel;
+    private string currentRouteClearanceSource = "none";
+#endif
     private int hornPlayCount;
     private int trafficOrder;
     private readonly RaycastHit[] roadHits = new RaycastHit[48];
@@ -35,20 +55,58 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private Vector3 roadPoint;
     private Vector3 junctionPoint;
+    private Vector3 busBayEntryPoint;
+    private Vector3 busBayParkingTurnPoint;
     private Vector3 roadTurnPoint;
     private Vector3 aislePoint;
     private Vector3 parkingPoint;
     private Vector3 departureRoadPoint;
     private Vector3 departureRoadTurnPoint;
     private Vector3 departureJunctionPoint;
+    private Vector3 busDepartureApproachPoint;
     private Coroutine driveRoutine;
     private Transform riderAnchor;
     private EnemyFighter mountedRider;
+    private bool runtimeVisualReady;
+    private bool runtimeVisualLoadFailed;
+    // A runtime GLB vehicle owns a coroutine while its visual is loading, but
+    // it is not traffic yet. Keep that staging interval out of IsDriving so
+    // traffic observers and clearance checks do not treat the initial road
+    // point as occupied by two vehicles before the second route is spawned.
+    private bool waitingForRuntimeVisual;
+    private bool waitingForBusTurnaround;
 
     public bool IsParked { get; private set; }
-    public bool IsDriving => driveRoutine != null;
+    public bool IsDriving => driveRoutine != null && !waitingForRuntimeVisual;
+    public static bool HasActiveParkingArrival =>
+        HasActiveParkingArrivalExcept(null);
+
+    public static bool HasActiveParkingArrivalExcept(
+        GymVisitorVehicle ignoredVehicle)
+    {
+        for (int i = activeGroundTraffic.Count - 1; i >= 0; i--)
+        {
+            GymVisitorVehicle other = activeGroundTraffic[i];
+            if (other == null)
+            {
+                activeGroundTraffic.RemoveAt(i);
+                continue;
+            }
+            if (other != ignoredVehicle && other.IsDriving &&
+                other.drivingIntoParking)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
     public bool HasCompletedDeparture { get; private set; }
     public bool IsCloud => identity == BodybuilderIdentity.Goku;
+    public bool IsBus => identity == BodybuilderIdentity.Davie;
+    public bool IsArnold => identity == BodybuilderIdentity.Arnold;
+    private bool NeedsRuntimeVisual => IsBus || IsArnold;
+    private bool UsesRoadsideBusRoute =>
+        IsBus && GymRoadsideBusStop.IsBuilt;
     public bool HasMountedRider => mountedRider != null;
     public static bool IsGroundTrafficActive => activeGroundTraffic.Count > 0;
     public bool HasPhysicalCollider => GetComponent<BoxCollider>() != null &&
@@ -84,6 +142,11 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         get
         {
+            if (IsBus && GymRoadsideBusStop.IsBuilt)
+            {
+                return GymRoadsideBusStop.DavieBusPassengerPoint;
+            }
+
             Vector3 towardAisle = Vector3.ProjectOnPlane(
                 aislePoint - parkingPoint, Vector3.up);
             if (towardAisle.sqrMagnitude < 0.01f)
@@ -100,8 +163,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
     }
     public Vector3 AislePassengerPoint => aislePoint;
-    public float BoardingReachDistance => IsCloud ? 0.8f : 0.65f;
+    public float BoardingReachDistance => IsCloud || IsBus ? 0.8f : 0.65f;
 #if UNITY_EDITOR
+    public static float NormalDriveSpeedForVerification => DriveSpeed;
     public Vector3 ParkingPointForVerification => parkingPoint;
     public Vector3 RoadPointForVerification => roadPoint;
     public bool HasDistanceAttenuatedAudioForVerification => engine != null &&
@@ -121,9 +185,42 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public static float CrossingPredictionForVerification => CrossingPredictionSeconds;
     public float CurrentDriveSpeedForVerification => currentDriveSpeed;
     public string LastTrafficBlockerForVerification => lastTrafficBlocker;
+    public int CurrentRouteWaypointIndexForVerification => currentRouteWaypointIndex;
+    public Vector3 CurrentRouteTargetForVerification => currentRouteTarget;
+    public float CurrentRouteRemainingForVerification => currentRouteRemaining;
+    public float CurrentRouteClearanceForVerification => currentRouteClearance;
+    public float CurrentRouteActualTravelForVerification => currentRouteActualTravel;
+    public string CurrentRouteClearanceSourceForVerification => currentRouteClearanceSource;
     public int HornPlayCountForVerification => hornPlayCount;
     public Vector3 ArrivalRoadTurnPointForVerification => roadTurnPoint;
     public Vector3 DepartureRoadTurnPointForVerification => departureRoadTurnPoint;
+    public Vector3 AislePointForVerification => aislePoint;
+    public Vector3 DepartureJunctionPointForVerification => departureJunctionPoint;
+    public Vector3 DepartureRoadPointForVerification => departureRoadPoint;
+    public bool RuntimeVisualReadyForVerification => !NeedsRuntimeVisual || runtimeVisualReady;
+    public Bounds RuntimeVisualBoundsForVerification
+    {
+        get
+        {
+            if (!runtimeVisualReady)
+            {
+                return default;
+            }
+
+            Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
+            return renderers.Length > 0 ? CombinedBounds(renderers) : default;
+        }
+    }
+    public Bounds PhysicalBodyBoundsForVerification
+    {
+        get
+        {
+            BoxCollider body = GetComponent<BoxCollider>();
+            return body != null ? body.bounds : default;
+        }
+    }
+    public Vector3 ParkedForwardForVerification =>
+        parkingPoint.z >= aislePoint.z ? Vector3.forward : Vector3.back;
 #endif
 
     public static GymVisitorVehicle Create(
@@ -131,13 +228,44 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         bool initiallyParked)
     {
         string resource = GetResource(identity);
-        GameObject prefab = Resources.Load<GameObject>(resource);
         GameObject root = new GameObject(identity + " Visitor Vehicle");
         GymVisitorVehicle vehicle = root.AddComponent<GymVisitorVehicle>();
         vehicle.identity = identity;
         vehicle.player = player;
         vehicle.ConfigureRoute(slot);
-        if (prefab != null)
+        root.transform.position = initiallyParked ? vehicle.parkingPoint : vehicle.roadPoint;
+        root.transform.rotation = vehicle.ParkedRotation;
+        GameObject prefab = vehicle.IsBus ? null : Resources.Load<GameObject>(resource);
+        if (vehicle.IsBus)
+        {
+            GymRoadsideBusStop.SetDavieDynamicBusActive(true);
+            RuntimeGlbSceneLoader.Request(
+                DavieBusAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one * DavieBusTargetLength,
+                "Davie Bus Visitor Vehicle",
+                root.layer,
+                settleOnSupport: true,
+                supportY: vehicle.parkingPoint.y,
+                onLoaded: vehicle.FinalizeRuntimeBus);
+        }
+        else if (vehicle.IsArnold)
+        {
+            RuntimeGlbSceneLoader.Request(
+                ArnoldHummerAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one,
+                "Arnold Hummer Visitor Vehicle",
+                root.layer,
+                settleOnSupport: true,
+                supportY: vehicle.parkingPoint.y,
+                onLoaded: vehicle.FinalizeRuntimeArnold);
+        }
+        else if (prefab != null)
         {
             GameObject visual = Instantiate(prefab, root.transform);
             visual.name = identity + " Vehicle Model";
@@ -155,8 +283,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Debug.LogError($"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} path={resource}");
         }
         vehicle.CreateEngineAudio();
-        root.transform.position = initiallyParked ? vehicle.parkingPoint : vehicle.roadPoint;
-        root.transform.rotation = vehicle.ParkedRotation;
         vehicle.IsParked = initiallyParked;
         root.SetActive(initiallyParked);
         return vehicle;
@@ -166,6 +292,25 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         if (driveRoutine != null) StopCoroutine(driveRoutine);
         gameObject.SetActive(true);
+        if (IsBus)
+        {
+            GymRoadsideBusStop.SetDavieDynamicBusActive(true);
+        }
+        if (NeedsRuntimeVisual && !runtimeVisualReady && !runtimeVisualLoadFailed)
+        {
+            waitingForRuntimeVisual = true;
+            driveRoutine = StartCoroutine(
+                WaitForRuntimeVisualThenDriveIn(onParked));
+            return;
+        }
+
+        BeginDriveIn(onParked);
+    }
+
+    private void BeginDriveIn(Action onParked)
+    {
+        waitingForRuntimeVisual = false;
+        waitingForBusTurnaround = false;
         HasCompletedDeparture = false;
         IsParked = false;
         drivingIntoParking = true;
@@ -179,14 +324,49 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             driveRoutine = StartCoroutine(DriveCloudRoute(true, onParked));
             return;
         }
-        Vector3[] route = new[] { roadPoint, roadTurnPoint, junctionPoint, aislePoint, parkingPoint };
-        driveRoutine = StartCoroutine(DriveRoute(route, true, onParked));
+        Vector3[] route = IsBus && UsesRoadsideBusRoute
+            // Approach the bay through the road leg, then make the bus
+            // cross the road-facing gate before turning north. The bus is
+            // 10.4 m long, so turning at the gate's east edge makes its
+            // swept body overlap the short corner wall; the extra clear
+            // waypoint keeps the complete collider west of that wall while
+            // preserving the physical gate and all real wall collisions.
+            ? new[] { roadPoint,
+                new Vector3(roadTurnPoint.x, roadPoint.y, roadPoint.z),
+                new Vector3(roadTurnPoint.x, roadPoint.y, junctionPoint.z),
+                junctionPoint,
+                new Vector3(busBayEntryPoint.x - 2.25f,
+                    junctionPoint.y, junctionPoint.z),
+                new Vector3(busBayEntryPoint.x - 2.25f,
+                    junctionPoint.y, busBayEntryPoint.z),
+                parkingPoint }
+            : new[] { roadPoint, roadTurnPoint, junctionPoint, aislePoint, parkingPoint };
+        driveRoutine = StartCoroutine(DriveRoute(route, true, onParked, 0f, IsBus));
     }
 
     public void DriveOut(Action onGone)
     {
         if (driveRoutine != null) StopCoroutine(driveRoutine);
         gameObject.SetActive(true);
+        if (IsBus)
+        {
+            GymRoadsideBusStop.SetDavieDynamicBusActive(true);
+        }
+        if (NeedsRuntimeVisual && !runtimeVisualReady && !runtimeVisualLoadFailed)
+        {
+            waitingForRuntimeVisual = true;
+            driveRoutine = StartCoroutine(
+                WaitForRuntimeVisualThenDriveOut(onGone));
+            return;
+        }
+
+        BeginDriveOut(onGone);
+    }
+
+    private void BeginDriveOut(Action onGone)
+    {
+        waitingForRuntimeVisual = false;
+        waitingForBusTurnaround = false;
         IsParked = false;
         drivingIntoParking = false;
         trafficOrder = ++nextTrafficOrder;
@@ -195,13 +375,259 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             driveRoutine = StartCoroutine(DriveCloudRoute(false, onGone));
             return;
         }
+        if (UsesRoadsideBusRoute)
+        {
+            driveRoutine = StartCoroutine(
+                WaitForBusTurnaroundThenDriveOut(onGone));
+            return;
+        }
         Vector3[] route = new[] {
-            aislePoint, departureJunctionPoint, departureRoadTurnPoint, departureRoadPoint };
+            UsesRoadsideBusRoute ? parkingPoint : aislePoint,
+            UsesRoadsideBusRoute ? busDepartureApproachPoint : departureJunctionPoint,
+            departureRoadTurnPoint,
+            departureRoadPoint };
         int queueRank = CountOutgoingTraffic();
         float releaseDelay = queueRank * 1.6f;
         driveRoutine = StartCoroutine(DriveRoute(route, false, onGone, releaseDelay));
         Debug.Log($"GYMCHAOS_VEHICLE_DEPARTURE_QUEUED identity={identity} " +
             $"rank={queueRank} delay={releaseDelay:F1}", this);
+    }
+
+    private IEnumerator WaitForBusTurnaroundThenDriveOut(Action onGone)
+    {
+        waitingForBusTurnaround = true;
+        currentDriveSpeed = 0f;
+        if (engine != null) engine.Stop();
+
+        float nextWaitLog = Time.time + 18f;
+        bool clear = false;
+        while (!clear)
+        {
+            clear = IsDavieBusTurnaroundClear();
+            if (clear) break;
+            if (Time.time >= nextWaitLog)
+            {
+                Debug.LogWarning(
+                    "GYMCHAOS_DAVIE_BUS_TURNAROUND_WAITING_FOR_CLEARANCE", this);
+                nextWaitLog = Time.time + 10f;
+            }
+            yield return null;
+        }
+
+
+        waitingForBusTurnaround = false;
+        BeginDavieBusDriveOut(onGone);
+    }
+
+    private void BeginDavieBusDriveOut(Action onGone)
+    {
+        Vector3[] route = CreateDavieBusDepartureRoute();
+        int queueRank = CountOutgoingTraffic();
+        float releaseDelay = queueRank * 1.6f;
+        driveRoutine = StartCoroutine(DriveRoute(route, false, onGone, releaseDelay, true));
+        Debug.Log(
+            $"GYMCHAOS_DAVIE_BUS_DEPARTURE_QUEUED rank={queueRank} " +
+            $"delay={releaseDelay:F1} uTurn=clearance-gated",
+            this);
+    }
+
+    private Vector3[] CreateDavieBusDepartureRoute()
+    {
+        float y = parkingPoint.y;
+        Vector3 start = GymRoadsideBusStop.DavieBusTurnaroundStartPoint;
+        Vector3 center = GymRoadsideBusStop.DavieBusTurnaroundCenterPoint;
+        start.y = y;
+        center.y = y;
+        float radiusX = GymRoadsideBusStop.DavieBusTurnaroundRadiusX;
+        float radiusZ = GymRoadsideBusStop.DavieBusTurnaroundRadiusZ;
+        const int arcSamples = 14;
+        List<Vector3> route = new List<Vector3>(arcSamples + 4)
+        {
+            new Vector3(parkingPoint.x, y, parkingPoint.z),
+            start
+        };
+        for (int i = 1; i <= arcSamples; i++)
+        {
+            float angle = Mathf.PI * i / arcSamples;
+            route.Add(new Vector3(
+                center.x - radiusX * Mathf.Sin(angle),
+                y,
+                center.z + radiusZ * Mathf.Cos(angle)));
+        }
+        Vector3 returnTurn = GymRoadsideBusStop.DavieBusReturnRoadTurnPoint;
+        Vector3 returnRoad = GymRoadsideBusStop.DavieBusReturnRoadPoint;
+        returnTurn.y = y;
+        returnRoad.y = y;
+        route.Add(returnTurn);
+        route.Add(returnRoad);
+        return route.ToArray();
+    }
+
+    private bool IsDavieBusTurnaroundClear()
+    {
+        if (!UsesRoadsideBusRoute)
+        {
+            return true;
+        }
+
+        Vector3 center = GymRoadsideBusStop.DavieBusTurnaroundCenterPoint;
+        float halfX = GymRoadsideBusStop.DavieBusTurnaroundRadiusX +
+            DavieBusTargetLength * 0.5f + 0.75f;
+        float halfZ = GymRoadsideBusStop.DavieBusTurnaroundRadiusZ +
+            1.45f + 0.75f;
+        for (int i = activeGroundTraffic.Count - 1; i >= 0; i--)
+        {
+            GymVisitorVehicle other = activeGroundTraffic[i];
+            if (other == null)
+            {
+                activeGroundTraffic.RemoveAt(i);
+                continue;
+            }
+            if (other == this || !other.IsDriving)
+            {
+                continue;
+            }
+            Vector3 relative = other.transform.position - center;
+            if (Mathf.Abs(relative.x) <= halfX &&
+                Mathf.Abs(relative.z) <= halfZ)
+            {
+                return false;
+            }
+        }
+
+        Vector3 overlapCenter = center + Vector3.up * 1.0f;
+        int overlapCount = Physics.OverlapBoxNonAlloc(
+            overlapCenter,
+            new Vector3(halfX, 1.35f, halfZ),
+            nearPeople,
+            Quaternion.identity,
+            ~0,
+            QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < overlapCount; i++)
+        {
+            Collider hit = nearPeople[i];
+            if (hit == null || hit.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+            GymVisitorVehicle otherVehicle =
+                hit.GetComponentInParent<GymVisitorVehicle>();
+            if (otherVehicle != null && otherVehicle != this)
+            {
+                return false;
+            }
+            if (IsPerson(hit))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private IEnumerator WaitForRuntimeVisualThenDriveIn(Action onParked)
+    {
+        float deadline = Time.time + 15f;
+        while (!runtimeVisualReady && !runtimeVisualLoadFailed &&
+            Time.time < deadline)
+        {
+            yield return null;
+        }
+
+        if (!runtimeVisualReady)
+        {
+            Debug.LogError(
+                IsBus
+                    ? $"GYMCHAOS_DAVIE_BUS_ROUTE_WITHOUT_VISUAL path={DavieBusAsset}"
+                    : $"GYMCHAOS_ARNOLD_HUMMER_ROUTE_WITHOUT_VISUAL path={ArnoldHummerAsset}",
+                this);
+            if (IsBus)
+            {
+                GymRoadsideBusStop.SetDavieDynamicBusActive(false);
+            }
+        }
+
+        waitingForRuntimeVisual = false;
+        driveRoutine = null;
+        BeginDriveIn(onParked);
+    }
+
+    private IEnumerator WaitForRuntimeVisualThenDriveOut(Action onGone)
+    {
+        float deadline = Time.time + 15f;
+        while (!runtimeVisualReady && !runtimeVisualLoadFailed &&
+            Time.time < deadline)
+        {
+            yield return null;
+        }
+
+        waitingForRuntimeVisual = false;
+        driveRoutine = null;
+        BeginDriveOut(onGone);
+    }
+
+    private void FinalizeRuntimeBus(GameObject visual)
+    {
+        if (visual == null)
+        {
+            runtimeVisualLoadFailed = true;
+            GymRoadsideBusStop.SetDavieDynamicBusActive(false);
+            Debug.LogError(
+                $"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} " +
+                $"path={DavieBusAsset}", this);
+            return;
+        }
+
+        visual.name = identity + " Vehicle Model";
+        AddPhysicalBody(visual);
+        runtimeVisualReady = true;
+        Debug.Log(
+            $"GYMCHAOS_DAVIE_VISITOR_BUS_READY path={DavieBusAsset} " +
+            $"length={DavieBusTargetLength:F2} roadside=1 " +
+            $"passengerPoint={PassengerPoint}",
+            this);
+    }
+
+    private void FinalizeRuntimeArnold(GameObject visual)
+    {
+        if (visual == null)
+        {
+            runtimeVisualLoadFailed = true;
+            Debug.LogError(
+                $"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} " +
+                $"path={ArnoldHummerAsset}", this);
+            return;
+        }
+
+        visual.name = identity + " Hummer Vehicle Model";
+        AlignArnoldVisualAxis(visual);
+        FitVisual(visual, ArnoldHummerTargetLength, centerHorizontally: true);
+        AddPhysicalBody(visual);
+        runtimeVisualReady = true;
+
+
+        Debug.Log(
+            $"GYMCHAOS_ARNOLD_HUMMER_READY path={ArnoldHummerAsset} " +
+            $"length={ArnoldHummerTargetLength:F2} centered=1 verticalAxis=1",
+            this);
+    }
+
+    private static void AlignArnoldVisualAxis(GameObject visual)
+    {
+        if (visual == null)
+        {
+            return;
+        }
+
+        // The authored GLB's long axis is local X and its nose points toward
+        // local +X. Generated parking stalls use local Z as their depth/
+        // forward axis, so local -90 degrees maps the nose to root +Z (or
+        // root -Z for the opposite row). Rotate only the GLB content child;
+        // route/root orientation remains unchanged.
+        Transform content = visual.transform.Find("City GLB Content");
+        if (content != null)
+        {
+            content.localRotation = Quaternion.Euler(0f, -90f, 0f);
+        }
     }
 
     public void MountRider(EnemyFighter fighter)
@@ -328,7 +754,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     }
 
     private IEnumerator DriveRoute(
-        Vector3[] points, bool park, Action done, float releaseDelay = 0f)
+        Vector3[] points, bool park, Action done, float releaseDelay = 0f,
+        bool preserveWaypoints = false)
     {
         if (!IsCloud && !activeGroundTraffic.Contains(this))
             activeGroundTraffic.Add(this);
@@ -344,77 +771,85 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         for (int i = 0; i < points.Length; i++)
         {
             Vector3 target = points[i];
+#if UNITY_EDITOR
+            currentRouteWaypointIndex = i;
+            currentRouteTarget = target;
+#endif
             bool finalPoint = i == points.Length - 1;
-            float reachRadius = finalPoint ? 0.2f : 0.9f;
-            Vector3 segmentStart = transform.position;
-            Vector3 segment = Vector3.ProjectOnPlane(target - segmentStart, Vector3.up);
-            float segmentLength = segment.magnitude;
-            Vector3 segmentDirection = segmentLength > 0.01f
-                ? segment / segmentLength
-                : Vector3.zero;
+            // The bay-entry leg translates the long bus sideways into the
+            // pull-off. Keep its authored left-facing heading while it
+            // crosses the gate so the 10.4 m body does not swing its nose
+            // into the outer fence; the following parking leg remains
+            // aligned with the same heading.
+            bool holdBusBayHeading = IsBus && park &&
+                UsesRoadsideBusRoute && i == points.Length - 2;
+            if (holdBusBayHeading)
+            {
+                transform.rotation = GymRoadsideBusStop.DavieBusRotation;
+            }
+            // A departure endpoint is a road-edge handoff, not a parking precision point. Once the vehicle body reaches this safe margin, the remaining collider length is already beyond the visible route.
+            float reachRadius = finalPoint ? (!park ? 1.25f : 0.2f) :
+                preserveWaypoints ? 0.35f : 0.9f;
             while ((transform.position - target).sqrMagnitude > reachRadius * reachRadius)
             {
-                // Direction blending deliberately rounds a corner before its
-                // mathematical centre. Once the vehicle has entered that
-                // rounded corner, advance to the next leg; otherwise it can
-                // orbit an already-cut waypoint forever while still moving.
-                if (!finalPoint && segmentLength > 0.01f)
+                int routeStepCount = IsCloud
+                    ? 1
+                    : Mathf.Max(1, Mathf.CeilToInt(Time.deltaTime / MaxGroundRouteDeltaTime));
+                float routeDeltaTime = IsCloud
+                    ? Time.deltaTime
+                    : Time.deltaTime / routeStepCount;
+                float clearance = float.PositiveInfinity;
+                float actualTravel = 0f;
+                float maxSubstepTravel = 0f;
+                for (int routeStep = 0; routeStep < routeStepCount; routeStep++)
                 {
-                    float progress = Vector3.Dot(
-                        Vector3.ProjectOnPlane(transform.position - segmentStart, Vector3.up),
-                        segmentDirection);
-                    float cornerEntry = Mathf.Max(0f, segmentLength - 1.8f);
-                    if (progress >= cornerEntry)
+                    if ((transform.position - target).sqrMagnitude <= reachRadius * reachRadius)
                     {
                         break;
                     }
+                    float substepTravel = AdvanceRouteStep(
+                        target, finalPoint, reachRadius, speed,
+                        holdBusBayHeading, routeDeltaTime, out clearance);
+                    actualTravel += substepTravel;
+                    maxSubstepTravel = Mathf.Max(maxSubstepTravel, substepTravel);
                 }
-                Vector3 direction = target - transform.position;
-                if (!IsCloud) direction = Vector3.ProjectOnPlane(direction, Vector3.up);
-                direction.Normalize();
                 float remaining = Vector3.Distance(transform.position, target);
-                if (!finalPoint && remaining < 5f)
+                float travel = actualTravel;
+                Vector3 direction = Vector3.ProjectOnPlane(target - transform.position, Vector3.up).normalized;
+                bool pedestrianAhead = IsYieldingToPedestrian;
+#if UNITY_EDITOR
+                currentRouteRemaining = Vector3.Distance(transform.position, target);
+                currentRouteClearance = clearance;
+                currentRouteActualTravel = actualTravel;
+                currentRouteClearanceSource = lastTrafficClearanceSource;
+                if (!IsCloud && Time.realtimeSinceStartup >= nextRouteProgressLogTime)
                 {
-                    Vector3 outgoing = Vector3.ProjectOnPlane(
-                        points[i + 1] - target, Vector3.up);
-                    if (outgoing.sqrMagnitude > 0.01f)
-                    {
-                        float blend = Mathf.InverseLerp(5f, reachRadius, remaining);
-                        direction = Vector3.Slerp(
-                            direction, outgoing.normalized, blend * 0.72f).normalized;
-                    }
+                    Debug.Log(
+                        $"GYMCHAOS_VEHICLE_ROUTE_SAMPLE identity={identity} " +
+                        $"waypoint={i}/{points.Length - 1} park={park} " +
+                        $"position={transform.position} target={target} " +
+                        $"remaining={currentRouteRemaining:F3} " +
+                        $"travel={actualTravel:F4} maxSubstep={maxSubstepTravel:F4} speed={currentDriveSpeed:F2} " +
+                        $"dt={Time.deltaTime:F4} substepDt={routeDeltaTime:F4} substeps={routeStepCount} timeScale={Time.timeScale:F2} " +
+                        $"clearance={clearance:F3} " +
+                        $"source={lastTrafficClearanceSource} " +
+                        $"blocker={lastTrafficBlocker}", this);
+                    nextRouteProgressLogTime = Time.realtimeSinceStartup + 2.5f;
                 }
-                if (direction.sqrMagnitude > 0.01f)
+#endif
+                if (!IsCloud && Time.time >= nextRouteStallLogTime &&
+                    (actualTravel <= 0.0001f ||
+                     (clearance <= 0.001f && remaining > reachRadius)))
                 {
-                    transform.rotation = Quaternion.Slerp(
-                        transform.rotation,
-                        Quaternion.LookRotation(direction, Vector3.up),
-                        TurnSpeed * Time.deltaTime);
-                }
-                bool pedestrianAhead = false;
-                float clearance = IsCloud
-                    ? float.PositiveInfinity
-                    : TrafficClearance(direction, out pedestrianAhead);
-                float routeSpeed = finalPoint
-                    ? Mathf.Sqrt(2f * 5f * Mathf.Max(0f, remaining - 0.1f))
-                    : Mathf.Lerp(4.2f, speed, Mathf.InverseLerp(reachRadius, 5f, remaining));
-                float targetSpeed = IsCloud ? speed : Mathf.Min(speed, routeSpeed);
-                if (!IsCloud)
-                    targetSpeed = Mathf.Min(targetSpeed, Mathf.Sqrt(2f * 7f * Mathf.Max(0f, clearance - 0.5f)));
-                currentDriveSpeed = Mathf.MoveTowards(currentDriveSpeed, targetSpeed,
-                    (targetSpeed < currentDriveSpeed ? 10f : 6.5f) * Time.deltaTime);
-                IsYieldingToPedestrian = !IsCloud && pedestrianAhead && clearance < 3f;
-                UpdateHorn(IsYieldingToPedestrian);
-                float travel = Mathf.Min(currentDriveSpeed * Time.deltaTime,
-                    Mathf.Max(0f, clearance - 0.45f));
-                if (finalPoint)
-                {
-                    transform.position = Vector3.MoveTowards(
-                        transform.position, target, travel);
-                }
-                else
-                {
-                    transform.position += direction * travel;
+                    Debug.Log(
+                        $"GYMCHAOS_VEHICLE_ROUTE_STALL identity={identity} " +
+                        $"waypoint={i} park={park} position={transform.position} " +
+                        $"target={target} remaining={remaining:F2} clearance={clearance:F3} " +
+                        $"travel={travel:F4} actualTravel={actualTravel:F4} " +
+                        $"speed={currentDriveSpeed:F2} blocker={lastTrafficBlocker} " +
+                        $"source={lastTrafficClearanceSource} " +
+                        $"pedestrianAhead={pedestrianAhead} direction={direction}", this);
+                    nextRouteStallLogTime = Time.time + 2.5f;
                 }
                 if (engine != null) engine.pitch = Mathf.Lerp(0.72f, 1.15f, currentDriveSpeed / speed);
                 UpdateEngineAudibility();
@@ -422,13 +857,27 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             }
             if (finalPoint) transform.position = target;
         }
+        if (park && IsBus)
+        {
+            transform.rotation = ParkedRotation;
+        }
         if (engine != null) engine.Stop();
         activeGroundTraffic.Remove(this);
         IsYieldingToPedestrian = false;
         IsParked = park;
         driveRoutine = null;
         if (!park) HasCompletedDeparture = true;
-        if (!park) gameObject.SetActive(false);
+        if (!park)
+        {
+            if (IsBus)
+            {
+                // Keep both preview and dynamic bus hidden behind the corner.
+                // The preview must not reappear at the stop until the next
+                // pickup cycle explicitly drives a bus back in.
+                GymRoadsideBusStop.SetDavieDynamicBusActive(true);
+            }
+            gameObject.SetActive(false);
+        }
         done?.Invoke();
         Debug.Log($"GYMCHAOS_VEHICLE_{(park ? "PARKED" : "DEPARTED")} identity={identity}", this);
     }
@@ -441,23 +890,25 @@ public sealed class GymVisitorVehicle : MonoBehaviour
              collider.GetComponentInParent<GymVisitorAgent>() != null);
     }
 
-    private float TrafficClearance(Vector3 direction, out bool pedestrianAhead)
+    private float TrafficClearance(
+        Vector3 direction, float waypointDistance, out bool pedestrianAhead)
     {
         pedestrianAhead = false;
         lastTrafficBlocker = "none";
-        float convoyClearance = SameDirectionConvoyClearance(out string convoyBlocker);
+        lastTrafficClearanceSource = "none";
+        float convoyClearance = SameDirectionConvoyClearance(
+            direction, out string convoyBlocker);
         if (convoyClearance <= 0.01f)
         {
             lastTrafficBlocker = convoyBlocker;
+            lastTrafficClearanceSource = "convoy:" + convoyBlocker;
             return 0f;
         }
         BoxCollider bodyCollider = GetComponent<BoxCollider>();
         float frontExtent = 1.7f;
         if (bodyCollider != null)
         {
-            Vector3 extents = bodyCollider.bounds.extents;
-            frontExtent = Mathf.Abs(direction.x) * extents.x +
-                Mathf.Abs(direction.z) * extents.z;
+            frontExtent = GetColliderExtentAlong(bodyCollider, direction);
         }
         // Start sensing just beyond the physical nose. A box centred on the
         // vehicle also covered neighbouring parking bays during a turn and
@@ -474,7 +925,10 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         for (int i = 0; i < bumperCount; i++)
         {
             Collider hit = nearPeople[i];
-            if (!IsTrafficObstacle(hit)) continue;
+            if (IsAdjacentBusBayStop(hit)) continue;
+            if (!IsTrafficObstacle(hit) ||
+                ShouldIgnoreStaticObstacle(
+                    hit, direction, waypointDistance, frontExtent)) continue;
             Vector3 relative = hit.bounds.center - transform.position;
             float ahead = Vector3.Dot(relative, direction);
             float lateral = Mathf.Abs(Vector3.Dot(relative, right));
@@ -487,6 +941,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             pedestrianAhead |= IsPerson(hit);
             RequestPedestrianYield(hit, direction);
             lastTrafficBlocker = hit.name;
+            lastTrafficClearanceSource = "bumper:" + hit.name;
             return 0f;
         }
 
@@ -498,10 +953,14 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         for (int i = 0; i < overlapCount; i++)
         {
             Collider hit = nearPeople[i];
-            if (!IsTrafficObstacle(hit)) continue;
+            if (IsAdjacentBusBayStop(hit)) continue;
+            if (!IsTrafficObstacle(hit) ||
+                ShouldIgnoreStaticObstacle(
+                    hit, direction, waypointDistance, frontExtent)) continue;
             pedestrianAhead |= IsPerson(hit);
             RequestPedestrianYield(hit, direction);
             lastTrafficBlocker = hit.name;
+            lastTrafficClearanceSource = "overlap:" + hit.name;
             return 0f;
         }
         float distance = Mathf.Lerp(ForwardSensorMinimumDistance, ForwardSensorMaximumDistance,
@@ -512,13 +971,24 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         for (int i = 0; i < count; i++)
         {
             Collider hit = roadHits[i].collider;
-            if (!IsTrafficObstacle(hit)) continue;
+            if (IsAdjacentBusBayStop(hit)) continue;
+            if (!IsTrafficObstacle(hit) ||
+                ShouldIgnoreStaticObstacle(
+                    hit, direction, waypointDistance, frontExtent)) continue;
             pedestrianAhead |= IsPerson(hit);
-            RequestPedestrianYield(hit, direction);
+            bool pedestrianYielded = RequestPedestrianYield(hit, direction);
+            if (pedestrianYielded)
+            {
+                clearance = 0f;
+                lastTrafficBlocker = hit.name;
+                lastTrafficClearanceSource = "boxcast-pedestrian:" + hit.name;
+                continue;
+            }
             if (roadHits[i].distance < clearance)
             {
                 clearance = roadHits[i].distance;
                 lastTrafficBlocker = hit.name;
+                lastTrafficClearanceSource = "boxcast:" + hit.name;
             }
         }
         float crossingClearance = PredictCrossingPedestrianClearance(direction);
@@ -527,8 +997,54 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             pedestrianAhead = true;
             clearance = crossingClearance;
             lastTrafficBlocker = "crossing pedestrian";
+            lastTrafficClearanceSource = "crossing pedestrian";
+        }
+        if (lastTrafficClearanceSource == "none")
+        {
+            lastTrafficClearanceSource = "clear";
         }
         return clearance;
+    }
+
+    private bool ShouldIgnoreStaticObstacle(
+        Collider collider, Vector3 direction, float waypointDistance,
+        float vehicleFrontExtent)
+    {
+        if (collider == null ||
+            IsPerson(collider))
+        {
+            return false;
+        }
+        if (collider.GetComponentInParent<GymVisitorVehicle>() != null)
+        {
+            return true;
+        }
+
+        Vector3 relative = Vector3.ProjectOnPlane(
+            collider.bounds.center - transform.position, Vector3.up);
+        float ahead = Vector3.Dot(relative, direction);
+        float obstacleHalfLength = Mathf.Abs(direction.x) *
+                collider.bounds.extents.x +
+            Mathf.Abs(direction.z) * collider.bounds.extents.z;
+        float vehicleCollisionDistance = ahead -
+            obstacleHalfLength - vehicleFrontExtent;
+        Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
+        BoxCollider bodyCollider = GetComponent<BoxCollider>();
+        float vehicleHalfWidth = bodyCollider != null
+            ? GetColliderExtentAlong(bodyCollider, right)
+            : ForwardSensorHalfWidth;
+        float obstacleHalfWidth = Mathf.Abs(right.x) *
+                collider.bounds.extents.x +
+            Mathf.Abs(right.z) * collider.bounds.extents.z;
+        float lateral = Mathf.Abs(Vector3.Dot(relative, right));
+        if (lateral > vehicleHalfWidth + obstacleHalfWidth + 0.08f ||
+            ahead + obstacleHalfLength < -0.15f)
+        {
+            return true;
+        }
+
+        return waypointDistance < ForwardSensorMaximumDistance &&
+            vehicleCollisionDistance > waypointDistance + 0.15f;
     }
 
     private float PredictCrossingPedestrianClearance(Vector3 forward)
@@ -554,28 +1070,39 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             float predictedLateral = lateral + lateralSpeed * CrossingPredictionSeconds;
             if (Mathf.Abs(lateral) <= 1.05f || Mathf.Abs(predictedLateral) <= 1.05f)
             {
-                RequestPedestrianYield(candidate, forward);
-                clearance = Mathf.Min(clearance, Mathf.Max(0f, ahead - 0.55f));
+                bool pedestrianYielded = RequestPedestrianYield(candidate, forward);
+                float candidateClearance = pedestrianYielded
+                    ? 0f
+                    : Mathf.Max(0f, ahead - 0.55f);
+                clearance = Mathf.Min(clearance, candidateClearance);
             }
         }
         return clearance;
     }
 
-    private void RequestPedestrianYield(Collider hit, Vector3 direction)
+    private bool RequestPedestrianYield(Collider hit, Vector3 direction)
     {
         if (hit == null || !IsPerson(hit))
         {
-            return;
+            return false;
         }
 
         GymVisitorAgent agent = hit.GetComponentInParent<GymVisitorAgent>();
-        agent?.RequestVehicleYield(this, direction);
+        return agent != null && agent.RequestVehicleYield(this, direction);
     }
 
-    private float SameDirectionConvoyClearance(out string blocker)
+    private float SameDirectionConvoyClearance(
+        Vector3 direction, out string blocker)
     {
         blocker = "none";
         float clearance = float.PositiveInfinity;
+        direction = Vector3.ProjectOnPlane(direction, Vector3.up);
+        if (direction.sqrMagnitude < 0.01f)
+        {
+            return clearance;
+        }
+        direction.Normalize();
+        Vector3 right = Vector3.Cross(Vector3.up, direction).normalized;
         for (int i = activeGroundTraffic.Count - 1; i >= 0; i--)
         {
             GymVisitorVehicle other = activeGroundTraffic[i];
@@ -585,12 +1112,23 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 continue;
             }
             if (other == this || !other.IsDriving ||
-                other.drivingIntoParking != drivingIntoParking ||
-                other.trafficOrder >= trafficOrder)
+                other.drivingIntoParking != drivingIntoParking)
                 continue;
-            float separation = Vector3.ProjectOnPlane(
-                other.transform.position - transform.position, Vector3.up).magnitude;
-            float candidate = Mathf.Max(0f, separation - 3f);
+            Vector3 relative = Vector3.ProjectOnPlane(
+                other.transform.position - transform.position, Vector3.up);
+            float ahead = Vector3.Dot(relative, direction);
+            float lateral = Mathf.Abs(Vector3.Dot(relative, right));
+            float otherHalfWidth = other.IsBus ? 1.45f : 1.05f;
+            if (ahead <= 0.05f || lateral > ForwardSensorHalfWidth +
+                otherHalfWidth * 0.8f)
+            {
+                continue;
+            }
+            float requiredGap = Mathf.Max(
+                4.5f,
+                GetForwardExtent(direction) +
+                other.GetForwardExtent(direction) + 0.45f);
+            float candidate = Mathf.Max(0f, ahead - requiredGap);
             if (candidate < clearance)
             {
                 clearance = candidate;
@@ -598,6 +1136,80 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             }
         }
         return clearance;
+    }
+
+    private float GetColliderExtentAlong(
+        BoxCollider bodyCollider, Vector3 direction)
+    {
+        if (bodyCollider == null || direction.sqrMagnitude < 0.0001f)
+        {
+            return 0f;
+        }
+
+        direction.Normalize();
+        Transform colliderTransform = bodyCollider.transform;
+        Vector3 halfSize = new Vector3(
+            bodyCollider.size.x * Mathf.Abs(colliderTransform.lossyScale.x) *
+                0.5f,
+            bodyCollider.size.y * Mathf.Abs(colliderTransform.lossyScale.y) *
+                0.5f,
+            bodyCollider.size.z * Mathf.Abs(colliderTransform.lossyScale.z) *
+                0.5f);
+        return Mathf.Abs(Vector3.Dot(direction, colliderTransform.right)) *
+                halfSize.x +
+            Mathf.Abs(Vector3.Dot(direction, colliderTransform.up)) *
+                halfSize.y +
+            Mathf.Abs(Vector3.Dot(direction, colliderTransform.forward)) *
+                halfSize.z;
+    }
+
+    private float GetForwardExtent(Vector3 direction)
+    {
+        BoxCollider bodyCollider = GetComponent<BoxCollider>();
+        if (bodyCollider == null)
+        {
+            return IsBus ? DavieBusTargetLength * 0.5f : 1.7f;
+        }
+        return GetColliderExtentAlong(bodyCollider, direction);
+    }
+
+    private bool IsAdjacentBusBayStop(Collider collider)
+    {
+        if (collider == null || !GymRoadsideBusStop.IsBuilt)
+        {
+            return false;
+        }
+
+        GymVisitorVehicle bus = collider.GetComponentInParent<GymVisitorVehicle>();
+        bool parkedBus = bus != null && bus.IsBus && bus.IsParked;
+        bool previewBus = false;
+        for (Transform current = collider.transform; current != null;
+            current = current.parent)
+        {
+            if (current.name == "Davie Bus - Temporary Roadside Stop")
+            {
+                previewBus = true;
+                break;
+            }
+        }
+        if (!parkedBus && !previewBus)
+        {
+            return false;
+        }
+
+        Bounds busBounds = collider.bounds;
+        if (busBounds.center.x < GymRoadsideBusStop.BusBayStartX - 0.75f ||
+            busBounds.center.x > GymRoadsideBusStop.BusBayEndX + 0.75f ||
+            busBounds.center.z < GymRoadsideBusStop.BusBayRoadEdgeZ)
+        {
+            return false;
+        }
+
+        // The bus is parked beyond the normal road edge. A car still on the
+        // normal lane should not brake for the adjacent pull-off; once a
+        // vehicle is actually in the bay envelope, normal obstacle handling
+        // applies again.
+        return transform.position.z <= GymRoadsideBusStop.BusBayRoadEdgeZ + 0.65f;
     }
 
     private bool IsTrafficObstacle(Collider collider)
@@ -621,14 +1233,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             return false;
         }
         string lowerName = collider.name.ToLowerInvariant();
-        // The parking perimeter remains a real collider, but when the
-        // authored stall target is already in front of that perimeter the
-        // bumper sensor must not treat the far-side fence as a blocker. The
-        // route coroutine stops at parkingPoint; this only removes a false
-        // early stop a car-width before the target and never opens a route
-        // through the fence itself.
-        if (drivingIntoParking &&
-            lowerName.Contains("outdoor boundary - parking"))
+        if (lowerName == "outdoor boundary - path outer" ||
+            lowerName == "player road access blocker")
         {
             return false;
         }
@@ -639,11 +1245,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             !lowerName.Contains("road center line") &&
             !lowerName.Contains("road shoulder") &&
             !lowerName.Contains("courtyard foundation") &&
-            // This invisible player-only limit intentionally spans the visual
-            // road opening. The exterior builder keeps it so the player cannot
-            // leave the playable courtyard, while authored vehicle routes are
-            // explicitly allowed to continue through that opening.
-            !lowerName.Contains("outdoor boundary - path outer") &&
             !lowerName.Contains("wheel stop");
     }
 
@@ -691,8 +1292,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     public static bool IsPedestrianUsingParkingConnector()
     {
-        GymVisitorAgent[] agents = FindObjectsByType<GymVisitorAgent>(FindObjectsSortMode.None);
-        for (int i = 0; i < agents.Length; i++)
+        IReadOnlyList<GymVisitorAgent> agents = GymVisitorAgent.ActiveAgents;
+        for (int i = 0; i < agents.Count; i++)
         {
             if (agents[i] != null && agents[i].State ==
                 GymVisitorAgent.VisitorState.ApproachingVehicle)
@@ -718,6 +1319,57 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         if (engine != null || horn != null) UpdateVehicleAudioAudibility();
     }
 
+    private float AdvanceRouteStep(
+        Vector3 target, bool finalPoint, float reachRadius, float speed,
+        bool holdBusBayHeading, float routeDeltaTime, out float clearance)
+    {
+        Vector3 direction = target - transform.position;
+        if (!IsCloud)
+        {
+            direction = Vector3.ProjectOnPlane(direction, Vector3.up);
+        }
+        direction.Normalize();
+        float remaining = Vector3.Distance(transform.position, target);
+        if (direction.sqrMagnitude > 0.01f && !holdBusBayHeading)
+        {
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation,
+                Quaternion.LookRotation(direction, Vector3.up),
+                TurnSpeed * routeDeltaTime);
+        }
+        else if (holdBusBayHeading)
+        {
+            transform.rotation = GymRoadsideBusStop.DavieBusRotation;
+        }
+
+        bool pedestrianAhead = false;
+        clearance = IsCloud
+            ? float.PositiveInfinity
+            : TrafficClearance(direction, remaining, out pedestrianAhead);
+        float routeSpeed = finalPoint
+            ? Mathf.Sqrt(2f * 5f * Mathf.Max(0f, remaining - 0.1f))
+            : Mathf.Lerp(4.2f, speed, Mathf.InverseLerp(reachRadius, 5f, remaining));
+        float targetSpeed = IsCloud ? speed : Mathf.Min(speed, routeSpeed);
+        if (!IsCloud)
+        {
+            targetSpeed = Mathf.Min(
+                targetSpeed,
+                Mathf.Sqrt(2f * 7f * Mathf.Max(0f, clearance - 0.5f)));
+        }
+        currentDriveSpeed = Mathf.MoveTowards(
+            currentDriveSpeed, targetSpeed,
+            (targetSpeed < currentDriveSpeed ? 10f : 6.5f) * routeDeltaTime);
+        IsYieldingToPedestrian = !IsCloud && pedestrianAhead && clearance < 3f;
+        UpdateHorn(IsYieldingToPedestrian);
+
+        float travel = Mathf.Min(
+            currentDriveSpeed * routeDeltaTime,
+            Mathf.Max(0f, clearance - 0.45f),
+            IsCloud ? float.PositiveInfinity : MaxGroundRouteStep);
+        Vector3 beforeMove = transform.position;
+        transform.position = Vector3.MoveTowards(transform.position, target, travel);
+        return Vector3.Distance(beforeMove, transform.position);
+    }
     private void UpdateEngineAudibility()
     {
         UpdateVehicleAudioAudibility();
@@ -737,7 +1389,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private void UpdateVehicleAudioAudibility()
     {
         bool outside = IsPlayerOutsideForAudio();
-        bool audibleDrivingState = IsDriving && !IsParked && gameObject.activeInHierarchy;
+        bool audibleDrivingState = IsDriving && !IsParked &&
+            !waitingForBusTurnaround && gameObject.activeInHierarchy;
         bool audible = outside && audibleDrivingState;
         if (engine != null)
         {
@@ -769,6 +1422,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         Bounds parking = GymOutdoorBuilder.ParkingBounds;
         float floorY = parking.center.y + 0.08f;
+        if (IsBus && GymRoadsideBusStop.IsBuilt)
+        {
+            ConfigureDavieBusRoute(floorY);
+            return;
+        }
+
         int normalizedSlot = Mathf.Abs(slot) % 6;
         int bayCount = Mathf.Max(1, GymOutdoorBuilder.ParkingBayCount);
         // Spread the six lifecycle slots across the generated bays while
@@ -806,10 +1465,47 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
     }
 
-    private Quaternion ParkedRotation => Quaternion.LookRotation(
-        parkingPoint.z >= aislePoint.z ? Vector3.forward : Vector3.back, Vector3.up);
+    private void ConfigureDavieBusRoute(float fallbackFloorY)
+    {
+        float busFloorY = GymRoadsideBusStop.DavieBusCenterPoint.y;
+        if (Mathf.Abs(busFloorY) < 0.001f)
+        {
+            busFloorY = fallbackFloorY;
+        }
 
-    private void FitVisual(GameObject visual, float targetLength)
+        parkingPoint = GymRoadsideBusStop.DavieBusCenterPoint;
+        parkingPoint.y = busFloorY;
+        aislePoint = GymRoadsideBusStop.DavieBusPedestrianExitPoint;
+        aislePoint.y = busFloorY;
+        junctionPoint = GymRoadsideBusStop.DavieBusArrivalApproachPoint;
+        junctionPoint.y = busFloorY;
+        busBayEntryPoint = GymRoadsideBusStop.DavieBusBayEntryPoint;
+        busBayEntryPoint.y = busFloorY;
+        busBayParkingTurnPoint = GymRoadsideBusStop.DavieBusBayParkingTurnPoint;
+        busBayParkingTurnPoint.y = busFloorY;
+        roadTurnPoint = GymOutdoorBuilder.VehicleArrivalRoadTurnPoint;
+        roadTurnPoint.y = busFloorY;
+        roadPoint = GymOutdoorBuilder.VehicleArrivalRoadSpawnPoint;
+        roadPoint.y = busFloorY;
+        busDepartureApproachPoint =
+            GymRoadsideBusStop.DavieBusTurnaroundStartPoint;
+        busDepartureApproachPoint.y = busFloorY;
+        departureJunctionPoint = GymOutdoorBuilder.VehicleDepartureRoadJunctionPoint;
+        departureJunctionPoint.y = busFloorY;
+        departureRoadTurnPoint = GymOutdoorBuilder.VehicleDepartureRoadTurnPoint;
+        departureRoadTurnPoint.y = busFloorY;
+        departureRoadPoint = GymOutdoorBuilder.VehicleDepartureRoadSpawnPoint;
+        departureRoadPoint.y = busFloorY;
+    }
+
+    private Quaternion ParkedRotation => Quaternion.LookRotation(
+        IsBus && GymRoadsideBusStop.IsBuilt
+            ? GymRoadsideBusStop.DavieBusRotation * Vector3.forward
+            : parkingPoint.z >= aislePoint.z ? Vector3.forward : Vector3.back,
+        Vector3.up);
+
+    private void FitVisual(
+        GameObject visual, float targetLength, bool centerHorizontally = false)
     {
         Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0) return;
@@ -821,6 +1517,16 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         Physics.SyncTransforms();
         bounds = CombinedBounds(renderers);
+        if (centerHorizontally)
+        {
+            Vector3 horizontalOffset = new Vector3(
+                transform.position.x - bounds.center.x,
+                0f,
+                transform.position.z - bounds.center.z);
+            visual.transform.position += horizontalOffset;
+            Physics.SyncTransforms();
+            bounds = CombinedBounds(renderers);
+        }
         visual.transform.position += Vector3.up * -bounds.min.y;
     }
 
@@ -871,18 +1577,86 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void AddPhysicalBody(GameObject visual)
     {
-        Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
-        if (renderers.Length == 0) return;
-        Bounds bounds = CombinedBounds(renderers);
+        if (visual == null ||
+            !TryGetOrientedLocalBounds(visual, transform, out Bounds localBounds))
+        {
+            return;
+        }
+
         BoxCollider box = gameObject.AddComponent<BoxCollider>();
-        box.center = transform.InverseTransformPoint(bounds.center);
-        box.size = bounds.size;
+        box.center = localBounds.center;
+        box.size = localBounds.size;
         Rigidbody rigidbody = gameObject.AddComponent<Rigidbody>();
         rigidbody.isKinematic = true;
         rigidbody.useGravity = false;
         rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
     }
 
+    private static bool TryGetOrientedLocalBounds(
+        GameObject visual, Transform root, out Bounds bounds)
+    {
+        bounds = default;
+        bool hasBounds = false;
+        MeshFilter[] filters = visual.GetComponentsInChildren<MeshFilter>(true);
+        for (int filterIndex = 0; filterIndex < filters.Length; filterIndex++)
+        {
+            MeshFilter filter = filters[filterIndex];
+            if (filter == null || filter.sharedMesh == null)
+            {
+                continue;
+            }
+
+            Bounds source = filter.sharedMesh.bounds;
+            for (int corner = 0; corner < 8; corner++)
+            {
+                Vector3 sourcePoint = new Vector3(
+                    (corner & 1) == 0 ? source.min.x : source.max.x,
+                    (corner & 2) == 0 ? source.min.y : source.max.y,
+                    (corner & 4) == 0 ? source.min.z : source.max.z);
+                Vector3 localPoint = root.InverseTransformPoint(
+                    filter.transform.TransformPoint(sourcePoint));
+                if (!hasBounds)
+                {
+                    bounds = new Bounds(localPoint, Vector3.zero);
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(localPoint);
+                }
+            }
+        }
+        if (hasBounds)
+        {
+            return true;
+        }
+
+        Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            Renderer renderer = renderers[rendererIndex];
+            if (renderer == null) continue;
+            Bounds source = renderer.bounds;
+            for (int corner = 0; corner < 8; corner++)
+            {
+                Vector3 worldPoint = new Vector3(
+                    (corner & 1) == 0 ? source.min.x : source.max.x,
+                    (corner & 2) == 0 ? source.min.y : source.max.y,
+                    (corner & 4) == 0 ? source.min.z : source.max.z);
+                Vector3 localPoint = root.InverseTransformPoint(worldPoint);
+                if (!hasBounds)
+                {
+                    bounds = new Bounds(localPoint, Vector3.zero);
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(localPoint);
+                }
+            }
+        }
+        return hasBounds;
+    }
     private static Bounds CombinedBounds(Renderer[] renderers)
     {
         Bounds bounds = renderers[0].bounds;
@@ -954,6 +1728,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             case BodybuilderIdentity.JayCutler: return "Vehicles/jaycutler_vehicle";
             case BodybuilderIdentity.Goku: return "Vehicles/goku_vehicle";
             case BodybuilderIdentity.Ronnie: return "Vehicles/ronnie_vehicle";
+            case BodybuilderIdentity.Davie: return DavieBusAsset;
             default: return "Vehicles/cbum_vehicle";
         }
     }

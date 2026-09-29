@@ -4,6 +4,30 @@ using UnityEngine.Rendering;
 public static class GymInteriorBuilder
 {
     private const string RootName = "Gym Interior (Runtime)";
+    private static Bounds mainGymBounds;
+    private static bool mainGymBoundsReady;
+
+    public static bool TryGetMainGymBounds(out Bounds bounds)
+    {
+        if (!mainGymBoundsReady)
+        {
+            GameObject root = GameObject.Find(RootName);
+            Transform floor = root != null ? root.transform.Find("Rubber Floor") : null;
+            Renderer renderer = floor != null ? floor.GetComponent<Renderer>() : null;
+            if (renderer != null)
+            {
+                Bounds floorBounds = renderer.bounds;
+                mainGymBounds = new Bounds(
+                    new Vector3(floorBounds.center.x, floorBounds.center.y + 4.25f,
+                        floorBounds.center.z),
+                    new Vector3(floorBounds.size.x, 8.5f, floorBounds.size.z));
+                mainGymBoundsReady = true;
+            }
+        }
+
+        bounds = mainGymBounds;
+        return mainGymBoundsReady;
+    }
 
     private struct PosterDefinition
     {
@@ -44,9 +68,13 @@ public static class GymInteriorBuilder
         float depth = Mathf.Clamp(equipmentBounds.size.z + 10f, 32f, 68f);
         float height = 8.5f;
         Vector3 center = new Vector3(equipmentBounds.center.x, floorY, equipmentBounds.center.z);
+        mainGymBounds = new Bounds(
+            center + Vector3.up * (height * 0.5f),
+            new Vector3(width, height, depth));
+        mainGymBoundsReady = true;
 
         GameObject root = new GameObject(RootName);
-        Material floor = CreateMaterial("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f), 0.05f, 0.34f);
+        Material floor = GymSurfaceMaterialFactory.CreateGymFloor("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f));
         Material wall = CreateMaterial("Warm concrete walls", new Color(0.36f, 0.39f, 0.41f), 0f, 0.25f);
         Material ceiling = CreateMaterial("Ceiling", new Color(0.12f, 0.14f, 0.16f), 0.05f, 0.24f);
         Material accent = CreateMaterial("Gym accent", new Color(0.78f, 0.13f, 0.07f), 0.05f, 0.45f);

@@ -14,12 +14,18 @@ public sealed class PlanarGymMirror : MonoBehaviour
     private Camera reflectionCamera;
     private RenderTexture reflectionTexture;
     private Material mirrorMaterial;
+    private Renderer[] mirrorRenderers;
     private Vector3 planePoint;
     private Vector3 planeNormal;
     private bool invertCulling;
     private bool continuousRefresh;
+    private bool refreshRequested = true;
     private bool useObliqueClip = true;
     private float nextPlayerMaterialRepair;
+    private static float nextGlobalPlayerMaterialRepair;
+    private static float nextPlayerRendererDiscovery;
+    private static Renderer[] cachedPlayerRenderers;
+    private readonly Plane[] visibilityPlanes = new Plane[6];
 
     public bool ReflectionIncludesPlayerLayer => reflectionCamera != null &&
         (reflectionCamera.cullingMask & (1 << MirrorPlayerLayer)) != 0;
@@ -30,14 +36,23 @@ public sealed class PlanarGymMirror : MonoBehaviour
     public bool HasReadyReflectionTexture => reflectionTexture != null &&
         reflectionTexture.IsCreated();
     public Vector3 PlaneNormal => planeNormal;
+    public Vector3 PlanePointForVerification => planePoint;
+    public Camera SourceCameraForVerification => sourceCamera;
+    public int LastRefreshFrameForVerification { get; private set; } = -1;
+    public int LastRenderedFrameForVerification { get; private set; } = -1;
     public bool ContinuousRefresh
     {
         get => continuousRefresh;
-        set => continuousRefresh = value;
+        set
+        {
+            continuousRefresh = value;
+            refreshRequested = true;
+        }
     }
 
     public void RequestImmediateRefresh()
     {
+        refreshRequested = true;
         UpdateReflectionCamera();
         if (reflectionCamera != null)
         {
@@ -69,6 +84,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         Vector3 pointOnPlane, Vector3 normal)
     {
         sourceCamera = playerCamera;
+        this.mirrorRenderers = mirrorRenderers;
         planePoint = pointOnPlane;
         planeNormal = normal.normalized;
         // A previous mirror removes MirrorPlayerLayer from the gameplay
@@ -77,6 +93,8 @@ public sealed class PlanarGymMirror : MonoBehaviour
         // reflection camera silently omit the player and outfit overlays.
         int reflectionCullingMask =
             sourceCamera.cullingMask | (1 << MirrorPlayerLayer);
+        reflectionCullingMask &=
+            ~(1 << GymCityDystopiaSurroundings.CityBackgroundLayer);
 
         // Keep the player body out of the gameplay camera even if a platform
         // strips the custom mirror shader. Without this guard WebGL can fall
@@ -146,16 +164,50 @@ public sealed class PlanarGymMirror : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (reflectionCamera == null)
+        {
+            return;
+        }
+
+        bool shouldRefresh = continuousRefresh || refreshRequested ||
+            IsVisibleFromSourceCamera();
+        if (!shouldRefresh)
+        {
+            reflectionCamera.enabled = false;
+            return;
+        }
+
+        refreshRequested = false;
         UpdateReflectionCamera();
         if (Time.unscaledTime >= nextPlayerMaterialRepair)
         {
             nextPlayerMaterialRepair = Time.unscaledTime + 0.5f;
             EnforceOpaqueMirrorPlayerMaterials();
         }
-        if (reflectionCamera != null)
+        reflectionCamera.enabled = true;
+    }
+
+    private bool IsVisibleFromSourceCamera()
+    {
+        if (sourceCamera == null || mirrorRenderers == null)
         {
-            reflectionCamera.enabled = true;
+            return false;
         }
+        GeometryUtility.CalculateFrustumPlanes(sourceCamera, visibilityPlanes);
+        for (int i = 0; i < mirrorRenderers.Length; i++)
+        {
+            Renderer renderer = mirrorRenderers[i];
+            if (renderer == null || !renderer.enabled ||
+                !renderer.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+            if (GeometryUtility.TestPlanesAABB(visibilityPlanes, renderer.bounds))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void UpdateReflectionCamera()
@@ -180,6 +232,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         Vector3 reflectedUp = Vector3.Reflect(sourceCamera.transform.up, planeNormal);
         reflectionCamera.transform.SetPositionAndRotation(
             reflectedPosition, Quaternion.LookRotation(reflectedForward, reflectedUp));
+        LastRefreshFrameForVerification = Time.frameCount;
 
         // A reflection changes handedness. LookRotation alone builds a normal
         // camera and cannot be paired with inverted culling (it shows backsides).
@@ -205,6 +258,12 @@ public sealed class PlanarGymMirror : MonoBehaviour
 
     private void OnPreCull()
     {
+        if (reflectionCamera != null && reflectionCamera.enabled)
+        {
+            // Rebuild immediately before rendering so late player/camera motion
+            // cannot leave the reflection one frame behind the source view.
+            UpdateReflectionCamera();
+        }
         if (reflectionTexture != null && !reflectionTexture.IsCreated())
         {
             reflectionTexture.Create();
@@ -214,6 +273,11 @@ public sealed class PlanarGymMirror : MonoBehaviour
 
     private static void EnforceOpaqueMirrorPlayerMaterials()
     {
+        if (Time.unscaledTime < nextGlobalPlayerMaterialRepair)
+        {
+            return;
+        }
+        nextGlobalPlayerMaterialRepair = Time.unscaledTime + 0.5f;
         PlayerHandRig[] playerRigs = FindObjectsByType<PlayerHandRig>(
             FindObjectsInactive.Include, FindObjectsSortMode.None);
         for (int i = 0; i < playerRigs.Length; i++)
@@ -224,7 +288,14 @@ public sealed class PlanarGymMirror : MonoBehaviour
             }
         }
 
-        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        if (cachedPlayerRenderers == null || Time.unscaledTime >= nextPlayerRendererDiscovery)
+        {
+            Renderer[] sceneRenderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+            cachedPlayerRenderers = System.Array.FindAll(sceneRenderers,
+                renderer => renderer != null && renderer.gameObject.layer == MirrorPlayerLayer);
+            nextPlayerRendererDiscovery = Time.unscaledTime + 5f;
+        }
+        Renderer[] renderers = cachedPlayerRenderers;
         for (int r = 0; r < renderers.Length; r++)
         {
             Renderer renderer = renderers[r];
@@ -271,6 +342,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
     {
         if (camera == reflectionCamera && !invertCulling)
         {
+            UpdateReflectionCamera();
             GL.invertCulling = true;
             invertCulling = true;
         }
@@ -280,6 +352,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
     {
         if (camera == reflectionCamera && invertCulling)
         {
+            LastRenderedFrameForVerification = Time.frameCount;
             GL.invertCulling = false;
             invertCulling = false;
         }

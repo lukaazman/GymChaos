@@ -10,7 +10,8 @@ public class GymArenaBootstrap : MonoBehaviour
         BodybuilderIdentity.Arnold,
         BodybuilderIdentity.Ronnie,
         BodybuilderIdentity.JayCutler,
-        BodybuilderIdentity.Goku
+        BodybuilderIdentity.Goku,
+        BodybuilderIdentity.Davie
     };
 
     private static readonly string[] StaticNameBlocks =
@@ -35,6 +36,7 @@ public class GymArenaBootstrap : MonoBehaviour
     private int webGlBoundsFallbackCount;
     private int webGlPickupExactMeshColliderCount;
     private int webGlPickupFallbackCount;
+    private int visitorDoorTreadmillRailCount;
 
     private PlayerMovement player;
     private GymRadio radio;
@@ -63,6 +65,7 @@ public class GymArenaBootstrap : MonoBehaviour
         webGlBoundsFallbackCount = 0;
         webGlPickupExactMeshColliderCount = 0;
         webGlPickupFallbackCount = 0;
+        visitorDoorTreadmillRailCount = 0;
         int repairedWebGlMeshColliders = RepairUnreadableWebGlMeshColliders();
         Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
         HashSet<Transform> processedRenderers = new HashSet<Transform>();
@@ -133,6 +136,13 @@ public class GymArenaBootstrap : MonoBehaviour
                 $"pickupExact={webGlPickupExactMeshColliderCount} " +
                 $"pickupFallback={webGlPickupFallbackCount}",
                 this);
+        }
+
+        if (visitorDoorTreadmillRailCount > 0)
+        {
+            Debug.Log(
+                $"GYMCHAOS_DOORWAY_COLLISION_CLEAR treadmillRails=" +
+                $"{visitorDoorTreadmillRailCount} scope=doorway-clearance");
         }
     }
 
@@ -276,6 +286,7 @@ public class GymArenaBootstrap : MonoBehaviour
         preparedGameplayActors.transform.SetParent(transform, false);
         preparedGameplayActors.SetActive(false);
         SpawnNeutralReceptionNpc();
+        SpawnProteinStoreWorker();
         SpawnEnemies();
 
         if (Application.isBatchMode)
@@ -301,6 +312,24 @@ public class GymArenaBootstrap : MonoBehaviour
         {
             // Door panels and trim are controlled by GymDoorway. The wall
             // segments around the opening carry the real static colliders.
+            return true;
+        }
+
+        if (IsVisitorDoorTreadmillRail(target))
+        {
+            // Imported treadmill side rails are visual supports. A rail that
+            // overlaps the active visitor doorway clearance must not become a
+            // fallback mesh/box collider and seal the passage from the inside.
+            // Keep the mesh rendered; only omit its gameplay collision.
+            Collider[] existingColliders = target.GetComponents<Collider>();
+            for (int i = 0; i < existingColliders.Length; i++)
+            {
+                if (existingColliders[i] != null)
+                {
+                    existingColliders[i].enabled = false;
+                }
+            }
+            visitorDoorTreadmillRailCount++;
             return true;
         }
 
@@ -368,6 +397,49 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         return false;
+    }
+
+    private static bool IsVisitorDoorTreadmillRail(Transform target)
+    {
+        if (target == null || GymDoorway.Instance == null)
+        {
+            return false;
+        }
+
+        string lowerName = target.name.ToLowerInvariant();
+        if (lowerName != "sidel" && lowerName != "sider")
+        {
+            return false;
+        }
+
+        bool belongsToTreadmill = false;
+        for (Transform current = target.parent; current != null; current = current.parent)
+        {
+            if (current.name.ToLowerInvariant().Contains("treadmill"))
+            {
+                belongsToTreadmill = true;
+                break;
+            }
+        }
+        if (!belongsToTreadmill)
+        {
+            return false;
+        }
+
+        Renderer renderer = target.GetComponent<Renderer>();
+        if (renderer == null)
+        {
+            return false;
+        }
+
+        Bounds railBounds = renderer.bounds;
+        Vector3 doorway = GymDoorway.Instance.DoorCenter;
+        const float horizontalClearance = 2.2f;
+        const float lateralClearance = 2.05f;
+        return railBounds.min.x <= doorway.x + horizontalClearance &&
+            railBounds.max.x >= doorway.x - horizontalClearance &&
+            railBounds.min.z <= doorway.z + lateralClearance &&
+            railBounds.max.z >= doorway.z - lateralClearance;
     }
 
     private Transform FindPickupRoot(Transform target)
@@ -848,15 +920,16 @@ public class GymArenaBootstrap : MonoBehaviour
         GameObject npc = new GameObject("NPC - manwithsuit1");
         // The receptionist uses the separate legacy GLB coroutine loader.
         // Keep it active under the bootstrap while the start screen is open
-        // so it is fully loaded behind the counter before Play. Only the six
-        // authored enemies belong under the inactive preload root.
+        // so it is fully loaded behind the counter before Play. Only the seven
+        // authored combat enemies belong under the inactive preload root;
+        // Mark is spawned separately at the protein.com checkout.
         npc.transform.SetParent(transform, false);
         npc.transform.SetPositionAndRotation(
             position, Quaternion.LookRotation(-towardWall, Vector3.up));
         CapsuleCollider collider = npc.AddComponent<CapsuleCollider>();
-        collider.center = new Vector3(0f, 1.02375f, 0f);
-        collider.height = 2.0475f;
-        collider.radius = 0.34f;
+        collider.center = new Vector3(0f, 1.02375f * EnemyFighter.GameplayScale, 0f);
+        collider.height = 2.0475f * EnemyFighter.GameplayScale;
+        collider.radius = 0.34f * EnemyFighter.GameplayScale;
         Rigidbody body = npc.AddComponent<Rigidbody>();
         body.mass = 78f;
         body.linearDamping = 1.5f;
@@ -872,6 +945,85 @@ public class GymArenaBootstrap : MonoBehaviour
         ReceptionDeathScreen.Create(npc.transform, fighter, floorY);
 
         PlacePlayerAcrossReceptionDesk(deskBounds, towardWall, floorY, npc.transform);
+    }
+
+    private void SpawnProteinStoreWorker()
+    {
+        EnemyFighter[] existingFighters = FindObjectsByType<EnemyFighter>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < existingFighters.Length; i++)
+        {
+            if (existingFighters[i] != null &&
+                existingFighters[i].Identity == BodybuilderIdentity.Mark)
+            {
+                return;
+            }
+        }
+
+        if (player == null || !GymProteinStoreEnvironment.IsBuilt)
+        {
+            return;
+        }
+
+        Vector3 position = GymProteinStoreEnvironment.StoreWorkerPoint;
+        if (GymProteinStoreEnvironment.StoreBounds.size.sqrMagnitude < 0.01f ||
+            position == Vector3.zero)
+        {
+            Debug.LogWarning(
+                "GYMCHAOS_MARK_WORKER_SKIPPED reason=store_bounds_missing", this);
+            return;
+        }
+
+        GameObject worker = new GameObject("Protein Store Worker - Mark");
+        worker.tag = "Enemies";
+        worker.layer = EnemyFighter.EnemyCollisionLayer;
+        if (preparedGameplayActors != null)
+        {
+            worker.transform.SetParent(preparedGameplayActors.transform, false);
+        }
+        else
+        {
+            worker.transform.SetParent(transform, false);
+        }
+        worker.transform.SetPositionAndRotation(
+            position, GymProteinStoreEnvironment.StoreWorkerRotation);
+
+        CapsuleCollider collider = worker.AddComponent<CapsuleCollider>();
+        collider.center = new Vector3(0f, EnemyFighter.EnemyCapsuleCenterY, 0f);
+        collider.height = EnemyFighter.EnemyCapsuleHeight;
+        collider.radius = EnemyFighter.EnemyStandardRadius;
+
+        Rigidbody body = worker.AddComponent<Rigidbody>();
+        body.mass = 78f;
+        body.linearDamping = 1.5f;
+        body.angularDamping = 0.5f;
+        body.constraints = RigidbodyConstraints.FreezePositionX |
+            RigidbodyConstraints.FreezePositionY |
+            RigidbodyConstraints.FreezePositionZ |
+            RigidbodyConstraints.FreezeRotationX |
+            RigidbodyConstraints.FreezeRotationY |
+            RigidbodyConstraints.FreezeRotationZ;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+
+        BodybuilderEnemyVisual.Build(worker, BodybuilderIdentity.Mark);
+        EnemyFighter fighter = worker.AddComponent<EnemyFighter>();
+        fighter.Configure(
+            BodybuilderIdentity.Mark, player, 18f, false,
+            passive: true, countAsOpponent: false);
+        // Configure establishes the normal grounded fighter constraints.
+        // Re-apply the shop anchor afterward so contact impulses cannot move
+        // Mark out from behind the checkout counter; Die() still releases the
+        // constraints for the intentionally easy-to-kill corpse.
+        body.constraints |= RigidbodyConstraints.FreezePositionX |
+            RigidbodyConstraints.FreezePositionZ |
+            RigidbodyConstraints.FreezeRotationY;
+        GymLooseItemSpawner.IgnoreDeadliftStationForEnemy(fighter);
+
+        Debug.Log(
+            $"GYMCHAOS_MARK_WORKER_READY position={position} " +
+            $"storeBounds={GymProteinStoreEnvironment.StoreBounds} " +
+            "passive=1 countAsOpponent=0 health=18 behindCounter=1",
+            worker);
     }
 
     private void PlacePlayerAcrossReceptionDesk(
@@ -1149,10 +1301,10 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private bool IsEnemySpawnOverlapFree(Vector3 floorPosition)
     {
-        Vector3 lower = floorPosition + Vector3.up * 0.55f;
-        Vector3 upper = floorPosition + Vector3.up * 1.85f;
+        Vector3 lower = floorPosition + Vector3.up * EnemyFighter.VisitorProbeLower;
+        Vector3 upper = floorPosition + Vector3.up * EnemyFighter.VisitorProbeUpper;
         int count = Physics.OverlapCapsuleNonAlloc(
-            lower, upper, 0.52f, enemySpawnOverlap, ~0, QueryTriggerInteraction.Ignore);
+            lower, upper, EnemyFighter.EnemySpawnProbeRadius, enemySpawnOverlap, ~0, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < count; i++)
         {
             Collider hit = enemySpawnOverlap[i];
@@ -1246,10 +1398,10 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private bool IsEnemySpawnPathClear(Vector3 floorPosition, Vector3 direction, float distance)
     {
-        Vector3 lower = floorPosition + Vector3.up * 0.55f;
-        Vector3 upper = floorPosition + Vector3.up * 1.85f;
+        Vector3 lower = floorPosition + Vector3.up * EnemyFighter.VisitorProbeLower;
+        Vector3 upper = floorPosition + Vector3.up * EnemyFighter.VisitorProbeUpper;
         int count = Physics.CapsuleCastNonAlloc(
-            lower, upper, 0.52f, direction.normalized, enemySpawnPathHits,
+            lower, upper, EnemyFighter.EnemySpawnProbeRadius, direction.normalized, enemySpawnPathHits,
             distance, ~0, QueryTriggerInteraction.Ignore);
         for (int i = 0; i < count; i++)
         {
@@ -1437,9 +1589,9 @@ public class GymArenaBootstrap : MonoBehaviour
         enemy.transform.rotation = rotation;
 
         CapsuleCollider collider = enemy.AddComponent<CapsuleCollider>();
-        collider.center = new Vector3(0f, 1.15f, 0f);
-        collider.height = 2.3f;
-        collider.radius = identity == BodybuilderIdentity.Cbum || identity == BodybuilderIdentity.Ronnie ? 0.54f : 0.48f;
+        collider.center = new Vector3(0f, EnemyFighter.EnemyCapsuleCenterY, 0f);
+        collider.height = EnemyFighter.EnemyCapsuleHeight;
+        collider.radius = EnemyFighter.GetBodyRadiusForIdentity(identity);
 
         Rigidbody body = enemy.AddComponent<Rigidbody>();
         body.mass = 85f;

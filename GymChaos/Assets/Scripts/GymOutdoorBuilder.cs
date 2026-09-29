@@ -12,17 +12,32 @@ using UnityEngine.Rendering;
 public static class GymOutdoorBuilder
 {
     private const string RootName = "Gym Exterior (Runtime)";
+    private static Renderer cachedRoomFloorRenderer;
     private const float ParkingDepth = 18f;
     private const float ParkingAisleDepth = 6.8f;
     private const float ParkingLineInset = 0.7f;
     private const float PathWidth = 4.4f;
-    private const float VehicleRoadWidth = 7.6f;
-    private const float VehicleLaneOffset = 1.65f;
+    // Two normal vehicle lanes plus shoulders. The bus stop is a
+    // short side pull-off, not a permanent third lane along the whole road.
+    private const float VehicleRoadWidth = 8.2f;
+    private const float VehicleLaneOffset = VehicleRoadWidth * 0.25f;
     private const float BoundaryHeight = 5.2f;
+    public const float SharedFenceCollisionHeight = BoundaryHeight;
+    public const float SharedFenceVisibleHeight = 1.35f;
+    public const float SharedFenceCopingHeight = 0.16f;
+    public const float SharedFenceWallThickness = 0.50f;
+    public const float SharedFenceRibThickness = 0.11f;
+    public const float SharedFenceRibSpacing = 2.8f;
     private const float EntranceFenceStartOffset = 3.25f;
     private const float EntranceFenceEndInset = 0.2f;
     private const float InnerBoundaryWallOffset = 0.42f;
     private const float ExteriorWallFaceOffset = 0.2f;
+    private const float ExteriorSurfaceThickness = 0.24f;
+    private const float FoundationSurfaceInset = 0.02f;
+    private const float RoadSurfaceThickness = 0.18f;
+    private const float VehicleRoadApproachLength = 42f;
+    private const float VehicleRoadOcclusionStart = 18f;
+    private const float VehicleRoadHiddenContinuation = 24f;
     private const float ParkingSurfaceOffset = 0.01f;
     private const float ParkingLightBaseHeight = 0.22f;
     private const float ParkingLightPoleHeight = 5.4f;
@@ -31,6 +46,7 @@ public static class GymOutdoorBuilder
     public static Bounds ParkingBounds { get; private set; }
     public static Bounds AccessibleBounds { get; private set; }
     public static Vector3 VehicleRoadSpawnPoint { get; private set; }
+    public static Vector3 VehicleRoadOcclusionStartPoint { get; private set; }
     public static Vector3 VehicleRoadJunctionPoint { get; private set; }
     public static Vector3 VehicleRoadTurnPoint { get; private set; }
     public static Vector3 VehicleArrivalRoadSpawnPoint { get; private set; }
@@ -41,12 +57,44 @@ public static class GymOutdoorBuilder
     public static Vector3 VehicleDepartureRoadJunctionPoint { get; private set; }
     public static Vector3 VisitorParkingTurnPoint { get; private set; }
     public static Vector3 VisitorParkingEntryPoint { get; private set; }
+    public static Vector3 VisitorParkingNorthGatePoint { get; private set; }
+    // The shop is mounted beside the shared path and contributes a physical
+    // dog-leg to all exterior pedestrian and vehicle routes.
+    public static bool HasProteinStoreRoute =>
+        GymProteinStoreEnvironment.IsBuilt &&
+        !GymProteinStoreEnvironment.LoadFailed;
+    public static Vector3 ProteinStoreFrontClearPoint =>
+        GymProteinStoreEnvironment.StoreFrontClearPoint;
+    public static Vector3 ProteinStoreWestApproachPoint =>
+        GymProteinStoreEnvironment.StoreWestApproachPoint;
+    public static Vector3 ProteinStoreSouthCurvePointB =>
+        GymProteinStoreEnvironment.StoreSouthCurvePointB;
+    public static Vector3 ProteinStoreSouthCurvePointC =>
+        GymProteinStoreEnvironment.StoreSouthCurvePointC;
+    public static Vector3 ProteinStoreSouthCurvePointD =>
+        GymProteinStoreEnvironment.StoreSouthCurvePointD;
+    public static Vector3 ProteinStoreSouthCurvePointE =>
+        GymProteinStoreEnvironment.StoreSouthCurvePointE;
+    public static Vector3 ProteinStoreParkingBypassPoint =>
+        GymProteinStoreEnvironment.StoreParkingBypassPoint;
+    public static Vector3 ProteinStoreEastRoutePoint =>
+        GymProteinStoreEnvironment.StoreEastRoutePoint;
+    public static Vector3 ProteinStoreGymPathSouthClearPoint =>
+        GymProteinStoreEnvironment.StoreGymPathSouthClearPoint;
+    public static Vector3 ProteinStoreGymPathClearPoint =>
+        GymProteinStoreEnvironment.StoreGymPathClearPoint;
+    public static Vector3 ProteinStoreGateWestClearPoint =>
+        GymProteinStoreEnvironment.StoreGateWestClearPoint;
+    public static Vector3 ProteinStoreVisitApproachPoint =>
+        GymProteinStoreEnvironment.StoreVisitApproachPoint;
     public static int ParkingBayCount { get; private set; }
     public static float ParkingBayStep { get; private set; }
     public static float ParkingBayStartX { get; private set; }
     public static float ParkingStallCenterOffset { get; private set; }
     public static float ParkingVehicleTargetLength => 4.0f;
 
+    public static float VehicleRoadWidthForVerification => VehicleRoadWidth;
+    public static float VehicleLaneOffsetForVerification => VehicleLaneOffset;
     public static float GetParkingBayCenterX(int column)
     {
         int count = Mathf.Max(1, ParkingBayCount);
@@ -75,10 +123,13 @@ public static class GymOutdoorBuilder
             return false;
         }
 
-        GameObject floorObject = GameObject.Find("Rubber Floor");
-        Renderer floorRenderer = floorObject != null
-            ? floorObject.GetComponent<Renderer>()
-            : null;
+        if (cachedRoomFloorRenderer == null)
+        {
+            GameObject floorObject = GameObject.Find("Rubber Floor");
+            cachedRoomFloorRenderer = floorObject != null
+                ? floorObject.GetComponent<Renderer>() : null;
+        }
+        Renderer floorRenderer = cachedRoomFloorRenderer;
         if (floorRenderer == null)
         {
             return false;
@@ -97,6 +148,7 @@ public static class GymOutdoorBuilder
         GameObject existingRoot = GameObject.Find(RootName);
         if (existingRoot != null)
         {
+            RemoveLegacyExitDecorations(existingRoot);
             IsBuilt = true;
             return;
         }
@@ -121,6 +173,8 @@ public static class GymOutdoorBuilder
         float parkingMinX = roomFloor.center.x - parkingWidth * 0.5f;
         float parkingMaxX = roomFloor.center.x + parkingWidth * 0.5f;
         float doorZ = doorway.ExteriorPoint.z;
+        // Keep the original compact gym path. The store now has its own site
+        // beyond the opposite fence instead of occupying this corridor.
         float pathCenterX = roomEast + 4.5f;
         float pathSouthZ = doorZ - 3.15f;
         float pathNorthZ = parkingCenterZ + ParkingDepth * 0.5f + 0.55f;
@@ -136,26 +190,14 @@ public static class GymOutdoorBuilder
         float courtyardMaxZ = pathNorthZ + 0.75f;
 
         GameObject root = new GameObject(RootName);
-        Material courtyardMaterial = CreateMaterial(
-            "Exterior courtyard foundation",
-            new Color(0.045f, 0.09f, 0.14f),
-            0.05f,
-            0.3f);
-        Material asphalt = CreateMaterial(
-            "Outdoor parking asphalt",
-            new Color(0.045f, 0.065f, 0.1f),
-            0.08f,
-            0.36f);
-        Material landscape = CreateMaterial(
-            "Outdoor park ground",
-            new Color(0.045f, 0.13f, 0.16f),
-            0f,
-            0.2f);
-        Material pathMaterial = CreateMaterial(
-            "Outdoor concrete path",
-            new Color(0.13f, 0.2f, 0.28f),
-            0.02f,
-            0.32f);
+        Material courtyardMaterial = GymSurfaceMaterialFactory.CreateCourtyard(
+            "Exterior courtyard foundation", new Color(0.045f, 0.09f, 0.14f));
+        Material asphalt = GymSurfaceMaterialFactory.CreateAsphalt(
+            "Outdoor parking asphalt", new Color(0.045f, 0.065f, 0.1f));
+        Material landscape = GymSurfaceMaterialFactory.CreateLandscape(
+            "Outdoor park ground", new Color(0.045f, 0.22f, 0.14f));
+        Material pathMaterial = GymSurfaceMaterialFactory.CreateConcretePath(
+            "Outdoor concrete path", new Color(0.13f, 0.2f, 0.28f));
         Material curbMaterial = CreateMaterial(
             "Outdoor curb",
             new Color(0.16f, 0.22f, 0.29f),
@@ -211,64 +253,93 @@ public static class GymOutdoorBuilder
             0.16f);
         SetEmission(lampFixtureMaterial, new Color(1.4f, 4.2f, 9f));
 
-        CreateBox(
+        // The protein.com mall module occupies the clear strip between the
+        // gym wall and the existing shared path. Its storefront apron opens
+        // onto that path; the parking lot itself remains shared with the gym.
+        GymProteinStoreEnvironment.Build(
+            root.transform,
+            roomFloor,
+            floorY,
+            doorway,
+            pathCenterX,
+            pathSouthZ,
+            outerPathX,
+            PathWidth,
+            asphalt,
+            markingMaterial,
+            boundaryMaterial,
+            boundaryTrimMaterial,
+            boundaryRibMaterial);
+
+        GameObject courtyardFoundation = CreateBox(
             "Exterior Courtyard Foundation",
             root.transform,
             new Vector3(
                 (courtyardMinX + courtyardMaxX) * 0.5f,
-                floorY - 0.13f,
+                floorY - ExteriorSurfaceThickness * 0.5f -
+                    FoundationSurfaceInset,
                 (courtyardMinZ + courtyardMaxZ) * 0.5f),
             new Vector3(
                 courtyardMaxX - courtyardMinX,
-                0.24f,
+                ExteriorSurfaceThickness,
                 courtyardMaxZ - courtyardMinZ),
             courtyardMaterial,
             true);
+        BoxCollider foundationCollider = courtyardFoundation.GetComponent<BoxCollider>();
+        if (foundationCollider != null)
+        {
+            // Keep gameplay support at the canonical floor while the
+            // foundation render surface sits just below the named surfaces.
+            foundationCollider.center = Vector3.up *
+                (FoundationSurfaceInset / ExteriorSurfaceThickness);
+        }
 
-        CreateBox(
+        GameObject parkingSurfaceMarker = CreateBox(
             "Mini Parking Lot",
             root.transform,
-            new Vector3(roomFloor.center.x, floorY - 0.11f, parkingCenterZ),
-            new Vector3(parkingWidth, 0.24f, ParkingDepth),
+            new Vector3(roomFloor.center.x,
+                floorY - ExteriorSurfaceThickness * 0.5f, parkingCenterZ),
+            new Vector3(parkingWidth, ExteriorSurfaceThickness, ParkingDepth),
             asphalt,
             true);
+        // Keep the named asphalt renderer visible. The foundation remains a
+        // quiet courtyard layer around it; gameplay collider ownership is
+        // unchanged and the direct art verifier can now inspect the actual
+        // surface rather than an editor-only material assignment.
+        float visiblePathLength = Mathf.Max(
+            0.5f, pathLength - VehicleRoadWidth * 0.5f + 0.4f);
         GameObject doorPath = CreateBox(
             "Path from Gym Door",
             root.transform,
-            new Vector3(pathCenterX, floorY - 0.11f, doorZ + pathLength * 0.5f),
-            new Vector3(PathWidth, 0.24f, pathLength + 0.8f),
+            new Vector3(pathCenterX,
+                floorY - ExteriorSurfaceThickness * 0.5f,
+                doorZ - 0.4f + visiblePathLength * 0.5f),
+            new Vector3(PathWidth, ExteriorSurfaceThickness, visiblePathLength),
             pathMaterial,
             false);
-        doorPath.AddComponent<GymExteriorOnlyVisual>();
+        // The concrete path is visual-only and keeps its existing no-collider
+        // contract, but it must be visible in the player-facing scene.
 
         float horizontalMinX = parkingMaxX - 0.9f;
         float horizontalMaxX = outerPathX;
-        GameObject parkingTurn = CreateBox(
-            "Parking Path Turn",
-            root.transform,
-            new Vector3((horizontalMinX + horizontalMaxX) * 0.5f, floorY - 0.11f, parkingCenterZ),
-            new Vector3(horizontalMaxX - horizontalMinX, 0.24f, VehicleRoadWidth),
-            pathMaterial,
-            false);
-        parkingTurn.AddComponent<GymExteriorOnlyVisual>();
+        // The road mesh owns the horizontal turn surface. Keeping a second
+        // renderer here would overlap the road and create a visible seam.
         float visitorLaneX = Mathf.Min(outerPathX - 0.8f, parkingMaxX + 1.8f);
         VisitorParkingTurnPoint = new Vector3(
             visitorLaneX, floorY, parkingCenterZ);
         VisitorParkingEntryPoint = new Vector3(
             parkingMaxX - 2.0f, floorY, parkingCenterZ);
+        // Bus passengers cross the north parking edge through the actual
+        // two-lane-road opening instead of cutting diagonally over the
+        // north-extension wall.
+        VisitorParkingNorthGatePoint = new Vector3(
+            outerPathX + 2.0f,
+            floorY,
+            parkingCenterZ + VehicleRoadWidth * 0.5f - 1.15f);
 
         float doorLandingMaxX = outerPathX + 0.4f;
-        GameObject doorLanding = CreateBox(
-            "Black Door Landing",
-            root.transform,
-            new Vector3((exteriorWallX + doorLandingMaxX) * 0.5f, floorY - 0.11f, doorZ),
-            new Vector3(doorLandingMaxX - exteriorWallX, 0.24f, 6.2f),
-            pathMaterial,
-            false);
-        doorLanding.AddComponent<GymExteriorOnlyVisual>();
 
         CreateParkingMarkings(root.transform, floorY, parkingMinX, parkingMaxX, parkingCenterZ, markingMaterial);
-        CreatePathEdge(root.transform, floorY, pathCenterX, doorZ, parkingCenterZ, markingMaterial);
         CreateParkingCurb(root.transform, floorY, parkingMinX, parkingMaxX, parkingCenterZ, curbMaterial);
         CreateParkingDetails(
             root.transform,
@@ -296,15 +367,29 @@ public static class GymOutdoorBuilder
         // Keep the landscape behind the lot as a thin ground strip. The old
         // implementation used a tall horizon cube here, which blocked the
         // parking view and read as a giant black wall from inside the gym.
+        float landscapeCenterZ = parkingCenterZ + ParkingDepth * 0.5f + 2.7f;
         CreateBox(
             "Parking Park Landscape",
             root.transform,
             new Vector3(roomFloor.center.x,
                 floorY - 0.06f,
-                parkingCenterZ + ParkingDepth * 0.5f + 2.7f),
+                landscapeCenterZ),
             new Vector3(parkingWidth + 8f, 0.12f, 4.8f),
             landscape,
             false);
+        float courtyardInsetWidth = Mathf.Max(
+            3f,
+            pathCenterX - PathWidth * 0.5f - parkingMaxX - 0.8f);
+        float courtyardInsetCenterX = parkingMaxX + 0.4f + courtyardInsetWidth * 0.5f;
+        CreateLandscapeDetails(
+            root.transform,
+            floorY,
+            roomFloor.center.x,
+            landscapeCenterZ,
+            parkingWidth,
+            planterMaterial,
+            foliageMaterial,
+            curbMaterial);
 
         // The gym shell, parking, fences and vehicle route above remain the gameplay
         // space.  The former neighbourhood buildings/foliage are intentionally
@@ -312,27 +397,27 @@ public static class GymOutdoorBuilder
 
         // Visible road continues east through the parking opening. Cars can
         // cross the invisible blocker; the player cannot enter traffic.
-        const float roadLength = 42f;
+        const float roadLength = VehicleRoadApproachLength;
         const float roadWidth = VehicleRoadWidth;
-        float roadStartX = parkingMaxX - 0.4f;
+        float roadStartX = parkingMaxX;
         float roadEndX = roadStartX + roadLength;
+        float roadSurfaceY = floorY - RoadSurfaceThickness * 0.5f;
+        float roadTurnX = roadEndX - 2f;
+        Vector3 roadOcclusionStart = new Vector3(
+            roadTurnX, roadSurfaceY,
+            parkingCenterZ + VehicleRoadOcclusionStart);
+        Vector3 roadRouteSurfaceEnd = new Vector3(
+            roadTurnX, roadSurfaceY,
+            roadOcclusionStart.z + VehicleRoadHiddenContinuation);
         Vector3 roadCenter = new Vector3(
-            (roadStartX + roadEndX) * 0.5f, floorY - 0.09f, parkingCenterZ);
-        CreateBox("Visitor Vehicle Road", root.transform, roadCenter,
-            new Vector3(roadLength, 0.18f, roadWidth), asphalt, false);
+            (roadStartX + roadEndX) * 0.5f, roadSurfaceY, parkingCenterZ);
         CreateBox("Road Center Line", root.transform,
             new Vector3(roadCenter.x, floorY + 0.025f, parkingCenterZ),
             new Vector3(roadLength - 1f, 0.035f, 0.09f), markingMaterial, false);
-        CreateBox("Road North Shoulder", root.transform,
-            new Vector3(roadCenter.x, floorY + 0.04f, parkingCenterZ + roadWidth * 0.5f),
-            new Vector3(roadLength, 0.08f, 0.18f), curbMaterial, false);
-        CreateBox("Road South Shoulder", root.transform,
-            new Vector3(roadCenter.x, floorY + 0.04f, parkingCenterZ - roadWidth * 0.5f),
-            new Vector3(roadLength, 0.08f, 0.18f), curbMaterial, false);
         VehicleRoadJunctionPoint = new Vector3(
             parkingMaxX + 4.8f, floorY + 0.08f, parkingCenterZ);
         VehicleRoadTurnPoint = new Vector3(
-            roadEndX - 2f, floorY + 0.08f, parkingCenterZ);
+            roadTurnX, floorY + 0.08f, parkingCenterZ);
 
         VehicleArrivalRoadJunctionPoint = VehicleRoadJunctionPoint +
             Vector3.forward * VehicleLaneOffset;
@@ -340,80 +425,348 @@ public static class GymOutdoorBuilder
             Vector3.forward * VehicleLaneOffset;
         VehicleArrivalRoadTurnPoint = VehicleRoadTurnPoint +
             Vector3.left * VehicleLaneOffset + Vector3.forward * VehicleLaneOffset;
+        // Turn outbound vehicles closer to the road centre; a long body otherwise
+        // enters the east-corner wall clearance envelope before rotating north.
         VehicleDepartureRoadTurnPoint = VehicleRoadTurnPoint +
-            Vector3.right * VehicleLaneOffset - Vector3.forward * VehicleLaneOffset;
+            Vector3.right * (VehicleLaneOffset * 0.5f) - Vector3.forward * VehicleLaneOffset;
 
         // Continue straight well beyond the player blocker, then turn behind
         // the far corner. From the accessible lot, departures visibly travel
         // into the distance and disappear only after completing the bend.
-        Vector3 roadExit = new Vector3(
-            roadEndX - 2f, floorY - 0.09f, parkingCenterZ + 18f);
-        Vector3 extensionDelta = roadExit - VehicleRoadTurnPoint;
+        Vector3 extensionDelta = roadRouteSurfaceEnd -
+            new Vector3(roadTurnX, roadSurfaceY, parkingCenterZ);
         Vector3 extensionDirection = Vector3.ProjectOnPlane(extensionDelta, Vector3.up).normalized;
-        Vector3 extensionCenter = (VehicleRoadTurnPoint + roadExit) * 0.5f;
+        Vector3 extensionCenter = (
+            new Vector3(roadTurnX, roadSurfaceY, parkingCenterZ) +
+            roadRouteSurfaceEnd) * 0.5f;
         float extensionLength = Vector3.ProjectOnPlane(extensionDelta, Vector3.up).magnitude;
         Quaternion extensionRotation = Quaternion.FromToRotation(Vector3.right, extensionDirection);
-        GameObject extension = CreateBox("Visitor Vehicle Road Extension", root.transform,
-            extensionCenter, new Vector3(extensionLength, 0.18f, roadWidth), asphalt, false);
-        extension.transform.rotation = extensionRotation;
+        GameObject extension = new GameObject("Visitor Vehicle Road Extension");
+        extension.transform.SetParent(root.transform, true);
+        extension.transform.position = roadRouteSurfaceEnd;
         GameObject extensionLine = CreateBox("Road Extension Center Line", root.transform,
             extensionCenter + Vector3.up * 0.11f,
             new Vector3(extensionLength - 0.5f, 0.035f, 0.09f), markingMaterial, false);
         extensionLine.transform.rotation = extensionRotation;
-        Vector3 shoulderOffset = Vector3.Cross(Vector3.up, extensionDirection) * (roadWidth * 0.5f);
-        GameObject extensionNorth = CreateBox("Road Extension North Shoulder", root.transform,
-            extensionCenter + shoulderOffset + Vector3.up * 0.13f,
-            new Vector3(extensionLength, 0.08f, 0.18f), curbMaterial, false);
-        extensionNorth.transform.rotation = extensionRotation;
-        GameObject extensionSouth = CreateBox("Road Extension South Shoulder", root.transform,
-            extensionCenter - shoulderOffset + Vector3.up * 0.13f,
-            new Vector3(extensionLength, 0.08f, 0.18f), curbMaterial, false);
-        extensionSouth.transform.rotation = extensionRotation;
-        VehicleRoadSpawnPoint = roadExit;
-        VehicleArrivalRoadSpawnPoint = roadExit + Vector3.left * VehicleLaneOffset;
-        VehicleDepartureRoadSpawnPoint = roadExit + Vector3.right * VehicleLaneOffset;
+        VehicleRoadOcclusionStartPoint = roadOcclusionStart;
+        VehicleRoadSpawnPoint = roadRouteSurfaceEnd;
+        VehicleArrivalRoadSpawnPoint = roadRouteSurfaceEnd + Vector3.left * VehicleLaneOffset;
+        VehicleDepartureRoadSpawnPoint = roadRouteSurfaceEnd + Vector3.right * VehicleLaneOffset;
+
+        // Use one non-overlapping renderer and one shared asphalt finish for
+        // parking, pedestrian approaches, the bus bay and vehicle route.
+        float pathLeftX = pathCenterX - PathWidth * 0.5f;
+        float pathRightX = pathCenterX + PathWidth * 0.5f;
+        float pathSurfaceMinZ = doorZ - 0.4f;
+        float pathSurfaceMaxZ = Mathf.Min(
+            doorZ + pathLength + 0.4f,
+            parkingCenterZ - roadWidth * 0.5f);
+        float roadSouthEdgeZ = parkingCenterZ - roadWidth * 0.5f;
+        float roadNorthEdgeZ = parkingCenterZ + roadWidth * 0.5f;
+        float roadOuterX = roadTurnX + roadWidth * 0.5f;
+        float busBayStartX = roadStartX + GymRoadsideBusStop.BusBayStartOffset;
+        float busBayEndX = roadTurnX - GymRoadsideBusStop.BusBayEndInset;
+        float busBayOuterZ = roadNorthEdgeZ + GymRoadsideBusStop.BusBayDepth;
+        Vector4[] groundRegions =
+        {
+            new Vector4(exteriorWallX, pathLeftX,
+                doorZ - 3.1f, doorZ + 3.1f),
+            new Vector4(
+                parkingMaxX,
+                pathLeftX,
+                roadSouthEdgeZ,
+                roadNorthEdgeZ),
+            new Vector4(
+                pathLeftX,
+                roadOuterX,
+                roadSouthEdgeZ,
+                roadNorthEdgeZ),
+            new Vector4(
+                busBayStartX,
+                busBayEndX,
+                roadNorthEdgeZ,
+                busBayOuterZ),
+            new Vector4(
+                roadTurnX - roadWidth * 0.5f,
+                roadTurnX + roadWidth * 0.5f,
+                roadNorthEdgeZ,
+                roadRouteSurfaceEnd.z)
+        };
+        Material[] groundRegionMaterials =
+        {
+            asphalt,
+            asphalt,
+            asphalt,
+            asphalt,
+            asphalt
+        };
+        CreateCompositeGroundSurface(
+            "Visitor Vehicle Road",
+            root.transform,
+            floorY,
+            RoadSurfaceThickness,
+            groundRegions,
+            groundRegionMaterials);
+
+        bool busStopSectionBuilt = GymRoadsideBusStop.Build(
+            root.transform,
+            floorY,
+            roadStartX,
+            roadTurnX,
+            parkingCenterZ,
+            roadWidth,
+            VehicleLaneOffset,
+            VehicleArrivalRoadSpawnPoint,
+            boundaryMaterial,
+            boundaryTrimMaterial,
+            boundaryRibMaterial);
 
         // Continue the existing dark perimeter architecture beyond the
         // demolished visible wall. The original path-outer collider remains
         // across the opening as the invisible player limit; these corridor
-        // walls are presentation only so vehicle transforms can complete the
-        // hidden turn without physics jitter.
+        // walls also carry collision so vehicles keep clear of the visible
+        // perimeter while completing the turn.
         float corridorStartX = outerPathX + 0.25f;
         float turnX = VehicleRoadTurnPoint.x;
         float insideCornerX = turnX - roadWidth * 0.5f;
         float outsideCornerX = turnX + roadWidth * 0.5f;
-        float northStraightLength = Mathf.Max(0.5f, insideCornerX - corridorStartX);
-        float southStraightLength = Mathf.Max(0.5f, outsideCornerX - corridorStartX);
-        CreateVisibleBoundary(
-            "Visitor Road North Wall", root.transform,
-            new Vector3(corridorStartX + northStraightLength * 0.5f,
-                floorY + BoundaryHeight * 0.5f,
-                parkingCenterZ + roadWidth * 0.5f),
-            new Vector3(northStraightLength, BoundaryHeight, 0.5f),
-            BoundaryHeight, floorY,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
-        CreateVisibleBoundary(
-            "Visitor Road South Wall", root.transform,
-            new Vector3(corridorStartX + southStraightLength * 0.5f,
-                floorY + BoundaryHeight * 0.5f,
-                parkingCenterZ - roadWidth * 0.5f),
-            new Vector3(southStraightLength, BoundaryHeight, 0.5f),
-            BoundaryHeight, floorY,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
+        // The bus passenger exits through a real pedestrian gate in the
+        // north road wall. Keep a generous capsule-width opening at the
+        // authored gate center; the bus bay fence and road opening remain
+        // separate physical systems.
+        float northGateCenterX = busStopSectionBuilt
+            ? GymRoadsideBusStop.DavieBusPedestrianExitPoint.x
+            : busBayStartX;
+        const float northGateHalfWidth = 1.15f;
+        float northBeforeGateLength =
+            northGateCenterX - northGateHalfWidth - corridorStartX;
+        if (northBeforeGateLength > 0.4f)
+        {
+            CreateVisibleBoundary(
+                "Visitor Road North Wall", root.transform,
+                new Vector3(corridorStartX + northBeforeGateLength * 0.5f,
+                    floorY + BoundaryHeight * 0.5f,
+                    parkingCenterZ + roadWidth * 0.5f),
+                new Vector3(northBeforeGateLength, BoundaryHeight, 0.5f),
+                BoundaryHeight, floorY,
+                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                exteriorOnly: false, addCollision: true);
+        }
+        float northAfterGateStartX = northGateCenterX + northGateHalfWidth;
+        float northAfterGateLength = busBayStartX - northAfterGateStartX;
+        if (northAfterGateLength > 0.4f)
+        {
+            CreateVisibleBoundary(
+                "Visitor Road North Wall Before Bus Bay", root.transform,
+                new Vector3(northAfterGateStartX + northAfterGateLength * 0.5f,
+                    floorY + BoundaryHeight * 0.5f,
+                    parkingCenterZ + roadWidth * 0.5f),
+                new Vector3(northAfterGateLength, BoundaryHeight, 0.5f),
+                BoundaryHeight, floorY,
+                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                exteriorOnly: false, addCollision: true);
+        }
+        Debug.Log(
+            $"GYMCHAOS_DAVIE_PEDESTRIAN_GATE_OK centerX={northGateCenterX:F2} " +
+            $"halfWidth={northGateHalfWidth:F2} wallZ={parkingCenterZ + roadWidth * 0.5f:F2} " +
+            $"busGate={busStopSectionBuilt}");
+        float northAfterBayLength = insideCornerX - busBayEndX;
+        if (northAfterBayLength > 0.4f)
+        {
+            // The road-facing side of the pull-off remains the real bus
+            // entry. This segment is beyond the bay and closes the perimeter
+            // without sealing the bus crossing itself.
+            CreateVisibleBoundary(
+                "Visitor Road North Wall After Bus Bay", root.transform,
+                new Vector3(busBayEndX + northAfterBayLength * 0.5f,
+                    floorY + BoundaryHeight * 0.5f,
+                    parkingCenterZ + roadWidth * 0.5f),
+                new Vector3(northAfterBayLength, BoundaryHeight, 0.5f),
+                BoundaryHeight, floorY,
+                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                exteriorOnly: false, addCollision: true);
+        }
+        // The bus turnaround uses the real south lane. Keep its edge fence
+        // one shoulder-width outside the 8.2 m road envelope so the full
+        // collider can arc through the lane without grazing the fence.
+        float roadSouthWallZ = parkingCenterZ - roadWidth * 0.5f -
+            (busStopSectionBuilt ? 3.5f : 0f);
+        GymProteinStoreEnvironment.CreateOuterRouteGroundAndFence(
+            root.transform, floorY, outerPathX, pathSouthZ, roadSouthEdgeZ,
+            roadSouthWallZ, asphalt, boundaryMaterial,
+            boundaryTrimMaterial, boundaryRibMaterial);
+        float southWallStartX = corridorStartX;
+        float southWallEndX = outsideCornerX;
+        bool storePedestrianGates =
+            HasProteinStoreRoute &&
+            GymProteinStoreEnvironment.StoreWestApproachPoint.x >
+                southWallStartX + 2.4f &&
+            GymProteinStoreEnvironment.StoreWestApproachPoint.x <
+                southWallEndX - 3.2f &&
+            GymProteinStoreEnvironment.StoreEastRoutePoint.x >
+                GymProteinStoreEnvironment.StoreWestApproachPoint.x + 6.5f &&
+            GymProteinStoreEnvironment.StoreEastRoutePoint.x <
+                southWallEndX - 3.2f;
+        Debug.Log(
+            $"GYMCHAOS_STORE_ROAD_GATES enabled={storePedestrianGates} " +
+            $"west={GymProteinStoreEnvironment.StoreWestApproachPoint.x:F2} " +
+            $"east={GymProteinStoreEnvironment.StoreEastRoutePoint.x:F2} " +
+            $"start={southWallStartX:F2} end={southWallEndX:F2}");
+        if (storePedestrianGates)
+        {
+            // The store dog-leg crosses the road edge at both ends of its
+            // east-side bypass. Keep each gate wide enough for the heaviest
+            // visitor capsule, while retaining a long solid wall between
+            // them so the road still reads and behaves as a contained lane.
+            float westGateCenterX =
+                GymProteinStoreEnvironment.StoreWestApproachPoint.x;
+            float eastGateCenterX =
+                GymProteinStoreEnvironment.StoreEastRoutePoint.x;
+            const float gateHalfWidth = 3.0f;
+            float beforeGateLength =
+                westGateCenterX - gateHalfWidth - southWallStartX;
+            if (beforeGateLength > 0.4f)
+            {
+                CreateVisibleBoundary(
+                    "Visitor Road South Wall",
+                    root.transform,
+                    new Vector3(
+                        southWallStartX + beforeGateLength * 0.5f,
+                        floorY + BoundaryHeight * 0.5f,
+                        roadSouthWallZ),
+                    new Vector3(beforeGateLength, BoundaryHeight, 0.5f),
+                    BoundaryHeight, floorY,
+                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                    exteriorOnly: false, addCollision: true);
+            }
+            else
+            {
+                // Keep the canonical boundary marker present when the
+                // store gate consumes this short pre-gate segment. The
+                // marker is visual only so it cannot close the real gate.
+                const float markerLength = 0.5f;
+                CreateVisibleBoundary(
+                    "Visitor Road South Wall",
+                    root.transform,
+                    new Vector3(
+                        southWallStartX + markerLength * 0.5f,
+                        floorY + BoundaryHeight * 0.5f,
+                        roadSouthWallZ),
+                    new Vector3(markerLength, BoundaryHeight, 0.5f),
+                    BoundaryHeight, floorY,
+                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                    exteriorOnly: false, addCollision: false);
+            }
 
-        float cornerEndZ = roadExit.z + 2f;
+            float middleStartX = westGateCenterX + gateHalfWidth;
+            // The east opening only served the retired police/visitor loop
+            // around the store; the two wall runs now meet at its center.
+            float middleEndX = eastGateCenterX;
+            float middleLength = middleEndX - middleStartX;
+            if (middleLength > 0.4f)
+            {
+                CreateVisibleBoundary(
+                    "Visitor Road South Wall Between Protein Store Gates",
+                    root.transform,
+                    new Vector3(
+                        middleStartX + middleLength * 0.5f,
+                        floorY + BoundaryHeight * 0.5f,
+                        roadSouthWallZ),
+                    new Vector3(middleLength, BoundaryHeight, 0.5f),
+                    BoundaryHeight, floorY,
+                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                    exteriorOnly: false, addCollision: true);
+            }
+
+            float afterGateStartX = eastGateCenterX;
+            float afterGateLength = southWallEndX - afterGateStartX;
+            if (afterGateLength > 0.4f)
+            {
+                CreateVisibleBoundary(
+                    "Visitor Road South Wall After Protein Store Gate",
+                    root.transform,
+                    new Vector3(
+                        afterGateStartX + afterGateLength * 0.5f,
+                        floorY + BoundaryHeight * 0.5f,
+                        roadSouthWallZ),
+                    new Vector3(afterGateLength, BoundaryHeight, 0.5f),
+                    BoundaryHeight, floorY,
+                    boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                    exteriorOnly: false, addCollision: true);
+            }
+        }
+        else
+        {
+            float southStraightLength = Mathf.Max(
+                0.5f, southWallEndX - southWallStartX);
+            CreateVisibleBoundary(
+                "Visitor Road South Wall",
+                root.transform,
+                new Vector3(
+                    southWallStartX + southStraightLength * 0.5f,
+                    floorY + BoundaryHeight * 0.5f,
+                    roadSouthWallZ),
+                new Vector3(southStraightLength, BoundaryHeight, 0.5f),
+                BoundaryHeight, floorY,
+                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                exteriorOnly: false, addCollision: true);
+        }
+        // The outer edge is a low curb of the pull-off, while the yellow
+        // geometry above stays flush with the asphalt and reads as paint.
+        CreateBox(
+            "Bus Bay Outer Low Curb",
+            root.transform,
+            new Vector3((busBayStartX + busBayEndX) * 0.5f,
+                floorY + 0.09f, busBayOuterZ),
+            new Vector3(busBayEndX - busBayStartX, 0.18f, 0.18f),
+            curbMaterial,
+            false);
+
+        if (busStopSectionBuilt)
+        {
+            // The south wall sits 3.5 m outside the road for the bus
+            // turnaround. The store route ground fills that shoulder only up
+            // to the store's east edge; fill the rest to the corner wall.
+            float shoulderStartX = FindRendererMaxX(root.transform, "Protein Store Route North", corridorStartX);
+            float shoulderEndX = outsideCornerX + 0.25f;
+            float shoulderDepth = roadSouthEdgeZ - roadSouthWallZ;
+            if (shoulderEndX - shoulderStartX > 0.2f && shoulderDepth > 0.2f)
+            {
+                CreateBox(
+                    "Road South East Shoulder Ground",
+                    root.transform,
+                    new Vector3((shoulderStartX + shoulderEndX) * 0.5f,
+                        floorY - RoadSurfaceThickness * 0.5f,
+                        (roadSouthWallZ + roadSouthEdgeZ) * 0.5f),
+                    new Vector3(shoulderEndX - shoulderStartX, RoadSurfaceThickness, shoulderDepth),
+                    asphalt,
+                    true);
+            }
+            BuildBusBayPockets(root.transform, floorY, asphalt,
+                roadNorthEdgeZ, busBayStartX, busBayEndX, busBayOuterZ,
+                insideCornerX + 0.5f,
+                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
+        }
+
+        float cornerEndZ = roadRouteSurfaceEnd.z + 2f;
         float westCornerStartZ = parkingCenterZ + roadWidth * 0.5f;
-        float eastCornerStartZ = parkingCenterZ - roadWidth * 0.5f;
-        float westCornerLength = cornerEndZ - westCornerStartZ;
+        float eastCornerStartZ = roadSouthWallZ;
+        float westCornerWallStartZ = westCornerStartZ;
+        float westCornerLength = cornerEndZ - westCornerWallStartZ;
         float eastCornerLength = cornerEndZ - eastCornerStartZ;
-        CreateVisibleBoundary(
-            "Visitor Road Corner West Wall", root.transform,
-            new Vector3(turnX - roadWidth * 0.5f,
-                floorY + BoundaryHeight * 0.5f,
-                westCornerStartZ + westCornerLength * 0.5f),
-            new Vector3(0.5f, BoundaryHeight, westCornerLength),
-            BoundaryHeight, floorY,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
+        if (westCornerLength > 0.4f)
+        {
+            CreateVisibleBoundary(
+                "Visitor Road Corner West Wall",
+                root.transform,
+                new Vector3(turnX - roadWidth * 0.5f,
+                    floorY + BoundaryHeight * 0.5f,
+                    westCornerWallStartZ + westCornerLength * 0.5f),
+                new Vector3(0.5f, BoundaryHeight, westCornerLength),
+                BoundaryHeight, floorY,
+                boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+                exteriorOnly: false, addCollision: true);
+        }
         CreateVisibleBoundary(
             "Visitor Road Corner East Wall", root.transform,
             new Vector3(turnX + roadWidth * 0.5f,
@@ -421,7 +774,8 @@ public static class GymOutdoorBuilder
                 eastCornerStartZ + eastCornerLength * 0.5f),
             new Vector3(0.5f, BoundaryHeight, eastCornerLength),
             BoundaryHeight, floorY,
-            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial);
+            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+            exteriorOnly: false, addCollision: true);
 
         // Parking perimeter. The east side is split around the path opening;
         // all other edges are continuous and high enough to stop a jump-over.
@@ -456,7 +810,9 @@ public static class GymOutdoorBuilder
         }
 
         float openingHalfWidth = VehicleRoadWidth * 0.5f + 0.45f;
-        float innerStartZ = doorZ + EntranceFenceStartOffset;
+        float innerStartZ = Mathf.Max(
+            doorZ + EntranceFenceStartOffset,
+            GymProteinStoreEnvironment.InnerFenceStartZ);
         float innerEndZ = parkingCenterZ - openingHalfWidth - EntranceFenceEndInset;
         float eastSouthLength = parkingCenterZ - openingHalfWidth - parkingMinZ;
         if (eastSouthLength > 0.4f)
@@ -480,15 +836,65 @@ public static class GymOutdoorBuilder
                 new Vector3(0.5f, BoundaryHeight, eastNorthLength));
         }
 
-        // The path uses the building wall as its inside edge. These two
-        // colliders close the exposed side and leave a deliberate opening at
-        // the door landing.
+        // The path has two real openings: the store doorway and the
+        // two-lane vehicle road. Keep every remaining segment solid, but
+        // retain the legacy name for the player-only road access blocker so
+        // older verifiers and visitor collision handoff remain compatible.
+        const float visibleRoadWallHalfThickness = 0.25f;
+        float vehicleRoadOpeningHalfWidth =
+            VehicleRoadWidth * 0.5f + visibleRoadWallHalfThickness;
+        float vehicleOpeningMinZ =
+            roadSouthWallZ - visibleRoadWallHalfThickness;
+        float vehicleOpeningMaxZ =
+            parkingCenterZ + vehicleRoadOpeningHalfWidth;
+        const float storeOpeningWidth = 5.0f;
+        float storeOpeningCenterZ = pathSouthZ + 3.15f;
+        float storeOpeningMinZ =
+            storeOpeningCenterZ - storeOpeningWidth * 0.5f;
+        float storeOpeningMaxZ =
+            storeOpeningCenterZ + storeOpeningWidth * 0.5f;
+
+        float outerSouthLength = storeOpeningMinZ - pathSouthZ;
+        if (outerSouthLength > 0.4f)
+        {
+            CreateBoundary(
+                "Outdoor Boundary - Path Outer South", root.transform,
+                new Vector3(outerPathX, floorY + BoundaryHeight * 0.5f,
+                    pathSouthZ + outerSouthLength * 0.5f),
+                new Vector3(SharedFenceWallThickness, BoundaryHeight,
+                    outerSouthLength));
+        }
+
+        float outerMiddleLength = vehicleOpeningMinZ - storeOpeningMaxZ;
+        if (outerMiddleLength > 0.4f)
+        {
+            CreateBoundary(
+                "Outdoor Boundary - Path Outer Middle", root.transform,
+                new Vector3(outerPathX, floorY + BoundaryHeight * 0.5f,
+                    storeOpeningMaxZ + outerMiddleLength * 0.5f),
+                new Vector3(SharedFenceWallThickness, BoundaryHeight,
+                    outerMiddleLength));
+        }
+
+        float vehicleOpeningLength = vehicleOpeningMaxZ - vehicleOpeningMinZ;
         CreateBoundary(
-            "Outdoor Boundary - Path Outer",
-            root.transform,
+            "Outdoor Boundary - Path Outer", root.transform,
             new Vector3(outerPathX, floorY + BoundaryHeight * 0.5f,
-                (pathSouthZ + pathNorthZ) * 0.5f),
-            new Vector3(0.5f, BoundaryHeight, pathNorthZ - pathSouthZ));
+                (vehicleOpeningMinZ + vehicleOpeningMaxZ) * 0.5f),
+            new Vector3(SharedFenceWallThickness, BoundaryHeight,
+                vehicleOpeningLength));
+
+        float outerNorthStartZ = vehicleOpeningMaxZ;
+        float outerNorthLength = pathNorthZ - outerNorthStartZ;
+        if (outerNorthLength > 0.4f)
+        {
+            CreateBoundary(
+                "Outdoor Boundary - Path Outer North", root.transform,
+                new Vector3(outerPathX, floorY + BoundaryHeight * 0.5f,
+                    outerNorthStartZ + outerNorthLength * 0.5f),
+                new Vector3(SharedFenceWallThickness, BoundaryHeight,
+                    outerNorthLength));
+        }
 
         if (innerEndZ > innerStartZ)
         {
@@ -501,7 +907,7 @@ public static class GymOutdoorBuilder
         }
 
         float pathSouthMinX = exteriorWallX;
-        float pathSouthMaxX = outerPathX + 0.4f;
+        float pathSouthMaxX = outerPathX;
         CreateBoundary(
             "Outdoor Boundary - Path South",
             root.transform,
@@ -525,6 +931,7 @@ public static class GymOutdoorBuilder
             innerPathX,
             innerStartZ,
             innerEndZ,
+            roadSouthWallZ,
             boundaryMaterial,
             boundaryTrimMaterial,
             boundaryRibMaterial);
@@ -535,6 +942,12 @@ public static class GymOutdoorBuilder
             courtyardMaxX,
             courtyardMinZ,
             courtyardMaxZ);
+        bool layoutContractPassed = ValidateExteriorLayout(
+            root,
+            floorY,
+            outerPathX,
+            pathSouthZ);
+        layoutContractPassed &= busStopSectionBuilt;
 
         ParkingBounds = new Bounds(
             new Vector3(roomFloor.center.x, floorY, parkingCenterZ),
@@ -548,6 +961,18 @@ public static class GymOutdoorBuilder
         AccessibleBounds = new Bounds(
             new Vector3((courtyardMinX + courtyardMaxX) * 0.5f, floorY, (courtyardMinZ + courtyardMaxZ) * 0.5f),
             new Vector3(courtyardMaxX - courtyardMinX, BoundaryHeight, courtyardMaxZ - courtyardMinZ));
+
+        if (GymProteinStoreEnvironment.IsBuilt)
+        {
+            AccessibleBounds.Encapsulate(
+                GymProteinStoreEnvironment.StoreBounds.min);
+            AccessibleBounds.Encapsulate(
+                GymProteinStoreEnvironment.StoreBounds.max);
+            AccessibleBounds.Encapsulate(GymProteinStoreEnvironment.SiteBounds.min);
+            AccessibleBounds.Encapsulate(GymProteinStoreEnvironment.SiteBounds.max);
+            AccessibleBounds.Encapsulate(GymProteinStoreEnvironment.OuterRouteBounds.min);
+            AccessibleBounds.Encapsulate(GymProteinStoreEnvironment.OuterRouteBounds.max);
+        }
 
         GymCityDystopiaSurroundings.Build(
             root.transform,
@@ -563,7 +988,9 @@ public static class GymOutdoorBuilder
             outerPathX,
             roadStartX,
             roadEndX,
-            roadExit,
+            // The city ring stops at the point where the road is first
+            // occluded. The actual vehicle spawn is deeper between buildings.
+            roadOcclusionStart,
             PathWidth,
             roadWidth);
         IsBuilt = true;
@@ -572,6 +999,10 @@ public static class GymOutdoorBuilder
             $"GYMCHAOS_OUTDOOR_OK parkingCenter={ParkingBounds.center} " +
             $"parkingSize={ParkingBounds.size} door={doorway.DoorCenter} " +
             $"pathWidth={PathWidth:F2} boundaryHeight={BoundaryHeight:F2} " +
+            $"layout={(layoutContractPassed ? 1 : 0)} " +
+            $"roadWidth={roadWidth:F2} trafficLanes=2 busStop={(busStopSectionBuilt ? 1 : 0)} " +
+            $"roadOcclusion={VehicleRoadOcclusionStartPoint} " +
+            $"roadSpawn={VehicleRoadSpawnPoint} " +
             "parkingLines=white parkingLights=4 vehicles=visitor-lifecycle " +
             "courtyard=filled visibleShell=1",
             root);
@@ -676,6 +1107,53 @@ public static class GymOutdoorBuilder
             new Vector3(0.08f, 0.035f, pathLength),
             markingMaterial,
             false);
+    }
+
+    private static void RemoveLegacyExitDecorations(GameObject root)
+    {
+        string[] legacyNames =
+        {
+            "Black Door Landing",
+            "Path Edge Marking",
+            "Parking Aisle Direction Arrow",
+            "Parking Sign - Exterior Only",
+            "Gym Door Drain Grate",
+            "Door Approach Bollard Left",
+            "Door Approach Bollard Right"
+        };
+        string[] legacyPrefixes =
+        {
+            "Gym Door Drain Grate",
+            "Door Approach Bollard"
+        };
+        Transform[] children = root.GetComponentsInChildren<Transform>(true);
+        for (int index = children.Length - 1; index >= 0; index--)
+        {
+            Transform child = children[index];
+            if (child == null || child == root.transform)
+            {
+                continue;
+            }
+
+            for (int nameIndex = 0; nameIndex < legacyNames.Length; nameIndex++)
+            {
+                if (child.name == legacyNames[nameIndex])
+                {
+                    Object.Destroy(child.gameObject);
+                    break;
+                }
+            }
+            for (int prefixIndex = 0; prefixIndex < legacyPrefixes.Length; prefixIndex++)
+            {
+                if (child.name.StartsWith(legacyPrefixes[prefixIndex],
+                    System.StringComparison.Ordinal))
+                {
+                    Object.Destroy(child.gameObject);
+                    break;
+                }
+            }
+        }
+        GymProteinStoreEnvironment.RemoveLegacyEntryDecorations();
     }
 
     private static void CreateParkingCurb(
@@ -828,22 +1306,6 @@ public static class GymOutdoorBuilder
         Material markingMaterial,
         Material metalMaterial)
     {
-        float halfDepth = ParkingDepth * 0.5f;
-        float planterZ = centerZ + halfDepth - 0.85f;
-        CreateBox(
-            "Parking North Planter West",
-            parent,
-            new Vector3(minX + 2.4f, floorY + 0.36f, planterZ),
-            new Vector3(4.2f, 0.72f, 0.9f),
-            planterMaterial,
-            true);
-        CreateBox(
-            "Parking North Planter East",
-            parent,
-            new Vector3(maxX - 2.4f, floorY + 0.36f, planterZ),
-            new Vector3(4.2f, 0.72f, 0.9f),
-            planterMaterial,
-            true);
         // Keep parking planters as hardscape only. All bushes and trees live
         // beyond the exterior fence, never inside a stall, aisle, or vehicle
         // approach path.
@@ -860,37 +1322,51 @@ public static class GymOutdoorBuilder
                 markingMaterial,
                 false);
         }
-        CreateGroundArrow(
-            parent,
-            new Vector3(pathCenterX, floorY + 0.05f, centerZ),
-            Vector3.left,
-            2.4f,
-            0.78f,
-            markingMaterial,
-            "Parking Aisle Direction Arrow");
 
-        CreateParkingSign(
-            parent,
-            new Vector3(pathCenterX - 0.95f, floorY, centerZ - 2.5f),
-            signMaterial,
-            markingMaterial);
-        CreateDrainGrate(
-            parent,
-            new Vector3(pathCenterX, floorY + 0.025f, doorZ + 1.85f),
-            metalMaterial,
-            "Gym Door Drain Grate");
+    }
 
-        float bollardZ = doorZ - 2.45f;
-        CreateBollard(
+    private static void CreateLandscapeDetails(
+        Transform parent,
+        float floorY,
+        float centerX,
+        float centerZ,
+        float width,
+        Material planterMaterial,
+        Material foliageMaterial,
+        Material metalMaterial)
+    {
+        float[] offsets = { -0.32f, 0f, 0.32f };
+        for (int index = 0; index < offsets.Length; index++)
+        {
+            float x = centerX + width * offsets[index];
+            CreateBox(
+                "Park Landscape Planter",
+                parent,
+                new Vector3(x, floorY + 0.30f, centerZ),
+                new Vector3(3.8f, 0.60f, 1.35f),
+                planterMaterial,
+                false);
+            CreateCylinder(
+                "Park Landscape Shrub",
+                parent,
+                new Vector3(x, floorY + 1.18f, centerZ),
+                new Vector3(0.72f, 0.88f, 0.72f),
+                foliageMaterial);
+            CreateCylinder(
+                "Park Landscape Shrub Accent",
+                parent,
+                new Vector3(x + (index - 1) * 0.72f, floorY + 0.92f, centerZ + 0.18f),
+                new Vector3(0.42f, 0.58f, 0.42f),
+                foliageMaterial);
+        }
+
+        CreateBox(
+            "Park Landscape Rail",
             parent,
-            new Vector3(pathCenterX - 1.55f, floorY, bollardZ),
+            new Vector3(centerX, floorY + 0.55f, centerZ - 1.75f),
+            new Vector3(Mathf.Max(8f, width - 6f), 0.10f, 0.10f),
             metalMaterial,
-            "Door Approach Bollard Left");
-        CreateBollard(
-            parent,
-            new Vector3(pathCenterX + 1.55f, floorY, bollardZ),
-            metalMaterial,
-            "Door Approach Bollard Right");
+            false);
     }
 
     private static void CreateNeighbourhood(Transform parent, float centerX, float floorY,
@@ -1204,6 +1680,120 @@ public static class GymOutdoorBuilder
         filter.sharedMesh = CreateFlatPolygonMesh(vertices, name + " Mesh");
     }
 
+    private static GameObject CreateCompositeGroundSurface(
+        string name,
+        Transform parent,
+        float floorY,
+        float thickness,
+        Vector4[] rectangles,
+        Material[] rectangleMaterials)
+    {
+        if (rectangles == null || rectangleMaterials == null ||
+            rectangles.Length == 0 ||
+            rectangles.Length != rectangleMaterials.Length)
+        {
+            return null;
+        }
+
+        int rectangleCount = rectangles.Length;
+        Vector3[] vertices = new Vector3[rectangleCount * 8];
+        Mesh mesh = new Mesh { name = name + " Mesh" };
+        mesh.subMeshCount = rectangleCount;
+        for (int i = 0; i < rectangleCount; i++)
+        {
+            Vector4 rectangle = rectangles[i];
+            int vertexIndex = i * 8;
+            vertices[vertexIndex] = new Vector3(
+                rectangle.x, floorY, rectangle.z);
+            vertices[vertexIndex + 1] = new Vector3(
+                rectangle.y, floorY, rectangle.z);
+            vertices[vertexIndex + 2] = new Vector3(
+                rectangle.y, floorY, rectangle.w);
+            vertices[vertexIndex + 3] = new Vector3(
+                rectangle.x, floorY, rectangle.w);
+            vertices[vertexIndex + 4] = new Vector3(
+                rectangle.x, floorY - thickness, rectangle.z);
+            vertices[vertexIndex + 5] = new Vector3(
+                rectangle.y, floorY - thickness, rectangle.z);
+            vertices[vertexIndex + 6] = new Vector3(
+                rectangle.y, floorY - thickness, rectangle.w);
+            vertices[vertexIndex + 7] = new Vector3(
+                rectangle.x, floorY - thickness, rectangle.w);
+        }
+
+        mesh.vertices = vertices;
+        for (int i = 0; i < rectangleCount; i++)
+        {
+            int vertexIndex = i * 8;
+            mesh.SetTriangles(
+                new[]
+                {
+                    vertexIndex, vertexIndex + 2, vertexIndex + 1,
+                    vertexIndex, vertexIndex + 3, vertexIndex + 2,
+                    vertexIndex + 4, vertexIndex + 5, vertexIndex + 6,
+                    vertexIndex + 4, vertexIndex + 6, vertexIndex + 7,
+                    vertexIndex, vertexIndex + 1, vertexIndex + 5,
+                    vertexIndex, vertexIndex + 5, vertexIndex + 4,
+                    vertexIndex + 1, vertexIndex + 2, vertexIndex + 6,
+                    vertexIndex + 1, vertexIndex + 6, vertexIndex + 5,
+                    vertexIndex + 2, vertexIndex + 3, vertexIndex + 7,
+                    vertexIndex + 2, vertexIndex + 7, vertexIndex + 6,
+                    vertexIndex + 3, vertexIndex, vertexIndex + 4,
+                    vertexIndex + 3, vertexIndex + 4, vertexIndex + 7
+                },
+                i);
+        }
+
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+
+        GameObject surface = new GameObject(name);
+        surface.transform.SetParent(parent, false);
+        MeshFilter filter = surface.AddComponent<MeshFilter>();
+        filter.sharedMesh = mesh;
+        MeshRenderer renderer = surface.AddComponent<MeshRenderer>();
+        renderer.sharedMaterials = rectangleMaterials;
+
+        // The rendered road uses a shallow solid mesh for the visible edge,
+        // but the collider must be a floor, not a collection of overlapping
+        // boxes. Internal vertical faces between adjacent regions can catch
+        // a visitor capsule and make it slide sideways at a region boundary.
+        // Keep only the top faces for collision; explicit road/wall boundaries
+        // above remain responsible for blocking vehicles and pedestrians.
+        Vector3[] colliderVertices = new Vector3[rectangleCount * 4];
+        int[] colliderTriangles = new int[rectangleCount * 6];
+        for (int i = 0; i < rectangleCount; i++)
+        {
+            Vector4 rectangle = rectangles[i];
+            int vertexIndex = i * 4;
+            colliderVertices[vertexIndex] = new Vector3(
+                rectangle.x, floorY, rectangle.z);
+            colliderVertices[vertexIndex + 1] = new Vector3(
+                rectangle.y, floorY, rectangle.z);
+            colliderVertices[vertexIndex + 2] = new Vector3(
+                rectangle.y, floorY, rectangle.w);
+            colliderVertices[vertexIndex + 3] = new Vector3(
+                rectangle.x, floorY, rectangle.w);
+
+            int triangleIndex = i * 6;
+            colliderTriangles[triangleIndex] = vertexIndex;
+            colliderTriangles[triangleIndex + 1] = vertexIndex + 2;
+            colliderTriangles[triangleIndex + 2] = vertexIndex + 1;
+            colliderTriangles[triangleIndex + 3] = vertexIndex;
+            colliderTriangles[triangleIndex + 4] = vertexIndex + 3;
+            colliderTriangles[triangleIndex + 5] = vertexIndex + 2;
+        }
+
+        Mesh colliderMesh = new Mesh { name = name + " Walkable Collider Mesh" };
+        colliderMesh.vertices = colliderVertices;
+        colliderMesh.triangles = colliderTriangles;
+        colliderMesh.RecalculateNormals();
+        colliderMesh.RecalculateBounds();
+        MeshCollider groundCollider = surface.AddComponent<MeshCollider>();
+        groundCollider.sharedMesh = colliderMesh;
+        return surface;
+    }
+
     private static Mesh CreateFlatPolygonMesh(Vector3[] vertices, string name)
     {
         Mesh mesh = new Mesh { name = name };
@@ -1237,6 +1827,7 @@ public static class GymOutdoorBuilder
         float innerPathX,
         float innerStartZ,
         float innerEndZ,
+        float roadSouthWallZ,
         Material boundaryMaterial,
         Material boundaryTrimMaterial,
         Material boundaryRibMaterial)
@@ -1332,9 +1923,19 @@ public static class GymOutdoorBuilder
         // Match the visible split to the full two-lane vehicle road. The
         // previous 2.6m half-opening left fence ends inside a vehicle's swept
         // width, so cars appeared to clip through the guard while turning.
-        const float vehicleRoadOpeningHalfWidth = VehicleRoadWidth * 0.5f + 0.45f;
-        float outerSouthEndZ = parkingCenterZ - vehicleRoadOpeningHalfWidth;
-        float outerSouthLength = outerSouthEndZ - pathSouthZ;
+        // End each visible split-wall at the outside face of the matching
+        // road wall. The road wall is 0.5m thick, so its half-thickness is
+        // the only visual clearance needed for an edge-to-edge junction.
+        const float visibleRoadWallHalfThickness = 0.25f;
+        const float vehicleRoadOpeningHalfWidth =
+            VehicleRoadWidth * 0.5f + visibleRoadWallHalfThickness;
+        float outerSouthEndZ = roadSouthWallZ -
+            SharedFenceWallThickness * 0.5f;
+        float storeOpeningCenterZ = pathSouthZ + 3.15f;
+        const float storeOpeningHalfWidth = 2.5f;
+        float storeOpeningMinZ = storeOpeningCenterZ - storeOpeningHalfWidth;
+        float storeOpeningMaxZ = storeOpeningCenterZ + storeOpeningHalfWidth;
+        float outerSouthLength = storeOpeningMinZ - pathSouthZ;
         if (outerSouthLength > 0.4f)
         {
             CreateVisibleBoundary(
@@ -1343,6 +1944,22 @@ public static class GymOutdoorBuilder
                 new Vector3(outerPathX, boundaryY,
                     pathSouthZ + outerSouthLength * 0.5f),
                 new Vector3(0.5f, BoundaryHeight, outerSouthLength),
+                BoundaryHeight,
+                floorY,
+                boundaryMaterial,
+                boundaryTrimMaterial,
+                boundaryRibMaterial,
+                exteriorOnly: true);
+        }
+        float outerMiddleLength = outerSouthEndZ - storeOpeningMaxZ;
+        if (outerMiddleLength > 0.4f)
+        {
+            CreateVisibleBoundary(
+                "Path Outer Boundary Wall Middle",
+                parent,
+                new Vector3(outerPathX, boundaryY,
+                    storeOpeningMaxZ + outerMiddleLength * 0.5f),
+                new Vector3(0.5f, BoundaryHeight, outerMiddleLength),
                 BoundaryHeight,
                 floorY,
                 boundaryMaterial,
@@ -1384,7 +2001,7 @@ public static class GymOutdoorBuilder
         }
 
         float pathSouthMinX = roomEast + ExteriorWallFaceOffset;
-        float pathSouthMaxX = outerPathX + 0.4f;
+        float pathSouthMaxX = outerPathX;
         CreateVisibleBoundary(
             "Path South Boundary Wall",
             parent,
@@ -1408,9 +2025,10 @@ public static class GymOutdoorBuilder
         Material boundaryMaterial,
         Material boundaryTrimMaterial,
         Material boundaryRibMaterial,
-        bool exteriorOnly = false)
+        bool exteriorOnly = false,
+        bool addCollision = false)
     {
-        float wallHeight = Mathf.Min(1.35f, Mathf.Clamp(visualHeight, 0.8f, size.y));
+        float wallHeight = Mathf.Min(SharedFenceVisibleHeight, Mathf.Clamp(visualHeight, 0.8f, size.y));
         Vector3 wallPosition = new Vector3(position.x, floorY + wallHeight * 0.5f, position.z);
         Vector3 wallSize = new Vector3(size.x, wallHeight, size.z);
         GameObject wall = CreateBox(name, parent, wallPosition, wallSize, boundaryMaterial, false);
@@ -1423,7 +2041,10 @@ public static class GymOutdoorBuilder
             name + " Coping",
             parent,
             new Vector3(position.x, floorY + wallHeight + 0.08f, position.z),
-            new Vector3(size.x + 0.16f, 0.16f, size.z + 0.16f),
+            // Keep coping flush with the wall's run. It may still overhang
+            // across the wall thickness, but it must not extend past a
+            // neighboring segment at a parking/path junction.
+            new Vector3(size.x, SharedFenceCopingHeight, size.z),
             boundaryTrimMaterial,
             false);
         if (exteriorOnly)
@@ -1433,7 +2054,7 @@ public static class GymOutdoorBuilder
 
         bool runsAlongX = size.x >= size.z;
         float runLength = runsAlongX ? size.x : size.z;
-        int ribCount = Mathf.Clamp(Mathf.FloorToInt(runLength / 2.8f), 2, 14);
+        int ribCount = Mathf.Clamp(Mathf.FloorToInt(runLength / SharedFenceRibSpacing), 2, 14);
         for (int i = 0; i < ribCount; i++)
         {
             float t = (i + 0.5f) / ribCount - 0.5f;
@@ -1441,8 +2062,8 @@ public static class GymOutdoorBuilder
                 ? new Vector3(t * runLength, 0f, 0f)
                 : new Vector3(0f, 0f, t * runLength));
             Vector3 ribSize = runsAlongX
-                ? new Vector3(0.11f, Mathf.Max(0.55f, wallHeight - 0.22f), size.z + 0.025f)
-                : new Vector3(size.x + 0.025f, Mathf.Max(0.55f, wallHeight - 0.22f), 0.11f);
+                ? new Vector3(SharedFenceRibThickness, Mathf.Max(0.55f, wallHeight - 0.22f), size.z + 0.025f)
+                : new Vector3(size.x + 0.025f, Mathf.Max(0.55f, wallHeight - 0.22f), SharedFenceRibThickness);
             ribPosition.y = floorY + wallHeight * 0.5f;
             GameObject rib = CreateBox(
                 name + " Vertical Rib", parent, ribPosition, ribSize, boundaryRibMaterial, false);
@@ -1450,6 +2071,10 @@ public static class GymOutdoorBuilder
             {
                 rib.AddComponent<GymExteriorOnlyVisual>();
             }
+        }
+        if (addCollision)
+        {
+            CreateBoundary(name + " Collision", parent, position, size);
         }
     }
 
@@ -1569,8 +2194,11 @@ public static class GymOutdoorBuilder
         MeshFilter arrowFilter = arrowTransform != null
             ? arrowTransform.GetComponent<MeshFilter>()
             : null;
-        bool arrowContractPassed = arrowFilter != null && arrowFilter.sharedMesh != null &&
-            arrowFilter.sharedMesh.vertexCount == 7;
+        // The directional triangles were removed from the exit/shop approach
+        // to keep the shared walkway visually clean.
+        bool arrowContractPassed = arrowTransform == null ||
+            (arrowFilter != null && arrowFilter.sharedMesh != null &&
+             arrowFilter.sharedMesh.vertexCount == 7);
 
         Transform innerVisual = root.transform.Find("Path Inner Boundary Guard");
         Transform innerCollider = root.transform.Find("Outdoor Boundary - Path Inner");
@@ -1596,7 +2224,7 @@ public static class GymOutdoorBuilder
             groundedLightPoleCount == parkingLightCount &&
             largestLightBaseGap <= 0.035f &&
             largestLightPoleGap <= 0.035f &&
-            parkingSignGateCount == 1 &&
+            parkingSignGateCount == 0 &&
             arrowContractPassed &&
             entranceFenceContractPassed &&
             activeDirectionalLights <= 1 &&
@@ -1610,6 +2238,383 @@ public static class GymOutdoorBuilder
             $"activeDirectional={activeDirectionalLights} " +
             $"duplicateLandingRemoved={duplicateLandingRemoved}",
             root);
+    }
+
+    private static bool ValidateExteriorLayout(
+        GameObject root,
+        float floorY,
+        float outerPathX,
+        float pathSouthZ)
+    {
+        string[] surfaceNames =
+        {
+            "Exterior Courtyard Foundation",
+            "Visitor Vehicle Road",
+            "Parking Park Landscape"
+        };
+        int surfaceObjectCount = 0;
+        float surfaceTopError = 0f;
+        for (int i = 0; i < surfaceNames.Length; i++)
+        {
+            Renderer renderer = GetPrimaryRenderer(root, surfaceNames[i]);
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            surfaceObjectCount++;
+            float expectedTopY = surfaceNames[i] ==
+                "Exterior Courtyard Foundation"
+                ? floorY - FoundationSurfaceInset
+                : floorY;
+            surfaceTopError = Mathf.Max(
+                surfaceTopError,
+                Mathf.Abs(renderer.bounds.max.y - expectedTopY));
+        }
+        int coplanarGroundOverlapPairs = CountCoplanarGroundOverlaps(
+            root,
+            surfaceNames,
+            out int differentMaterialOverlapPairs);
+
+        Renderer parkingNorth = GetPrimaryRenderer(
+            root, "Parking North Boundary Wall");
+        Renderer parkingNorthExtension = GetPrimaryRenderer(
+            root, "Parking North Extension Wall");
+        Renderer parkingEastNorth = GetPrimaryRenderer(
+            root, "Parking East North Wall");
+        Renderer pathOuterSouth = GetPrimaryRenderer(
+            root, "Path Outer Boundary Wall South");
+        Renderer pathOuterMiddle = GetPrimaryRenderer(
+            root, "Path Outer Boundary Wall Middle");
+        Renderer pathOuterNorth = GetPrimaryRenderer(
+            root, "Path Outer Boundary Wall North");
+        Renderer pathSouth = GetPrimaryRenderer(root, "Path South Boundary Wall");
+        Renderer roadNorth = GetPrimaryRenderer(root, "Visitor Road North Wall");
+        Renderer roadNorthAfterBay = GetPrimaryRenderer(
+            root, "Visitor Road North Wall After Bus Bay");
+        Renderer roadSouth = GetPrimaryRenderer(root, "Visitor Road South Wall");
+        Renderer roadSouthAfterGate = GetPrimaryRenderer(
+            root, "Visitor Road South Wall After Protein Store Gate");
+        Renderer cornerWest = GetPrimaryRenderer(
+            root, "Visitor Road Corner West Wall");
+        Renderer cornerEast = GetPrimaryRenderer(
+            root, "Visitor Road Corner East Wall");
+
+        int junctionCount = 0;
+        float largestJunctionGap = 0f;
+        bool fenceJunctionsPassed = true;
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            parkingNorth,
+            SegmentEndpoint(parkingNorth, true, true),
+            parkingNorthExtension,
+            SegmentEndpoint(parkingNorthExtension, true, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            parkingNorthExtension,
+            SegmentEndpoint(parkingNorthExtension, true, true),
+            pathOuterNorth,
+            SegmentEndpoint(pathOuterNorth, false, true),
+            ref junctionCount,
+            ref largestJunctionGap);
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            parkingEastNorth,
+            SegmentEndpoint(parkingEastNorth, false, true),
+            parkingNorthExtension,
+            SegmentEndpoint(parkingNorthExtension, true, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            pathSouth,
+            SegmentEndpoint(pathSouth, true, true),
+            pathOuterSouth,
+            SegmentEndpoint(pathOuterSouth, false, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            roadNorthAfterBay,
+            SegmentEndpoint(roadNorthAfterBay, true, true),
+            cornerWest,
+            SegmentEndpoint(cornerWest, false, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+        fenceJunctionsPassed &= ValidateFenceJunction(
+            (roadSouthAfterGate != null ? roadSouthAfterGate : roadSouth),
+            SegmentEndpoint(
+                roadSouthAfterGate != null ? roadSouthAfterGate : roadSouth,
+                true, true),
+            cornerEast,
+            SegmentEndpoint(cornerEast, false, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+
+        // The player blocker remains continuous through the vehicle opening,
+        // while its visible wall is split around the road. Validate the two
+        // exposed edge-to-edge contacts explicitly; center-point checks do
+        // not detect a gap between perpendicular wall boxes.
+        bool roadOpeningJunctionsPassed = true;
+        roadOpeningJunctionsPassed &= ValidateFenceJunction(
+            pathOuterMiddle,
+            FenceCornerEndpoint(pathOuterMiddle, true, true),
+            roadSouth,
+            FenceCornerEndpoint(roadSouth, false, false),
+            ref junctionCount,
+            ref largestJunctionGap);
+        roadOpeningJunctionsPassed &= ValidateFenceJunction(
+            pathOuterNorth,
+            FenceCornerEndpoint(pathOuterNorth, true, false),
+            roadNorth,
+            FenceCornerEndpoint(roadNorth, false, true),
+            ref junctionCount,
+            ref largestJunctionGap);
+
+        bool pathSouthEndsAtOuterPath = pathSouth != null &&
+            Mathf.Abs(pathSouth.bounds.max.x - outerPathX) <= 0.001f &&
+            Mathf.Abs(pathSouth.bounds.center.z - pathSouthZ) <= 0.001f;
+        bool contractPassed = surfaceObjectCount == surfaceNames.Length &&
+            surfaceTopError <= 0.002f &&
+            coplanarGroundOverlapPairs == 0 &&
+            fenceJunctionsPassed &&
+            roadOpeningJunctionsPassed &&
+            pathSouthEndsAtOuterPath;
+        Debug.Log(
+            $"GYMCHAOS_OUTDOOR_LAYOUT_{(contractPassed ? "OK" : "FAIL")} " +
+            $"surfaces={surfaceObjectCount}/{surfaceNames.Length} " +
+            $"surfaceTopError={surfaceTopError:F3} " +
+            $"coplanarGroundOverlaps={coplanarGroundOverlapPairs} " +
+            $"differentMaterialOverlaps={differentMaterialOverlapPairs} " +
+            $"fenceJunctions={junctionCount} " +
+            $"largestJunctionGap={largestJunctionGap:F3} " +
+            $"roadOpeningJunctions={(roadOpeningJunctionsPassed ? 2 : 0)}/2 " +
+            $"pathSouthEndsAtOuterPath={(pathSouthEndsAtOuterPath ? 1 : 0)}",
+            root);
+        return contractPassed;
+    }
+
+    private static int CountCoplanarGroundOverlaps(
+        GameObject root,
+        string[] surfaceNames,
+        out int differentMaterialOverlapPairs)
+    {
+        int rendererCapacity = surfaceNames.Length + 1;
+        Renderer[] renderers = new Renderer[rendererCapacity];
+        for (int i = 0; i < surfaceNames.Length; i++)
+        {
+            renderers[i] = GetPrimaryRenderer(root, surfaceNames[i]);
+        }
+
+        GameObject roomFloor = GameObject.Find("Rubber Floor");
+        renderers[rendererCapacity - 1] = roomFloor != null
+            ? roomFloor.GetComponent<Renderer>()
+            : null;
+
+        GroundRegion[] regions = new GroundRegion[rendererCapacity * 6];
+        int regionCount = 0;
+        for (int rendererIndex = 0;
+             rendererIndex < renderers.Length;
+             rendererIndex++)
+        {
+            regionCount = AppendGroundRegions(
+                renderers[rendererIndex], regions, regionCount);
+        }
+
+        differentMaterialOverlapPairs = 0;
+        int overlapPairs = 0;
+        for (int firstIndex = 0; firstIndex < regionCount; firstIndex++)
+        {
+            GroundRegion first = regions[firstIndex];
+            for (int secondIndex = firstIndex + 1;
+                 secondIndex < regionCount;
+                 secondIndex++)
+            {
+                GroundRegion second = regions[secondIndex];
+                Bounds firstBounds = first.bounds;
+                Bounds secondBounds = second.bounds;
+                float overlapX = Mathf.Min(
+                    firstBounds.max.x, secondBounds.max.x) -
+                    Mathf.Max(firstBounds.min.x, secondBounds.min.x);
+                float overlapZ = Mathf.Min(
+                    firstBounds.max.z, secondBounds.max.z) -
+                    Mathf.Max(firstBounds.min.z, secondBounds.min.z);
+                float topDelta = Mathf.Abs(
+                    firstBounds.max.y - secondBounds.max.y);
+                if (overlapX <= 0.01f || overlapZ <= 0.01f ||
+                    topDelta > 0.002f)
+                {
+                    continue;
+                }
+
+                overlapPairs++;
+                if (first.material != second.material)
+                {
+                    differentMaterialOverlapPairs++;
+                }
+            }
+        }
+
+        return overlapPairs;
+    }
+
+    private struct GroundRegion
+    {
+        public Bounds bounds;
+        public Material material;
+    }
+
+    private static int AppendGroundRegions(
+        Renderer renderer,
+        GroundRegion[] regions,
+        int regionCount)
+    {
+        if (renderer == null || !renderer.enabled ||
+            regions == null || regionCount >= regions.Length)
+        {
+            return regionCount;
+        }
+
+        MeshFilter filter = renderer.GetComponent<MeshFilter>();
+        Mesh mesh = filter != null ? filter.sharedMesh : null;
+        if (mesh == null || !mesh.isReadable || mesh.subMeshCount == 0)
+        {
+            regions[regionCount++] = new GroundRegion
+            {
+                bounds = renderer.bounds,
+                material = renderer.sharedMaterial
+            };
+            return regionCount;
+        }
+
+        Vector3[] vertices = mesh.vertices;
+        Material[] materials = renderer.sharedMaterials;
+        for (int subMeshIndex = 0;
+             subMeshIndex < mesh.subMeshCount &&
+             regionCount < regions.Length;
+             subMeshIndex++)
+        {
+            int[] indices = mesh.GetIndices(subMeshIndex);
+            if (indices == null || indices.Length == 0)
+            {
+                continue;
+            }
+
+            int firstVertexIndex = indices[0];
+            if (firstVertexIndex < 0 || firstVertexIndex >= vertices.Length)
+            {
+                continue;
+            }
+
+            Bounds bounds = new Bounds(
+                renderer.transform.TransformPoint(vertices[firstVertexIndex]),
+                Vector3.zero);
+            for (int index = 1; index < indices.Length; index++)
+            {
+                int vertexIndex = indices[index];
+                if (vertexIndex >= 0 && vertexIndex < vertices.Length)
+                {
+                    bounds.Encapsulate(
+                        renderer.transform.TransformPoint(vertices[vertexIndex]));
+                }
+            }
+
+            Material material = materials != null &&
+                subMeshIndex < materials.Length
+                ? materials[subMeshIndex]
+                : renderer.sharedMaterial;
+            regions[regionCount++] = new GroundRegion
+            {
+                bounds = bounds,
+                material = material
+            };
+        }
+
+        return regionCount;
+    }
+
+    private static void DisableRenderer(GameObject gameObject)
+    {
+        Renderer renderer = gameObject != null
+            ? gameObject.GetComponent<Renderer>()
+            : null;
+        if (renderer != null)
+        {
+            renderer.enabled = false;
+        }
+    }
+
+    private static Renderer GetPrimaryRenderer(GameObject root, string name)
+    {
+        Transform child = root.transform.Find(name);
+        Renderer renderer = child != null ? child.GetComponent<Renderer>() : null;
+        return renderer;
+    }
+
+    private static Vector3 SegmentEndpoint(
+        Renderer renderer,
+        bool alongX,
+        bool positiveDirection)
+    {
+        if (renderer == null)
+        {
+            return Vector3.zero;
+        }
+
+        Bounds bounds = renderer.bounds;
+        if (alongX)
+        {
+            return new Vector3(
+                positiveDirection ? bounds.max.x : bounds.min.x,
+                0f,
+                bounds.center.z);
+        }
+
+        return new Vector3(
+            bounds.center.x,
+            0f,
+            positiveDirection ? bounds.max.z : bounds.min.z);
+    }
+
+    private static Vector3 FenceCornerEndpoint(
+        Renderer renderer,
+        bool positiveX,
+        bool positiveZ)
+    {
+        if (renderer == null)
+        {
+            return Vector3.zero;
+        }
+
+        Bounds bounds = renderer.bounds;
+        return new Vector3(
+            positiveX ? bounds.max.x : bounds.min.x,
+            0f,
+            positiveZ ? bounds.max.z : bounds.min.z);
+    }
+
+    private static bool ValidateFenceJunction(
+        Renderer first,
+        Vector3 firstEndpoint,
+        Renderer second,
+        Vector3 secondEndpoint,
+        ref int junctionCount,
+        ref float largestGap)
+    {
+        junctionCount++;
+        if (first == null || second == null)
+        {
+            largestGap = Mathf.Max(largestGap, 999f);
+            return false;
+        }
+
+        float gap = Vector3.Distance(firstEndpoint, secondEndpoint);
+        largestGap = Mathf.Max(largestGap, gap);
+        if (gap > 0.035f)
+        {
+            Debug.LogWarning(
+                $"GYMCHAOS_OUTDOOR_JUNCTION_GAP first={first.name} " +
+                $"a={firstEndpoint} second={second.name} b={secondEndpoint} " +
+                $"gap={gap:F3}");
+        }
+        return gap <= 0.035f;
     }
 
     private static void CreateBoundary(
@@ -1691,6 +2696,82 @@ public static class GymOutdoorBuilder
         material.SetColor("_EmissionColor", emission);
     }
 
+    // The pull-off sits north of the road wall line. The ground west of it
+    // (behind the bus passenger gate) and east of it (behind the after-bay
+    // wall) was void, and the pockets had no north wall. Fill both with
+    // asphalt and join the north walls to the neighbouring runs.
+    private static float FindRendererMaxX(Transform root, string name, float fallback)
+    {
+        Renderer renderer = GetPrimaryRenderer(root.gameObject, name);
+        return renderer != null ? renderer.bounds.max.x : fallback;
+    }
+
+    private static void BuildBusBayPockets(
+        Transform root,
+        float floorY,
+        Material asphalt,
+        float roadNorthEdgeZ,
+        float busBayStartX,
+        float busBayEndX,
+        float busBayOuterZ,
+        float cornerWallOuterX,
+        Material boundaryMaterial,
+        Material boundaryTrimMaterial,
+        Material boundaryRibMaterial)
+    {
+        float pocketNorthZ = busBayOuterZ + SharedFenceWallThickness * 0.5f;
+        float depth = pocketNorthZ - roadNorthEdgeZ;
+        float westStart = FindRendererMaxX(root, "Exterior Courtyard Foundation", 171.75f);
+        float parkingNorthEndX = FindRendererMaxX(root, "Parking North Extension Wall", 171.0f);
+        if (busBayStartX - westStart > 0.2f && depth > 0.2f)
+        {
+            CreateBox(
+                "Bus Bay West Pocket Ground",
+                root,
+                new Vector3((westStart + busBayStartX) * 0.5f,
+                    floorY - RoadSurfaceThickness * 0.5f,
+                    (roadNorthEdgeZ + pocketNorthZ) * 0.5f),
+                new Vector3(busBayStartX - westStart, RoadSurfaceThickness, depth),
+                asphalt,
+                true);
+        }
+        if (cornerWallOuterX - busBayEndX > 0.2f && depth > 0.2f)
+        {
+            CreateBox(
+                "Bus Bay East Pocket Ground",
+                root,
+                new Vector3((busBayEndX + cornerWallOuterX) * 0.5f,
+                    floorY - RoadSurfaceThickness * 0.5f,
+                    (roadNorthEdgeZ + pocketNorthZ) * 0.5f),
+                new Vector3(cornerWallOuterX - busBayEndX, RoadSurfaceThickness, depth),
+                asphalt,
+                true);
+        }
+
+        // North links overlap the neighbouring wall ends by 0.25 m so the
+        // runs read as one continuous wall.
+        float westWallStart = parkingNorthEndX - 0.25f;
+        float westWallEnd = busBayStartX + 0.25f;
+        CreateVisibleBoundary(
+            "Bus Bay West Pocket North Wall", root,
+            new Vector3((westWallStart + westWallEnd) * 0.5f,
+                floorY + BoundaryHeight * 0.5f, busBayOuterZ - 0.25f),
+            new Vector3(westWallEnd - westWallStart, BoundaryHeight, 0.5f),
+            BoundaryHeight, floorY,
+            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+            exteriorOnly: false, addCollision: true);
+        float eastWallStart = busBayEndX - 0.25f;
+        float eastWallEnd = cornerWallOuterX;
+        CreateVisibleBoundary(
+            "Bus Bay East Pocket North Wall", root,
+            new Vector3((eastWallStart + eastWallEnd) * 0.5f,
+                floorY + BoundaryHeight * 0.5f, busBayOuterZ),
+            new Vector3(eastWallEnd - eastWallStart, BoundaryHeight, 0.5f),
+            BoundaryHeight, floorY,
+            boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
+            exteriorOnly: false, addCollision: true);
+    }
+
     private static GameObject CreateBox(
         string name,
         Transform parent,
@@ -1728,28 +2809,42 @@ public static class GymOutdoorBuilder
 [DefaultExecutionOrder(100)]
 public sealed class GymExteriorOnlyVisual : MonoBehaviour
 {
+    private static PlayerMovement sharedPlayer;
+    private static int sharedVisibilityFrame = -1;
+    private static bool sharedOutsideVisibility;
+
     private Renderer[] gatedRenderers;
-    private PlayerMovement player;
     private bool visibilityApplied;
     private bool visible;
 
     private void Awake()
     {
         gatedRenderers = GetComponentsInChildren<Renderer>(true);
-        player = Object.FindAnyObjectByType<PlayerMovement>();
         ApplyVisibility(false);
     }
 
     private void LateUpdate()
     {
-        if (player == null)
+        ApplyVisibility(GetSharedOutsideVisibility());
+    }
+
+    private static bool GetSharedOutsideVisibility()
+    {
+        int frame = Time.frameCount;
+        if (sharedVisibilityFrame == frame)
         {
-            player = Object.FindAnyObjectByType<PlayerMovement>();
+            return sharedOutsideVisibility;
         }
 
-        bool shouldBeVisible = player != null &&
-            GymOutdoorBuilder.IsPlayerOutsideGym(player.transform.position);
-        ApplyVisibility(shouldBeVisible);
+        sharedVisibilityFrame = frame;
+        if (sharedPlayer == null)
+        {
+            sharedPlayer = Object.FindAnyObjectByType<PlayerMovement>();
+        }
+
+        sharedOutsideVisibility = sharedPlayer != null &&
+            GymOutdoorBuilder.IsPlayerOutsideGym(sharedPlayer.transform.position);
+        return sharedOutsideVisibility;
     }
 
     private void ApplyVisibility(bool shouldBeVisible)

@@ -279,6 +279,84 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
         return true;
     }
 
+    public bool TryGetNavigationFootprint(out Bounds localFootprint)
+    {
+        return TryGetLocalFootprint(out localFootprint);
+    }
+
+    public bool IsInsideNavigationClearance(Vector3 worldPosition, float clearance)
+    {
+        if (!TryGetLocalFootprint(out Bounds localFootprint))
+        {
+            return false;
+        }
+
+        Vector3 local = transform.InverseTransformPoint(worldPosition);
+        Vector3 scale = transform.lossyScale;
+        float localClearanceX = Mathf.Max(0f, clearance) /
+            Mathf.Max(0.001f, Mathf.Abs(scale.x));
+        float localClearanceZ = Mathf.Max(0f, clearance) /
+            Mathf.Max(0.001f, Mathf.Abs(scale.z));
+        return local.x >= localFootprint.min.x - localClearanceX &&
+            local.x <= localFootprint.max.x + localClearanceX &&
+            local.z >= localFootprint.min.z - localClearanceZ &&
+            local.z <= localFootprint.max.z + localClearanceZ;
+    }
+
+    public bool DoesSegmentCrossNavigationClearance(
+        Vector3 worldStart, Vector3 worldEnd, float clearance)
+    {
+        if (!TryGetLocalFootprint(out Bounds localFootprint))
+        {
+            return false;
+        }
+
+        Vector3 start = transform.InverseTransformPoint(worldStart);
+        Vector3 end = transform.InverseTransformPoint(worldEnd);
+        Vector3 scale = transform.lossyScale;
+        float localClearanceX = Mathf.Max(0f, clearance) /
+            Mathf.Max(0.001f, Mathf.Abs(scale.x));
+        float localClearanceZ = Mathf.Max(0f, clearance) /
+            Mathf.Max(0.001f, Mathf.Abs(scale.z));
+        float minX = localFootprint.min.x - localClearanceX;
+        float maxX = localFootprint.max.x + localClearanceX;
+        float minZ = localFootprint.min.z - localClearanceZ;
+        float maxZ = localFootprint.max.z + localClearanceZ;
+        float dx = end.x - start.x;
+        float dz = end.z - start.z;
+        float enter = 0f;
+        float exit = 1f;
+
+        return ClipSegmentAxis(-dx, start.x - minX, ref enter, ref exit) &&
+            ClipSegmentAxis(dx, maxX - start.x, ref enter, ref exit) &&
+            ClipSegmentAxis(-dz, start.z - minZ, ref enter, ref exit) &&
+            ClipSegmentAxis(dz, maxZ - start.z, ref enter, ref exit) &&
+            enter <= exit;
+    }
+
+    private static bool ClipSegmentAxis(
+        float direction, float distanceToBoundary,
+        ref float enter, ref float exit)
+    {
+        if (Mathf.Abs(direction) < 0.00001f)
+        {
+            return distanceToBoundary >= 0f;
+        }
+
+        float t = distanceToBoundary / direction;
+        if (direction < 0f)
+        {
+            if (t > exit) return false;
+            if (t > enter) enter = t;
+        }
+        else
+        {
+            if (t < enter) return false;
+            if (t < exit) exit = t;
+        }
+        return true;
+    }
+
     private bool TryGetLocalFootprint(out Bounds localFootprint)
     {
         localFootprint = default;
@@ -348,6 +426,8 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     private const float DeadliftLoadedPlateClearance = 0.002f;
 
     private static GymLooseItemSpawner instance;
+
+    public static bool IsReady { get; private set; }
 
     private readonly Dictionary<string, ItemAsset> assetCache =
         new Dictionary<string, ItemAsset>(StringComparer.OrdinalIgnoreCase);
@@ -648,6 +728,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
 
     private void BuildLayout(PlayerMovement player)
     {
+        IsReady = false;
         hasFloorBounds = TryFindFloorBounds(out floorBounds);
         if (!hasFloorBounds)
         {
@@ -870,19 +951,29 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             CreateFallbackBarVisual(barObject.transform);
         }
 
-        float loadedPlateCenter = GetDeadliftLoadedPlateCenter(
-            barObject.transform, GymExerciseStation.DeadliftLoadedPlateCenter);
-        // Use the same authored bar/plate ratio as the incline reference. The
-        // 20 kg pair is the starting load and stays together on each side.
+        // The cloned incline-bench bar carries its own 20 kg discs at the
+        // inner sleeve. Remove those visual-only discs and put the physical,
+        // pickable 20 kg pair exactly where and as large as they were, so the
+        // bar shows one correctly placed 20 kg plate per side.
+        float loadedPlateCenter = GymExerciseStation.DeadliftLoadedPlateCenter;
+        float loadedPlateDiameter = DefaultLoadedPlateDiameter;
+        if (barVisual != null &&
+            TryStripBarVisualPlates(barObject.transform, barVisual,
+                out float detectedCenter, out float detectedDiameter))
+        {
+            loadedPlateCenter = detectedCenter;
+            loadedPlateDiameter = detectedDiameter;
+        }
         for (int side = -1; side <= 1; side += 2)
         {
             CreateLoadedDeadliftPlate(
                 barObject.transform, stationMarker, side,
-                loadedPlateCenter);
+                loadedPlateCenter, loadedPlateDiameter);
         }
 
         Debug.Log(
             $"GYMCHAOS_DEADLIFT_LOADING_PIN center={loadedPlateCenter:F3} " +
+            $"diameter={loadedPlateDiameter:F3} " +
             $"fallback={GymExerciseStation.DeadliftLoadedPlateCenter:F3}",
             barObject);
 
@@ -913,9 +1004,75 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         SettleLoadedDeadliftBarbell(barObject, stationCenter);
     }
 
+    private const float DefaultLoadedPlateDiameter = 0.56f;
+
+    // Finds disc renderers (thin along the bar, wide across it) in the bar
+    // visual, removes them with their labels, and reports their mean |x|
+    // centre and diameter in bar-local space.
+    private static bool TryStripBarVisualPlates(
+        Transform barRoot, Transform barVisual,
+        out float plateCenter, out float plateDiameter)
+    {
+        plateCenter = 0f;
+        plateDiameter = 0f;
+        Renderer[] renderers = barVisual.GetComponentsInChildren<Renderer>(true);
+        List<float> discCenters = new List<float>();
+        List<Renderer> remove = new List<Renderer>();
+        foreach (Renderer renderer in renderers)
+        {
+            Bounds local = GetBoundsRelativeTo(barRoot, new[] { renderer });
+            float across = Mathf.Max(local.size.y, local.size.z);
+            if (local.size.x < 0.25f && across > 0.4f && Mathf.Abs(local.center.x) > 0.5f)
+            {
+                discCenters.Add(local.center.x);
+                plateCenter += Mathf.Abs(local.center.x);
+                plateDiameter = Mathf.Max(plateDiameter, across);
+                remove.Add(renderer);
+            }
+        }
+        if (discCenters.Count == 0)
+        {
+            return false;
+        }
+        plateCenter /= discCenters.Count;
+        // Hubs and labels of the removed discs sit on the same thin slice of
+        // the bar; keep the bar's own sleeves and collars.
+        foreach (Renderer renderer in renderers)
+        {
+            if (remove.Contains(renderer))
+            {
+                continue;
+            }
+            Bounds local = GetBoundsRelativeTo(barRoot, new[] { renderer });
+            bool onDiscSlice = false;
+            foreach (float center in discCenters)
+            {
+                onDiscSlice |= Mathf.Abs(local.center.x - center) < 0.08f &&
+                    local.size.x < 0.12f;
+            }
+            if (onDiscSlice &&
+                (Mathf.Max(local.size.y, local.size.z) > 0.2f || renderer.name.StartsWith("Text")))
+            {
+                remove.Add(renderer);
+            }
+        }
+        // Remove only the disc meshes; parents shared with the shaft or
+        // sleeves must survive.
+        foreach (Renderer part in remove)
+        {
+            MeshFilter filter = part.GetComponent<MeshFilter>();
+            UnityEngine.Object.DestroyImmediate(part);
+            if (filter != null)
+            {
+                UnityEngine.Object.DestroyImmediate(filter);
+            }
+        }
+        return true;
+    }
+
     private static void CreateLoadedDeadliftPlate(
         Transform barRoot, GymDeadliftStationMarker stationMarker,
-        int side, float localCenterX)
+        int side, float localCenterX, float diameter)
     {
         GameObject plateObject = new GameObject(
             $"Plate20 Deadlift Loaded Plate {side}");
@@ -924,18 +1081,29 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         plateObject.transform.localRotation = Quaternion.identity;
 
         Transform visual = CreateNormalizedSceneVisual(
-            "plate20", plateObject.transform, Vector3.zero, 0.56f, false,
+            "plate20", plateObject.transform, Vector3.zero, diameter, false,
             $"Deadlift Loaded Plate Visual {side}");
         if (visual == null)
         {
             CreateFallbackPlateVisual(
-                plateObject.transform, Vector3.zero, 0.56f, true);
+                plateObject.transform, Vector3.zero, diameter, true);
         }
 
         BoxCollider collider = plateObject.AddComponent<BoxCollider>();
         collider.center = Vector3.zero;
         collider.size = new Vector3(
-            DeadliftLoadedPlateThickness, 0.56f, 0.56f);
+            DeadliftLoadedPlateThickness, diameter, diameter);
+        // Fit the collider to the visible disc; the normalized major size can
+        // exceed the disc itself, which lifted the settled bar off the mat.
+        Renderer[] discRenderers = plateObject.GetComponentsInChildren<Renderer>(true);
+        if (discRenderers.Length > 0)
+        {
+            Bounds disc = GetBoundsRelativeTo(plateObject.transform, discRenderers);
+            collider.center = disc.center;
+            collider.size = new Vector3(
+                Mathf.Max(DeadliftLoadedPlateThickness, disc.size.x),
+                disc.size.y, disc.size.z);
+        }
         collider.sharedMaterial = CreateDeadliftPhysicsMaterial(WeightType.Plate20);
         stationMarker?.RegisterCollider(collider);
 
@@ -953,24 +1121,6 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
         body.useGravity = false;
         body.isKinematic = true;
-    }
-
-    private static float GetDeadliftLoadedPlateCenter(
-        Transform barRoot, float fallback)
-    {
-        if (barRoot == null)
-        {
-            return fallback;
-        }
-
-        Renderer[] renderers = barRoot.GetComponentsInChildren<Renderer>(true);
-        if (renderers.Length == 0)
-        {
-            return fallback;
-        }
-
-        return GymExerciseStation.GetSceneMatchedLoadedPlateCenter(
-            barRoot, fallback);
     }
 
     private static void SettleLoadedDeadliftBarbell(
@@ -1792,6 +1942,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             $"scales=foam{FoamRollerScale:0.####} balls{MedicineBallScale:0.####} " +
             "source=BodyBuilders/items",
             this);
+        IsReady = true;
     }
 
     private IEnumerator LoadAsset(string fileName)

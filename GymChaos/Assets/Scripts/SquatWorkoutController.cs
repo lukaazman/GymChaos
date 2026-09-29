@@ -73,10 +73,20 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private float rightFootBoneToSoleOffset;
     private float leftFootMeshSoleOffset;
     private float rightFootMeshSoleOffset;
+    private Vector3 baseLeftSoleAnchorLocal;
+    private Vector3 baseRightSoleAnchorLocal;
+    private Vector3 currentLeftSoleOffsetWorld;
+    private Vector3 currentRightSoleOffsetWorld;
     private bool hasMeshFootSoleCalibration;
     private Vector3 squatKneePole;
     private Vector3 squatLeftFootTarget;
     private Vector3 squatRightFootTarget;
+    private Vector3 squatLeftSoleTarget;
+    private Vector3 squatRightSoleTarget;
+    private Vector3 baseSquatLeftSoleTarget;
+    private Vector3 baseSquatRightSoleTarget;
+    private Vector3 baseFighterPosition;
+    private bool authoredSquatTargetsCaptured;
     private float leftLegSideSign = -1f;
     private float rightLegSideSign = 1f;
     private float hipBackTravelRatio = 0.42f;
@@ -148,6 +158,8 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private float currentRightFootSoleError = float.PositiveInfinity;
     private float currentLeftFootGroundError = float.PositiveInfinity;
     private float currentRightFootGroundError = float.PositiveInfinity;
+    private float currentLeftFixedFootGroundError = float.PositiveInfinity;
+    private float currentRightFixedFootGroundError = float.PositiveInfinity;
     private float currentLeftFootRotationError = float.PositiveInfinity;
     private float currentRightFootRotationError = float.PositiveInfinity;
     private Vector3 barTargetPosition;
@@ -155,6 +167,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
     private float currentBarBodyFollowError = float.PositiveInfinity;
     private float currentBarDropFromStart;
     private bool poseMetricLogged;
+    private bool workoutGroundingApplied;
     private bool hasPreviousLeftElbowPose;
     private bool hasPreviousRightElbowPose;
     private Vector3 previousLeftElbowDirection;
@@ -194,6 +207,31 @@ public sealed class SquatWorkoutController : MonoBehaviour
     public float RightFootGroundError => currentRightFootGroundError;
     public float FootGroundError => Mathf.Max(
         currentLeftFootGroundError, currentRightFootGroundError);
+    // Independent contact oracle: this uses the calibrated mesh/bind sole
+    // offset directly and never uses currentLeftSoleOffsetWorld or the
+    // reachability adjustment used by the IK endpoint solver.
+    public float LeftFixedFootGroundError => currentLeftFixedFootGroundError;
+    public float RightFixedFootGroundError => currentRightFixedFootGroundError;
+    public float FixedFootGroundError => Mathf.Max(
+        currentLeftFixedFootGroundError, currentRightFixedFootGroundError);
+    public float LeftFixedFootGroundSigned =>
+        GetFixedFootGroundSigned(leftFoot, baseLeftSoleAnchorLocal,
+            leftFootMeshSoleOffset);
+    public float RightFixedFootGroundSigned =>
+        GetFixedFootGroundSigned(rightFoot, baseRightSoleAnchorLocal,
+            rightFootMeshSoleOffset);
+    public float LeftMeshSoleOffsetForVerification => leftFootMeshSoleOffset;
+    public float RightMeshSoleOffsetForVerification => rightFootMeshSoleOffset;
+    public Vector3 LeftFixedSoleAnchorWorldForVerification =>
+        leftFoot != null ? leftFoot.TransformPoint(baseLeftSoleAnchorLocal) :
+        Vector3.zero;
+    public Vector3 RightFixedSoleAnchorWorldForVerification =>
+        rightFoot != null ? rightFoot.TransformPoint(baseRightSoleAnchorLocal) :
+        Vector3.zero;
+    public float LeftFootHorizontalSlip => !basePoseCaptured ? float.PositiveInfinity :
+        GetFootPlantHorizontalSlip(leftFoot, baseLeftSoleAnchorLocal, squatLeftSoleTarget);
+    public float RightFootHorizontalSlip => !basePoseCaptured ? float.PositiveInfinity :
+        GetFootPlantHorizontalSlip(rightFoot, baseRightSoleAnchorLocal, squatRightSoleTarget);
     public float FootRotationError => Mathf.Max(
         currentLeftFootRotationError, currentRightFootRotationError);
     public float BarBodyFollowError => currentBarBodyFollowError;
@@ -279,8 +317,8 @@ public sealed class SquatWorkoutController : MonoBehaviour
             }
 
             return Mathf.Max(
-                Vector3.Distance(leftFoot.position, squatLeftFootTarget),
-                Vector3.Distance(rightFoot.position, squatRightFootTarget));
+                Vector3.Distance(GetSoleAnchorWorld(leftFoot, baseLeftSoleAnchorLocal), squatLeftSoleTarget),
+                Vector3.Distance(GetSoleAnchorWorld(rightFoot, baseRightSoleAnchorLocal), squatRightSoleTarget));
         }
     }
 
@@ -313,6 +351,12 @@ public sealed class SquatWorkoutController : MonoBehaviour
         // arrival handoff. Keep this fallback for direct callers, but the
         // locked-state guard makes it a no-op during the normal entry frame.
         fighter.PrepareVisitorWorkoutPose();
+        // A direct verifier or a vehicle handoff can move the Rigidbody after
+        // the imported child was initially fitted. Reground that child once
+        // before capturing any world-space foot anchors.
+        Physics.SyncTransforms();
+        fighter.GetComponent<ExternalRiggedCharacterVisual>()?.RegroundAfterRootSnap();
+        Physics.SyncTransforms();
         CaptureBasePose(fighter);
         barTargetPosition = CalculateBarTargetPosition(fighter);
         if (!targetStation.TryBeginEnemySquat(fighter, Traps, barTargetPosition))
@@ -337,6 +381,10 @@ public sealed class SquatWorkoutController : MonoBehaviour
         CurrentMotion = 0f;
         initialPoseHoldPending = true;
         poseMetricLogged = false;
+        workoutGroundingApplied = false;
+        currentLeftSoleOffsetWorld = Vector3.zero;
+        currentRightSoleOffsetWorld = Vector3.zero;
+        authoredSquatTargetsCaptured = false;
         return true;
     }
 
@@ -372,11 +420,17 @@ public sealed class SquatWorkoutController : MonoBehaviour
         currentRightFootSoleError = float.PositiveInfinity;
         currentLeftFootGroundError = float.PositiveInfinity;
         currentRightFootGroundError = float.PositiveInfinity;
+        currentLeftFixedFootGroundError = float.PositiveInfinity;
+        currentRightFixedFootGroundError = float.PositiveInfinity;
         barTargetPosition = Vector3.zero;
         initialAttachedBarCenter = Vector3.zero;
         currentBarBodyFollowError = float.PositiveInfinity;
         currentBarDropFromStart = 0f;
         poseMetricLogged = false;
+        workoutGroundingApplied = false;
+        currentLeftSoleOffsetWorld = Vector3.zero;
+        currentRightSoleOffsetWorld = Vector3.zero;
+        authoredSquatTargetsCaptured = false;
         hasPreviousLeftElbowPose = false;
         hasPreviousRightElbowPose = false;
     }
@@ -456,6 +510,11 @@ public sealed class SquatWorkoutController : MonoBehaviour
         float motion = Mathf.Sin(cycle * Mathf.PI);
         CurrentMotion = motion;
         SetAuthoredWorkoutPhase(cycle);
+        if (!workoutGroundingApplied)
+        {
+            owner.GetComponent<ExternalRiggedCharacterVisual>()?.RegroundAfterRootSnap();
+            workoutGroundingApplied = true;
+        }
         ApplySquatPose(motion);
     }
 
@@ -483,195 +542,80 @@ public sealed class SquatWorkoutController : MonoBehaviour
             return;
         }
 
-        float eased = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(motion));
-        currentHipDrop = GetReachableHipDrop(maxHipDrop * eased);
-        hips.position = GetSquatHipPosition(currentHipDrop);
-        hips.rotation = baseHipsWorldRotation;
-        leftThigh.position = hips.position +
-            baseHipsWorldRotation * squatLeftThighOffsetFromHips;
-        rightThigh.position = hips.position +
-            baseHipsWorldRotation * squatRightThighOffsetFromHips;
+        // The old generic lower-body IK fallback lengthened legs and wrote
+        // foot/ankle transforms. Keep the no-clip path root-only as well:
+        // authored enemy assets and their limb transforms are never modified.
+        ApplyRootOnlySquatFallback();
+    }
 
-        // Start each frame from the imported idle pose. The retargeter runs
-        // before this component, but resetting the driven chain here keeps
-        // the squat solve deterministic for every imported enemy rig.
-        // Drive the torso around the actual world-space shoulder axis. A
-        // fixed local X Euler angle is not equivalent across imported scans;
-        // on some of them it twists the chest sideways instead of producing
-        // the small forward lean of a real back squat.
-        spine.rotation = GetForwardLeanRotation(baseSpineWorldRotation, 8f * eased);
-        chest.rotation = GetForwardLeanRotation(baseChestWorldRotation, 14f * eased);
-        leftShoulder.localRotation = baseLeftShoulderLocalRotation;
-        rightShoulder.localRotation = baseRightShoulderLocalRotation;
-        leftUpperArm.localRotation = baseLeftUpperArmLocalRotation;
-        rightUpperArm.localRotation = baseRightUpperArmLocalRotation;
-        leftForearm.localRotation = baseLeftForearmLocalRotation;
-        rightForearm.localRotation = baseRightForearmLocalRotation;
-        leftHand.localRotation = baseLeftHandLocalRotation;
-        rightHand.localRotation = baseRightHandLocalRotation;
-        leftThigh.localRotation = baseLeftThighLocalRotation;
-        rightThigh.localRotation = baseRightThighLocalRotation;
-        leftFoot.localPosition = baseLeftFootLocalPosition;
-        rightFoot.localPosition = baseRightFootLocalPosition;
-        leftShin.localRotation = baseLeftShinLocalRotation;
-        rightShin.localRotation = baseRightShinLocalRotation;
-        leftFoot.localRotation = baseLeftFootLocalRotation;
-        rightFoot.localRotation = baseRightFootLocalRotation;
-        if (leftToe != null)
+    // The contact-baked clip keeps both soles on one plane but its pelvis
+    // height can sit a few centimetres off the runtime support plane. Shift
+    // only the visual skeleton root by the mean sole error; limbs untouched.
+    private const float MaxAuthoredSquatGroundCorrection = 0.08f;
+
+    private void ApplyAuthoredSquatGroundCorrection(
+        MixamoScanRetargetAnimator authoredAnimator, Vector3 up)
+    {
+        if (authoredAnimator == null || leftFoot == null || rightFoot == null)
         {
-            leftToe.localRotation = baseLeftToeLocalRotation;
+            return;
         }
-        if (rightToe != null)
+        float floorY = GetFloorY(owner);
+        float leftSigned = GetSoleAnchorWorld(leftFoot, baseLeftSoleAnchorLocal).y - floorY;
+        float rightSigned = GetSoleAnchorWorld(rightFoot, baseRightSoleAnchorLocal).y - floorY;
+        float correction = Mathf.Clamp(
+            -(leftSigned + rightSigned) * 0.5f,
+            -MaxAuthoredSquatGroundCorrection,
+            MaxAuthoredSquatGroundCorrection);
+        authoredAnimator.ApplyGroundedRootCorrection(up, correction);
+    }
+
+    private void ApplyRootOnlySquatFallback()
+    {
+        if (owner == null || station == null)
         {
-            rightToe.localRotation = baseRightToeLocalRotation;
+            return;
         }
 
-        // The feet are the fixed support points of a squat. Target the ankle
-        // joints from the actual floor plane and the imported rig's
-        // ankle-to-sole offset; targeting the raw foot bone position can leave
-        // the visible soles floating even when the ankle IK error is zero.
-        Vector3 leftFootTarget = squatLeftFootTarget;
-        Vector3 rightFootTarget = squatRightFootTarget;
-        // Keep each ankle at the vertical offset captured from that same
-        // imported rig in its grounded rest pose. A single whole-mesh offset
-        // is not safe for asymmetric scans: it can plant one foot while
-        // lifting or twisting the other.
-        leftFootTarget.y = GetFloorY(owner) + leftFootRootOffsetY;
-        rightFootTarget.y = GetFloorY(owner) + rightFootRootOffsetY;
-        SolveLeg(
-            leftThigh,
-            leftShin,
-            leftFoot,
-            leftFootTarget,
-            leftUpperLegLength,
-            leftLowerLegLength);
-        SolveLeg(
-            rightThigh,
-            rightShin,
-            rightFoot,
-            rightFootTarget,
-            rightUpperLegLength,
-            rightLowerLegLength);
-        float leftKneeBend = GetKneeBend(leftThigh, leftShin, leftFoot);
-        float rightKneeBend = GetKneeBend(rightThigh, rightShin, rightFoot);
+        MixamoScanRetargetAnimator authoredAnimator =
+            owner.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        if (authoredAnimator != null && leftFoot != null && rightFoot != null)
+        {
+            float leftSignedGroundError =
+                (leftFoot.position.y + leftFootMeshSoleOffset) - GetFloorY(owner);
+            float rightSignedGroundError =
+                (rightFoot.position.y + rightFootMeshSoleOffset) - GetFloorY(owner);
+            float rootGroundCorrection = Mathf.Clamp(
+                -Mathf.Max(leftSignedGroundError, rightSignedGroundError),
+                -0.25f,
+                0.25f);
+            authoredAnimator.ApplyGroundedRootCorrection(
+                owner.transform.up, rootGroundCorrection);
+        }
 
-        // Keep the knee/ankle IK on the shared support plane, then make the
-        // final ankle-to-shoe translation from each asset's measured sole
-        // offset. This removes a few centimetres of idle-animation phase
-        // difference without rotating or deforming either shoe.
-        ApplyFootSoleSupportCorrection(leftFoot, leftFootMeshSoleOffset);
-        ApplyFootSoleSupportCorrection(rightFoot, rightFootMeshSoleOffset);
-
-        // The ankle/foot bones are skinned deformation bones, not generic
-        // world-up pivots. The old FromToRotation correction twisted the shoe
-        // because every imported scan has a different foot axis. Keep the
-        // foot in the exact authored grounded world orientation instead. The
-        // ankle position still follows the leg IK target, so the lower body
-        // remains grounded without deforming or tilting the shoe asset.
-        RestoreFootGroundedPose(leftFoot, baseLeftFootRotation);
-        RestoreFootGroundedPose(rightFoot, baseRightFootRotation);
-        currentLeftFootRotationError = Quaternion.Angle(
-            leftFoot.rotation, baseLeftFootRotation);
-        currentRightFootRotationError = Quaternion.Angle(
-            rightFoot.rotation, baseRightFootRotation);
+        currentHipDrop = 0f;
+        currentKneeBend = 0f;
+        currentKneeBendDifference = 0f;
+        currentLegDepthDifference = 0f;
+        currentLeftFootRotationError = 0f;
+        currentRightFootRotationError = 0f;
         currentLeftFootSoleError = GetFootSoleError(
             leftFoot, leftToe, leftFootBoneToSoleOffset);
         currentRightFootSoleError = GetFootSoleError(
             rightFoot, rightToe, rightFootBoneToSoleOffset);
-        currentLeftFootGroundError = GetFootGroundError(
-            leftFoot, leftFootMeshSoleOffset);
-        currentRightFootGroundError = GetFootGroundError(
-            rightFoot, rightFootMeshSoleOffset);
-        currentKneeBend = (leftKneeBend + rightKneeBend) * 0.5f;
-        currentKneeBendDifference = Mathf.Abs(leftKneeBend - rightKneeBend);
-        Vector3 depthAxis = Vector3.ProjectOnPlane(
-            owner.transform.forward, owner.transform.up);
-        if (depthAxis.sqrMagnitude < 0.0001f)
-        {
-            depthAxis = Vector3.forward;
-        }
-        depthAxis.Normalize();
-        currentLegDepthDifference = Mathf.Abs(
-            Vector3.Dot(leftShin.position - leftThigh.position, depthAxis) -
-            Vector3.Dot(rightShin.position - rightThigh.position, depthAxis));
+        currentLeftFootGroundError = GetFootPlantGroundError(
+            leftFoot, baseLeftSoleAnchorLocal);
+        currentRightFootGroundError = GetFootPlantGroundError(
+            rightFoot, baseRightSoleAnchorLocal);
+        UpdateFixedFootGroundErrors();
 
-        // The chest/neck transforms have now moved with the lowered hips and
-        // leg solve. Reposition the authored rack bar against this current
-        // traps target before solving the hands, otherwise the arms can move
-        // to a new squat pose while the bar remains at its standing world-Y.
         Vector3 currentBarTarget = CalculateBarTargetPosition(owner);
         station.SyncEnemySquatBarPose(owner, Traps, currentBarTarget);
         currentBarBodyFollowError = Vector3.Distance(
             station.EnemySquatBarCenter, currentBarTarget);
         currentBarDropFromStart = initialAttachedBarCenter.y -
             station.EnemySquatBarCenter.y;
-        ApplyArmGripPose();
-        if (!poseMetricLogged && eased > 0.35f && owner != null)
-        {
-            poseMetricLogged = true;
-            Vector3 leftContactPosition = GetHandContactPosition(leftHand);
-            Vector3 rightContactPosition = GetHandContactPosition(rightHand);
-            float leftElbowHeight = Vector3.Dot(
-                leftForearm.position - leftUpperArm.position, owner.transform.up);
-            float rightElbowHeight = Vector3.Dot(
-                rightForearm.position - rightUpperArm.position, owner.transform.up);
-            float leftForearmContactHeight = Vector3.Dot(
-                leftContactPosition - leftForearm.position, owner.transform.up);
-            float rightForearmContactHeight = Vector3.Dot(
-                rightContactPosition - rightForearm.position, owner.transform.up);
-            Vector3 contactSideAxis = Vector3.ProjectOnPlane(
-                owner.transform.right, owner.transform.up).normalized;
-            float leftForearmContactOutward = Vector3.Dot(
-                leftContactPosition - leftForearm.position,
-                contactSideAxis) * leftArmSideSign;
-            float rightForearmContactOutward = Vector3.Dot(
-                rightContactPosition - rightForearm.position,
-                contactSideAxis) * rightArmSideSign;
-            float leftElbowOutward = Vector3.Dot(
-                leftForearm.position - leftUpperArm.position,
-                contactSideAxis) * leftArmSideSign;
-            float rightElbowOutward = Vector3.Dot(
-                rightForearm.position - rightUpperArm.position,
-                contactSideAxis) * rightArmSideSign;
-            Debug.Log(
-                $"GYMCHAOS_SQUAT_POSE_METRICS enemy={owner.Identity} " +
-                $"hipDrop={currentHipDrop:0.000} kneeBend={currentKneeBend:0.0} " +
-                $"kneeDelta={currentKneeBendDifference:0.0} " +
-                $"legDepthDelta={currentLegDepthDifference:0.000} " +
-                $"footError={FootPlantError:0.000} gripError={currentGripError:0.000} " +
-                $"leftGrip={currentLeftGripError:0.000} rightGrip={currentRightGripError:0.000} " +
-                $"forearmOutward={currentForearmOutwardError:0.000} " +
-                $"armCrossing={currentArmCrossingError:0.000} " +
-                $"elbowOutward={currentElbowOutwardError:0.000} " +
-                $"upperArmRef={currentUpperArmReferenceError:0.000} " +
-                $"forearmRef={currentForearmReferenceError:0.000} " +
-                $"armShape={currentArmShapeError:0.000} " +
-                $"leftHandContact={currentLeftHandContactError:0.000} " +
-                $"rightHandContact={currentRightHandContactError:0.000} " +
-                $"leftSole={currentLeftFootSoleError:0.000} " +
-                $"rightSole={currentRightFootSoleError:0.000} " +
-                $"leftGround={currentLeftFootGroundError:0.000} " +
-                $"rightGround={currentRightFootGroundError:0.000} " +
-                $"footRotation={FootRotationError:0.0} " +
-                $"barDrop={currentBarDropFromStart:0.000} " +
-                $"barFollow={currentBarBodyFollowError:0.000} " +
-                $"overhand={HasOverhandGrip} " +
-                $"handSpread={HandSpread:0.000} handSpreadRatio={HandSpreadRatio:0.000} " +
-                $"elbowHeights={leftElbowHeight:0.000}/{rightElbowHeight:0.000} " +
-                $"forearmContactHeights={leftForearmContactHeight:0.000}/" +
-                $"{rightForearmContactHeight:0.000} " +
-                $"forearmContactOutward={leftForearmContactOutward:0.000}/" +
-                $"{rightForearmContactOutward:0.000} " +
-                $"elbowOutwardValues={leftElbowOutward:0.000}/" +
-                $"{rightElbowOutward:0.000} " +
-                $"barY={station.EnemySquatBarCenter.y:0.000} " +
-                $"leftKnee={leftKneeBend:0.0} rightKnee={rightKneeBend:0.0} " +
-                $"legLengths={leftUpperLegLength + leftLowerLegLength:0.000}/" +
-                $"{rightUpperLegLength + rightLowerLegLength:0.000}",
-                this);
-        }
     }
-
     private bool TryApplyAuthoredSquatPose()
     {
         if (owner == null || station == null)
@@ -694,11 +638,20 @@ public sealed class SquatWorkoutController : MonoBehaviour
         // per-character rigs. Only derive measurements and attach the scene
         // bar to the current authored traps position here.
         Vector3 up = owner.transform.up;
+        // Keep the authored skeleton and enemy assets untouched. If the
+        // exported squat pose lifts both soles, move only the visual
+        // skeleton root down to the support plane; never lengthen a leg or
+        // translate either foot/ankle bone.
+        if (!authoredSquatTargetsCaptured)
+        {
+            CaptureAuthoredSquatTargets();
+        }
         // The per-character squat.fbx is one complete authored repetition.
         // Keep its hip, torso, leg, foot and hand transforms untouched; the
         // old generic correction solvers were calibrated against a shared
         // skeleton and changed the source animation on differently rigged
         // enemies.
+        ApplyAuthoredSquatGroundCorrection(authoredAnimator, up);
         currentHipDrop = Mathf.Max(
             0f, Vector3.Dot(baseHipsWorldPosition - hips.position, up));
         float leftKneeBend = GetKneeBend(leftThigh, leftShin, leftFoot);
@@ -720,10 +673,11 @@ public sealed class SquatWorkoutController : MonoBehaviour
             leftFoot, leftToe, leftFootBoneToSoleOffset);
         currentRightFootSoleError = GetFootSoleError(
             rightFoot, rightToe, rightFootBoneToSoleOffset);
-        currentLeftFootGroundError = GetFootGroundError(
-            leftFoot, leftFootMeshSoleOffset);
-        currentRightFootGroundError = GetFootGroundError(
-            rightFoot, rightFootMeshSoleOffset);
+        currentLeftFootGroundError = GetFootPlantGroundError(
+            leftFoot, baseLeftSoleAnchorLocal);
+        currentRightFootGroundError = GetFootPlantGroundError(
+            rightFoot, baseRightSoleAnchorLocal);
+        UpdateFixedFootGroundErrors();
         currentLeftFootRotationError = Quaternion.Angle(
             leftFoot.rotation, baseLeftFootRotation);
         currentRightFootRotationError = Quaternion.Angle(
@@ -760,97 +714,12 @@ public sealed class SquatWorkoutController : MonoBehaviour
         return true;
     }
 
-    private Quaternion GetForwardLeanRotation(
-        Quaternion baseRotation, float degrees)
-    {
-        if (owner == null || degrees == 0f)
-        {
-            return baseRotation;
-        }
-
-        Vector3 leanAxis = Vector3.ProjectOnPlane(
-            owner.transform.right, owner.transform.up);
-        if (leanAxis.sqrMagnitude < 0.0001f)
-        {
-            return baseRotation;
-        }
-
-        return Quaternion.AngleAxis(degrees, leanAxis.normalized) * baseRotation;
-    }
-
     private float GetFloorY(EnemyFighter fighter)
     {
-        return fighter != null ? fighter.transform.position.y + 0.02f : 0f;
+        return fighter != null
+            ? fighter.transform.position.y + EnemyFighter.GroundedVisualClearance
+            : 0f;
     }
-
-    private float GetReachableHipDrop(float requestedDrop)
-    {
-        if (owner == null || leftThigh == null || rightThigh == null)
-        {
-            return requestedDrop;
-        }
-
-        float drop = Mathf.Max(0f, requestedDrop);
-        float leftReach = leftUpperLegLength + leftLowerLegLength - 0.012f;
-        float rightReach = rightUpperLegLength + rightLowerLegLength - 0.012f;
-        float minimumReach = Mathf.Min(leftReach, rightReach);
-        for (int i = 0; i < 12; i++)
-        {
-            Vector3 loweredHips = GetSquatHipPosition(drop);
-            Vector3 leftHip = loweredHips +
-                baseHipsWorldRotation * squatLeftThighOffsetFromHips;
-            Vector3 rightHip = loweredHips +
-                baseHipsWorldRotation * squatRightThighOffsetFromHips;
-            Vector3 leftTarget = squatLeftFootTarget;
-            Vector3 rightTarget = squatRightFootTarget;
-            leftTarget.y = GetFloorY(owner) + leftFootRootOffsetY;
-            rightTarget.y = GetFloorY(owner) + rightFootRootOffsetY;
-
-            if (Vector3.Distance(leftHip, leftTarget) <= minimumReach &&
-                Vector3.Distance(rightHip, rightTarget) <= minimumReach)
-            {
-                break;
-            }
-
-            // Reduce only the requested depth when a particular imported rig
-            // has a shorter leg chain. This keeps the ankle target exact and
-            // avoids the analytic solver stretching the lower body.
-            drop = Mathf.Max(0f, drop - 0.025f);
-        }
-
-        return drop;
-    }
-
-    private Vector3 GetSquatHipPosition(float drop)
-    {
-        if (owner == null)
-        {
-            return baseHipsWorldPosition - Vector3.up * drop;
-        }
-
-        Vector3 up = owner.transform.up;
-        Vector3 back = Vector3.ProjectOnPlane(-owner.transform.forward, up);
-        if (back.sqrMagnitude < 0.0001f)
-        {
-            back = Vector3.back;
-        }
-        back.Normalize();
-        float backTravel = Mathf.Min(
-            maximumHipBackTravel, Mathf.Max(0f, drop) * hipBackTravelRatio);
-        return baseHipsWorldPosition - up * drop + back * backTravel;
-    }
-
-    private static void RestoreFootGroundedPose(
-        Transform foot, Quaternion baseWorldRotation)
-    {
-        if (foot == null)
-        {
-            return;
-        }
-
-        foot.rotation = baseWorldRotation;
-    }
-
     private float GetFootSoleError(
         Transform foot, Transform toe, float expectedFootToSoleOffset)
     {
@@ -881,25 +750,750 @@ public sealed class SquatWorkoutController : MonoBehaviour
             (foot.position.y + soleOffset) - GetFloorY(owner));
     }
 
-    private void ApplyFootSoleSupportCorrection(
-        Transform foot, float soleOffset)
+    private Vector3 GetGroundedSoleOffsetWorld(
+        Transform foot, Vector3 anchorLocal, Vector3 worldUp)
     {
-        if (foot == null || owner == null ||
-            float.IsNaN(soleOffset) || float.IsInfinity(soleOffset))
+        if (foot == null)
         {
-            return;
+            return Vector3.zero;
         }
 
-        float error = (foot.position.y + soleOffset) - GetFloorY(owner);
-        float correction = Mathf.Clamp(-error, -0.08f, 0.08f);
-        if (Mathf.Abs(correction) < 0.0001f)
+        Vector3 anchorOffset = foot.TransformVector(anchorLocal);
+        if (anchorOffset.sqrMagnitude < 0.000001f)
         {
-            return;
+            return Vector3.zero;
         }
 
-        foot.position += owner.transform.up * correction;
+        // Imported foot bind axes can point down or forward. Keep the
+        // authored horizontal sole offset for stable stance/slip metrics, but
+        // make the support-facing depth at least the full anchor distance so
+        // an upside-down bind orientation cannot make the ankle target
+        // unreachable above the floor.
+        if (Vector3.Dot(anchorOffset, worldUp) > 0f)
+        {
+            anchorOffset = -anchorOffset;
+        }
+
+        Vector3 horizontal = Vector3.ProjectOnPlane(anchorOffset, worldUp);
+        float supportDepth = anchorOffset.magnitude;
+        return horizontal - worldUp * supportDepth;
     }
 
+    private Vector3 GetSoleAnchorWorld(
+        Transform foot, Vector3 anchorLocal)
+    {
+        if (foot == null)
+        {
+            return Vector3.zero;
+        }
+
+        Vector3 up = owner != null && owner.transform.up.sqrMagnitude > 0.0001f
+            ? owner.transform.up.normalized
+            : Vector3.up;
+        Vector3 anchorOffset =
+            foot == leftFoot && currentLeftSoleOffsetWorld.sqrMagnitude > 0.000001f
+                ? currentLeftSoleOffsetWorld
+                : foot == rightFoot && currentRightSoleOffsetWorld.sqrMagnitude > 0.000001f
+                    ? currentRightSoleOffsetWorld
+                    : GetGroundedSoleOffsetWorld(foot, anchorLocal, up);
+        return foot.position + anchorOffset;
+    }
+
+    private Vector3 EnsureSoleOffsetReachable(
+        Transform thigh,
+        Vector3 soleTarget,
+        Vector3 anchorOffset,
+        float upperLegLength,
+        float lowerLegLength,
+        Vector3 worldUp)
+    {
+        Vector3 horizontal = Vector3.ProjectOnPlane(anchorOffset, worldUp);
+        float supportDepth = Mathf.Max(
+            0f, -Vector3.Dot(anchorOffset, worldUp));
+        float maximumReach = Mathf.Max(
+            0.001f, upperLegLength + lowerLegLength - 0.0005f);
+
+        for (int iteration = 0; iteration < 3; iteration++)
+        {
+            Vector3 candidate = horizontal - worldUp * supportDepth;
+            float targetDistance = Vector3.Distance(
+                thigh.position, soleTarget - candidate);
+            if (targetDistance <= maximumReach)
+            {
+                return candidate;
+            }
+
+            // Raise the ankle target by extending only the invisible
+            // sole-to-ankle support depth. This preserves a planted sole
+            // without changing any authored bone length or scale.
+            supportDepth += targetDistance - maximumReach;
+        }
+
+        return horizontal - worldUp * supportDepth;
+    }
+
+    private float GetFootPlantGroundError(
+        Transform foot, Vector3 anchorLocal)
+    {
+        if (foot == null || owner == null)
+        {
+            return float.PositiveInfinity;
+        }
+
+        return Mathf.Abs(
+            GetSoleAnchorWorld(foot, anchorLocal).y - GetFloorY(owner));
+    }
+
+    private float GetFixedFootGroundError(
+        Transform foot, Vector3 fixedSoleAnchorLocal, float fixedSoleOffset)
+    {
+        if (foot == null || owner == null ||
+            float.IsNaN(fixedSoleOffset) || float.IsInfinity(fixedSoleOffset))
+        {
+            return float.PositiveInfinity;
+        }
+
+        Vector3 soleAnchorLocal = fixedSoleAnchorLocal;
+        if (soleAnchorLocal.sqrMagnitude < 0.000001f)
+        {
+            soleAnchorLocal = new Vector3(0f, fixedSoleOffset, 0f);
+        }
+
+        return Mathf.Abs(GetFixedFootGroundSigned(
+            foot, soleAnchorLocal, fixedSoleOffset));
+    }
+
+    private float GetFixedFootGroundSigned(
+        Transform foot, Vector3 fixedSoleAnchorLocal, float fixedSoleOffset)
+    {
+        if (foot == null || owner == null ||
+            float.IsNaN(fixedSoleOffset) || float.IsInfinity(fixedSoleOffset))
+        {
+            return float.NaN;
+        }
+
+        Vector3 soleAnchorLocal = fixedSoleAnchorLocal;
+        if (soleAnchorLocal.sqrMagnitude < 0.000001f)
+        {
+            soleAnchorLocal = new Vector3(0f, fixedSoleOffset, 0f);
+        }
+
+        // This is the bind-pose mesh sole anchor transformed by the current
+        // foot rotation. It intentionally does not use the per-frame IK
+        // reach extension, so the contact oracle remains independent of the
+        // endpoint solver while still respecting the foot's real orientation.
+        return foot.TransformPoint(soleAnchorLocal).y - GetFloorY(owner);
+    }
+
+    private void UpdateFixedFootGroundErrors()
+    {
+        currentLeftFixedFootGroundError = GetFixedFootGroundError(
+            leftFoot, baseLeftSoleAnchorLocal, leftFootMeshSoleOffset);
+        currentRightFixedFootGroundError = GetFixedFootGroundError(
+            rightFoot, baseRightSoleAnchorLocal, rightFootMeshSoleOffset);
+    }
+
+    private float GetFootPlantHorizontalSlip(
+        Transform foot, Vector3 anchorLocal, Vector3 target)
+    {
+        if (foot == null)
+        {
+            return float.PositiveInfinity;
+        }
+
+        return Vector3.ProjectOnPlane(
+            GetSoleAnchorWorld(foot, anchorLocal) - target,
+            Vector3.up).magnitude;
+    }
+
+    private static float GetFootPlantCandidateCost(
+        Transform foot,
+        Vector3 anchorLocal,
+        Vector3 target,
+        Vector3 worldUp)
+    {
+        Vector3 error = foot.TransformPoint(anchorLocal) - target;
+        float groundError = Mathf.Abs(Vector3.Dot(error, worldUp));
+        float horizontalError = Vector3.ProjectOnPlane(error, worldUp).magnitude;
+        // Keep the two independent planting contracts balanced: a tiny
+        // vertical improvement must not be bought with a larger horizontal
+        // slip, or the reverse.
+        return Mathf.Max(groundError / 0.015f, horizontalError / 0.020f);
+    }
+
+    private void CaptureAuthoredSquatTargets()
+    {
+        if (owner == null || leftFoot == null || rightFoot == null)
+        {
+            return;
+        }
+
+        // Capture after MixamoScanRetargetAnimator has sampled squat.fbx at
+        // phase zero. The idle capture in Begin() is only a fallback: the
+        // authored squat can start from a different, fully valid foot stance.
+        // From this point onward these world-space sole contacts stay fixed
+        // for the complete repetition.
+        Vector3 up = owner.transform.up.sqrMagnitude > 0.0001f
+            ? owner.transform.up.normalized
+            : Vector3.up;
+        float floorY = GetFloorY(owner);
+        Vector3 leftTarget = leftFoot.TransformPoint(baseLeftSoleAnchorLocal);
+        Vector3 rightTarget = rightFoot.TransformPoint(baseRightSoleAnchorLocal);
+        leftTarget.y = floorY;
+        rightTarget.y = floorY;
+        baseSquatLeftSoleTarget = leftTarget;
+        baseSquatRightSoleTarget = rightTarget;
+        squatLeftSoleTarget = leftTarget;
+        squatRightSoleTarget = rightTarget;
+        authoredSquatTargetsCaptured = true;
+    }
+
+    private bool ApplyFootPlantIk()
+    {
+        if (owner == null || !HasValidSquatRig)
+        {
+            return false;
+        }
+
+        Vector3 up = owner.transform.up.sqrMagnitude > 0.0001f
+            ? owner.transform.up.normalized
+            : Vector3.up;
+        Vector3 pole = squatKneePole.sqrMagnitude > 0.0001f
+            ? squatKneePole.normalized
+            : owner.transform.forward;
+        MixamoScanRetargetAnimator authoredAnimator =
+            owner.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        Vector3 rootDelta = owner.transform.position - baseFighterPosition;
+        Vector3 horizontalRootDelta = Vector3.ProjectOnPlane(rootDelta, up);
+        squatLeftSoleTarget = baseSquatLeftSoleTarget + horizontalRootDelta;
+        squatRightSoleTarget = baseSquatRightSoleTarget + horizontalRootDelta;
+        float floorY = GetFloorY(owner);
+        squatLeftSoleTarget.y = floorY;
+        squatRightSoleTarget.y = floorY;
+
+        // Solve to the measured bind-pose sole anchor itself. The previous
+        // reachability extension could make the dynamic oracle read planted
+        // while the actual mesh sole stayed above the floor.
+        leftFoot.rotation = Quaternion.FromToRotation(
+            leftFoot.up, up) * leftFoot.rotation;
+        rightFoot.rotation = Quaternion.FromToRotation(
+            rightFoot.up, up) * rightFoot.rotation;
+        Physics.SyncTransforms();
+        currentLeftSoleOffsetWorld = leftFoot.TransformVector(
+            baseLeftSoleAnchorLocal);
+        currentRightSoleOffsetWorld = rightFoot.TransformVector(
+            baseRightSoleAnchorLocal);
+
+        // If the authored clip raises the hips farther than its current
+        // runtime leg segments can reach, lower only the visible rig root
+        // before solving. This keeps the fixed floor contacts reachable
+        // without changing a limb scale, bone position, or animation asset.
+        float remainingReachCorrection = 0.80f;
+        for (int reachIteration = 0;
+            reachIteration < 6 && remainingReachCorrection > 0.0005f;
+            reachIteration++)
+        {
+            float leftRuntimeReach = Vector3.Distance(
+                leftThigh.position, leftShin.position) +
+                Vector3.Distance(leftShin.position, leftFoot.position);
+            float rightRuntimeReach = Vector3.Distance(
+                rightThigh.position, rightShin.position) +
+                Vector3.Distance(rightShin.position, rightFoot.position);
+            float leftTargetDistance = Vector3.Distance(
+                leftThigh.position,
+                squatLeftSoleTarget - currentLeftSoleOffsetWorld);
+            float rightTargetDistance = Vector3.Distance(
+                rightThigh.position,
+                squatRightSoleTarget - currentRightSoleOffsetWorld);
+            float leftReachDeficit = Mathf.Max(
+                0f, leftTargetDistance - leftRuntimeReach);
+            float rightReachDeficit = Mathf.Max(
+                0f, rightTargetDistance - rightRuntimeReach);
+            if (leftReachDeficit <= 0.0005f &&
+                rightReachDeficit <= 0.0005f)
+            {
+                break;
+            }
+
+            float leftCorrectionDistance = leftReachDeficit > 0.0005f
+                ? leftReachDeficit + 0.06f
+                : 0f;
+            float rightCorrectionDistance = rightReachDeficit > 0.0005f
+                ? rightReachDeficit + 0.06f
+                : 0f;
+            Vector3 leftReachDirection = leftTargetDistance > 0.0001f
+                ? (squatLeftSoleTarget - currentLeftSoleOffsetWorld -
+                    leftThigh.position).normalized
+                : Vector3.zero;
+            Vector3 rightReachDirection = rightTargetDistance > 0.0001f
+                ? (squatRightSoleTarget - currentRightSoleOffsetWorld -
+                    rightThigh.position).normalized
+                : Vector3.zero;
+            Vector3 reachCorrectionVector = Vector3.zero;
+            int deficientLegCount = 0;
+            if (leftCorrectionDistance > 0f)
+            {
+                reachCorrectionVector += leftReachDirection *
+                    leftCorrectionDistance;
+                deficientLegCount++;
+            }
+            if (rightCorrectionDistance > 0f)
+            {
+                reachCorrectionVector += rightReachDirection *
+                    rightCorrectionDistance;
+                deficientLegCount++;
+            }
+            if (deficientLegCount == 0 ||
+                reachCorrectionVector.sqrMagnitude < 0.00000025f)
+            {
+                break;
+            }
+            Vector3 averageReachCorrection = reachCorrectionVector /
+                deficientLegCount;
+            float correctionDistance = Mathf.Min(
+                averageReachCorrection.magnitude, remainingReachCorrection);
+            Vector3 reachCorrection = averageReachCorrection.normalized *
+                correctionDistance;
+            ExternalRiggedCharacterVisual externalVisual =
+                owner.GetComponent<ExternalRiggedCharacterVisual>();
+            Transform visibleRoot = externalVisual != null
+                ? externalVisual.RuntimeModelRoot
+                : null;
+            if (visibleRoot != null)
+            {
+                visibleRoot.position += reachCorrection;
+            }
+            if (authoredAnimator.RuntimeModelRoot != visibleRoot)
+            {
+                authoredAnimator.ApplyRootWorldCorrection(reachCorrection);
+            }
+            Physics.SyncTransforms();
+            remainingReachCorrection -= correctionDistance;
+            currentLeftSoleOffsetWorld = leftFoot.TransformVector(
+                baseLeftSoleAnchorLocal);
+            currentRightSoleOffsetWorld = rightFoot.TransformVector(
+                baseRightSoleAnchorLocal);
+        }
+
+        bool leftSolved = ApplyFootPlantIkForLeg(
+            leftThigh, leftShin, leftFoot,
+            squatLeftSoleTarget, currentLeftSoleOffsetWorld,
+            baseLeftSoleAnchorLocal, pole, leftUpperLegLength,
+            leftLowerLegLength, up);
+        bool rightSolved = ApplyFootPlantIkForLeg(
+            rightThigh, rightShin, rightFoot,
+            squatRightSoleTarget, currentRightSoleOffsetWorld,
+            baseRightSoleAnchorLocal, pole, rightUpperLegLength,
+            rightLowerLegLength, up);
+
+        ApplyFixedSoleRootCorrection(authoredAnimator, up);
+
+        // A steep authored frame can leave one endpoint just outside the
+        // contract after the first grounded root correction. Retry only when
+        // it is actually outside the two measured tolerances, and retain the
+        // original pose if the retry is worse.
+        float beforeRetryCost = Mathf.Max(
+            GetFootPlantCandidateCost(
+                leftFoot, baseLeftSoleAnchorLocal, squatLeftSoleTarget, up),
+            GetFootPlantCandidateCost(
+                rightFoot, baseRightSoleAnchorLocal, squatRightSoleTarget, up));
+        if (beforeRetryCost > 1f)
+        {
+            Quaternion savedLeftThigh = leftThigh.localRotation;
+            Quaternion savedLeftShin = leftShin.localRotation;
+            Quaternion savedLeftFoot = leftFoot.localRotation;
+            Quaternion savedRightThigh = rightThigh.localRotation;
+            Quaternion savedRightShin = rightShin.localRotation;
+            Quaternion savedRightFoot = rightFoot.localRotation;
+            ExternalRiggedCharacterVisual retryVisual =
+                owner.GetComponent<ExternalRiggedCharacterVisual>();
+            Transform retryVisibleRoot = retryVisual != null
+                ? retryVisual.RuntimeModelRoot
+                : null;
+            Vector3 savedVisibleRootPosition = retryVisibleRoot != null
+                ? retryVisibleRoot.position
+                : Vector3.zero;
+
+            // The first solve can change the current hip/ankle geometry. If
+            // a leg is still beyond reach, make one small diagonal root move
+            // toward the deficient target before the retry.
+            float retryLeftReach = Vector3.Distance(
+                leftThigh.position, leftShin.position) +
+                Vector3.Distance(leftShin.position, leftFoot.position);
+            float retryRightReach = Vector3.Distance(
+                rightThigh.position, rightShin.position) +
+                Vector3.Distance(rightShin.position, rightFoot.position);
+            float retryLeftDistance = Vector3.Distance(
+                leftThigh.position,
+                squatLeftSoleTarget - currentLeftSoleOffsetWorld);
+            float retryRightDistance = Vector3.Distance(
+                rightThigh.position,
+                squatRightSoleTarget - currentRightSoleOffsetWorld);
+            float retryLeftDeficit = Mathf.Max(
+                0f, retryLeftDistance - retryLeftReach);
+            float retryRightDeficit = Mathf.Max(
+                0f, retryRightDistance - retryRightReach);
+            Vector3 lateReachCorrection = Vector3.zero;
+            int lateDeficientLegCount = 0;
+            if (retryLeftDeficit > 0.0005f)
+            {
+                lateReachCorrection += (
+                    squatLeftSoleTarget - currentLeftSoleOffsetWorld -
+                    leftThigh.position).normalized * (retryLeftDeficit + 0.04f);
+                lateDeficientLegCount++;
+            }
+            if (retryRightDeficit > 0.0005f)
+            {
+                lateReachCorrection += (
+                    squatRightSoleTarget - currentRightSoleOffsetWorld -
+                    rightThigh.position).normalized * (retryRightDeficit + 0.04f);
+                lateDeficientLegCount++;
+            }
+            bool lateRootMoved = lateDeficientLegCount > 0 &&
+                lateReachCorrection.sqrMagnitude > 0.00000025f;
+            if (lateRootMoved)
+            {
+                lateReachCorrection /= lateDeficientLegCount;
+                lateReachCorrection = Vector3.ClampMagnitude(
+                    lateReachCorrection, 0.15f);
+                if (retryVisibleRoot != null)
+                {
+                    retryVisibleRoot.position += lateReachCorrection;
+                }
+                if (authoredAnimator.RuntimeModelRoot != retryVisibleRoot)
+                {
+                    authoredAnimator.ApplyRootWorldCorrection(
+                        lateReachCorrection);
+                }
+                Physics.SyncTransforms();
+                currentLeftSoleOffsetWorld = leftFoot.TransformVector(
+                    baseLeftSoleAnchorLocal);
+                currentRightSoleOffsetWorld = rightFoot.TransformVector(
+                    baseRightSoleAnchorLocal);
+            }
+            bool retryLeftSolved = ApplyFootPlantIkForLeg(
+                leftThigh, leftShin, leftFoot,
+                squatLeftSoleTarget, currentLeftSoleOffsetWorld,
+                baseLeftSoleAnchorLocal, pole, leftUpperLegLength,
+                leftLowerLegLength, up);
+            bool retryRightSolved = ApplyFootPlantIkForLeg(
+                rightThigh, rightShin, rightFoot,
+                squatRightSoleTarget, currentRightSoleOffsetWorld,
+                baseRightSoleAnchorLocal, pole, rightUpperLegLength,
+                rightLowerLegLength, up);
+            float afterRetryCost = Mathf.Max(
+                GetFootPlantCandidateCost(
+                    leftFoot, baseLeftSoleAnchorLocal, squatLeftSoleTarget, up),
+                GetFootPlantCandidateCost(
+                rightFoot, baseRightSoleAnchorLocal, squatRightSoleTarget, up));
+            if (lateRootMoved)
+            {
+                ApplyFixedSoleRootCorrection(authoredAnimator, up);
+                afterRetryCost = Mathf.Max(
+                    GetFootPlantCandidateCost(
+                        leftFoot, baseLeftSoleAnchorLocal, squatLeftSoleTarget, up),
+                    GetFootPlantCandidateCost(
+                        rightFoot, baseRightSoleAnchorLocal, squatRightSoleTarget, up));
+            }
+            if (!retryLeftSolved || !retryRightSolved ||
+                afterRetryCost > beforeRetryCost)
+            {
+                leftThigh.localRotation = savedLeftThigh;
+                leftShin.localRotation = savedLeftShin;
+                leftFoot.localRotation = savedLeftFoot;
+                rightThigh.localRotation = savedRightThigh;
+                rightShin.localRotation = savedRightShin;
+                rightFoot.localRotation = savedRightFoot;
+                if (lateRootMoved && retryVisibleRoot != null)
+                {
+                    retryVisibleRoot.position = savedVisibleRootPosition;
+                    Physics.SyncTransforms();
+                }
+            }
+            else
+            {
+                leftSolved = retryLeftSolved;
+                rightSolved = retryRightSolved;
+            }
+        }
+        currentLeftSoleOffsetWorld = leftFoot.TransformVector(
+            baseLeftSoleAnchorLocal);
+        currentRightSoleOffsetWorld = rightFoot.TransformVector(
+            baseRightSoleAnchorLocal);
+
+
+        currentLeftFootGroundError = GetFootPlantGroundError(
+            leftFoot, baseLeftSoleAnchorLocal);
+        currentRightFootGroundError = GetFootPlantGroundError(
+            rightFoot, baseRightSoleAnchorLocal);
+        UpdateFixedFootGroundErrors();
+        currentLeftFootSoleError = GetFootSoleError(
+            leftFoot, leftToe, leftFootBoneToSoleOffset);
+        currentRightFootSoleError = GetFootSoleError(
+            rightFoot, rightToe, rightFootBoneToSoleOffset);
+        currentLeftFootRotationError = Vector3.Angle(leftFoot.up, up);
+        currentRightFootRotationError = Vector3.Angle(rightFoot.up, up);
+        return leftSolved && rightSolved;
+    }
+
+    private void ApplyFixedSoleRootCorrection(
+        MixamoScanRetargetAnimator authoredAnimator, Vector3 worldUp)
+    {
+        if (authoredAnimator == null || leftFoot == null || rightFoot == null)
+        {
+            return;
+        }
+
+        ExternalRiggedCharacterVisual externalVisual =
+            owner.GetComponent<ExternalRiggedCharacterVisual>();
+        Transform visibleRoot = externalVisual != null
+            ? externalVisual.RuntimeModelRoot : null;
+        float leftSigned = GetFixedFootGroundSigned(
+            leftFoot, baseLeftSoleAnchorLocal, leftFootMeshSoleOffset);
+        float rightSigned = GetFixedFootGroundSigned(
+            rightFoot, baseRightSoleAnchorLocal, rightFootMeshSoleOffset);
+        if (float.IsNaN(leftSigned) || float.IsNaN(rightSigned))
+        {
+            return;
+        }
+        float correction = -((leftSigned + rightSigned) * 0.5f);
+        Vector3 leftHorizontalError = Vector3.ProjectOnPlane(
+            leftFoot.TransformPoint(baseLeftSoleAnchorLocal) -
+            squatLeftSoleTarget, worldUp);
+        Vector3 rightHorizontalError = Vector3.ProjectOnPlane(
+            rightFoot.TransformPoint(baseRightSoleAnchorLocal) -
+            squatRightSoleTarget, worldUp);
+        Vector3 horizontalCorrection = -(
+            leftHorizontalError + rightHorizontalError) * 0.5f;
+        Vector3 totalCorrection = horizontalCorrection +
+            worldUp.normalized * correction;
+        if (totalCorrection.sqrMagnitude <= 0.00000025f)
+        {
+            return;
+        }
+
+        // Correct only the authored skeleton roots. Foot/leg transforms,
+        // scales, and the source squat clip remain untouched; the root shift
+        // places the fixed mesh soles on the station floor as a rigid body.
+        if (visibleRoot != null)
+        {
+            visibleRoot.position += totalCorrection;
+        }
+        if (authoredAnimator.RuntimeModelRoot != visibleRoot)
+        {
+            authoredAnimator.ApplyRootWorldCorrection(totalCorrection);
+        }
+        Physics.SyncTransforms();
+
+        // A non-uniform imported model can leave a small horizontal residual
+        // after a world-space root move. Correct that residual once, while
+        // deliberately leaving the vertical correction single-pass.
+        Vector3 correctedLeftHorizontal = Vector3.ProjectOnPlane(
+            leftFoot.TransformPoint(baseLeftSoleAnchorLocal) -
+            squatLeftSoleTarget, worldUp);
+        Vector3 correctedRightHorizontal = Vector3.ProjectOnPlane(
+            rightFoot.TransformPoint(baseRightSoleAnchorLocal) -
+            squatRightSoleTarget, worldUp);
+        Vector3 horizontalResidual = -(
+            correctedLeftHorizontal + correctedRightHorizontal) * 0.5f;
+        if (horizontalResidual.sqrMagnitude > 0.00000025f)
+        {
+            if (visibleRoot != null)
+            {
+                visibleRoot.position += horizontalResidual;
+            }
+            if (authoredAnimator.RuntimeModelRoot != visibleRoot)
+            {
+                authoredAnimator.ApplyRootWorldCorrection(horizontalResidual);
+            }
+            totalCorrection += horizontalResidual;
+            Physics.SyncTransforms();
+        }
+
+        float finalLeftSigned = GetFixedFootGroundSigned(
+            leftFoot, baseLeftSoleAnchorLocal, leftFootMeshSoleOffset);
+        float finalRightSigned = GetFixedFootGroundSigned(
+            rightFoot, baseRightSoleAnchorLocal, rightFootMeshSoleOffset);
+        Vector3 finalLeftHorizontal = Vector3.ProjectOnPlane(
+            leftFoot.TransformPoint(baseLeftSoleAnchorLocal) -
+            squatLeftSoleTarget, worldUp);
+        Vector3 finalRightHorizontal = Vector3.ProjectOnPlane(
+            rightFoot.TransformPoint(baseRightSoleAnchorLocal) -
+            squatRightSoleTarget, worldUp);
+        Debug.Log(
+            $"GYMCHAOS_SQUAT_FIXED_SOLE_ROOT_CORRECTION " +
+            $"left={finalLeftSigned:0.000} right={finalRightSigned:0.000} " +
+            $"delta={totalCorrection} " +
+            $"leftHorizontal={finalLeftHorizontal} " +
+            $"rightHorizontal={finalRightHorizontal}", this);
+    }
+
+    private bool ApplyFootPlantIkForLeg(
+        Transform thigh,
+        Transform shin,
+        Transform foot,
+        Vector3 soleTarget,
+        Vector3 anchorOffset,
+        Vector3 fixedSoleAnchorLocal,
+        Vector3 kneePole,
+        float upperLegLength,
+        float lowerLegLength,
+        Vector3 worldUp)
+    {
+        if (thigh == null || shin == null || foot == null)
+        {
+            return false;
+        }
+
+        // Preserve the authored foot heading while removing only its
+        // vertical tilt. The foot is then treated as a rigid endpoint; no
+        // position, scale, or limb length is written.
+        Quaternion groundedFootRotation =
+            Quaternion.FromToRotation(foot.up, worldUp) * foot.rotation;
+        bool solved = false;
+        foot.rotation = groundedFootRotation;
+        anchorOffset = foot.TransformVector(fixedSoleAnchorLocal);
+        // Authored clips may contain local bone-position channels. Use the
+        // current segment lengths for this solve instead of assuming the
+        // idle bind distances, while never writing scale or bone positions.
+        float runtimeUpperLegLength = Vector3.Distance(
+            thigh.position, shin.position);
+        float runtimeLowerLegLength = Vector3.Distance(
+            shin.position, foot.position);
+        if (runtimeUpperLegLength > 0.001f)
+        {
+            upperLegLength = runtimeUpperLegLength;
+        }
+        if (runtimeLowerLegLength > 0.001f)
+        {
+            lowerLegLength = runtimeLowerLegLength;
+        }
+        // The imported rigs have non-zero foot pivots and different local
+        // bone offsets. Give the endpoint solve enough passes to converge on
+        // the fixed mesh sole without translating a foot bone or changing
+        // either limb length.
+        float bestCost = GetFootPlantCandidateCost(
+            foot, fixedSoleAnchorLocal, soleTarget, worldUp);
+        Quaternion bestThighRotation = thigh.localRotation;
+        Quaternion bestShinRotation = shin.localRotation;
+        Quaternion bestFootRotation = foot.localRotation;
+        for (int iteration = 0; iteration < 8; iteration++)
+        {
+            Vector3 desiredAnkle = soleTarget - anchorOffset;
+            solved = SolveTwoBoneChain(
+                thigh, shin, foot, desiredAnkle, kneePole,
+                upperLegLength, lowerLegLength);
+            if (!solved)
+            {
+                return false;
+            }
+
+            // Reapply the rigid foot orientation after every leg solve. The
+            // next pass corrects the remaining endpoint error without
+            // translating the foot bone or changing either limb length.
+            foot.rotation = groundedFootRotation;
+            anchorOffset = foot.TransformVector(fixedSoleAnchorLocal);
+
+            float cost = GetFootPlantCandidateCost(
+                foot, fixedSoleAnchorLocal, soleTarget, worldUp);
+            if (cost < bestCost)
+            {
+                bestCost = cost;
+                bestThighRotation = thigh.localRotation;
+                bestShinRotation = shin.localRotation;
+                bestFootRotation = foot.localRotation;
+            }
+        }
+
+        // Solving from a different authored pose can overshoot when the
+        // target is near the chain's reach limit. Keep the best fixed-anchor
+        // result rather than allowing a later pass to worsen contact.
+        if (solved)
+        {
+            thigh.localRotation = bestThighRotation;
+            shin.localRotation = bestShinRotation;
+            foot.localRotation = bestFootRotation;
+        }
+        return solved;
+    }
+
+    private static bool SolveTwoBoneChain(
+        Transform thigh,
+        Transform shin,
+        Transform foot,
+        Vector3 target,
+        Vector3 kneePole,
+        float upperLegLength,
+        float lowerLegLength)
+    {
+        Vector3 hip = thigh.position;
+        Vector3 toTarget = target - hip;
+        float targetDistance = toTarget.magnitude;
+        if (targetDistance < 0.0001f)
+        {
+            return false;
+        }
+
+        float upper = Mathf.Max(0.001f, upperLegLength);
+        float lower = Mathf.Max(0.001f, lowerLegLength);
+        float minimumReach = Mathf.Abs(upper - lower) + 0.0005f;
+        float maximumReach = upper + lower - 0.0005f;
+        float distance = Mathf.Clamp(
+            targetDistance, minimumReach, Mathf.Max(minimumReach, maximumReach));
+        Vector3 direction = toTarget / targetDistance;
+        if (targetDistance > maximumReach)
+        {
+            distance = maximumReach;
+        }
+        else if (targetDistance < minimumReach)
+        {
+            distance = minimumReach;
+        }
+
+        Vector3 projectedPole = Vector3.ProjectOnPlane(
+            kneePole, direction);
+        if (projectedPole.sqrMagnitude < 0.0001f)
+        {
+            projectedPole = Vector3.ProjectOnPlane(
+                shin.position - hip, direction);
+        }
+        if (projectedPole.sqrMagnitude < 0.0001f)
+        {
+            projectedPole = Vector3.Cross(direction, Vector3.up);
+        }
+        if (projectedPole.sqrMagnitude < 0.0001f)
+        {
+            projectedPole = Vector3.Cross(direction, Vector3.right);
+        }
+        projectedPole.Normalize();
+
+        float along = (upper * upper - lower * lower +
+            distance * distance) / (2f * distance);
+        float height = Mathf.Sqrt(
+            Mathf.Max(0f, upper * upper - along * along));
+        Vector3 desiredKnee = hip + direction * along +
+            projectedPole * height;
+
+        Vector3 currentUpper = shin.position - thigh.position;
+        if (currentUpper.sqrMagnitude < 0.0001f)
+        {
+            return false;
+        }
+        thigh.rotation = Quaternion.FromToRotation(
+            currentUpper, desiredKnee - hip) * thigh.rotation;
+
+        Vector3 actualKnee = shin.position;
+        Vector3 currentLower = foot.position - actualKnee;
+        Vector3 desiredLower = target - actualKnee;
+        if (currentLower.sqrMagnitude < 0.0001f ||
+            desiredLower.sqrMagnitude < 0.0001f)
+        {
+            return false;
+        }
+        shin.rotation = Quaternion.FromToRotation(
+            currentLower, desiredLower) * shin.rotation;
+        return true;
+    }
     private static float GetLowestFootBoneY(Transform foot, Transform toe)
     {
         if (foot == null)
@@ -910,103 +1504,6 @@ public sealed class SquatWorkoutController : MonoBehaviour
         return toe != null
             ? Mathf.Min(foot.position.y, toe.position.y)
             : foot.position.y;
-    }
-
-    private void SolveLeg(
-        Transform thigh,
-        Transform shin,
-        Transform foot,
-        Vector3 targetFoot,
-        float upperLength,
-        float lowerLength)
-    {
-        if (thigh == null || shin == null || foot == null ||
-            upperLength <= 0.01f || lowerLength <= 0.01f)
-        {
-            return;
-        }
-
-        Vector3 hip = thigh.position;
-        Vector3 toFoot = targetFoot - hip;
-        float distance = Mathf.Clamp(
-            toFoot.magnitude,
-            Mathf.Abs(upperLength - lowerLength) + 0.001f,
-            upperLength + lowerLength - 0.001f);
-        if (toFoot.sqrMagnitude < 0.0001f)
-        {
-            return;
-        }
-
-        Vector3 direction = toFoot.normalized;
-        // Use one shared pole direction for both sides. Blending each leg
-        // back toward its imported knee vector made visually mirrored rigs
-        // choose slightly different bend planes and depths.
-        Vector3 poleDirection = squatKneePole.sqrMagnitude > 0.0001f
-            ? squatKneePole
-            : owner.transform.forward;
-        Vector3 pole = Vector3.ProjectOnPlane(poleDirection, direction);
-        if (pole.sqrMagnitude < 0.0001f)
-        {
-            pole = Vector3.ProjectOnPlane(owner.transform.right, direction);
-        }
-        if (pole.sqrMagnitude < 0.0001f) pole = owner.transform.up;
-        pole.Normalize();
-
-        float along = (upperLength * upperLength + distance * distance -
-            lowerLength * lowerLength) / (2f * distance);
-        float perpendicular = Mathf.Sqrt(
-            Mathf.Max(0f, upperLength * upperLength - along * along));
-        Vector3 targetKnee = hip + direction * along + pole * perpendicular;
-
-        // Solve twice. The first rotation moves the knee joint, which changes
-        // the lower-chain origin on rigs with non-uniform imported bone
-        // offsets. Recomputing the knee/ankle relationship prevents that
-        // offset from becoming visible leg stretch or a displaced foot.
-        for (int iteration = 0; iteration < 5; iteration++)
-        {
-            hip = thigh.position;
-            toFoot = targetFoot - hip;
-            distance = Mathf.Clamp(
-                toFoot.magnitude,
-                Mathf.Abs(upperLength - lowerLength) + 0.001f,
-                upperLength + lowerLength - 0.001f);
-            direction = toFoot.sqrMagnitude > 0.0001f
-                ? toFoot.normalized
-                : direction;
-            pole = Vector3.ProjectOnPlane(poleDirection, direction);
-            if (pole.sqrMagnitude < 0.0001f)
-            {
-                pole = Vector3.ProjectOnPlane(owner.transform.right, direction);
-            }
-            if (pole.sqrMagnitude < 0.0001f)
-            {
-                pole = owner.transform.up;
-            }
-            pole.Normalize();
-            along = (upperLength * upperLength + distance * distance -
-                lowerLength * lowerLength) / (2f * distance);
-            perpendicular = Mathf.Sqrt(
-                Mathf.Max(0f, upperLength * upperLength - along * along));
-            targetKnee = hip + direction * along + pole * perpendicular;
-
-            Vector3 currentUpper = shin.position - hip;
-            Vector3 desiredUpper = targetKnee - hip;
-            if (currentUpper.sqrMagnitude > 0.0001f &&
-                desiredUpper.sqrMagnitude > 0.0001f)
-            {
-                thigh.rotation = Quaternion.FromToRotation(
-                    currentUpper, desiredUpper) * thigh.rotation;
-            }
-
-            Vector3 currentLower = foot.position - shin.position;
-            Vector3 desiredLower = targetFoot - shin.position;
-            if (currentLower.sqrMagnitude > 0.0001f &&
-                desiredLower.sqrMagnitude > 0.0001f)
-            {
-                shin.rotation = Quaternion.FromToRotation(
-                    currentLower, desiredLower) * shin.rotation;
-            }
-        }
     }
 
     private void ApplyArmGripPose()
@@ -2651,6 +3148,48 @@ public sealed class SquatWorkoutController : MonoBehaviour
             leftFootMeshSoleOffset = leftFootBoneToSoleOffset;
             rightFootMeshSoleOffset = rightFootBoneToSoleOffset;
         }
+        Transform leftSoleAnchor = leftToe != null &&
+            leftToe.position.y < leftFoot.position.y ? leftToe : leftFoot;
+        Transform rightSoleAnchor = rightToe != null &&
+            rightToe.position.y < rightFoot.position.y ? rightToe : rightFoot;
+        baseLeftSoleAnchorLocal =
+            leftFoot.InverseTransformPoint(leftSoleAnchor.position);
+        baseRightSoleAnchorLocal =
+            rightFoot.InverseTransformPoint(rightSoleAnchor.position);
+        if (hasMeshFootSoleCalibration)
+        {
+            // Convert the measured bind-pose mesh contact point into each
+            // foot's local frame. Replacing only local Y with a world-space
+            // scalar loses the contact point when the authored foot rotates.
+            baseLeftSoleAnchorLocal = leftFoot.InverseTransformPoint(
+                baseLeftFootPosition + Vector3.up * leftFootMeshSoleOffset);
+            baseRightSoleAnchorLocal = rightFoot.InverseTransformPoint(
+                baseRightFootPosition + Vector3.up * rightFootMeshSoleOffset);
+        }
+
+        // The imported FBX foot pivots can sit well above the visible shoe
+        // sole. ExternalRiggedCharacterVisual already measures the renderer
+        // ground contact against the rig foot bones; convert that world-space
+        // offset into each foot's local anchor so IK targets the shoe, not the
+        // ankle pivot. This does not alter the rig, scale or limb lengths.
+        ExternalRiggedCharacterVisual externalVisual =
+            fighter.GetComponent<ExternalRiggedCharacterVisual>();
+        if (!hasMeshFootSoleCalibration && externalVisual != null &&
+            externalVisual.HasGroundedFootReference)
+        {
+            float visualSoleOffset = externalVisual.GroundedFootToMeshOffset;
+            if (!float.IsNaN(visualSoleOffset) &&
+                !float.IsInfinity(visualSoleOffset) &&
+                Mathf.Abs(visualSoleOffset) < 1.0f)
+            {
+                Vector3 supportDelta = fighter.transform.up.normalized *
+                    visualSoleOffset;
+                baseLeftSoleAnchorLocal = leftFoot.InverseTransformPoint(
+                    baseLeftFootPosition + supportDelta);
+                baseRightSoleAnchorLocal = rightFoot.InverseTransformPoint(
+                    baseRightFootPosition + supportDelta);
+            }
+        }
 
         // The visible sole, not the ankle pivot, is the support point. The
         // idle clip can capture the two feet at slightly different phases,
@@ -2677,46 +3216,50 @@ public sealed class SquatWorkoutController : MonoBehaviour
         }
         forwardAxis.Normalize();
 
-        // Normalize the imported stance around its own centreline. Some
-        // scans have a slightly staggered idle pose; feeding those two raw
-        // foot positions into independent IK targets makes one squat leg
-        // visibly lead the other. Preserve the model's stance width, but use
-        // one common fore/aft and floor position for both contacts.
+        // Preserve the authored bind-pose stance. A scan's foot pivots and
+        // mesh soles are not guaranteed to share the same centreline, so
+        // synthesizing a symmetric target can create equal-and-opposite
+        // horizontal slip on the two fixed sole anchors. The calibrated
+        // bind-pose anchors are the stable per-rig contact reference; only
+        // their vertical component is replaced by the station floor below.
         leftLegSideSign = GetBoneSideSign(baseLeftFootPosition, -1f);
         rightLegSideSign = GetBoneSideSign(baseRightFootPosition, 1f);
         if (Mathf.Sign(leftLegSideSign) == Mathf.Sign(rightLegSideSign))
         {
             rightLegSideSign = -leftLegSideSign;
         }
-        Vector3 footCenter = (baseLeftFootPosition + baseRightFootPosition) * 0.5f;
-        float leftHalfWidth = Mathf.Abs(Vector3.Dot(
-            baseLeftFootPosition - footCenter, sideAxis));
-        float rightHalfWidth = Mathf.Abs(Vector3.Dot(
-            baseRightFootPosition - footCenter, sideAxis));
-        // The imported idle scans are often authored with a show-pose stance.
-        // A back squat should be shoulder/hip width, not a wide split. Keep
-        // each rig's mirrored centreline, but bring the feet inward before
-        // solving the knees so the whole lower body follows the reference.
-        float authoredHalfWidth = (leftHalfWidth + rightHalfWidth) * 0.5f;
+        Vector3 hipJointCenter = (baseLeftHipPosition + baseRightHipPosition) * 0.5f;
+        Vector3 authoredLeftSole = leftFoot.TransformPoint(
+            baseLeftSoleAnchorLocal);
+        Vector3 authoredRightSole = rightFoot.TransformPoint(
+            baseRightSoleAnchorLocal);
+        Vector3 authoredSoleCenter =
+            (authoredLeftSole + authoredRightSole) * 0.5f;
+        float authoredHalfWidth = Mathf.Abs(Vector3.Dot(
+            authoredLeftSole - authoredSoleCenter, sideAxis));
+        float hipWidth = Vector3.Distance(
+            baseLeftHipPosition, baseRightHipPosition);
         float stanceHalfWidth = Mathf.Clamp(
-            authoredHalfWidth * 0.82f,
+            authoredHalfWidth * 0.72f,
             0.07f,
-            Mathf.Max(0.09f, Vector3.Distance(
-                baseLeftHipPosition, baseRightHipPosition) * 0.62f));
-        // Keep the horizontal stance centred, while the independently
-        // calibrated vertical targets above put both visible soles on the
-        // same floor plane.
-        footCenter.y = floorY;
-        squatLeftFootTarget = footCenter + sideAxis * leftLegSideSign * stanceHalfWidth;
-        squatRightFootTarget = footCenter + sideAxis * rightLegSideSign * stanceHalfWidth;
+            Mathf.Max(0.09f, hipWidth * 0.60f));
+        // Keep the authored fore/aft centre as well. It is part of the
+        // calibrated sole reference and is more reliable than a universal
+        // hip-centred correction for scans with a deep source stance.
+        Vector3 groundedSoleCenter = authoredSoleCenter;
+        groundedSoleCenter.y = floorY;
+        squatLeftSoleTarget = groundedSoleCenter +
+            sideAxis * leftLegSideSign * stanceHalfWidth;
+        squatRightSoleTarget = groundedSoleCenter +
+            sideAxis * rightLegSideSign * stanceHalfWidth;
+        squatLeftFootTarget = squatLeftSoleTarget;
+        squatRightFootTarget = squatRightSoleTarget;
         squatLeftFootTarget.y = floorY + leftFootRootOffsetY;
         squatRightFootTarget.y = floorY + rightFootRootOffsetY;
+        baseSquatLeftSoleTarget = squatLeftSoleTarget;
+        baseSquatRightSoleTarget = squatRightSoleTarget;
+        baseFighterPosition = fighter.transform.position;
 
-        // Normalize the two hip joints around one shared centreline as well
-        // as the feet. Imported idle scans can carry a small fore/aft thigh
-        // stagger; keeping those roots untouched makes the two IK chains
-        // choose visibly different squat planes even with a shared pole.
-        Vector3 hipJointCenter = (baseLeftHipPosition + baseRightHipPosition) * 0.5f;
         float leftHipHalfWidth = Mathf.Abs(Vector3.Dot(
             baseLeftHipPosition - hipJointCenter, sideAxis));
         float rightHipHalfWidth = Mathf.Abs(Vector3.Dot(
@@ -3059,36 +3602,9 @@ public sealed class SquatWorkoutController : MonoBehaviour
             return;
         }
 
-        hips.localPosition = baseHipsLocalPosition;
-        hips.localRotation = baseHipsLocalRotation;
-        leftThigh.localPosition = baseLeftThighLocalPosition;
-        rightThigh.localPosition = baseRightThighLocalPosition;
-        leftFoot.localPosition = baseLeftFootLocalPosition;
-        rightFoot.localPosition = baseRightFootLocalPosition;
-        spine.localRotation = baseSpineLocalRotation;
-        chest.localRotation = baseChestLocalRotation;
-        leftShoulder.localRotation = baseLeftShoulderLocalRotation;
-        leftUpperArm.localRotation = baseLeftUpperArmLocalRotation;
-        leftForearm.localRotation = baseLeftForearmLocalRotation;
-        leftHand.localRotation = baseLeftHandLocalRotation;
-        rightShoulder.localRotation = baseRightShoulderLocalRotation;
-        rightUpperArm.localRotation = baseRightUpperArmLocalRotation;
-        rightForearm.localRotation = baseRightForearmLocalRotation;
-        rightHand.localRotation = baseRightHandLocalRotation;
-        leftThigh.rotation = baseLeftThighRotation;
-        rightThigh.rotation = baseRightThighRotation;
-        leftShin.rotation = baseLeftShinRotation;
-        rightShin.rotation = baseRightShinRotation;
-        leftFoot.rotation = baseLeftFootRotation;
-        rightFoot.rotation = baseRightFootRotation;
-        if (leftToe != null)
-        {
-            leftToe.localRotation = baseLeftToeLocalRotation;
-        }
-        if (rightToe != null)
-        {
-            rightToe.localRotation = baseRightToeLocalRotation;
-        }
+        // The authored animation controller owns the skeleton. Do not write
+        // captured limb transforms back into the enemy mesh on release; the
+        // next animator sample restores its own idle pose and root.
         currentHipDrop = 0f;
         currentKneeBend = 0f;
         currentKneeBendDifference = 0f;
@@ -3108,13 +3624,12 @@ public sealed class SquatWorkoutController : MonoBehaviour
         currentRightFootSoleError = float.PositiveInfinity;
         currentLeftFootGroundError = float.PositiveInfinity;
         currentRightFootGroundError = float.PositiveInfinity;
-        currentLeftFootRotationError = 0f;
-        currentRightFootRotationError = 0f;
-        hasPreviousLeftElbowPose = false;
-        hasPreviousRightElbowPose = false;
+        currentLeftFootRotationError = float.PositiveInfinity;
+        currentRightFootRotationError = float.PositiveInfinity;
+        currentBarBodyFollowError = float.PositiveInfinity;
+        currentBarDropFromStart = 0f;
         basePoseCaptured = false;
     }
-
     private void ResolveBones()
     {
         Transform[] bones = GetComponentsInChildren<Transform>(true);

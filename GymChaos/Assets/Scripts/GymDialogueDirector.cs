@@ -7,6 +7,7 @@ using UnityEngine.InputSystem;
 public sealed class GymDialogueDirector : MonoBehaviour
 {
     private const float TalkTargetRange = 3.2f;
+    private const float MarkTalkTargetRange = 5.5f;
     private const float DialogueTargetHeight = 1.45f;
     private const float DialogueLineOfSightPadding = 0.08f;
     private static GymDialogueDirector instance;
@@ -105,6 +106,14 @@ public sealed class GymDialogueDirector : MonoBehaviour
         return FindNearbyTalkTarget(player, position);
     }
 
+    public bool HasAuthoredOpeningForVerification(EnemyFighter fighter, string requiredText)
+    {
+        if (fighter == null || string.IsNullOrEmpty(requiredText)) return false;
+        DialogueDefinition authored = BuildDefinition(fighter);
+        return authored.nodes.Count > 0 && authored.nodes[0].text != null &&
+            authored.nodes[0].text.IndexOf(requiredText, System.StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     public EnemyFighter FindNearbyTalkTarget(PlayerMovement targetPlayer)
     {
         if (targetPlayer == null)
@@ -120,7 +129,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
     {
         var fighters = EnemyFighter.RegisteredFighters;
         EnemyFighter closest = null;
-        float bestDistance = TalkTargetRange * TalkTargetRange;
+        float bestDistance = float.PositiveInfinity;
         for (int i = 0; i < fighters.Count; i++)
         {
             EnemyFighter fighter = fighters[i];
@@ -136,13 +145,22 @@ public sealed class GymDialogueDirector : MonoBehaviour
                 continue;
             }
 
+            float targetRange = fighter.Identity == BodybuilderIdentity.Mark
+                ? MarkTalkTargetRange
+                : TalkTargetRange;
+
+            float distance = Vector3.ProjectOnPlane(fighter.transform.position - position, Vector3.up).sqrMagnitude;
+            if (distance > targetRange * targetRange || distance >= bestDistance)
+            {
+                continue;
+            }
+
             if (!HasDialogueLineOfSight(targetPlayer, fighter))
             {
                 continue;
             }
 
-            float distance = Vector3.ProjectOnPlane(fighter.transform.position - position, Vector3.up).sqrMagnitude;
-            if (distance < bestDistance)
+            if (distance <= targetRange * targetRange && distance < bestDistance)
             {
                 bestDistance = distance;
                 closest = fighter;
@@ -190,8 +208,34 @@ public sealed class GymDialogueDirector : MonoBehaviour
                 continue;
             }
 
+            if (fighter.Identity == BodybuilderIdentity.Mark &&
+                IsProteinStoreCounterOccluder(hit.transform))
+            {
+                continue;
+            }
+
             return hit.transform == fighter.transform ||
                 hit.transform.IsChildOf(fighter.transform);
+        }
+
+        // Mark's body collider sits below the counter-top ray; once the only
+        // hits are checkout props, nothing blocks the view across the counter.
+        return fighter.Identity == BodybuilderIdentity.Mark;
+    }
+
+    private static bool IsProteinStoreCounterOccluder(Transform hitTransform)
+    {
+        for (Transform current = hitTransform; current != null;
+             current = current.parent)
+        {
+            // Counter, terminal screen, and other checkout props all sit
+            // between the customer side and Mark.
+            if (current.name.StartsWith(
+                    "Checkout_",
+                    System.StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -463,6 +507,19 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
         switch (fighter.Identity)
         {
+            case BodybuilderIdentity.Mark:
+                result.nodes.Add(new DialogueNode(name,
+                    positiveRep
+                        ? "Welcome back. Protein.com is stocked, and I saved you a spot by the good shaker display."
+                        : "Hey. Welcome to protein.com. Take a look around, and ask if you need help finding a clean stack.")
+                    .AddChoice("What do you recommend?", 1, 2)
+                    .AddChoice("I am just browsing.", 1, 0)
+                    .AddChoice("I need a quick reset.", 1, 1));
+                result.nodes.Add(new DialogueNode(name,
+                    "Start with something you will actually use. Train first, then make the next choice with a clear head.")
+                    .AddChoice("Thanks, Mark.", -1, 1));
+                return result;
+
             case BodybuilderIdentity.Goku:
                 AddMemberConversation(
                     result,
@@ -644,6 +701,8 @@ public sealed class GymDialogueDirector : MonoBehaviour
             case BodybuilderIdentity.Arnold: return "Arnold";
             case BodybuilderIdentity.Zyzz: return "Zyzz";
             case BodybuilderIdentity.Goku: return "Goku";
+            case BodybuilderIdentity.Mark: return "Mark";
+            case BodybuilderIdentity.Davie: return "Davie";
             default: return fighter.Identity.ToString();
         }
     }

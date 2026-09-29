@@ -34,7 +34,9 @@ public class GymExerciseStation : MonoBehaviour
     // of the sleeve shown by the incline-bar reference. Keep the 20 kg pair
     // on the sleeve's inner edge and append selected plates outward from it.
     public const float DeadliftLoadingSleeveInset = 0.16f;
-    public const float DeadliftLoadedPlateCenter = 1.915f;
+    // Inner loading position on the sleeve, measured from the authored bar
+    // visual (its own 20 kg discs sat here before they were stripped).
+    public const float DeadliftLoadedPlateCenter = 1.45f;
     private const float DeadliftExtraPlateSpacing = 0.055f;
     private const float DeadliftLoadedPlateThickness = 0.12f;
     private const float DeadliftPlateClearance = 0.004f;
@@ -164,8 +166,8 @@ public class GymExerciseStation : MonoBehaviour
     public bool IsAvailableForPlayer => !IsOccupied;
     public EnemyFighter EnemyOccupant => enemyOccupant;
     // Treadmills use the same authored center/facing correction as the player
-    // exercise pose. That keeps an enemy's feet on the belt and its chest
-    // pointed at the machine screen instead of at the aisle.
+    // exercise pose. Keep the visitor root exactly on the authored belt top so
+    // its feet do not hover above the moving surface.
     public Vector3 EnemyPosition
     {
         get
@@ -173,7 +175,10 @@ public class GymExerciseStation : MonoBehaviour
             Vector3 position = playerPosition;
             if (IsTreadmill && treadmillBeltRenderer != null)
             {
-                position.y = treadmillBeltRenderer.bounds.max.y + 0.015f;
+                // The animator grounds the visible skeleton against the
+                // fighter root. Extra clearance here lifts both feet.
+                position.y = treadmillBeltRenderer.bounds.max.y -
+                    EnemyFighter.GroundedVisualClearance;
             }
             return position;
         }
@@ -185,6 +190,7 @@ public class GymExerciseStation : MonoBehaviour
     public Transform EquipmentRoot => equipmentRoot;
     public bool IsEnemySquatBarAttached => enemyOccupant != null && sceneBar != null &&
         sceneBar.IsChildOf(enemyOccupant.transform);
+    public bool IsEnemySquatReleaseActive => enemySquatReleaseOccupant != null;
     public bool HasAuthoredSquatBar => IsSquat && sceneBar != null &&
         equipmentRoot != null;
     public bool IsSquatBarOnRack => HasAuthoredSquatBar &&

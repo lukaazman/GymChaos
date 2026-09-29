@@ -270,6 +270,7 @@ public class PlayerMovement : MonoBehaviour
         IsDead = false;
         sprintEnergy = 100f;
         characterController = GetComponent<CharacterController>();
+        ApplyGameplayCharacterScale();
 
         if (playerCamera == null)
         {
@@ -314,6 +315,30 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+    private void ApplyGameplayCharacterScale()
+    {
+        float scale = EnemyFighter.GameplayScale;
+        defaultHeight *= scale;
+        crouchHeight *= scale;
+        characterController.height = defaultHeight;
+        characterController.radius *= scale;
+        characterController.center *= scale;
+        characterController.stepOffset *= scale;
+        characterController.skinWidth *= scale;
+
+        CapsuleCollider[] capsules = GetComponentsInChildren<CapsuleCollider>(true);
+        for (int index = 0; index < capsules.Length; index++)
+        {
+            CapsuleCollider capsule = capsules[index];
+            if (capsule == null || capsule.transform == transform)
+            {
+                continue;
+            }
+            capsule.height *= scale;
+            capsule.radius *= scale;
+            capsule.center *= scale;
+        }
+    }
     private void Update()
     {
         if (playerCamera == null)
@@ -1879,7 +1904,7 @@ public class PlayerMovement : MonoBehaviour
             hudMetricStyle);
         DrawHudText(
             new Rect(hudLeft, 77f, 300f, 20f),
-            $"MEMBERS  {EnemyFighter.ActiveCount:00}",
+            $"MEMBERS  {GymMemberRoster.GetDisplayCount(this):00}",
             hudHintStyle);
         if (heldItem != null)
         {

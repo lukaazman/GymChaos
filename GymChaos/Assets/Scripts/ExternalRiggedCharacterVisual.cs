@@ -11,12 +11,12 @@ using UnityEngine.Rendering;
 [DefaultExecutionOrder(1000)]
 public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 {
-    public const float StandardGameplayHeight = 2.30f;
-    public const float ArnoldGameplayHeight = 2.35f;
+    public const float StandardGameplayHeight = 2.30f * EnemyFighter.GameplayScale;
+    public const float ArnoldGameplayHeight = 2.35f * EnemyFighter.GameplayScale;
 
     public float GroundContactError => runtimeRenderer == null
         ? float.PositiveInfinity
-        : Mathf.Abs(GetGroundContactY() - (transform.position.y + 0.02f));
+        : Mathf.Abs(GetGroundContactY() - (transform.position.y + EnemyFighter.GroundedVisualClearance));
     public float GroundContactY => GetGroundContactY();
     public float GroundedFootToMeshOffset => groundedFootToMeshOffset;
     public bool HasGroundedFootReference => hasGroundedFootReference;
@@ -44,6 +44,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     private int groundingSettleFrames;
     private bool groundingSettled;
     private bool initialGroundingCorrectionApplied;
+    private bool workoutGroundingCorrected;
     private int heightCorrectionFrames;
     private bool dynamicHeightCorrection;
     private bool heightCorrectionLogged;
@@ -57,6 +58,9 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             { BodybuilderIdentity.Ronnie, "Characters/Enemies/ronnie_authored" },
             { BodybuilderIdentity.JayCutler, "Characters/Enemies/jaycutler_authored" },
             { BodybuilderIdentity.Goku, "Characters/Enemies/goku_authored" },
+            { BodybuilderIdentity.Mark, "Characters/Enemies/mark_authored" },
+            { BodybuilderIdentity.Davie, "Characters/Enemies/davie_authored" },
+            { BodybuilderIdentity.Policeman, "Characters/Enemies/policeman_authored" },
             { BodybuilderIdentity.Manwithsuit1, "Characters/Reception/manwithsuit1_mixamo_rigged" }
         };
 
@@ -97,7 +101,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return false;
         }
 
-        renderer.updateWhenOffscreen = true;
+        renderer.updateWhenOffscreen = false;
         FitToGameplayHeight(modelRoot.transform, renderer, identity);
         PreserveImportedTextures(modelRoot, identity);
 
@@ -238,6 +242,19 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return;
         }
 
+        if (!workoutPoseLocked)
+        {
+            workoutGroundingCorrected = false;
+        }
+        else if (!workoutGroundingCorrected)
+        {
+            // The authored squat clip is sampled before the controller's
+            // LateUpdate. Correct its first posed AABB once, then leave the
+            // child root untouched for the rest of the rep.
+            RegroundAfterRootSnap();
+            workoutGroundingCorrected = true;
+        }
+
         if (!workoutPoseLocked && heightCorrectionFrames > 0)
         {
             heightCorrectionFrames--;
@@ -275,6 +292,30 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             RefreshRuntimeFaceCensor();
             runtimeFaceCalibrationSettled = true;
         }
+    }
+
+    public void RegroundAfterRootSnap()
+    {
+        if (runtimeModelRoot == null || runtimeRenderer == null ||
+            runtimeRenderer.bounds.size.y < 0.1f)
+        {
+            return;
+        }
+
+        Physics.SyncTransforms();
+        float floorY = transform.position.y + EnemyFighter.GroundedVisualClearance;
+        float offset = Mathf.Clamp(
+            floorY - runtimeRenderer.bounds.min.y, -1.5f, 1.5f);
+        if (Mathf.Abs(offset) < 0.005f)
+        {
+            return;
+        }
+
+        // Root snaps are discrete visitor/vehicle handoffs. Correct the
+        // imported child once at that boundary, then leave authored
+        // locomotion/squat motion untouched between handoffs.
+        runtimeModelRoot.position += Vector3.up * offset;
+        Physics.SyncTransforms();
     }
 
     public bool RefreshFaceCensorForCurrentPose()
@@ -324,7 +365,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // back up on every stride would recreate the walking shake.
         if (groundingSettled)
         {
-            float settledFloorY = transform.position.y + 0.02f;
+            float settledFloorY = transform.position.y + EnemyFighter.GroundedVisualClearance;
             float settledFloorOffset = settledFloorY - GetGroundContactY();
             if (settledFloorOffset < -0.12f)
             {
@@ -337,7 +378,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return;
         }
 
-        float floorY = transform.position.y + 0.02f;
+        float floorY = transform.position.y + EnemyFighter.GroundedVisualClearance;
         float floorOffset = floorY - GetGroundContactY();
         const float correctionThreshold = 0.18f;
         if (!initialGroundingCorrectionApplied &&
@@ -506,7 +547,10 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             Physics.SyncTransforms();
             scaledBounds = CalculateBakedWorldBounds(renderer);
         }
-        float floorOffset = 0.02f - scaledBounds.min.y;
+        float supportY = modelRoot.parent != null
+            ? modelRoot.parent.position.y + EnemyFighter.GroundedVisualClearance
+            : EnemyFighter.GroundedVisualClearance;
+        float floorOffset = supportY - scaledBounds.min.y;
         modelRoot.position += Vector3.up * floorOffset;
         Physics.SyncTransforms();
     }
@@ -523,7 +567,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     {
         if (identity == BodybuilderIdentity.Manwithsuit1)
         {
-            return 1.82f * 1.125f;
+            return 1.82f * 1.125f * EnemyFighter.GameplayScale;
         }
         return identity == BodybuilderIdentity.Arnold
             ? ArnoldGameplayHeight
@@ -587,7 +631,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             }
             renderer.sharedMaterials = materials;
             renderer.enabled = true;
-            renderer.updateWhenOffscreen = true;
+            renderer.updateWhenOffscreen = false;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = false;
         }

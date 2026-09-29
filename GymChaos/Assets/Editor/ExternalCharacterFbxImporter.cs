@@ -57,11 +57,12 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
         for (int i = 0; i < clips.Length; i++)
         {
             bool run = clips[i].name.IndexOf("run", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool walk = clips[i].name.IndexOf("walk", StringComparison.OrdinalIgnoreCase) >= 0;
             bool idle = clips[i].name.IndexOf("idle", StringComparison.OrdinalIgnoreCase) >= 0;
             bool fly = clips[i].name.IndexOf("fly", StringComparison.OrdinalIgnoreCase) >= 0;
             bool celebration = clips[i].name.IndexOf("celebration", StringComparison.OrdinalIgnoreCase) >= 0;
-            clips[i].loopTime = run || idle || fly || celebration;
-            clips[i].loopPose = run || idle || fly || celebration;
+            clips[i].loopTime = run || walk || idle || fly || celebration;
+            clips[i].loopPose = run || walk || idle || fly || celebration;
         }
         if (clips.Length > 0)
         {

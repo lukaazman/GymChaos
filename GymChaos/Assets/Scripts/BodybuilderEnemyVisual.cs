@@ -14,7 +14,10 @@ public enum BodybuilderIdentity
     Ronnie,
     Manwithsuit1,
     JayCutler,
-    Goku
+    Goku,
+    Mark,
+    Davie,
+    Policeman
 }
 
 public sealed class BodybuilderEnemyVisual : MonoBehaviour
@@ -924,8 +927,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
         float baseMeshHeight = identity == BodybuilderIdentity.Arnold ? 1.88f : 1.84f;
         float targetMeshHeight = identity == BodybuilderIdentity.Manwithsuit1
-            ? 1.82f * 1.125f
-            : baseMeshHeight * 1.25f;
+            ? 1.82f * 1.125f * EnemyFighter.GameplayScale
+            : baseMeshHeight * 1.25f * EnemyFighter.GameplayScale;
         float sourceHeight = Mathf.Max(0.01f, sourceMaxY - sourceMinY);
         float scale = targetMeshHeight / sourceHeight;
         float modelBottom = 0f;

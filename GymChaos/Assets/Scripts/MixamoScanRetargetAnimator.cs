@@ -11,6 +11,8 @@ using UnityEngine;
 [DefaultExecutionOrder(900)]
 public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 {
+    public const string CanonicalSquatSourcePath =
+        "Assets/BodyBuilders/enemies/anims/squat.fbx";
     private const float PunchDuration = 0.72f;
     private const float AuthoredTransitionDuration = 0.12f;
 
@@ -20,6 +22,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         Idle,
         Running,
         Punching,
+        GunDrawing,
+        GunShooting,
         Flying,
         Celebration,
         Downed
@@ -38,6 +42,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private AnimationClip authoredPunchClip;
     private AnimationClip authoredFlyingClip;
     private AnimationClip authoredSquatClip;
+    private AnimationClip authoredGunDrawingClip;
+    private AnimationClip authoredGunShootingClip;
     private AnimationClip[] idleVariants = new AnimationClip[0];
     private AnimationClip[] celebrationVariants = new AnimationClip[0];
     private readonly Dictionary<Transform, Quaternion> restRotations =
@@ -49,9 +55,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private Vector3 modelBaseLocalPosition;
     private Quaternion modelBaseLocalRotation;
     private Vector3 modelBaseLocalScale;
-    private float groundingOffsetY;
-    private float groundingOffsetVelocity;
-    private bool groundingOffsetInitialized;
+    private EnemyFighter owningFighter;
+    private int treadmillGroundingSamples;
+    private float treadmillMinimumRootLocalY;
+    private float treadmillMaximumRootLocalY;
     private bool moving;
     private bool useRunningClip;
     private bool flying;
@@ -61,6 +68,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private float idleTime;
     private float flightTime;
     private float attackTime = -1f;
+    private AnimationClip gunActionClip;
+    private float gunActionTime = -1f;
+    private MotionState gunActionState;
     private bool punchContactSent;
     private bool celebrating;
     private bool workoutPoseLocked;
@@ -87,6 +97,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private AnimationClip lastSampledClip;
     private string lastSampledBranch;
     private bool hasSampledPose;
+    private int ExpectedAuthoredClipCount =>
+        configuredIdentity == BodybuilderIdentity.Mark ? 3 :
+        configuredIdentity == BodybuilderIdentity.Policeman ? 7 : 11;
 
     public bool HasRunClip => runClip != null;
     public bool HasWalkingClip => walkingClip != null;
@@ -102,7 +115,14 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public bool HasAuthoredPunchClip => authoredPunchClip != null;
     public bool HasAuthoredFlyingClip => authoredFlyingClip != null;
     public bool HasAuthoredSquatClip => authoredSquatClip != null;
-    public bool HasAuthoredAnimationSetup => authoredLoadedClipCount == 11;
+    public AnimationClip AuthoredSquatClipForVerification => authoredSquatClip;
+    public bool HasGunDrawingClip => authoredGunDrawingClip != null;
+    public bool HasGunShootingClip => authoredGunShootingClip != null;
+    public bool IsGunActionPlaying => gunActionTime >= 0f;
+    public bool IsGunActionComplete => !IsGunActionPlaying;
+    public bool HasAuthoredAnimationSetup =>
+        authoredLoadedClipCount == ExpectedAuthoredClipCount;
+    public Transform RuntimeModelRoot => modelRoot;
     public int AuthoredIdleClipCount => CountAvailable(idleVariants);
     public int AuthoredCelebrationClipCount => CountAvailable(celebrationVariants);
     public string AuthoredAnimationResourcePath => ResourcePath(configuredIdentity);
@@ -114,7 +134,51 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public MotionState LastMotionState => lastMotionState;
     public bool IsWorkoutPoseLocked => workoutPoseLocked;
     public bool IsUsingRunningClip => useRunningClip;
+    public bool HasGroundedSkeletonRoot => rig != null && rig.Root != null;
+    public int TreadmillGroundingSamples => treadmillGroundingSamples;
+    public float TreadmillRootBounce => treadmillGroundingSamples > 0
+        ? treadmillMaximumRootLocalY - treadmillMinimumRootLocalY
+        : float.PositiveInfinity;
+    public float GroundedRootVerticalDrift
+    {
+        get
+        {
+            if (rig == null || rig.Root == null || rig.Root.parent == null ||
+                !restPositions.TryGetValue(
+                    rig.Root, out Vector3 restRootLocalPosition))
+            {
+                return float.PositiveInfinity;
+            }
 
+            Vector3 restRootWorldPosition =
+                rig.Root.parent.TransformPoint(restRootLocalPosition);
+            return Mathf.Abs(Vector3.Dot(
+                rig.Root.position - restRootWorldPosition, Vector3.up));
+        }
+    }
+
+    public void ApplyGroundedRootCorrection(Vector3 worldUp, float worldDelta)
+    {
+        if (rig == null || rig.Root == null ||
+            worldUp.sqrMagnitude < 0.0001f ||
+            Mathf.Abs(worldDelta) < 0.00001f)
+        {
+            return;
+        }
+
+        ApplyRootWorldCorrection(worldUp.normalized * worldDelta);
+    }
+
+    public void ApplyRootWorldCorrection(Vector3 worldDelta)
+    {
+        if (rig == null || rig.Root == null ||
+            worldDelta.sqrMagnitude < 0.00000001f)
+        {
+            return;
+        }
+
+        rig.Root.position += worldDelta;
+    }
     public bool Configure(
         BodybuilderIdentity identity, BodybuilderEnemyVisual.Rig bodyRig)
     {
@@ -130,21 +194,36 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         variantSeed = StableVariantSeed(identity);
         rig = bodyRig;
         modelRoot = authoredRoot != null ? authoredRoot : ResolveModelRoot(bodyRig);
+        owningFighter = GetComponentInParent<EnemyFighter>();
         lastAnimationMarker = null;
         hasAnimationMarker = false;
         lastAnimationMarkerClip = null;
         lastAnimationMarkerBranch = null;
 
         string resourcePath = ResourcePath(identity);
-        authoredWalkingClip = LoadAuthoredClip(resourcePath, "walking");
+        bool policeSet = identity == BodybuilderIdentity.Policeman;
+        // The policeman has a deliberately small authored set: running,
+        // punch_combo, celebration variants and the two firearm actions.
+        // Do not load the ordinary enemy-only walking/flying/squat/idles for
+        // this role; running is used as its locomotion fallback.
+        authoredWalkingClip = policeSet
+            ? null : LoadAuthoredClip(resourcePath, "walking");
         authoredRunningClip = LoadAuthoredClip(resourcePath, "running");
         authoredPunchClip = LoadAuthoredClip(resourcePath, "punch_combo");
-        authoredFlyingClip = LoadAuthoredClip(resourcePath, "flying");
-        authoredSquatClip = LoadAuthoredClip(resourcePath, "squat");
-        idleVariants = CompactVariants(
-            LoadAuthoredClip(resourcePath, "idle1"),
-            LoadAuthoredClip(resourcePath, "idle2"),
-            LoadAuthoredClip(resourcePath, "idle3"));
+        authoredFlyingClip = policeSet
+            ? null : LoadAuthoredClip(resourcePath, "flying");
+        authoredSquatClip = policeSet
+            ? null : LoadAuthoredClip(resourcePath, "squat");
+        authoredGunDrawingClip = policeSet
+            ? LoadAuthoredClip(resourcePath, "gun_drawing") : null;
+        authoredGunShootingClip = policeSet
+            ? LoadAuthoredClip(resourcePath, "gun_shooting") : null;
+        idleVariants = policeSet
+            ? new AnimationClip[0]
+            : CompactVariants(
+                LoadAuthoredClip(resourcePath, "idle1"),
+                LoadAuthoredClip(resourcePath, "idle2"),
+                LoadAuthoredClip(resourcePath, "idle3"));
         celebrationVariants = CompactVariants(
             LoadAuthoredClip(resourcePath, "celebration1"),
             LoadAuthoredClip(resourcePath, "celebration2"),
@@ -152,7 +231,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         authoredLoadedClipNames = BuildAuthoredClipNameList();
         authoredLoadedClipCount = CountLoadedAuthoredClips();
 
-        walkingClip = authoredWalkingClip;
+        walkingClip = policeSet ? authoredRunningClip : authoredWalkingClip;
         runClip = authoredRunningClip;
         punchClip = authoredPunchClip;
         flyClip = authoredFlyingClip;
@@ -185,7 +264,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             Debug.LogError(
                 $"GYMCHAOS_ENEMY_AUTHORED_CLIP_SETUP_FAILED identity={identity} " +
                 $"modelRoot={modelRoot != null} bodyRig={bodyRig != null} " +
-                $"loadedCount={authoredLoadedClipCount}/11 " +
+                $"loadedCount={authoredLoadedClipCount}/{ExpectedAuthoredClipCount} " +
                 $"requiredPath=Assets/Resources/{resourcePath}.fbx", this);
             return false;
         }
@@ -207,6 +286,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             $"idle={ClipName(idleClip)} walking={ClipName(walkingClip)} " +
             $"run={ClipName(runClip)} punch={ClipName(punchClip)} " +
             $"flight={ClipName(flyClip)} squat={ClipName(authoredSquatClip)} " +
+            $"gunDrawing={ClipName(authoredGunDrawingClip)} " +
+            $"gunShooting={ClipName(authoredGunShootingClip)} " +
             $"celebration={ClipName(celebrationClip)}",
             this);
         return true;
@@ -221,9 +302,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         modelBaseLocalPosition = modelRoot.localPosition;
         modelBaseLocalRotation = modelRoot.localRotation;
         modelBaseLocalScale = modelRoot.localScale;
-        groundingOffsetY = 0f;
-        groundingOffsetVelocity = 0f;
-        groundingOffsetInitialized = false;
+        if (configured && idleClip != null)
+        {
+            SampleDirect(idleClip, 0f);
+        }
     }
 
     public void SetConversationActive(bool active)
@@ -330,6 +412,34 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
     }
 
+    public bool BeginGunDrawing()
+    {
+        return BeginGunAction(authoredGunDrawingClip, MotionState.GunDrawing);
+    }
+
+    public bool BeginGunShooting()
+    {
+        return BeginGunAction(authoredGunShootingClip, MotionState.GunShooting);
+    }
+
+    private bool BeginGunAction(AnimationClip clip, MotionState state)
+    {
+        if (!configured || configuredIdentity != BodybuilderIdentity.Policeman || clip == null)
+        {
+            return false;
+        }
+
+        moving = false;
+        flying = false;
+        celebrating = false;
+        attackTime = -1f;
+        punchContactSent = false;
+        gunActionClip = clip;
+        gunActionState = state;
+        gunActionTime = 0f;
+        lastMotionState = state;
+        return true;
+    }
     public void CancelPunch()
     {
         attackTime = -1f;
@@ -401,6 +511,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         downed = isDowned;
         if (downed)
         {
+            gunActionTime = -1f;
+            gunActionClip = null;
+        }
+        if (downed)
+        {
             moving = false;
             flying = false;
             celebrating = false;
@@ -414,6 +529,25 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     }
 
 #if UNITY_EDITOR
+    // Holds a gun clip at a fixed phase; pair with Time.timeScale = 0.
+    public bool HoldGunActionForVerification(bool drawing, float normalizedTime)
+    {
+        AnimationClip clip = drawing ? authoredGunDrawingClip : authoredGunShootingClip;
+        if (clip == null)
+        {
+            return false;
+        }
+        gunActionClip = clip;
+        gunActionState = drawing ? MotionState.GunDrawing : MotionState.GunShooting;
+        gunActionTime = Mathf.Clamp01(normalizedTime) * Mathf.Max(0.01f, clip.length - 0.001f);
+        // A frozen clock never advances the blend, so show the clip directly.
+        poseTransition.Cancel();
+        hasSampledPose = true;
+        lastSampledClip = clip;
+        lastSampledBranch = drawing ? "gun-drawing" : "gun-shooting";
+        return true;
+    }
+
     public bool SampleAuthoredClipForVerification(
         string clipStem, float normalizedTime, out string details)
     {
@@ -630,6 +764,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         celebrating = false;
         downed = false;
         attackTime = -1f;
+        gunActionTime = -1f;
+        gunActionClip = null;
         punchContactSent = false;
         idleTime = 0f;
         runTime = 0f;
@@ -681,6 +817,25 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             return;
         }
 
+        if (gunActionTime >= 0f)
+        {
+            lastMotionState = gunActionState;
+            string branch = gunActionState == MotionState.GunDrawing
+                ? "gun-drawing" : "gun-shooting";
+            PreparePoseTransition(gunActionClip, branch);
+            float duration = Mathf.Max(
+                0.01f, gunActionClip != null ? gunActionClip.length - 0.001f : 0.01f);
+            gunActionTime += Time.deltaTime;
+            EmitAnimationMarker(gunActionState, gunActionClip, branch);
+            SampleDirectNormalized(
+                gunActionClip, Mathf.Clamp01(gunActionTime / duration));
+            if (gunActionTime >= duration)
+            {
+                gunActionTime = -1f;
+                gunActionClip = null;
+            }
+            return;
+        }
         if (downed)
         {
             PreparePoseTransition(null, "downed");
@@ -730,14 +885,59 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             EmitAnimationMarker(MotionState.Running, locomotion,
                 useRunningClip ? "running" : "walking");
             SampleDirectLoop(locomotion, runTime);
+            RecordTreadmillWalkingGrounding();
             return;
         }
 
         lastMotionState = MotionState.Idle;
-        PreparePoseTransition(idleClip, "idle");
         idleTime += Time.deltaTime;
+        if (idleClip != null &&
+            idleTime >= Mathf.Max(0.01f, idleClip.length - 0.001f))
+        {
+            // Let idle-only workers and neutral enemies move through their
+            // authored idle set without needing a locomotion transition.
+            // SelectNextIdleVariant avoids immediately repeating the same
+            // clip when two or more variants are available.
+            SelectNextIdleVariant();
+        }
+        PreparePoseTransition(idleClip, "idle");
         EmitAnimationMarker(MotionState.Idle, idleClip, "idle");
         SampleDirectLoop(idleClip, idleTime);
+    }
+
+    private void RecordTreadmillWalkingGrounding()
+    {
+        if (owningFighter == null)
+        {
+            owningFighter = GetComponentInParent<EnemyFighter>();
+        }
+        GymExerciseStation station = owningFighter != null
+            ? owningFighter.CurrentTreadmill
+            : null;
+        bool settledTreadmill = station != null &&
+            rig != null && rig.Root != null &&
+            Mathf.Abs(owningFighter.transform.position.y - station.EnemyPosition.y) <= 0.02f;
+        if (!settledTreadmill)
+        {
+            treadmillGroundingSamples = 0;
+            treadmillMinimumRootLocalY = float.PositiveInfinity;
+            treadmillMaximumRootLocalY = float.NegativeInfinity;
+            return;
+        }
+
+        if (modelRoot == null)
+        {
+            return;
+        }
+
+        float rootLocalY = owningFighter.transform
+            .InverseTransformPoint(rig.Root.position).y;
+
+        treadmillMinimumRootLocalY = Mathf.Min(
+            treadmillMinimumRootLocalY, rootLocalY);
+        treadmillMaximumRootLocalY = Mathf.Max(
+            treadmillMaximumRootLocalY, rootLocalY);
+        treadmillGroundingSamples++;
     }
 
     private void PreparePoseTransition(AnimationClip nextClip, string branch)
@@ -754,6 +954,20 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         if (ReferenceEquals(lastSampledClip, nextClip) &&
             string.Equals(lastSampledBranch, branch, StringComparison.Ordinal))
         {
+            return;
+        }
+
+        // The authored squat is the grounded contact source itself. Blending
+        // local positions from a locomotion clip into it can import a source
+        // rig root offset for one frame (some scans carry a large walking
+        // translation channel). Start the squat clip directly so the solver
+        // sees a coherent authored phase-zero pose; limb scales and clip data
+        // remain untouched.
+        if (ReferenceEquals(nextClip, authoredSquatClip))
+        {
+            poseTransition.Cancel();
+            lastSampledClip = nextClip;
+            lastSampledBranch = branch;
             return;
         }
 
@@ -843,64 +1057,44 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         // each character's own imported rest scales so those bake artifacts
         // cannot stretch fingers or change the visible body height.
         RestoreAnimatedScales();
+        // The firearm clips were exported from the policeman's source rig as
+        // separate actions. Their translation channels contain source-armature
+        // offsets (including a large vertical offset) rather than meaningful
+        // gameplay root motion. Keep their authored rotations, but restore the
+        // policeman bind translations so the hand and attached Glock stay on
+        // the grounded actor.
+        bool policeFirearmClip =
+            configuredIdentity == BodybuilderIdentity.Policeman &&
+            (ReferenceEquals(clip, authoredGunDrawingClip) ||
+             ReferenceEquals(clip, authoredGunShootingClip));
+        if (policeFirearmClip)
+        {
+            foreach (KeyValuePair<Transform, Vector3> pair in restPositions)
+            {
+                if (pair.Key != null)
+                {
+                    pair.Key.localPosition = pair.Value;
+                }
+            }
+        }
+
         // Root motion belongs to the EnemyFighter/Rigidbody, never to the
-        // imported child model. Keep the full authored squat root translation
-        // because squat.fbx is one complete standing -> squat -> standing rep;
-        // strip root translation from locomotion/attack/idle clips so those
-        // clips cannot change the character's world height or floor contact.
-        if (!ReferenceEquals(clip, authoredSquatClip) && rig != null &&
+        // imported child model. The squat clip is a pose sequence, not a
+        // locomotion path: keep its skeleton root on the authored grounded
+        // bind position so per-foot IK has one stable support plane. Flying
+        // remains the only intentional airborne root-motion exception.
+        bool preserveAuthoredRootMotion =
+            ReferenceEquals(clip, flyClip) || ReferenceEquals(clip, authoredSquatClip);
+        if (!preserveAuthoredRootMotion && rig != null &&
             rig.Root != null && restPositions.TryGetValue(
                 rig.Root, out Vector3 rootPosition))
         {
-            // Horizontal motion belongs to EnemyFighter/Rigidbody. Keep only
-            // the authored vertical pelvis curve: it is smooth clip data and
-            // keeps the planted foot on the floor without moving the entire
-            // FBX model root from animated renderer bounds every frame.
-            Vector3 sampledRootPosition = rig.Root.localPosition;
-            rig.Root.localPosition = new Vector3(
-                rootPosition.x, sampledRootPosition.y, rootPosition.z);
+            rig.Root.localPosition = rootPosition;
         }
         modelRoot.localPosition = modelBaseLocalPosition;
         modelRoot.localRotation = modelBaseLocalRotation;
         modelRoot.localScale = modelBaseLocalScale;
-        GroundSkeletonSmoothly();
         return true;
-    }
-
-    private void GroundSkeletonSmoothly()
-    {
-        if (modelRoot == null || rig == null || rig.Root == null || flying || downed)
-        {
-            return;
-        }
-        Renderer[] renderers = modelRoot.GetComponentsInChildren<Renderer>(false);
-        if (renderers.Length == 0)
-        {
-            return;
-        }
-        Bounds bounds = renderers[0].bounds;
-        for (int i = 1; i < renderers.Length; i++)
-        {
-            bounds.Encapsulate(renderers[i].bounds);
-        }
-        float targetOffset = Mathf.Clamp(
-            transform.position.y - bounds.min.y, -0.45f, 0.45f);
-        if (!groundingOffsetInitialized)
-        {
-            groundingOffsetY = targetOffset;
-            groundingOffsetVelocity = 0f;
-            groundingOffsetInitialized = true;
-        }
-        else
-        {
-            groundingOffsetY = Mathf.SmoothDamp(
-                groundingOffsetY, targetOffset, ref groundingOffsetVelocity,
-                0.085f, 3.5f, Mathf.Max(Time.deltaTime, 1f / 120f));
-        }
-        // Move the authored skeleton, never the fitted FBX/model root. The
-        // correction therefore follows a damped continuous curve while the
-        // Rigidbody and visible model transform remain perfectly stable.
-        rig.Root.position += Vector3.up * groundingOffsetY;
     }
 
     private void RestoreAnimatedScales()
@@ -924,7 +1118,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
         float duration = Mathf.Max(0.01f, clip.length - 0.001f);
         SampleDirect(clip, elapsed % duration);
-        poseTransition.Apply(Time.deltaTime);
+        ApplyPoseTransitionPreservingGroundedRoot(clip);
     }
 
     private void SampleDirectNormalized(AnimationClip clip, float normalized)
@@ -937,7 +1131,28 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
         float duration = Mathf.Max(0.01f, clip.length - 0.001f);
         SampleDirect(clip, Mathf.Clamp01(normalized) * duration);
+        ApplyPoseTransitionPreservingGroundedRoot(clip);
+    }
+
+    private void ApplyPoseTransitionPreservingGroundedRoot(AnimationClip clip)
+    {
+        bool preserveSampledRoot = rig != null && rig.Root != null &&
+            !ReferenceEquals(clip, flyClip);
+        Vector3 sampledRootPosition = preserveSampledRoot
+            ? rig.Root.position
+            : Vector3.zero;
+
         poseTransition.Apply(Time.deltaTime);
+
+        if (preserveSampledRoot)
+        {
+            // AuthoredPoseTransition blends every child localPosition, which
+            // includes this skeleton root. Let it blend the body pose, then
+            // keep the normalized sampled root authoritative so a previous
+            // clip's incompatible export origin cannot lift the model or
+            // erase a squat floor correction between sampled frames.
+            rig.Root.position = sampledRootPosition;
+        }
     }
 
     private static Transform ResolveModelRoot(BodybuilderEnemyVisual.Rig bodyRig)
@@ -1028,6 +1243,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         if (string.Equals(clipStem, "punch_combo", StringComparison.OrdinalIgnoreCase)) return authoredPunchClip;
         if (string.Equals(clipStem, "flying", StringComparison.OrdinalIgnoreCase)) return authoredFlyingClip;
         if (string.Equals(clipStem, "squat", StringComparison.OrdinalIgnoreCase)) return authoredSquatClip;
+        if (string.Equals(clipStem, "gun_drawing", StringComparison.OrdinalIgnoreCase)) return authoredGunDrawingClip;
+        if (string.Equals(clipStem, "gun_shooting", StringComparison.OrdinalIgnoreCase)) return authoredGunShootingClip;
         if (string.Equals(clipStem, "idle1", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 0);
         if (string.Equals(clipStem, "idle2", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 1);
         if (string.Equals(clipStem, "idle3", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 2);
@@ -1087,6 +1304,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             authoredFlyingClip,
             authoredSquatClip
         };
+        if (configuredIdentity == BodybuilderIdentity.Policeman)
+        {
+            clips.Add(authoredGunDrawingClip);
+            clips.Add(authoredGunShootingClip);
+        }
         clips.AddRange(idleVariants);
         clips.AddRange(celebrationVariants);
         return clips.ToArray();
@@ -1218,6 +1440,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             case BodybuilderIdentity.Ronnie: return "Characters/Enemies/ronnie_authored";
             case BodybuilderIdentity.JayCutler: return "Characters/Enemies/jaycutler_authored";
             case BodybuilderIdentity.Goku: return "Characters/Enemies/goku_authored";
+            case BodybuilderIdentity.Mark: return "Characters/Enemies/mark_authored";
+            case BodybuilderIdentity.Davie: return "Characters/Enemies/davie_authored";
+            case BodybuilderIdentity.Policeman: return "Characters/Enemies/policeman_authored";
             default: return string.Empty;
         }
     }
