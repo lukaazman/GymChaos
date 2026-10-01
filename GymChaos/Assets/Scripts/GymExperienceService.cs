@@ -59,14 +59,14 @@ public sealed class GymExperienceService : MonoBehaviour
     private Quaternion lockerMenuPreviousCameraRotation;
     private bool timeScaleChanged;
     private bool initialized;
+    private bool sessionBacked;
     private float temporaryFatigue;
 
-    private GUIStyle lockerTitleStyle;
-    private GUIStyle lockerSectionStyle;
-    private GUIStyle lockerBodyStyle;
-    private GUIStyle lockerButtonStyle;
-    private GUIStyle lockerSelectedButtonStyle;
-    private GUIStyle lockerFooterStyle;
+    /// <summary>Raised when level, experience, stats, reputation or goals change.</summary>
+    public event Action ProgressionChanged;
+    /// <summary>Short gameplay notices: text, seconds, priority (0 info, 1 reward, 2 critical).</summary>
+    public event Action<string, float, int> NoticeRaised;
+
     private GUIStyle progressHudShadowStyle;
     private GUIStyle progressHudTitleStyle;
     private GUIStyle progressHudBodyStyle;
@@ -121,6 +121,18 @@ public sealed class GymExperienceService : MonoBehaviour
 
         initialized = true;
         player = targetPlayer;
+        sessionBacked = GymSessionService.SessionMode;
+        if (sessionBacked)
+        {
+            // Character slots own progression. Stay neutral until the menu
+            // applies a confirmed new or loaded character.
+            state = new GymProgressionState();
+            state.Normalize();
+            EnsureCosmetics();
+            Debug.Log("GYMCHAOS_PROGRESSION_READY source=session-pending", this);
+            return;
+        }
+
         bool hasPreviousSave = PlayerPrefs.HasKey(SaveKey);
         state = LoadState();
         if (PlayerPrefs.GetInt(InitialReputationResetKey, 0) == 0)
@@ -141,6 +153,66 @@ public sealed class GymExperienceService : MonoBehaviour
             $"xp={state.experience}/{GetExperienceToNextLevel(state.level)} " +
             $"day={state.gymDay} reputation={state.reputation}",
             this);
+    }
+
+    /// <summary>
+    /// Replaces progression with a character save. Loading never awards
+    /// experience or replays completion events; a loaded character starts a
+    /// new gym day exactly like the previous launch-per-day behaviour.
+    /// </summary>
+    public void ApplySession(GymProgressionState saved, string[] savedOneShotRewards, bool startNewDay)
+    {
+        state = saved != null
+            ? JsonUtility.FromJson<GymProgressionState>(JsonUtility.ToJson(saved))
+            : new GymProgressionState();
+        state.Normalize();
+        if (startNewDay)
+        {
+            state.gymDay = Mathf.Max(1, state.gymDay + 1);
+            state.lockerPrepCompleted = false;
+            state.dailyProgress = new[] { 0, 0, 0 };
+            state.dailyCompleted = new[] { false, false, false };
+        }
+
+        oneShotRewards.Clear();
+        if (savedOneShotRewards != null)
+        {
+            for (int i = 0; i < savedOneShotRewards.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(savedOneShotRewards[i]))
+                {
+                    oneShotRewards.Add(savedOneShotRewards[i]);
+                }
+            }
+        }
+        recentRewards.Clear();
+        feedbackText = null;
+        statImpactText = null;
+        temporaryFatigue = 0f;
+        levelChoiceVisible = state.skillPoints > 0;
+        levelChoiceWasCursorCaptured = true;
+        levelChoiceCursorReleased = false;
+        sessionBacked = true;
+        EnsureCosmetics();
+        ProgressionChanged?.Invoke();
+        Debug.Log(
+            $"GYMCHAOS_PROGRESSION_READY source=session level={state.level} " +
+            $"xp={state.experience}/{GetExperienceToNextLevel(state.level)} " +
+            $"day={state.gymDay} reputation={state.reputation}",
+            this);
+    }
+
+#if UNITY_EDITOR
+    public int NoticeListenerCountForVerification =>
+        NoticeRaised != null ? NoticeRaised.GetInvocationList().Length : 0;
+#endif
+
+    public string[] CaptureOneShotRewards()
+    {
+        string[] captured = new string[oneShotRewards.Count];
+        oneShotRewards.CopyTo(captured);
+        Array.Sort(captured, StringComparer.Ordinal);
+        return captured;
     }
 
     private GymProgressionState LoadState()
@@ -247,21 +319,36 @@ public sealed class GymExperienceService : MonoBehaviour
         return 1f + GetStatRank(GymStat.Strength) * 0.042f;
     }
 
+    // Class modifiers are derived here on every read from the active class
+    // definition; nothing multiplied is ever stored, so reloads cannot stack.
     public float GetSprintMultiplier()
     {
-        return HasEnduranceUltimate
+        float progression = HasEnduranceUltimate
             ? 1.72f
             : 1f + GetStatRank(GymStat.Endurance) * 0.055f;
+        return progression * GymSessionService.ActiveClass.sprintSpeed;
     }
 
     public float GetSprintCapacity()
     {
-        return 100f + GetStatRank(GymStat.Endurance) * 8f;
+        return (100f + GetStatRank(GymStat.Endurance) * 8f) *
+            GymSessionService.ActiveClass.staminaCapacity;
     }
 
     public float GetSprintDrainPerSecond()
     {
-        return Mathf.Max(7f, 18f - GetStatRank(GymStat.Endurance) * 0.75f);
+        return Mathf.Max(7f, 18f - GetStatRank(GymStat.Endurance) * 0.75f) *
+            GymSessionService.ActiveClass.sprintCost;
+    }
+
+    /// <summary>
+    /// Class performance for one exercise, by its single primary category.
+    /// Strength stations divide their timing difficulty by it; cardio
+    /// machines scale their sustainable top pace with it.
+    /// </summary>
+    public float GetExercisePerformance(GymExerciseType exerciseType)
+    {
+        return GymSessionService.ActiveClass.Performance(GymClassCatalog.Category(exerciseType));
     }
 
     public float GetSprintRecoveryPerSecond()
@@ -385,7 +472,20 @@ public sealed class GymExperienceService : MonoBehaviour
             ShowFeedback($"Level {state.level}. Choose a stat point when the room is clear.", 5f);
         }
 
-        nextSaveTime = Time.unscaledTime + 1.5f;
+        if (sessionBacked)
+        {
+            // Routine experience rides along with the timed autosave; only a
+            // level-up or a one-time reward is worth an immediate request.
+            GymSessionService.MarkDirty();
+            if (leveled || (sourceKey != null && sourceKey.StartsWith("once:", StringComparison.Ordinal)))
+            {
+                GymSessionService.RequestSave("reward");
+            }
+        }
+        else
+        {
+            nextSaveTime = Time.unscaledTime + 1.5f;
+        }
         if (!string.IsNullOrWhiteSpace(reason))
         {
             Debug.Log($"GYMCHAOS_XP +{amount} reason={reason} total={state.totalExperience}", this);
@@ -463,9 +563,14 @@ public sealed class GymExperienceService : MonoBehaviour
         Debug.Log(
             $"GYMCHAOS_REPUTATION_CHANGED delta={applied} value={state.reputation} reason={reason}",
             this);
-        SaveNow();
+        SaveNow(false);
         return applied;
     }
+
+    /// <summary>Base XP per rep: Perfect clearly pays most, Good less, a miss little.</summary>
+    public static int GetRepReward(WorkoutResult result) =>
+        result == WorkoutResult.Perfect || result == WorkoutResult.AutoPerfect ? 10 :
+        result == WorkoutResult.Good ? 5 : 1;
 
     public void RegisterWorkoutRep(
         WorkoutResult result, GymExerciseType exerciseType, int weight, int comboMultiplier = 1)
@@ -475,8 +580,7 @@ public sealed class GymExperienceService : MonoBehaviour
             return;
         }
 
-        int baseReward = result == WorkoutResult.Perfect || result == WorkoutResult.AutoPerfect ? 8 :
-            result == WorkoutResult.Good ? 5 : 2;
+        int baseReward = GetRepReward(result);
         int multiplier = Mathf.Clamp(comboMultiplier, 1, 8);
         int reward = baseReward * multiplier;
         string resultLabel = result == WorkoutResult.AutoPerfect ? "AUTO PERFECT" : result.ToString().ToUpperInvariant();
@@ -488,7 +592,8 @@ public sealed class GymExperienceService : MonoBehaviour
         }
         UpdateTemporaryFatigue(result);
         ShowFeedback($"{resultLabel}  x{multiplier}  +{reward} XP", 1.15f);
-        ShowStatImpact($"{resultLabel} IMPACT   XP +{reward}", 1.15f);
+        // The feedback line above already carries this rep; one notice per rep.
+        ShowStatImpact($"{resultLabel} IMPACT   XP +{reward}", 1.15f, false);
         string key = $"workout-rep-{Time.frameCount}";
         AwardExperience(reward, result.ToString(), key);
         RegisterDailyGoal(0);
@@ -842,6 +947,7 @@ public sealed class GymExperienceService : MonoBehaviour
             targetPlayer.GetComponentInChildren<PlayerHandRig>(true);
         playerRig?.EnsureMirrorAppearance();
         lockerMenuOpen = true;
+        GymLockerMenuUI.Ensure(this);
         SetLockerMirrorContinuousRefresh(true);
         lockerMenuWasCursorCaptured = targetPlayer.CursorCaptured;
         targetPlayer.SetCinematicLock(true);
@@ -922,7 +1028,11 @@ public sealed class GymExperienceService : MonoBehaviour
 
         state.dailyCompleted[goalIndex] = true;
         AwardExperience(45, "daily goal", "daily-goal-" + state.gymDay + "-" + goalIndex);
-        ShowFeedback("Daily goal complete: " + DailyGoalLabels[goalIndex], 4f);
+        ShowFeedback("Daily goal complete: " + DailyGoalLabels[goalIndex], 4f, 2);
+        if (sessionBacked)
+        {
+            GymSessionService.RequestSave("goal");
+        }
         Debug.Log(
             $"GYMCHAOS_DAILY_GOAL_COMPLETE day={state.gymDay} goal={goalIndex} " +
             $"label={DailyGoalLabels[goalIndex]}",
@@ -969,17 +1079,28 @@ public sealed class GymExperienceService : MonoBehaviour
         return true;
     }
 
-    private void ShowFeedback(string text, float seconds)
+    private void ShowFeedback(string text, float seconds, int priority = 0)
     {
         feedbackText = text;
         feedbackUntil = Time.unscaledTime + seconds;
+        NoticeRaised?.Invoke(text, seconds, priority);
     }
 
-    private void ShowStatImpact(string text, float seconds)
+    private void ShowStatImpact(string text, float seconds, bool notify = true)
     {
         statImpactText = text;
         statImpactUntil = Time.unscaledTime + seconds;
+        if (notify)
+        {
+            NoticeRaised?.Invoke(text, seconds, 1);
+        }
     }
+
+    public string GetDailyGoalLabel(int index) =>
+        index >= 0 && index < DailyGoalLabels.Length ? DailyGoalLabels[index] : string.Empty;
+    public int GetDailyGoalTarget(int index) =>
+        index >= 0 && index < DailyGoalTargets.Length ? DailyGoalTargets[index] : 1;
+    public int DailyGoalCount => DailyGoalTargets.Length;
 
     private string GetSkillImpactText(GymStat stat, int previousRank)
     {
@@ -1004,7 +1125,7 @@ public sealed class GymExperienceService : MonoBehaviour
         }
     }
 
-    private void SaveNow()
+    private void SaveNow(bool durableChange = true)
     {
         if (state == null)
         {
@@ -1012,6 +1133,24 @@ public sealed class GymExperienceService : MonoBehaviour
         }
 
         state.Normalize();
+        ProgressionChanged?.Invoke();
+        if (sessionBacked)
+        {
+            // The character slot is written by the session service: durable
+            // changes request a debounced save, frequent ones (reputation per
+            // hit) only flag the state for the next timed autosave.
+            nextSaveTime = float.PositiveInfinity;
+            if (durableChange)
+            {
+                GymSessionService.RequestSave("progression");
+            }
+            else
+            {
+                GymSessionService.MarkDirty();
+            }
+            return;
+        }
+
         PlayerPrefs.SetString(SaveKey, JsonUtility.ToJson(state));
         PlayerPrefs.Save();
         nextSaveTime = Time.unscaledTime + 2f;
@@ -1039,12 +1178,9 @@ public sealed class GymExperienceService : MonoBehaviour
         }
 
         EnsureProgressHudStyles();
-        if (lockerMenuOpen)
+        if (!lockerMenuOpen && !GymHud.IsActive)
         {
-            DrawLockerMenu();
-        }
-        else
-        {
+            // The uGUI HUD replaces these panels and the feedback line.
             DrawProgressHud();
             DrawDailyGoals();
         }
@@ -1231,6 +1367,7 @@ public sealed class GymExperienceService : MonoBehaviour
 
     private void DrawProgressHudText(Rect rect, string text, GUIStyle style)
     {
+        progressHudShadowStyle.font = style.font;
         progressHudShadowStyle.fontSize = style.fontSize;
         progressHudShadowStyle.fontStyle = style.fontStyle;
         progressHudShadowStyle.alignment = style.alignment;
@@ -1350,178 +1487,47 @@ public sealed class GymExperienceService : MonoBehaviour
                 : new Color(0.48f, 0.86f, 1f, 0.78f));
         return GUI.Button(rect, label, style);
     }
-    private void EnsureLockerStyles()
+    // ---- locker outfit menu (presented by GymLockerMenuUI) ----
+
+    public static System.Collections.Generic.IReadOnlyList<GymShirtColor> LockerShirts => LockerShirtOptions;
+    public static System.Collections.Generic.IReadOnlyList<GymHeadwear> LockerHeadwear => LockerHeadwearOptions;
+
+    public bool IsShirtWorn(GymShirtColor shirt) =>
+        state != null && string.Equals(state.shirt, shirt.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    public bool IsHeadwearWorn(GymHeadwear item) =>
+        state != null && string.Equals(state.headwear, item.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    public string GetLockerShirtLabel(GymShirtColor shirt)
     {
-        if (lockerTitleStyle != null)
-        {
-            return;
-        }
-
-        lockerTitleStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleLeft,
-            fontSize = 25,
-            fontStyle = FontStyle.Bold
-        };
-        lockerTitleStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
-
-        lockerSectionStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleLeft,
-            fontSize = 12,
-            fontStyle = FontStyle.Bold
-        };
-        lockerSectionStyle.normal.textColor = new Color(0.48f, 0.72f, 1f);
-
-        lockerBodyStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleLeft,
-            fontSize = 13,
-            wordWrap = true
-        };
-        lockerBodyStyle.normal.textColor = new Color(0.82f, 0.87f, 0.96f);
-
-        lockerButtonStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 12,
-            wordWrap = true,
-            padding = new RectOffset(6, 6, 4, 4)
-        };
-        lockerButtonStyle.normal.textColor = new Color(0.88f, 0.92f, 1f);
-        lockerButtonStyle.hover.textColor = Color.white;
-        lockerButtonStyle.active.textColor = Color.white;
-        lockerButtonStyle.normal.background = null;
-        lockerButtonStyle.hover.background = null;
-        lockerButtonStyle.active.background = null;
-        lockerButtonStyle.focused.background = null;
-
-        lockerSelectedButtonStyle = new GUIStyle(lockerButtonStyle);
-        lockerSelectedButtonStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
-        lockerSelectedButtonStyle.hover.textColor = Color.white;
-
-        lockerFooterStyle = new GUIStyle(lockerBodyStyle)
-        {
-            alignment = TextAnchor.MiddleLeft,
-            fontSize = 12
-        };
-        lockerFooterStyle.normal.textColor = new Color(0.68f, 0.78f, 0.93f);
+        string name = shirt.ToString().ToUpperInvariant();
+        if (IsCosmeticUnlocked(shirt)) return name;
+        return shirt == GymShirtColor.Gold ? name + "  M1" : name + "  L" + GetShirtUnlockLevel(shirt);
     }
 
-    private static bool DrawLockerButton(
-        Rect rect, string label, GUIStyle style, bool selected)
+    public string GetLockerHeadwearLabel(GymHeadwear item)
     {
-        DrawProgressHudRect(
-            rect,
-            selected
-                ? new Color(0.11f, 0.075f, 0.04f, 0.98f)
-                : new Color(0.055f, 0.08f, 0.12f, 0.98f));
-        DrawProgressHudRect(
-            new Rect(rect.x, rect.y, 2f, rect.height),
-            selected
-                ? new Color(1f, 0.82f, 0.35f, 1f)
-                : new Color(0.48f, 0.86f, 1f, 0.72f));
-        return GUI.Button(rect, label, style);
+        string name = PlayerCosmeticLoadout.GetHeadwearDisplayName(item).ToUpperInvariant();
+        if (IsCosmeticUnlocked(item)) return name;
+        return item == GymHeadwear.BucketHat ? name + "  M2" : name + "  L" + GetHeadwearUnlockLevel(item);
     }
-    private void DrawLockerMenu()
+
+    public string LockerRankLine => state != null
+        ? "LEVEL " + state.level + "   MASTERY " + state.masteryRank
+        : string.Empty;
+
+    public string LockerWearingLine => state == null ? string.Empty :
+        "WEARING   " + state.shirt.ToUpperInvariant() + "   " +
+        (cosmetics != null
+            ? PlayerCosmeticLoadout.GetHeadwearDisplayName(cosmetics.CurrentHeadwear)
+            : state.headwear).ToUpperInvariant();
+
+    /// <summary>DONE button or ESC in the locker panel.</summary>
+    public void CloseLockerMenuFromUi()
     {
-        EnsureLockerStyles();
-
-        float width = Mathf.Min(500f, Screen.width - 28f);
-        float panelHeight = Mathf.Min(448f, Screen.height - 24f);
-        Rect panel = new Rect(
-            14f,
-            Mathf.Max(12f, Screen.height * 0.5f - panelHeight * 0.5f),
-            width,
-            panelHeight);
-
-        Color previousColor = GUI.color;
-        GUI.color = new Color(0.018f, 0.025f, 0.055f, 0.96f);
-        GUI.DrawTexture(panel, Texture2D.whiteTexture);
-        GUI.color = new Color(0.95f, 0.2f, 0.08f, 0.9f);
-        GUI.DrawTexture(new Rect(panel.x, panel.y, 4f, panel.height), Texture2D.whiteTexture);
-        GUI.color = previousColor;
-
-        const float left = 24f;
-        const float gap = 8f;
-        const int columns = 3;
-        float buttonWidth = (panel.width - left * 2f - gap * (columns - 1)) / columns;
-        float buttonTop = panel.y + 112f;
-        float buttonHeight = 38f;
-
-        GUI.Label(new Rect(panel.x + left, panel.y + 16f, panel.width - left * 2f, 34f),
-            "OUTFIT", lockerTitleStyle);
-        GUI.Label(new Rect(panel.x + left, panel.y + 50f, panel.width - left * 2f, 24f),
-            $"Level {state.level}  ·  Mastery {state.masteryRank}", lockerBodyStyle);
-
-        GUI.Label(new Rect(panel.x + left, panel.y + 82f, panel.width - left * 2f, 22f),
-            "SHIRT", lockerSectionStyle);
-        for (int i = 0; i < LockerShirtOptions.Length; i++)
-        {
-            GymShirtColor shirt = LockerShirtOptions[i];
-            bool selected = string.Equals(state.shirt, shirt.ToString(), StringComparison.OrdinalIgnoreCase);
-            bool unlocked = IsCosmeticUnlocked(shirt);
-            string label = selected ? $"✓ {shirt}" : unlocked ? shirt.ToString() :
-                shirt == GymShirtColor.Gold
-                    ? $"{shirt} · M1"
-                    : $"{shirt} · L{GetShirtUnlockLevel(shirt)}";
-            int column = i % columns;
-            int row = i / columns;
-            Rect buttonRect = new Rect(
-                panel.x + left + column * (buttonWidth + gap),
-                buttonTop + row * (buttonHeight + gap),
-                buttonWidth,
-                buttonHeight);
-            if (DrawLockerButton(buttonRect, label,
-                    selected ? lockerSelectedButtonStyle : lockerButtonStyle, selected))
-            {
-                EquipShirt(shirt);
-            }
-        }
-
-        GUI.Label(new Rect(panel.x + left, panel.y + 212f, panel.width - left * 2f, 22f),
-            "HEADWEAR", lockerSectionStyle);
-        float headwearTop = panel.y + 242f;
-        for (int i = 0; i < LockerHeadwearOptions.Length; i++)
-        {
-            GymHeadwear item = LockerHeadwearOptions[i];
-            bool selected = string.Equals(state.headwear, item.ToString(), StringComparison.OrdinalIgnoreCase);
-            bool unlocked = IsCosmeticUnlocked(item);
-            string name = PlayerCosmeticLoadout.GetHeadwearDisplayName(item);
-            string label = selected ? $"✓ {name}" : unlocked ? name :
-                item == GymHeadwear.BucketHat
-                    ? $"{name} · M2"
-                    : $"{name} · L{GetHeadwearUnlockLevel(item)}";
-            int column = i % columns;
-            int row = i / columns;
-            Rect buttonRect = new Rect(
-                panel.x + left + column * (buttonWidth + gap),
-                headwearTop + row * (buttonHeight + gap),
-                buttonWidth,
-                buttonHeight);
-            if (DrawLockerButton(buttonRect, label,
-                    selected ? lockerSelectedButtonStyle : lockerButtonStyle, selected))
-            {
-                EquipHeadwear(item);
-            }
-        }
-
-        GUI.Label(new Rect(panel.x + left, panel.y + 350f, panel.width - left * 2f, 22f),
-            $"Wearing  {state.shirt}  ·  {(cosmetics != null ? PlayerCosmeticLoadout.GetHeadwearDisplayName(cosmetics.CurrentHeadwear) : state.headwear)}", lockerFooterStyle);
-        GUI.Label(new Rect(panel.x + left, panel.y + 372f, panel.width - left * 2f, 22f),
-            MasteryChallengeLabel, lockerFooterStyle);
-
-        Rect doneRect = new Rect(panel.x + panel.width - 138f, panel.y + 402f, 114f, 32f);
-        if (DrawLockerButton(doneRect, "DONE  [ESC]", lockerButtonStyle, false))
+        if (lockerMenuOpen)
         {
             CloseLockerMenu();
-        }
-
-        Event current = Event.current;
-        if (current.type == EventType.KeyDown && current.keyCode == KeyCode.Escape)
-        {
-            CloseLockerMenu();
-            current.Use();
         }
     }
 

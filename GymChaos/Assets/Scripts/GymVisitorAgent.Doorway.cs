@@ -229,6 +229,9 @@ public sealed partial class GymVisitorAgent
 		return along >= -1.5f && along <= length + 1.5f &&
 			lateral.magnitude <= DoorwayBodyRadius * 1.65f;
 	}
+    private const float DoorwayExitReservationRadius = 6f;
+    private bool doorwayExitReservationLatched;
+
     private bool IsDoorwayExitAreaClearForReservation()
     {
         // Keep right-of-way while the visitor is inside the doorway. Use signed
@@ -237,7 +240,19 @@ public sealed partial class GymVisitorAgent
         // to prevent the shared reservation from flapping along the parking route.
         if (state == VisitorState.ExitingDoor)
         {
-            return false;
+            // Only the doorway itself is shared. A visitor still walking to it
+            // from deep inside the gym (or boxed in on the way) used to hold
+            // the reservation for the whole walk, so one stuck visitor kept
+            // every other departure waiting forever.
+            // Once inside the radius the hold latches for this departure, so a
+            // holder near the edge cannot flap between held and clear.
+            if (!doorwayExitReservationLatched && doorway != null && fighter != null &&
+                Vector3.ProjectOnPlane(fighter.VisitorPhysicsPosition - doorway.InteriorPoint, Vector3.up)
+                    .sqrMagnitude <= DoorwayExitReservationRadius * DoorwayExitReservationRadius)
+            {
+                doorwayExitReservationLatched = true;
+            }
+            return !doorwayExitReservationLatched;
         }
 
         float outwardClearance = GetDoorwayOutwardClearanceMeters();
@@ -536,6 +551,7 @@ public sealed partial class GymVisitorAgent
 			exitRoomWaypoints = BuildIndoorVisitorRoute(doorway.InteriorPoint);
 							exitRoomWaypointIndex = 0;
 							travelTarget = exitRoomWaypoints[0];
+			doorwayExitReservationLatched = false;
 			state = VisitorState.ExitingDoor;
 		}
 		fighter.StopVisitorMovement();
@@ -945,6 +961,11 @@ public sealed partial class GymVisitorAgent
 			}
 		}
 		doorwayExitRecoveryCount++;
+		fighter.SetVisitorPushesLooseItems(doorwayExitRecoveryCount >= 3);
+		if (doorwayExitRecoveryCount >= 4)
+		{
+			fighter.TryVisitorCrowdPassRouteBlocker();
+		}
 		string recoveryMode = "reroute_no_teleport";
 		if (state == VisitorState.ExitingDoor)
 		{

@@ -1420,6 +1420,10 @@ public partial class EnemyFighter
         EndTreadmillVisit();
         SelectRoamDestination();
     }
+#if UNITY_EDITOR
+    public bool IsTreadmillSettledForVerification =>
+        treadmillStation != null && !treadmillEntryActive && !treadmillExitActive;
+#endif
     private void EndTreadmillVisit()
     {
         if (treadmillStation != null)

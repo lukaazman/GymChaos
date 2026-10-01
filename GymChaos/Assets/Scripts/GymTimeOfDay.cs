@@ -128,6 +128,17 @@ public sealed class GymTimeOfDay : MonoBehaviour
         ApplyVisuals();
     }
 
+    /// <summary>Restores a saved clock without replaying the day-change event.</summary>
+    public void RestoreSession(float savedTime01, int savedDay)
+    {
+        time01 = Mathf.Repeat(savedTime01, 1f);
+        currentDay = Mathf.Max(0, savedDay);
+        if (configured)
+        {
+            ApplyVisuals();
+        }
+    }
+
     public void AdvanceForVerification(float seconds)
     {
         if (seconds <= 0f || simulatedDayLengthSeconds <= 0.01f)

@@ -17,6 +17,20 @@ public sealed class PersonaShape : MaskableGraphic
 
     public override Texture mainTexture => pattern != null ? pattern : s_WhiteTexture;
 
+    /// <summary>True when any corner is displaced, i.e. the quad is not an upright rectangle.</summary>
+    public bool HasCornerOffsets
+    {
+        get
+        {
+            if (cornerOffsets == null) return false;
+            for (int i = 0; i < cornerOffsets.Length; i++)
+            {
+                if (cornerOffsets[i] != Vector2.zero) return true;
+            }
+            return false;
+        }
+    }
+
     public void SetCorners(Vector2 bottomLeft, Vector2 topLeft, Vector2 topRight, Vector2 bottomRight)
     {
         cornerOffsets = new[] { bottomLeft, topLeft, topRight, bottomRight };

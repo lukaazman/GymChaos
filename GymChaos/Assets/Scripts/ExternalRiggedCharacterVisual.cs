@@ -103,7 +103,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         }
 
         renderer.updateWhenOffscreen = false;
-        FitToGameplayHeight(modelRoot.transform, renderer, identity);
+        soleAboveBounds = FitToGameplayHeight(modelRoot.transform, renderer, identity);
         PreserveImportedTextures(modelRoot, identity);
 
         BodybuilderEnemyVisual.Rig rig = BuildRig(modelRoot.transform, renderer);
@@ -142,7 +142,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
                 // Configure samples this FBX's actual authored idle. Fit that
                 // pose once while the prepared actor is still hidden. Runtime
                 // scale/floor corrections fight locomotion and cause shaking.
-                FitToGameplayHeight(modelRoot.transform, renderer, identity);
+                soleAboveBounds = FitToGameplayHeight(modelRoot.transform, renderer, identity);
                 animator.CaptureFittedModelTransform();
             }
         }
@@ -306,7 +306,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         Physics.SyncTransforms();
         float floorY = transform.position.y + EnemyFighter.GroundedVisualClearance;
         float offset = Mathf.Clamp(
-            floorY - runtimeRenderer.bounds.min.y, -1.5f, 1.5f);
+            floorY - GetGroundContactY(), -1.5f, 1.5f);
         if (Mathf.Abs(offset) < 0.005f)
         {
             return;
@@ -415,7 +415,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // Measure the actual deformed surface while leaving the model root
         // untouched; feeding animated bone height back into the root caused
         // the visible per-step shake.
-        return runtimeRenderer.bounds.min.y;
+        return runtimeRenderer.bounds.min.y + soleAboveBounds;
     }
 
     private float GetLowestFootY()
@@ -527,7 +527,11 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
         bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation;
     }
-    private static void FitToGameplayHeight(
+    // Height of the real soles above the skinned renderer's (loose) box
+    // floor in the fitted pose; contact checks use box floor + this.
+    private float soleAboveBounds;
+
+    private static float FitToGameplayHeight(
         Transform modelRoot, SkinnedMeshRenderer renderer, BodybuilderIdentity identity)
     {
         float targetHeight = GetGameplayHeight(identity);
@@ -551,9 +555,41 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         float supportY = modelRoot.parent != null
             ? modelRoot.parent.position.y + EnemyFighter.GroundedVisualClearance
             : EnemyFighter.GroundedVisualClearance;
-        float floorOffset = supportY - scaledBounds.min.y;
+        // Skinned renderer bounds are a loose box that reaches ~0.25 m below
+        // the soles of these scans, so aligning bounds.min to the floor left
+        // every member walking (and running on treadmills) in the air. Align
+        // the real lowest vertex of the fitted pose instead (one bake per spawn).
+        float lowest = LowestBakedVertexY(renderer);
+        // The real soles sit inside the loose box: anything outside it, or far
+        // above its floor, is a bad bake and falls back to the box.
+        bool bakeUsable = !float.IsInfinity(lowest) && lowest >= scaledBounds.min.y - 0.02f &&
+            lowest - scaledBounds.min.y < 0.5f;
+        float floorOffset = supportY - (bakeUsable ? lowest : scaledBounds.min.y);
         modelRoot.position += Vector3.up * floorOffset;
         Physics.SyncTransforms();
+        return bakeUsable ? lowest - scaledBounds.min.y : 0f;
+    }
+
+    private static float LowestBakedVertexY(SkinnedMeshRenderer renderer)
+    {
+        if (renderer == null || renderer.sharedMesh == null)
+        {
+            return float.PositiveInfinity;
+        }
+        Mesh baked = new Mesh();
+        // Measured on these scans (renderer lossy scale ~225): a scaled bake
+        // placed with the renderer's matrix gives the true world mesh; the
+        // unscaled bake or a scale-free placement do not.
+        renderer.BakeMesh(baked, true);
+        Matrix4x4 matrix = renderer.transform.localToWorldMatrix;
+        Vector3[] vertices = baked.vertices;
+        float lowest = float.PositiveInfinity;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            lowest = Mathf.Min(lowest, matrix.MultiplyPoint3x4(vertices[i]).y);
+        }
+        Destroy(baked);
+        return lowest;
     }
 
     private static Bounds CalculateBakedWorldBounds(SkinnedMeshRenderer renderer)

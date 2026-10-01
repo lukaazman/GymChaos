@@ -59,6 +59,13 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         initialized = true;
     }
 
+    /// <summary>The avatar rig was rebuilt; reapply the outfit and headwear to the new body.</summary>
+    public void InvalidateVisuals()
+    {
+        visualReady = false;
+        ClearHeadwear();
+    }
+
     public void ApplyFromState(GymProgressionState state)
     {
         if (state == null)

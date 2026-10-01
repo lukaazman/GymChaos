@@ -980,7 +980,14 @@ public class GymExerciseStation : MonoBehaviour
     {
         if (sessionActive && IsCardio && distance > 0.1f)
         {
-            GymExperienceService.Active?.RegisterCardio(distance, sessionElapsed);
+            // Class pace changes how fast the belt runs, not how much a
+            // session is worth: experience uses the class-neutral distance.
+            GymExperienceService cardioProgression = GymExperienceService.Active;
+            if (cardioProgression != null)
+            {
+                cardioProgression.RegisterCardio(
+                    distance / cardioProgression.GetExercisePerformance(exerciseType), sessionElapsed);
+            }
         }
         sessionActive = false;
         repTimer = -1f;
@@ -1896,6 +1903,9 @@ public class GymExerciseStation : MonoBehaviour
                     : 1f;
                 if (progression != null)
                 {
+                    // Class aptitude widens or narrows the timing window for
+                    // this exercise's category; load, pace and rewards stay.
+                    weightDifficulty /= progression.GetExercisePerformance(exerciseType);
                     weightDifficulty = progression.GetTechniqueDifficultyScale(weightDifficulty);
                 }
                 techniqueSkillCheck.Begin(rank, weightDifficulty);
@@ -1959,6 +1969,8 @@ public class GymExerciseStation : MonoBehaviour
         if (GymExperienceService.Active != null)
         {
             maximum *= GymExperienceService.Active.GetCardioCapacityMultiplier();
+            // Class cardio aptitude changes only the sustainable top pace.
+            maximum *= GymExperienceService.Active.GetExercisePerformance(exerciseType);
         }
         maximum = Mathf.Max(1f, maximum);
         if (increasePressed)

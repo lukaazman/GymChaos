@@ -24,6 +24,7 @@ public sealed class TechniqueSkillCheck
 
     public bool IsActive { get; private set; }
     public float MarkerAngle { get; private set; }
+    internal void SetMarkerAngleForVerification(float angle) => MarkerAngle = Mathf.Repeat(angle, 360f);
     public float PerfectHalfAngle { get; private set; }
     public float AcceptableHalfAngle { get; private set; }
 
@@ -90,7 +91,7 @@ public sealed class TechniqueSkillCheck
             return;
         }
 
-        Texture2D ring = TechniqueSkillCheckTextures.GetRing();
+        Texture2D ring = TechniqueSkillCheckTextures.GetRing(PerfectHalfAngle, AcceptableHalfAngle);
         GUI.DrawTexture(rect, ring, ScaleMode.ScaleToFit, true);
 
         float radius = Mathf.Min(rect.width, rect.height) * 0.39f;
@@ -115,21 +116,36 @@ public sealed class TechniqueSkillCheck
 internal static class TechniqueSkillCheckTextures
 {
     private static Texture2D ring;
+    private static float ringPerfect = -1f;
+    private static float ringAcceptable = -1f;
 
-    public static Texture2D GetRing()
+    /// <summary>
+    /// Ring with the green and amber segments at exactly the check's windows,
+    /// centred on 0 degrees at the top, where the marker scores Perfect.
+    /// Texture rows run bottom-up, so "up" is +y here; the old ring used -y
+    /// and drew the green segment at the bottom, 180 degrees from the real
+    /// Perfect window, so a hit on green always scored Miss.
+    /// </summary>
+    public static Texture2D GetRing(float perfectHalfAngle, float acceptableHalfAngle)
     {
-        if (ring != null)
+        if (ring != null && Mathf.Approximately(ringPerfect, perfectHalfAngle) &&
+            Mathf.Approximately(ringAcceptable, acceptableHalfAngle))
         {
             return ring;
         }
 
         const int size = 256;
-        ring = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        if (ring == null)
         {
-            name = "Technique Timing Ring",
-            filterMode = FilterMode.Bilinear,
-            wrapMode = TextureWrapMode.Clamp
-        };
+            ring = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                name = "Technique Timing Ring",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp
+            };
+        }
+        ringPerfect = perfectHalfAngle;
+        ringAcceptable = acceptableHalfAngle;
         Color32[] pixels = new Color32[size * size];
         Vector2 center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
         for (int y = 0; y < size; y++)
@@ -145,17 +161,28 @@ internal static class TechniqueSkillCheckTextures
                 }
 
                 float angle = Mathf.Abs(Mathf.DeltaAngle(
-                    Mathf.Atan2(offset.x, -offset.y) * Mathf.Rad2Deg, 0f));
-                Color color = angle <= 8.5f
+                    Mathf.Atan2(offset.x, offset.y) * Mathf.Rad2Deg, 0f));
+                Color color = angle <= perfectHalfAngle
                     ? new Color(0.26f, 0.95f, 0.52f, 0.98f)
-                    : angle <= 27f
+                    : angle <= acceptableHalfAngle
                         ? new Color(1f, 0.68f, 0.18f, 0.94f)
                         : new Color(0.34f, 0.44f, 0.58f, 0.82f);
                 pixels[y * size + x] = color;
             }
         }
         ring.SetPixels32(pixels);
-        ring.Apply(false, true);
+        ring.Apply(false, false);
         return ring;
+    }
+
+    /// <summary>Verifier access: ring colour at an angle (0 = top, clockwise).</summary>
+    public static Color SampleForVerification(float angleDegrees)
+    {
+        const int size = 256;
+        float radians = angleDegrees * Mathf.Deg2Rad;
+        Vector2 center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
+        // Same mapping as DrawGUI: screen up is texture +y.
+        Vector2 point = center + new Vector2(Mathf.Sin(radians), Mathf.Cos(radians)) * 101f;
+        return ring != null ? ring.GetPixel(Mathf.RoundToInt(point.x), Mathf.RoundToInt(point.y)) : Color.clear;
     }
 }

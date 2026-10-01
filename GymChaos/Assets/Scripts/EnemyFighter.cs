@@ -145,6 +145,8 @@ public partial class EnemyFighter : MonoBehaviour
     private string routeBlockerText = "none";
     private Collider routeBlockerCollider;
     private string routeBlockerOwner;
+    // Fighter behind the last route block, when known (crowd-pass recovery).
+    private EnemyFighter routeBlockerFighter;
     private Vector3 routeBlockerOrigin;
     private Vector3 routeBlockerDirection;
     private bool routeBlockerHasVectors;
@@ -171,6 +173,7 @@ public partial class EnemyFighter : MonoBehaviour
             routeBlockerText = value;
             routeBlockerCollider = null;
             routeBlockerOwner = null;
+            routeBlockerFighter = null;
             routeBlockerHasVectors = false;
         }
     }
@@ -179,6 +182,7 @@ public partial class EnemyFighter : MonoBehaviour
     {
         routeBlockerCollider = hit;
         routeBlockerOwner = owner;
+        routeBlockerFighter = hit != null ? hit.GetComponentInParent<EnemyFighter>() : null;
         routeBlockerHasVectors = false;
     }
 
@@ -186,6 +190,7 @@ public partial class EnemyFighter : MonoBehaviour
     {
         routeBlockerCollider = hit;
         routeBlockerOwner = null;
+        routeBlockerFighter = null;
         routeBlockerOrigin = origin;
         routeBlockerDirection = direction;
         routeBlockerHasVectors = true;
@@ -374,6 +379,9 @@ public partial class EnemyFighter : MonoBehaviour
     public BodybuilderIdentity Identity => identity;
     public bool HasVisitorAgent => visitorAgent != null;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
+    // Last reason the combat chase stopped or moved (constant strings, no allocation).
+    private string chaseStopReason = "none";
+    public string ChaseStopReasonForVerification => chaseStopReason;
     public string GokuFlightLastBlocker => gokuFlightLastBlocker;
     public bool IsGokuGrounded => identity == BodybuilderIdentity.Goku &&
         gokuFlightState == GokuFlightState.Grounded;
@@ -570,6 +578,9 @@ public partial class EnemyFighter : MonoBehaviour
     {
         ReleasePoliceDoorRequest();
         RestoreDoorwayCrowdCollisions(true);
+        // Disabling resets ignore pairs on our colliders; only drop the records.
+        visitorPushesLooseItemsUntil = -1f;
+        ClearVisitorCrowdPass(false);
         // Keep station ownership and attached squat bars from surviving a
         // disable before the visitor director gets another Update tick.
         if (visitorAgent != null)
@@ -586,6 +597,10 @@ public partial class EnemyFighter : MonoBehaviour
     private void FixedUpdate()
     {
         using var profileScope = FixedUpdateMarker.Auto();
+        if (visitorCrowdPass != null)
+        {
+            TickVisitorCrowdPass();
+        }
         if (visitorVehicleRideAnchor != null && !isDead)
         {
             Vector3 ridePosition = visitorVehicleRideAnchor.position;
@@ -768,6 +783,7 @@ public partial class EnemyFighter : MonoBehaviour
 
         if (currentTarget == null)
         {
+            chaseStopReason = "no-target";
             TickRoaming();
             return;
         }
@@ -800,6 +816,7 @@ public partial class EnemyFighter : MonoBehaviour
 
         if (Time.time < stunnedUntilTime)
         {
+            chaseStopReason = "stunned";
             SetAnimatedMovement(false);
             return;
         }
@@ -822,6 +839,7 @@ public partial class EnemyFighter : MonoBehaviour
         float chaseSpeed = GetChaseSpeed();
         if (distance > GetDetectionRange())
         {
+            chaseStopReason = "out-of-detection-range";
             TickRoaming();
             return;
         }
@@ -840,12 +858,14 @@ public partial class EnemyFighter : MonoBehaviour
             Time.time >= gokuFlightGroundedUntil;
         if (IsGoku() && !UpdateGokuFlight(shouldGokuFly, planarToTarget))
         {
+            chaseStopReason = "goku-flight";
             return;
         }
 
         body.WakeUp();
         if (distance <= GetCurrentAttackRange())
         {
+            chaseStopReason = "attack-range";
             StopForAttack(planarToTarget);
             if (CanStartAutomaticPunch() && !punchInProgress &&
                 Time.time >= lastAttackTime + attackCooldown)
@@ -870,9 +890,11 @@ public partial class EnemyFighter : MonoBehaviour
                 moveDirection = FindClearMovementDirection(moveDirection, distance, false, false);
                 if (moveDirection.sqrMagnitude < 0.001f)
                 {
+                    chaseStopReason = "no-clear-direction";
                     StopMoving();
                     return;
                 }
+                chaseStopReason = "chasing";
                 Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
                 Vector3 desiredVelocity = moveDirection * chaseSpeed;
                 // Directly steer the planar Rigidbody velocity. The old 11 N force

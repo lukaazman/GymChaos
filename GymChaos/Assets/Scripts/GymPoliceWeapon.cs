@@ -357,11 +357,8 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         PlaceInPalm();
         visible = false;
         weaponRoot.gameObject.SetActive(false);
-        muzzle = FindMuzzle(weaponRoot);
-        if (muzzle == null)
-        {
-            muzzle = weaponRoot;
-        }
+        muzzle = CreateMuzzle();
+        GymPoliceProjectile.Preload();
 
         Debug.Log(
             $"GYMCHAOS_POLICE_WEAPON_READY asset={GlockAsset} " +
@@ -531,18 +528,45 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         return true;
     }
 
-    private static Transform FindMuzzle(Transform root)
+    // The scanned prop has no muzzle node, so the muzzle is measured from the
+    // mesh: the centre of the frontmost slice of vertices along the barrel
+    // (+X), i.e. the slide face around the bore.
+    private Transform CreateMuzzle()
     {
-        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
-        for (int i = 0; i < transforms.Length; i++)
+        Vector3 sum = Vector3.zero;
+        int count = 0;
+        if (TryGetLocalBounds(out Bounds local))
         {
-            string lower = transforms[i].name.ToLowerInvariant();
-            if (lower.Contains("muzzle") || lower.Contains("barrel") ||
-                lower.Contains("slide"))
+            float threshold = local.max.x - local.size.x * 0.02f;
+            foreach (MeshFilter filter in weaponRoot.GetComponentsInChildren<MeshFilter>(true))
             {
-                return transforms[i];
+                Mesh mesh = filter.sharedMesh;
+                if (mesh == null || !mesh.isReadable) continue;
+                Matrix4x4 toRoot = weaponRoot.worldToLocalMatrix * filter.transform.localToWorldMatrix;
+                Vector3[] vertices = mesh.vertices;
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    Vector3 point = toRoot.MultiplyPoint3x4(vertices[i]);
+                    if (point.x >= threshold)
+                    {
+                        sum += point;
+                        count++;
+                    }
+                }
             }
         }
-        return root;
+        if (count == 0)
+        {
+            Debug.LogWarning("GYMCHAOS_POLICE_MUZZLE_FALLBACK reason=no-readable-vertices", this);
+        }
+        Transform muzzlePoint = new GameObject("Glock Muzzle").transform;
+        muzzlePoint.SetParent(weaponRoot, false);
+        muzzlePoint.localPosition = count > 0
+            ? new Vector3(local.max.x, sum.y / count, sum.z / count)
+            : Vector3.zero;
+        muzzlePoint.localRotation = Quaternion.identity;
+        return muzzlePoint;
     }
+
+    public Vector3 MuzzleLocalForVerification => muzzle != null ? muzzle.localPosition : Vector3.zero;
 }

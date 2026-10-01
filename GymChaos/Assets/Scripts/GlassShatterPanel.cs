@@ -15,6 +15,48 @@ public sealed class GlassShatterPanel : MonoBehaviour
 
     public bool IsShattered => hasShattered;
 
+    /// <summary>Content identity for saves: the generated name plus its grid position.</summary>
+    public string StableId
+    {
+        get
+        {
+            Vector3 position = transform.position;
+            return name + "@" + Mathf.RoundToInt(position.x * 10f) + "," +
+                Mathf.RoundToInt(position.y * 10f) + "," + Mathf.RoundToInt(position.z * 10f);
+        }
+    }
+
+    /// <summary>Removes a panel that was already broken in the loaded save; no reward, sound or shards.</summary>
+    public void RestoreShattered()
+    {
+        if (hasShattered)
+        {
+            return;
+        }
+
+        hasShattered = true;
+        ShatteredIds.Add(StableId);
+        Destroy(gameObject);
+    }
+
+    // Broken panels destroy themselves, so saves read this registry instead of the scene.
+    private static readonly System.Collections.Generic.HashSet<string> ShatteredIds =
+        new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+
+    public static string[] CaptureShatteredIds()
+    {
+        string[] ids = new string[ShatteredIds.Count];
+        ShatteredIds.CopyTo(ids);
+        System.Array.Sort(ids, System.StringComparer.Ordinal);
+        return ids;
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    public static void ResetShatteredRegistry()
+    {
+        ShatteredIds.Clear();
+    }
+
     private void Awake()
     {
         panelRenderer = GetComponent<Renderer>();
@@ -114,6 +156,7 @@ public sealed class GlassShatterPanel : MonoBehaviour
         }
 
         hasShattered = true;
+        ShatteredIds.Add(StableId);
         GymExperienceService.Active?.RegisterMirrorBreak(name);
         Vector3 shatterSoundPosition = panelRenderer != null
             ? panelRenderer.bounds.center

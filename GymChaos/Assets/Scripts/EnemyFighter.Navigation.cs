@@ -183,6 +183,10 @@ public partial class EnemyFighter
                 continue;
             }
             EnemyFighter blockedFighter = hit.GetComponentInParent<EnemyFighter>();
+            if (blockedFighter != null && blockedFighter == visitorCrowdPass)
+            {
+                continue;
+            }
             if (blockedFighter != null && blockedFighter != this)
             {
                 SetRouteBlocker(hit, blockedFighter.IdentityName);

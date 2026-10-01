@@ -19,11 +19,9 @@ public sealed class GymDialogueDirector : MonoBehaviour
     private int currentNodeIndex;
     private float startedAt;
 
-    private GUIStyle dialogueSpeakerStyle;
-    private GUIStyle dialogueBodyStyle;
-    private GUIStyle dialogueChoiceStyle;
-    private GUIStyle dialogueHintStyle;
-
+    // Frame of the last node change, so a UI submit and the gameplay key in
+    // the same frame cannot advance twice.
+    private int lastStepFrame = -1;
 
     public static GymDialogueDirector Active => instance;
     public static bool IsDialogueActive => instance != null && instance.target != null;
@@ -45,6 +43,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
         instance.player = targetPlayer;
         instance.dialogueCamera = directorObject.AddComponent<GymDialogueCamera>();
         instance.dialogueUi = directorObject.AddComponent<GymDialogueUI>();
+        instance.dialogueUi.Bind(instance);
         return instance;
     }
 
@@ -82,6 +81,12 @@ public sealed class GymDialogueDirector : MonoBehaviour
         if (escapePressed)
         {
             instance.Close("cancelled");
+            return;
+        }
+
+        if (instance.lastStepFrame == Time.frameCount)
+        {
+            // The panel already handled a button this frame.
             return;
         }
 
@@ -256,121 +261,6 @@ public sealed class GymDialogueDirector : MonoBehaviour
         return fighter.transform.position + Vector3.up * DialogueTargetHeight;
     }
 
-    public void DrawDialogueUI()
-    {
-        if (!IsDialogueActive || dialogueUi == null)
-        {
-            return;
-        }
-
-        DialogueNode node = CurrentNode;
-        if (node == null)
-        {
-            return;
-        }
-
-        EnsureDialogueStyles();
-        float blend = LetterboxBlend;
-        float barHeight = Mathf.Lerp(
-            0f, Mathf.Clamp(Screen.height * 0.1f, 34f, 72f), blend);
-        GUI.color = new Color(0.005f, 0.007f, 0.012f, 0.98f);
-        GUI.DrawTexture(new Rect(0f, 0f, Screen.width, barHeight), Texture2D.whiteTexture);
-        GUI.DrawTexture(new Rect(0f, Screen.height - barHeight, Screen.width, barHeight), Texture2D.whiteTexture);
-        GUI.color = Color.white;
-
-        int choiceCount = node.choices.Count;
-        int columns = choiceCount >= 3 && Screen.width >= 720f
-            ? 3
-            : choiceCount == 2 && Screen.width >= 620f
-                ? 2
-                : 1;
-        int rows = choiceCount > 0
-            ? Mathf.CeilToInt(choiceCount / (float)columns)
-            : 0;
-        float panelPadding = Mathf.Clamp(Screen.width * 0.02f, 22f, 34f);
-        float panelMargin = Mathf.Clamp(Screen.width * 0.025f, 18f, 36f);
-        float bottomMargin = Mathf.Clamp(Screen.height * 0.028f, 12f, 26f);
-        float choiceHeight = Mathf.Clamp(Screen.height * 0.085f, 46f, 64f);
-        float choiceGap = Mathf.Clamp(Screen.width * 0.012f, 8f, 14f);
-        float choiceAreaHeight = rows > 0
-            ? rows * choiceHeight + Mathf.Max(0, rows - 1) * choiceGap
-            : 0f;
-        float desiredPanelHeight = choiceCount > 0
-            ? 148f + choiceAreaHeight
-            : 174f;
-        float panelBottom = Screen.height - barHeight - bottomMargin;
-        float maxPanelHeight = Mathf.Max(140f, panelBottom - 12f);
-        float panelHeight = Mathf.Min(desiredPanelHeight, maxPanelHeight);
-        panelHeight = Mathf.Max(140f, panelHeight);
-        Rect panel = new Rect(
-            panelMargin,
-            Mathf.Max(8f, panelBottom - panelHeight),
-            Screen.width - panelMargin * 2f,
-            panelHeight);
-
-        GUI.color = new Color(0f, 0f, 0f, 0.34f);
-        GUI.DrawTexture(
-            new Rect(panel.x + 4f, panel.y + 5f, panel.width, panel.height),
-            Texture2D.whiteTexture);
-        GUI.color = new Color(0.015f, 0.022f, 0.045f, 0.985f);
-        GUI.DrawTexture(panel, Texture2D.whiteTexture);
-        GUI.color = Color.white;
-
-        dialogueSpeakerStyle.fontSize = Mathf.Clamp(Screen.height / 42, 18, 28);
-        dialogueBodyStyle.fontSize = Mathf.Clamp(Screen.height / 58, 15, 22);
-        dialogueChoiceStyle.fontSize = Mathf.Clamp(Screen.height / 64, 13, 18);
-        dialogueHintStyle.fontSize = Mathf.Clamp(Screen.height / 76, 12, 16);
-
-        GUI.Label(
-            new Rect(panel.x + panelPadding, panel.y + 15f,
-                panel.width - panelPadding * 2f, 34f),
-            node.speaker,
-            dialogueSpeakerStyle);
-
-        float choiceTop = panel.y + panel.height - 18f - choiceAreaHeight;
-        float bodyTop = panel.y + 54f;
-        float bodyBottom = choiceCount > 0
-            ? choiceTop - 12f
-            : panel.y + panel.height - 48f;
-        GUI.Label(
-            new Rect(panel.x + panelPadding, bodyTop,
-                panel.width - panelPadding * 2f, Mathf.Max(30f, bodyBottom - bodyTop)),
-            node.text,
-            dialogueBodyStyle);
-
-        if (choiceCount > 0)
-        {
-            float choiceWidth = (panel.width - panelPadding * 2f -
-                Mathf.Max(0, columns - 1) * choiceGap) / columns;
-            for (int i = 0; i < choiceCount; i++)
-            {
-                int row = i / columns;
-                int column = i % columns;
-                Rect choiceRect = new Rect(
-                    panel.x + panelPadding + column * (choiceWidth + choiceGap),
-                    choiceTop + row * (choiceHeight + choiceGap),
-                    choiceWidth,
-                    choiceHeight);
-                if (GUI.Button(choiceRect,
-                    $"{i + 1}  {node.choices[i].text}", dialogueChoiceStyle))
-                {
-                    SelectChoice(i);
-                }
-            }
-        }
-        else
-        {
-            GUI.Label(
-                new Rect(panel.x + panelPadding, panel.y + panel.height - 37f,
-                    panel.width - panelPadding * 2f, 24f),
-                "SPACE continue   ESC close",
-                dialogueHintStyle);
-        }
-
-        GUI.color = Color.white;
-    }
-
-
     private void Open(PlayerMovement targetPlayer, EnemyFighter fighter)
     {
         player = targetPlayer;
@@ -408,8 +298,28 @@ public sealed class GymDialogueDirector : MonoBehaviour
         currentNodeIndex = -1;
     }
 
+    /// <summary>Choice button pressed in the dialogue panel.</summary>
+    public void ChooseFromUi(int choiceIndex)
+    {
+        if (IsDialogueActive && lastStepFrame != Time.frameCount)
+        {
+            SelectChoice(choiceIndex);
+        }
+    }
+
+    /// <summary>Continue button pressed in the dialogue panel.</summary>
+    public void AdvanceFromUi()
+    {
+        if (IsDialogueActive && lastStepFrame != Time.frameCount &&
+            CurrentNode != null && CurrentNode.choices.Count == 0)
+        {
+            AdvanceNode();
+        }
+    }
+
     private void AdvanceNode()
     {
+        lastStepFrame = Time.frameCount;
         if (definition == null || CurrentNode == null)
         {
             Close("invalid");
@@ -427,6 +337,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
     private void SelectChoice(int choiceIndex)
     {
+        lastStepFrame = Time.frameCount;
         DialogueNode node = CurrentNode;
         if (node == null || choiceIndex < 0 || choiceIndex >= node.choices.Count)
         {
@@ -707,19 +618,6 @@ public sealed class GymDialogueDirector : MonoBehaviour
         }
     }
 
-    private void OnGUI()
-    {
-        if (GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible || dialogueUi == null)
-        {
-            return;
-        }
-
-        if (IsDialogueActive)
-        {
-            DrawDialogueUI();
-        }
-    }
-
     private void OnDestroy()
     {
         if (dialogueCamera != null)
@@ -734,71 +632,5 @@ public sealed class GymDialogueDirector : MonoBehaviour
         {
             instance = null;
         }
-    }
-
-    private void EnsureDialogueStyles()
-    {
-        if (dialogueSpeakerStyle != null)
-        {
-            return;
-        }
-
-        dialogueSpeakerStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.UpperLeft,
-            fontStyle = FontStyle.Bold,
-            padding = new RectOffset(0, 0, 0, 0)
-        };
-        dialogueSpeakerStyle.normal.textColor = new Color(1f, 0.78f, 0.28f);
-
-        dialogueBodyStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.UpperLeft,
-            fontStyle = FontStyle.Normal,
-            wordWrap = true,
-            padding = new RectOffset(0, 0, 0, 0)
-        };
-        dialogueBodyStyle.normal.textColor = new Color(0.92f, 0.95f, 1f);
-
-        dialogueChoiceStyle = new GUIStyle(GUI.skin.button)
-        {
-            alignment = TextAnchor.MiddleLeft,
-            fontStyle = FontStyle.Bold,
-            wordWrap = true,
-            padding = new RectOffset(14, 14, 8, 8)
-        };
-        dialogueChoiceStyle.normal.textColor = new Color(0.95f, 0.97f, 1f);
-        dialogueChoiceStyle.hover.textColor = Color.white;
-        dialogueChoiceStyle.active.textColor = Color.white;
-        dialogueChoiceStyle.focused.textColor = Color.white;
-        dialogueChoiceStyle.normal.background = CreateDialogueTexture(
-            new Color(0.075f, 0.16f, 0.28f, 0.98f), "Dialogue choice");
-        dialogueChoiceStyle.hover.background = CreateDialogueTexture(
-            new Color(0.14f, 0.3f, 0.48f, 1f), "Dialogue choice hover");
-        dialogueChoiceStyle.active.background = CreateDialogueTexture(
-            new Color(0.92f, 0.58f, 0.16f, 1f), "Dialogue choice active");
-        dialogueChoiceStyle.focused.background = dialogueChoiceStyle.hover.background;
-
-        dialogueHintStyle = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleRight,
-            fontStyle = FontStyle.Normal,
-            padding = new RectOffset(0, 0, 0, 0)
-        };
-        dialogueHintStyle.normal.textColor = new Color(0.63f, 0.7f, 0.84f);
-
-
-    }
-
-    private static Texture2D CreateDialogueTexture(Color color, string textureName)
-    {
-        Texture2D texture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
-        {
-            name = textureName,
-            hideFlags = HideFlags.HideAndDontSave
-        };
-        texture.SetPixel(0, 0, color);
-        texture.Apply();
-        return texture;
     }
 }

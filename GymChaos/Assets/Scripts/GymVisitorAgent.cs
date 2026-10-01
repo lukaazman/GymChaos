@@ -426,6 +426,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		entryRoomWaypointIndex = 0;
 						exitRoomWaypointIndex = 0;
 		doorwayExitRecoveryCount = 0;
+		fighter?.ClearVisitorStuckRecovery();
 		deadReservationCleanupComplete = false;
 		externalVehicleRouteVerification = false;
 		ResetDoorwayExitTracking();
@@ -677,6 +678,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		entryRoomClearPointPending = false;
 						exitRoomClearPointPending = false;
 		doorwayExitRecoveryCount = 0;
+		fighter?.ClearVisitorStuckRecovery();
 		ResetDoorwayExitTracking();
 		postWorkoutFreeRoamUntil = 0f;
 		roomTravelStalledSeconds = 0f;
@@ -724,6 +726,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			entryRoomRecoveryCount = 0;
 							exitRoomClearPointPending = false;
 			doorwayExitRecoveryCount = 0;
+			fighter?.ClearVisitorStuckRecovery();
 			ResetDoorwayExitTracking();
 			postWorkoutFreeRoamUntil = 0f;
 			roomTravelStalledSeconds = 0f;
@@ -840,7 +843,9 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 						travelTarget = exitRoomWaypoints[0];
 		Debug.Log($"GYMCHAOS_VISITOR_EXIT_ROUTE_PLANNED enemy={fighter.Identity} points={exitRoomWaypoints.Length} target={doorway.InteriorPoint}", this);
 		doorwayExitRecoveryCount = 0;
+		fighter?.ClearVisitorStuckRecovery();
 		ResetDoorwayExitTracking();
+		doorwayExitReservationLatched = false;
 		state = VisitorState.ExitingDoor;
 		fighter.StopVisitorMovement();
 	}
@@ -1333,7 +1338,22 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			else
 			{
 				roomTravelStalledSeconds += Time.fixedDeltaTime;
-				if (roomTravelStalledSeconds > 2.2f && doorway != null)
+				if (roomTravelStalledSeconds > 2.2f && doorway != null &&
+					entryRoomRecoveryCount >= 3 &&
+					!GymOutdoorBuilder.IsPlayerOutsideGym(fighter.VisitorPhysicsPosition) &&
+					Vector3.ProjectOnPlane(fighter.VisitorPhysicsPosition - doorway.InteriorPoint, Vector3.up).magnitude > 1.5f)
+				{
+					// The visitor is already inside; its first room point is only
+					// a roaming goal. When other members keep standing on it,
+					// finish the entry here instead of replanning until the
+					// entry times out and the visitor walks back to its vehicle.
+					entryRoomWaypoints = null;
+					entryRoomWaypointIndex = 0;
+					travelTarget = fighter.VisitorPhysicsPosition;
+					roomTravelStalledSeconds = 0f;
+					Debug.Log($"GYMCHAOS_VISITOR_ENTRY_ACCEPTED_INSIDE enemy={fighter.Identity} attempts={entryRoomRecoveryCount} blocker={fighter.LastVisitorRouteBlocker}", this);
+				}
+				else if (roomTravelStalledSeconds > 2.2f && doorway != null)
 				{
 					entryRoomRecoveryCount++;
 					PlanEntryRoomRoute();

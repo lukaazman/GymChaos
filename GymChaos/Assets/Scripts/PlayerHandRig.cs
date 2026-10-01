@@ -162,7 +162,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     public Transform RuntimeFirstPersonRightShoulder => firstPersonRightShoulder;
     public Transform RuntimeFirstPersonLeftUpperArm => firstPersonLeftUpperArm;
     public Transform RuntimeFirstPersonRightUpperArm => firstPersonRightUpperArm;
-    public string RuntimeModelResourcePath => PlayerModelResource;
+    public string RuntimeModelResourcePath => modelResource;
     public string RuntimeAnimationResourcePath => PlayerAnimationBundleResource;
     public string MixamoAttackClipSummary =>
         $"walk={walkClip?.name ?? "missing"},run={runClip?.name ?? "missing"}," +
@@ -175,7 +175,11 @@ public sealed class PlayerHandRig : MonoBehaviour
         $"throw_frisbee={throwFrisbeeClip?.name ?? "missing"}," +
         $"throw_object_hard={throwHardClip?.name ?? "missing"}";
 
-    public static PlayerHandRig Create(Transform cameraTransform)
+    public const string DefaultModelResource = PlayerModelResource;
+    // Class body variants share the baseline rig and clips; only the mesh differs.
+    private string modelResource = PlayerModelResource;
+
+    public static PlayerHandRig Create(Transform cameraTransform, string modelResourcePath = null)
     {
         PlayerMovement player = cameraTransform != null
             ? cameraTransform.GetComponentInParent<PlayerMovement>()
@@ -203,6 +207,10 @@ public sealed class PlayerHandRig : MonoBehaviour
             rig = root.AddComponent<PlayerHandRig>();
         }
 
+        if (!rig.initialized && !string.IsNullOrEmpty(modelResourcePath))
+        {
+            rig.modelResource = modelResourcePath;
+        }
         rig.Initialize(cameraTransform != null ? cameraTransform.GetComponent<Camera>() : null);
         return rig;
     }
@@ -227,7 +235,14 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
         controller = GetComponentInParent<CharacterController>();
 
-        GameObject modelPrefab = Resources.Load<GameObject>(PlayerModelResource);
+        GameObject modelPrefab = Resources.Load<GameObject>(modelResource);
+        if (modelPrefab == null && modelResource != PlayerModelResource)
+        {
+            // A missing class body must never leave the player without a mesh.
+            Debug.LogError("GYMCHAOS_CLASS_MODEL_MISSING resource=" + modelResource, this);
+            modelResource = PlayerModelResource;
+            modelPrefab = Resources.Load<GameObject>(modelResource);
+        }
         if (modelPrefab == null)
         {
             Debug.LogError("Player model is missing at Resources/Player/player_authored.fbx.");
@@ -236,6 +251,10 @@ public sealed class PlayerHandRig : MonoBehaviour
 
         modelRoot = Instantiate(modelPrefab, transform);
         modelRoot.name = "Player Mesh (Authored Blender Rig)";
+        if (modelResource != PlayerModelResource)
+        {
+            AlignVariantBoundsToBaseline();
+        }
         // The imported FBX mesh faces Unity +Z. Keep the avatar aligned with
         // the controller; the reflection view matrix supplies the mirror flip.
         modelRoot.transform.SetLocalPositionAndRotation(
@@ -1279,6 +1298,84 @@ public sealed class PlayerHandRig : MonoBehaviour
                     pair.Key.localScale = scale;
                 }
             }
+        }
+    }
+
+    // The height fit and foot placement read the imported renderer bounds.
+    // A class body shares the baseline skeleton, so it takes the baseline's
+    // bounds frame too and lands on exactly the same scale and floor contact.
+    private void AlignVariantBoundsToBaseline()
+    {
+        GameObject baselinePrefab = Resources.Load<GameObject>(PlayerModelResource);
+        if (baselinePrefab == null)
+        {
+            return;
+        }
+
+        SkinnedMeshRenderer[] baseline =
+            baselinePrefab.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        SkinnedMeshRenderer[] variant =
+            modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        Transform[] bones = modelRoot.GetComponentsInChildren<Transform>(true);
+        for (int i = 0; i < variant.Length; i++)
+        {
+            // Pair renderers by name; fall back to order only for a lone mesh.
+            int baselineIndex = -1;
+            for (int candidate = 0; candidate < baseline.Length; candidate++)
+            {
+                if (baseline[candidate].name == variant[i].name)
+                {
+                    baselineIndex = candidate;
+                    break;
+                }
+            }
+            if (baselineIndex < 0 && baseline.Length == 1 && variant.Length == 1)
+            {
+                baselineIndex = 0;
+            }
+            if (baselineIndex < 0)
+            {
+                continue;
+            }
+            Transform baselineRoot = baseline[baselineIndex].rootBone;
+            if (baselineRoot != null)
+            {
+                for (int boneIndex = 0; boneIndex < bones.Length; boneIndex++)
+                {
+                    if (bones[boneIndex].name == baselineRoot.name)
+                    {
+                        variant[i].rootBone = bones[boneIndex];
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                variant[i].rootBone = null;
+            }
+            variant[i].localBounds = baseline[baselineIndex].localBounds;
+        }
+
+        // The baseline FBX stores its nodes in the first clip pose while a
+        // mesh-only variant stores the rest pose. Clips drive rotations from
+        // these defaults, so the variant starts from the baseline's defaults.
+        Transform[] baselineNodes = baselinePrefab.GetComponentsInChildren<Transform>(true);
+        var defaults = new Dictionary<string, Transform>(baselineNodes.Length);
+        for (int i = 0; i < baselineNodes.Length; i++)
+        {
+            defaults[baselineNodes[i].name] = baselineNodes[i];
+        }
+        for (int i = 0; i < bones.Length; i++)
+        {
+            if (bones[i] == modelRoot.transform ||
+                !defaults.TryGetValue(bones[i].name, out Transform source) ||
+                source == baselinePrefab.transform)
+            {
+                continue;
+            }
+            bones[i].localPosition = source.localPosition;
+            bones[i].localRotation = source.localRotation;
+            bones[i].localScale = source.localScale;
         }
     }
 

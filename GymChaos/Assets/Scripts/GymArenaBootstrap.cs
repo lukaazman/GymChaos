@@ -247,9 +247,10 @@ public class GymArenaBootstrap : MonoBehaviour
         if (radio != null)
         {
         }
-        if (!Application.isBatchMode)
+        if (GymSessionService.SessionMode)
         {
             GymPauseMenu.CreateForScene(player);
+            GymHud.CreateForScene(player);
         }
         double activationMilliseconds =
             (Time.realtimeSinceStartupAsDouble - activationStarted) * 1000.0;
@@ -289,7 +290,7 @@ public class GymArenaBootstrap : MonoBehaviour
         SpawnProteinStoreWorker();
         SpawnEnemies();
 
-        if (Application.isBatchMode)
+        if (!GymSessionService.SessionMode)
         {
             // Existing headless verifiers do not have a UI click to press.
             // Keep their runtime contract intact while the player-facing

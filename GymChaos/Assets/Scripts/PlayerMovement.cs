@@ -191,6 +191,93 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+    // isGrounded is only refreshed by Move(); the short probe also covers
+    // frames where movement is suspended (menus, released cursor).
+    public bool IsGroundedForSession =>
+        characterController != null && characterController.enabled &&
+        (characterController.isGrounded || Physics.Raycast(
+            characterController.bounds.center, Vector3.down,
+            characterController.bounds.extents.y + 0.3f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore));
+    /// <summary>True while sprint is held but the stamina reserve is empty.</summary>
+    public bool IsSprintExhausted { get; private set; }
+    /// <summary>Stamina below which a held sprint cannot continue or restart.</summary>
+    public const float SprintRestartThreshold = 0.01f;
+    private const float SprintExhaustedReserve = 1f;
+    public bool IsSprinting => animationSprinting && !IsSprintExhausted;
+    public string HeldItemDisplayName => heldItem != null ? heldItem.DisplayName : null;
+    public bool HudShowsVitals =>
+        !IsDead && pendingWeightStation == null && !pullUpMountTransitionActive &&
+        activeExerciseStation == null;
+
+    /// <summary>
+    /// Swaps the avatar for the class body. The rig is rebuilt only when the
+    /// model actually changes, so reloads and HUD refreshes cost nothing.
+    /// </summary>
+    public void ApplyClassAppearance(GymClassDefinition definition)
+    {
+        if (playerCamera == null || definition == null)
+        {
+            return;
+        }
+
+        string resource = string.IsNullOrEmpty(definition.appearance)
+            ? PlayerHandRig.DefaultModelResource
+            : "Player/Classes/player_" + definition.id;
+        if (handRig != null && handRig.RuntimeModelResourcePath == resource)
+        {
+            return;
+        }
+
+        bool wasActive = handRig == null || handRig.gameObject.activeSelf;
+        if (handRig != null)
+        {
+            // Create() looks the rig up by name; retire the old one first.
+            handRig.gameObject.name = "PlayerAvatarRig (retired)";
+            handRig.gameObject.SetActive(false);
+            Destroy(handRig.gameObject);
+        }
+        handRig = PlayerHandRig.Create(playerCamera.transform, resource);
+        if (handRig != null)
+        {
+            handRig.gameObject.SetActive(wasActive);
+        }
+        PlayerCosmeticLoadout cosmetics = GetComponent<PlayerCosmeticLoadout>();
+        if (cosmetics != null)
+        {
+            cosmetics.InvalidateVisuals();
+        }
+        Debug.Log($"GYMCHAOS_CLASS_APPEARANCE class={definition.id} resource={resource}", this);
+    }
+
+    /// <summary>Places a loaded character and restores resources clamped to the derived maxima.</summary>
+    public void RestoreSessionState(
+        bool useSpawn, Vector3 spawn, float facingDegrees, float health, float stamina)
+    {
+        if (useSpawn)
+        {
+            bool controllerWasEnabled = characterController != null && characterController.enabled;
+            if (characterController != null)
+            {
+                characterController.enabled = false;
+            }
+            transform.SetPositionAndRotation(spawn, Quaternion.Euler(0f, facingDegrees, 0f));
+            if (characterController != null)
+            {
+                characterController.enabled = controllerWasEnabled;
+            }
+        }
+        planarVelocity = Vector3.zero;
+        impactVelocity = Vector3.zero;
+        verticalVelocity = 0f;
+        IsDead = false;
+        currentHealth = Mathf.Clamp(health, 1f, maxHealth);
+        float capacity = GymExperienceService.Active != null
+            ? GymExperienceService.Active.GetSprintCapacity()
+            : 100f;
+        sprintEnergy = Mathf.Clamp(stamina, 0f, capacity);
+    }
+
     public void SetCinematicLock(bool locked)
     {
         cinematicLock = locked;
@@ -452,13 +539,18 @@ public class PlayerMovement : MonoBehaviour
         {
             return;
         }
-        if (nearbyRadio != null && ReadRadioTogglePressed())
+        // F triggers exactly the action its prompt shows.
+        ContextAction fPressed = ReadExerciseStartPressed()
+            ? ResolveContextAction(ContextKey.F, false, false, false, false, nearbyRadio != null,
+                nearbyExerciseStation != null)
+            : ContextAction.None;
+        if (fPressed == ContextAction.Radio)
         {
             nearbyRadio.ToggleMusic();
             return;
         }
 
-        if (nearbyExerciseStation != null && ReadExerciseStartPressed())
+        if (fPressed == ContextAction.Workout)
         {
             if (nearbyExerciseStation.RequiresWeightSelection)
             {
@@ -642,7 +734,20 @@ public class PlayerMovement : MonoBehaviour
             ? progression.GetSprintCapacity()
             : 100f;
         sprintEnergy = Mathf.Clamp(sprintEnergy, 0f, sprintCapacity);
-        bool sprinting = sprintHeld && !crouchHeld && sprintEnergy > 0.01f;
+        bool sprinting = sprintHeld && !crouchHeld && sprintEnergy > SprintRestartThreshold;
+        // Holding sprint on an empty reserve only stutters: recovery refills a
+        // sliver and the next frame spends it. The state starts when the reserve
+        // actually runs out (the movement threshold) and lasts until sprint is
+        // released or the reserve has visibly recovered; movement is unchanged.
+        bool sprintRequested = sprintHeld && !crouchHeld;
+        if (!sprintRequested || sprintEnergy > SprintExhaustedReserve)
+        {
+            IsSprintExhausted = false;
+        }
+        else if (sprintEnergy <= SprintRestartThreshold)
+        {
+            IsSprintExhausted = true;
+        }
         animationSprinting = sprinting;
         if (sprinting && moveInput.sqrMagnitude > 0.01f)
         {
@@ -1946,6 +2051,22 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (GymHud.IsActive)
+        {
+            // The uGUI HUD owns vitals, members and the held item; only the
+            // contextual prompts remain on this path.
+            if (CanShowCursorRecapturePrompt)
+            {
+                float promptWidth = Mathf.Min(360f, Screen.width - 32f);
+                DrawHudPrompt(
+                    new Rect((Screen.width - promptWidth) * 0.5f, Screen.height * 0.5f - 26f, promptWidth, 52f),
+                    "LMB", "CLICK TO LOOK AROUND");
+            }
+
+            DrawContextInteractionPrompts();
+            return;
+        }
+
         float sprintCapacity = GymExperienceService.Active != null
             ? GymExperienceService.Active.GetSprintCapacity()
             : 100f;
@@ -1999,6 +2120,58 @@ public class PlayerMovement : MonoBehaviour
         DrawContextInteractionPrompts();
     }
 
+    public enum ContextKey { E, F }
+    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup }
+
+    // Priority per key, highest first. Talking to a person beats a workout,
+    // which beats picking something up; only one action is shown per key.
+    // Prompts for different keys are drawn E then F, left to right.
+    private static readonly ContextAction[] ContextPriority =
+    {
+        ContextAction.Talk, ContextAction.BackRoom, ContextAction.Workout,
+        ContextAction.Radio, ContextAction.Drop, ContextAction.Pickup
+    };
+
+    public static ContextKey GetContextActionKey(ContextAction action) =>
+        action == ContextAction.Workout || action == ContextAction.Radio ? ContextKey.F : ContextKey.E;
+
+    /// <summary>The single action shown on (and triggered by) a key.</summary>
+    public static ContextAction ResolveContextAction(ContextKey key, bool talk, bool backRoom,
+        bool drop, bool pickup, bool radio, bool workout)
+    {
+        for (int i = 0; i < ContextPriority.Length; i++)
+        {
+            ContextAction action = ContextPriority[i];
+            bool available = action == ContextAction.Talk ? talk :
+                action == ContextAction.BackRoom ? backRoom :
+                action == ContextAction.Workout ? workout :
+                action == ContextAction.Radio ? radio :
+                action == ContextAction.Drop ? drop : pickup;
+            if (available && GetContextActionKey(action) == key)
+            {
+                return action;
+            }
+        }
+        return ContextAction.None;
+    }
+
+    private string GetContextActionMessage(ContextAction action)
+    {
+        switch (action)
+        {
+            case ContextAction.Talk: return "TALK TO MEMBER";
+            case ContextAction.BackRoom:
+                return string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
+                    ? "INTERACT"
+                    : nearbyBackRoomInteractable.DisplayName.ToUpperInvariant();
+            case ContextAction.Drop: return "DROP " + GetPromptItemName(heldItem);
+            case ContextAction.Pickup: return "PICK UP " + GetPromptItemName(nearbyPickup);
+            case ContextAction.Radio: return StripPromptKey(nearbyRadio.GetInteractionPrompt());
+            case ContextAction.Workout: return StripPromptKey(nearbyExerciseStation.GetInteractionPrompt());
+            default: return string.Empty;
+        }
+    }
+
     private void DrawContextInteractionPrompts()
     {
         if (GymExperienceService.Active != null &&
@@ -2007,44 +2180,18 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        bool hasE = false;
-        string eMessage = string.Empty;
-        if (nearbyTalkTarget != null)
-        {
-            hasE = true;
-            eMessage = "TALK TO MEMBER";
-        }
-        else if (nearbyBackRoomInteractable != null)
-        {
-            hasE = true;
-            eMessage = string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
-                ? "INTERACT"
-                : nearbyBackRoomInteractable.DisplayName.ToUpperInvariant();
-        }
-        else if (heldItem != null)
-        {
-            hasE = true;
-            eMessage = "DROP " + GetPromptItemName(heldItem);
-        }
-        else if (nearbyPickup != null)
-        {
-            hasE = true;
-            eMessage = "PICK UP " + GetPromptItemName(nearbyPickup);
-        }
-
-        bool hasF = false;
-        string fMessage = string.Empty;
-        if (nearbyRadio != null)
-        {
-            hasF = true;
-            fMessage = StripPromptKey(nearbyRadio.GetInteractionPrompt());
-        }
-        else if (nearbyExerciseStation != null &&
-                 nearbyExerciseStation.IsAvailableForPlayer)
-        {
-            hasF = true;
-            fMessage = StripPromptKey(nearbyExerciseStation.GetInteractionPrompt());
-        }
+        ContextAction eAction = ResolveContextAction(ContextKey.E,
+            nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
+            nearbyPickup != null, nearbyRadio != null,
+            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer);
+        ContextAction fAction = ResolveContextAction(ContextKey.F,
+            nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
+            nearbyPickup != null, nearbyRadio != null,
+            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer);
+        bool hasE = eAction != ContextAction.None;
+        bool hasF = fAction != ContextAction.None;
+        string eMessage = hasE ? GetContextActionMessage(eAction) : string.Empty;
+        string fMessage = hasF ? GetContextActionMessage(fAction) : string.Empty;
 
         if (!hasE && !hasF)
         {
@@ -2191,6 +2338,18 @@ public class PlayerMovement : MonoBehaviour
     private static void DrawHudPanel(Rect rect)
     {
         Color previousColor = GUI.color;
+        if (GymSessionService.SessionMode)
+        {
+            // Upright plate in the menu palette: an even accent border around a dark face.
+            GUI.color = PersonaMenuStyle.Accent;
+            GUI.DrawTexture(new Rect(rect.x - 3f, rect.y - 3f, rect.width + 6f, rect.height + 6f),
+                Texture2D.whiteTexture);
+            GUI.color = new Color(
+                PersonaMenuStyle.ButtonIdle.r, PersonaMenuStyle.ButtonIdle.g, PersonaMenuStyle.ButtonIdle.b, 0.96f);
+            GUI.DrawTexture(rect, Texture2D.whiteTexture);
+            GUI.color = previousColor;
+            return;
+        }
         GUI.color = new Color(0.012f, 0.022f, 0.04f, 0.86f);
         GUI.DrawTexture(rect, Texture2D.whiteTexture);
         GUI.color = new Color(0.98f, 0.34f, 0.13f, 0.95f);
@@ -2283,15 +2442,36 @@ public class PlayerMovement : MonoBehaviour
         style.hover.background = null;
         style.active.background = null;
         style.focused.background = null;
+        if (GymSessionService.SessionMode)
+        {
+            // Prompts and exercise panels share the menu typeface. The
+            // condensed face is set a little larger and never faux-bold.
+            Font menuFont = PersonaMenuStyle.LoadButtonFont(null);
+            if (menuFont != null)
+            {
+                style.font = menuFont;
+                style.fontStyle = FontStyle.Normal;
+                style.fontSize = Mathf.RoundToInt(fontSize * 1.2f);
+            }
+        }
         return style;
+    }
+
+    // The shadow must mirror the label exactly. A different font or clipping
+    // mode draws a second, misaligned copy of the text.
+    internal static void MirrorShadowStyle(GUIStyle shadow, GUIStyle style)
+    {
+        shadow.font = style.font;
+        shadow.fontSize = style.fontSize;
+        shadow.fontStyle = style.fontStyle;
+        shadow.alignment = style.alignment;
+        shadow.wordWrap = style.wordWrap;
+        shadow.clipping = style.clipping;
     }
 
     private void DrawHudText(Rect rect, string text, GUIStyle style)
     {
-        hudShadowStyle.fontSize = style.fontSize;
-        hudShadowStyle.fontStyle = style.fontStyle;
-        hudShadowStyle.alignment = style.alignment;
-        hudShadowStyle.wordWrap = style.wordWrap;
+        MirrorShadowStyle(hudShadowStyle, style);
         GUI.Label(new Rect(rect.x + 1f, rect.y + 1f, rect.width, rect.height), text, hudShadowStyle);
         GUI.Label(rect, text, style);
     }

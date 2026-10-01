@@ -345,10 +345,13 @@ public partial class EnemyFighter
         }
         else
         {
+            // Turn in simulated time, like the velocity integration below. The
+            // unscaled step made the turning circle grow with Time.timeScale, so
+            // a sharp waypoint was orbited forever at the verifiers' 3x speed.
             float routeTurnRate = distance < 1.15f ? 360f : 105f;
             Vector3 steeredDirection = Vector3.RotateTowards(
                 visitorRouteDirection.normalized, direction,
-                Mathf.Deg2Rad * routeTurnRate * Time.fixedUnscaledDeltaTime, 0f).normalized;
+                Mathf.Deg2Rad * routeTurnRate * Time.fixedDeltaTime, 0f).normalized;
             visitorRouteDirection = IsVisitorPathClear(
                     steeredDirection, Mathf.Min(distance, 1.2f), true, null)
                 ? steeredDirection
@@ -366,7 +369,7 @@ public partial class EnemyFighter
             float velocityTurnRate = distance < 1.15f ? 720f : 220f;
             velocityDirection = Vector3.RotateTowards(
                 planarVelocity.normalized, visitorRouteDirection,
-                Mathf.Deg2Rad * velocityTurnRate * Time.fixedUnscaledDeltaTime, 0f).normalized;
+                Mathf.Deg2Rad * velocityTurnRate * Time.fixedDeltaTime, 0f).normalized;
         }
         planarVelocity = velocityDirection * nextSpeed;
         body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
@@ -775,7 +778,7 @@ public partial class EnemyFighter
         for (int i = 0; i < registered.Count; i++)
         {
             EnemyFighter candidate = registered[i];
-            if (candidate == null || candidate == this ||
+            if (candidate == null || candidate == this || candidate == visitorCrowdPass ||
                 !candidate.isActiveAndEnabled || candidate.isDead || candidate.body == null)
             {
                 continue;
@@ -810,6 +813,7 @@ public partial class EnemyFighter
             }
 
             lastVisitorRouteBlocker = "dynamic visitor clearance owner=" + candidate.IdentityName;
+            routeBlockerFighter = candidate;
             return false;
         }
 
@@ -891,6 +895,10 @@ public partial class EnemyFighter
             {
                 continue;
             }
+            if (blockedFighter != null && blockedFighter == visitorCrowdPass)
+            {
+                continue;
+            }
             if (blockedFighter != null && blockedFighter != this)
             {
                 SetRouteBlocker(hit, blockedFighter.IdentityName);
@@ -915,6 +923,10 @@ public partial class EnemyFighter
             if (doorwayVisitor != null &&
                 doorwayVisitor.IsDoorwayWallCollisionIgnored &&
                 GymVisitorAgent.IsDoorwayWallColliderForRouting(hit))
+            {
+                continue;
+            }
+            if (IsPushedLooseItem(hit))
             {
                 continue;
             }
@@ -960,11 +972,131 @@ public partial class EnemyFighter
             (origin.z >= bounds.max.z + margin && direction.z >= -0.05f) ||
             (origin.z <= bounds.min.z - margin && direction.z <= 0.05f);
     }
+    // Set by GymVisitorAgent after repeated failed exit reroutes: loose gym
+    // props (foam roller, medicine ball) stop counting as route walls for a
+    // few seconds, so a visitor boxed in between a prop and a standing member
+    // pushes the prop aside instead of rerouting forever.
+    private const float VisitorLooseItemPushSeconds = 6f;
+    private float visitorPushesLooseItemsUntil = -1f;
+    internal void SetVisitorPushesLooseItems(bool value) =>
+        visitorPushesLooseItemsUntil = value ? Time.time + VisitorLooseItemPushSeconds : -1f;
+    public bool VisitorPushesLooseItemsForVerification => Time.time < visitorPushesLooseItemsUntil;
+
+    // A visitor that keeps failing to get past a standing, non-hostile member
+    // (seen: Ronnie idling in a gap between equipment) walks through that
+    // member instead of rerouting forever. Physics and the route probes both
+    // let it pass; the pass ends by itself once the two are apart, or when
+    // the member turns hostile or is disabled.
+    private const float VisitorCrowdPassMaxStartDistance = 2.5f;
+    private const float VisitorCrowdPassEndDistance = 3.5f;
+    private EnemyFighter visitorCrowdPass;
+    private readonly List<Collider> visitorCrowdPassMine = new List<Collider>();
+    private readonly List<Collider> visitorCrowdPassTheirs = new List<Collider>();
+    public EnemyFighter VisitorCrowdPassForVerification => visitorCrowdPass;
+
+    internal void TryVisitorCrowdPassRouteBlocker()
+    {
+        // Every probe that blocks on a member records that exact fighter; it
+        // must still be next to this visitor (the field survives clear probes).
+        EnemyFighter other = routeBlockerFighter;
+        if (other == null || other == this || other.isDead || other.isAggressive ||
+            (other.isPolice && other.currentTarget != null) ||
+            !other.isActiveAndEnabled || visitorCrowdPass == other ||
+            PlanarDistanceTo(other) > VisitorCrowdPassMaxStartDistance)
+        {
+            return;
+        }
+        ClearVisitorCrowdPass(true);
+        Collider[] mine = GetComponentsInChildren<Collider>(false);
+        Collider[] theirs = other.GetComponentsInChildren<Collider>(false);
+        for (int a = 0; a < mine.Length; a++)
+        {
+            for (int b = 0; b < theirs.Length; b++)
+            {
+                // Only pairs this pass changes are recorded and later restored,
+                // so pairs ignored by other systems stay as they were.
+                if (mine[a] != null && theirs[b] != null && mine[a].enabled && theirs[b].enabled &&
+                    !Physics.GetIgnoreCollision(mine[a], theirs[b]))
+                {
+                    Physics.IgnoreCollision(mine[a], theirs[b], true);
+                    visitorCrowdPassMine.Add(mine[a]);
+                    visitorCrowdPassTheirs.Add(theirs[b]);
+                }
+            }
+        }
+        visitorCrowdPass = other;
+        cachedOwnColliders = null;
+        Debug.Log($"GYMCHAOS_VISITOR_CROWD_PASS identity={identity} through={other.identity}", this);
+    }
+
+    /// <summary>Exit made or state changed: stop pushing props and restore collisions.</summary>
+    internal void ClearVisitorStuckRecovery()
+    {
+        visitorPushesLooseItemsUntil = -1f;
+        ClearVisitorCrowdPass(true);
+    }
+
+    // Called from FixedUpdate while a pass is active: a few comparisons.
+    private void TickVisitorCrowdPass()
+    {
+        EnemyFighter other = visitorCrowdPass;
+        if (other == null || !other.isActiveAndEnabled || other.isDead || other.isAggressive ||
+            (other.isPolice && other.currentTarget != null) ||
+            PlanarDistanceTo(other) > VisitorCrowdPassEndDistance)
+        {
+            ClearVisitorCrowdPass(other != null && other.isActiveAndEnabled);
+        }
+    }
+
+    private void ClearVisitorCrowdPass(bool restore)
+    {
+        if (restore)
+        {
+            for (int i = 0; i < visitorCrowdPassMine.Count; i++)
+            {
+                Collider a = visitorCrowdPassMine[i];
+                Collider b = visitorCrowdPassTheirs[i];
+                // Disabled colliders lose their ignore state by themselves.
+                if (a != null && b != null && a.enabled && b.enabled &&
+                    a.gameObject.activeInHierarchy && b.gameObject.activeInHierarchy)
+                {
+                    Physics.IgnoreCollision(a, b, false);
+                }
+            }
+        }
+        visitorCrowdPassMine.Clear();
+        visitorCrowdPassTheirs.Clear();
+        if (visitorCrowdPass != null)
+        {
+            cachedOwnColliders = null;
+        }
+        visitorCrowdPass = null;
+    }
+
+    private float PlanarDistanceTo(EnemyFighter other) =>
+        Vector3.ProjectOnPlane(other.transform.position - transform.position, Vector3.up).magnitude;
+
+    private bool IsPushedLooseItem(Collider hit)
+    {
+        if (Time.time >= visitorPushesLooseItemsUntil || hit.attachedRigidbody == null ||
+            hit.attachedRigidbody.isKinematic)
+        {
+            return false;
+        }
+        PickupItem item = hit.attachedRigidbody.GetComponent<PickupItem>();
+        return item != null && !item.IsHeld;
+    }
+
     private bool IsIgnoredVisitorRouteCollision(Collider hit)
     {
         if (hit == null)
         {
             return false;
+        }
+
+        if (IsPushedLooseItem(hit))
+        {
+            return true;
         }
 
         // Hitbox colliders are added after spawn; refresh the cached set

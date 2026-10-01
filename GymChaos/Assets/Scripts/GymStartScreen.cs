@@ -20,7 +20,11 @@ public sealed class GymStartScreen : MonoBehaviour
     private PlayerMovement player;
     private CanvasGroup canvasGroup;
     private Button playButton;
+    private GymSessionMenu sessionMenu;
     private bool closing;
+
+    public static GymSessionMenu SessionMenu => instance != null ? instance.sessionMenu : null;
+    public static Button PlayButton => instance != null ? instance.playButton : null;
 
     private static readonly Color Accent = PersonaMenuStyle.Accent;
 
@@ -149,6 +153,20 @@ public sealed class GymStartScreen : MonoBehaviour
             if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(optionsButton.gameObject);
         });
         options.SetActive(false);
+
+        if (GymSessionService.SessionMode)
+        {
+            sessionMenu = GymSessionMenu.Create(
+                transform, font, SetMenuButtonsInteractable,
+                () =>
+                {
+                    if (EventSystem.current != null && playButton != null)
+                    {
+                        EventSystem.current.SetSelectedGameObject(playButton.gameObject);
+                    }
+                },
+                StartGameplay);
+        }
 
         if (EventSystem.current != null && playButton != null)
         {
@@ -339,6 +357,38 @@ public sealed class GymStartScreen : MonoBehaviour
             return;
         }
 
+        if (sessionMenu != null)
+        {
+            // Character slots: choose or create a character before the world starts.
+            sessionMenu.Open();
+            return;
+        }
+
+        StartGameplay();
+    }
+
+    private void StartGameplay()
+    {
+        if (closing)
+        {
+            return;
+        }
+
+        RestoreGameplayFacing();
+        try
+        {
+            // Appearance, progression, spawn and resources are in place before
+            // the bootstrap enables input and the HUD binds. The menu stays
+            // interactive until this succeeds, so a failure can be reported.
+            GymSessionService.ApplyToWorld(player);
+        }
+        catch
+        {
+            GymSessionService.AbandonSession();
+            FrameReceptionistOnRight();
+            throw;
+        }
+
         closing = true;
         Debug.Log("GYMCHAOS_START_SCREEN_PLAY", this);
         if (canvasGroup != null)
@@ -347,7 +397,6 @@ public sealed class GymStartScreen : MonoBehaviour
             canvasGroup.blocksRaycasts = false;
         }
 
-        RestoreGameplayFacing();
         if (bootstrap != null)
         {
             bootstrap.BeginGameplay();
