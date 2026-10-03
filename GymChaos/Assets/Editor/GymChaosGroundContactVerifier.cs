@@ -637,7 +637,7 @@ public static class GymChaosGroundContactVerifier
         image.Apply();
         RenderTexture.active = previous;
         string directory = System.IO.Path.GetFullPath(
-            System.IO.Path.Combine(Application.dataPath, "..", "..", "Logs", "agent"));
+            System.IO.Path.Combine(Application.dataPath, "..", "..", "Logs", "verify"));
         System.IO.Directory.CreateDirectory(directory);
         System.IO.File.WriteAllBytes(System.IO.Path.Combine(directory, fileName), image.EncodeToPNG());
         camera.targetTexture = null;

@@ -482,7 +482,7 @@ public static class GymChaosPoliceVerifier
             officer);
     }
 
-    // Graphics runs only: saves Logs/agent/police-gun.png framing the officer.
+    // Graphics runs only: saves Logs/verify/police-gun.png framing the officer.
     private static void CaptureOfficer()
     {
         Transform subject = officer.transform;
@@ -528,7 +528,7 @@ public static class GymChaosPoliceVerifier
         camera.targetTexture = null;
         string path = System.IO.Path.Combine(
             System.IO.Directory.GetParent(Application.dataPath).Parent.FullName,
-            "Logs", "agent", fileName);
+            "Logs", "verify", fileName);
         System.IO.File.WriteAllBytes(path, image.EncodeToPNG());
         UnityEngine.Object.DestroyImmediate(image);
         target.Release();

@@ -13,7 +13,7 @@ using UnityEngine;
 /// Frame-time benchmark over representative scenarios. Run with graphics
 /// (Invoke-UnityCheck -Graphics): the main camera renders into a render
 /// texture every frame so rendering and planar mirrors are included.
-/// Writes Logs/agent/perf-&lt;label&gt;.json and logs one GYMCHAOS_PERF line per
+/// Writes Logs/verify/perf-&lt;label&gt;.json and logs one GYMCHAOS_PERF line per
 /// scenario. Set GYMCHAOS_PERF_LABEL to name the run (baseline, final, ...).
 /// </summary>
 [InitializeOnLoad]
@@ -317,7 +317,7 @@ public static class GymChaosPerformanceVerifier
         string label = Environment.GetEnvironmentVariable("GYMCHAOS_PERF_LABEL");
         if (string.IsNullOrEmpty(label)) label = "latest";
         string directory = Path.Combine(
-            Directory.GetParent(Application.dataPath).Parent.FullName, "Logs", "agent");
+            Directory.GetParent(Application.dataPath).Parent.FullName, "Logs", "verify");
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, $"perf-{label}.json");
         File.WriteAllText(path, "{\n" + json + "\n}\n");
