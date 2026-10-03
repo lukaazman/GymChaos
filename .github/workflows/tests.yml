@@ -32,8 +32,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-unity-library-
 
+      # Unity license activation occasionally fails when several workflows
+      # activate at once; one retry covers it.
       - name: Run EditMode tests
-        id: tests
+        id: tests_first
+        continue-on-error: true
+        uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: GymChaos
+          testMode: editmode
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
+          checkName: EditMode test results
+
+      - name: Run EditMode tests (retry)
+        id: tests_retry
+        if: steps.tests_first.outcome == 'failure'
         uses: game-ci/unity-test-runner@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -50,4 +67,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: editmode-test-results
-          path: ${{ steps.tests.outputs.artifactsPath }}
+          path: ${{ steps.tests_retry.outputs.artifactsPath || steps.tests_first.outputs.artifactsPath }}
