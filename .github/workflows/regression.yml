@@ -1,0 +1,64 @@
+name: Regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths-ignore:
+      - README.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: ${{ matrix.verifier }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        verifier:
+          - Police
+          - ProteinStore
+          - OutdoorPerimeter
+          - LockerVisit
+          - Visitor
+          - EnemyBehavior
+          - VehicleTraffic
+          - VehicleDeparture
+          - DavieBus
+          - DoorwayPriority
+          - DeadliftPath
+          - MembersCount
+          - VisitorUnstick
+          - PlayMode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: GymChaos/Library
+          key: ${{ runner.os }}-unity-library-regression-${{ hashFiles('GymChaos/ProjectSettings/ProjectVersion.txt', 'GymChaos/Packages/packages-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-unity-library-
+
+      - name: Run ${{ matrix.verifier }} verifier
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: GymChaos
+          targetPlatform: StandaloneLinux64
+          buildMethod: GymChaos${{ matrix.verifier }}Verifier.Run
+          manualExit: true
+          versioning: None
+          customParameters: -nographics
