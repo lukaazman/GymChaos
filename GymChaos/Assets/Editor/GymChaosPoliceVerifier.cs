@@ -772,7 +772,10 @@ public static class GymChaosPoliceVerifier
                 $"drawClip={policeOfficer.HasObservedGunDrawingClip} " +
                 $"shootClip={policeOfficer.HasObservedGunShootingClip} " +
                 $"shotAnimation={policeOfficer.HasObservedShotAnimation} " +
-                $"celebration={playerCelebration} sirenReady={sirenReady}.");
+                $"celebration={playerCelebration} sirenReady={sirenReady} " +
+                $"officer={officer.transform.position} player={player?.transform.position} " +
+                $"lastShotOrigin={weapon.LastShotOrigin} lastShotDirection={weapon.LastShotDirection} " +
+                $"lastHit={GymPoliceProjectile.LastCollisionKind}.");
         }
     }
 
