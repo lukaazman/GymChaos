@@ -555,13 +555,6 @@ public static class GymChaosPoliceVerifier
         destination.y = GymDoorway.Instance != null
             ? GymDoorway.Instance.ExteriorPoint.y + 0.05f + footOffset
             : player.transform.position.y;
-        // The player root is the CharacterController centre: stand the capsule
-        // on the floor instead of burying its lower half in it.
-        CharacterController controller = player.GetComponent<CharacterController>();
-        if (controller != null)
-        {
-            destination.y += controller.height * 0.5f - controller.center.y;
-        }
         Rigidbody body = player.GetComponent<Rigidbody>();
         if (body != null)
         {
