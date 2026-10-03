@@ -1536,6 +1536,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 					storeVisitWaypointIndex = 0;
 					state = VisitorState.VisitingProteinStore;
 					travelTarget = storeVisitWaypoints[0];
+					ClearVehicleRouteDetour();
 					ResetVehicleRouteProgress();
 					fighter.StopVisitorMovement();
 					Debug.Log((object)$"GYMCHAOS_VISITOR_STORE_EXITED_GYM enemy={fighter.Identity}", (UnityEngine.Object)(object)this);
@@ -1567,9 +1568,14 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 				fighter.StopVisitorMovement();
 				return true;
 			}
-			Vector3? storeLookAhead = ((storeVisitWaypointIndex + 1 < storeVisitWaypoints.Length) ? new Vector3?(storeVisitWaypoints[storeVisitWaypointIndex + 1]) : ((Vector3?)null));
+			Vector3? storeLookAhead = vehicleDetourActive ? GetVehicleRouteDetourLookAhead() : ((storeVisitWaypointIndex + 1 < storeVisitWaypoints.Length) ? new Vector3?(storeVisitWaypoints[storeVisitWaypointIndex + 1]) : ((Vector3?)null));
 			if (fighter.MoveVisitorAlongExteriorRoute(travelTarget, 2.2f, storeLookAhead, 0.55f, allowWaypointPlaneCrossing: false, !storeLookAhead.HasValue))
 			{
+				if (vehicleDetourActive)
+				{
+					AdvanceVehicleRouteDetour();
+					return true;
+				}
 				storeVisitWaypointIndex++;
 				if (storeVisitWaypointIndex < storeVisitWaypoints.Length)
 				{
@@ -1585,6 +1591,10 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 					Debug.Log((object)($"GYMCHAOS_VISITOR_STORE_ARRIVED enemy={fighter.Identity} " + $"target={travelTarget}"), (UnityEngine.Object)(object)this);
 				}
 			}
+			else
+			{
+				TryRerouteStalledVehicleApproach();
+			}
 			return true;
 		}
 		case VisitorState.ProteinStoreDwell:
@@ -1596,6 +1606,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 				storeVisitWaypointIndex = 0;
 				state = VisitorState.ReturningFromProteinStore;
 				travelTarget = storeVisitWaypoints[0];
+				ClearVehicleRouteDetour();
 				ResetVehicleRouteProgress();
 				Debug.Log((object)$"GYMCHAOS_VISITOR_STORE_LEAVING enemy={fighter.Identity}", (UnityEngine.Object)(object)this);
 			}
@@ -1608,9 +1619,14 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 				travelTarget = (((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null) ? doorway.InteriorPoint : travelTarget);
 				return true;
 			}
-			Vector3? returnLookAhead = ((storeVisitWaypointIndex + 1 < storeVisitWaypoints.Length) ? new Vector3?(storeVisitWaypoints[storeVisitWaypointIndex + 1]) : ((Vector3?)null));
+			Vector3? returnLookAhead = vehicleDetourActive ? GetVehicleRouteDetourLookAhead() : ((storeVisitWaypointIndex + 1 < storeVisitWaypoints.Length) ? new Vector3?(storeVisitWaypoints[storeVisitWaypointIndex + 1]) : ((Vector3?)null));
 			if (fighter.MoveVisitorAlongExteriorRoute(travelTarget, 2.2f, returnLookAhead, 0.55f, allowWaypointPlaneCrossing: false, !returnLookAhead.HasValue))
 			{
+				if (vehicleDetourActive)
+				{
+					AdvanceVehicleRouteDetour();
+					return true;
+				}
 				storeVisitWaypointIndex++;
 				if (storeVisitWaypointIndex < storeVisitWaypoints.Length)
 				{
@@ -1626,6 +1642,10 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 					ResetDoorwayExitTracking();
 					Debug.Log((object)$"GYMCHAOS_VISITOR_STORE_RETURN_DOOR enemy={fighter.Identity}", (UnityEngine.Object)(object)this);
 				}
+			}
+			else
+			{
+				TryRerouteStalledVehicleApproach();
 			}
 			return true;
 		}
@@ -1716,6 +1736,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		vehicleEntryUsesProteinStoreRoute = false;
 		vehicleExitUsesDavieBusGate = false;
 		vehicleExitUsesProteinStoreRoute = false;
+		ClearVehicleRouteDetour();
 		storeVisitDwellUntil = 0f;
 		storeVisitWaypoints = null;
 		storeVisitWaypointIndex = 0;

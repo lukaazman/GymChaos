@@ -1321,6 +1321,12 @@ public sealed partial class GymVisitorAgent
 		}
 		lastVehicleRouteDistance = num;
 	}
+	private void ClearVehicleRouteDetour()
+	{
+		vehicleDetourActive = false;
+		vehicleDetourWaypoints = null;
+		vehicleDetourWaypointIndex = 0;
+	}
 	private void TryRerouteStalledVehicleApproach()
 	{
 		//IL_0010: Unknown result type (might be due to invalid IL or missing references)
