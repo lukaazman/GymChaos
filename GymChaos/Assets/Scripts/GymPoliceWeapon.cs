@@ -211,6 +211,24 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         }
     }
 
+    // Fighter roots stand on the floor; the player root is the CharacterController
+    // centre, so a fixed offset above it would shoot over the player's head.
+    private static Vector3 ResolveAimPoint(Transform target)
+    {
+        EnemyFighter targetFighter = target.GetComponentInParent<EnemyFighter>();
+        if (targetFighter != null)
+        {
+            return targetFighter.transform.position + Vector3.up * 1.18f;
+        }
+        CharacterController controller = target.GetComponentInParent<CharacterController>();
+        if (controller != null)
+        {
+            return controller.transform.TransformPoint(controller.center) +
+                Vector3.up * (controller.height * 0.15f);
+        }
+        return target.position + Vector3.up * 1.15f;
+    }
+
     // Where the officer shoots: the target's chest, else level ahead.
     private Vector3 TargetAimDirection(Vector3 from)
     {
@@ -219,10 +237,7 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         {
             return AimDirection;
         }
-        EnemyFighter targetFighter = target.GetComponentInParent<EnemyFighter>();
-        Vector3 aimPoint = targetFighter != null
-            ? targetFighter.transform.position + Vector3.up * 1.18f
-            : target.position + Vector3.up * 1.15f;
+        Vector3 aimPoint = ResolveAimPoint(target);
         Vector3 direction = aimPoint - from;
         return direction.sqrMagnitude > 0.0001f ? direction.normalized : AimDirection;
     }
@@ -474,12 +489,7 @@ public sealed class GymPoliceWeapon : MonoBehaviour
             return;
         }
 
-        Vector3 aimPoint = target.position + Vector3.up * 1.15f;
-        EnemyFighter targetFighter = target.GetComponentInParent<EnemyFighter>();
-        if (targetFighter != null)
-        {
-            aimPoint = targetFighter.transform.position + Vector3.up * 1.18f;
-        }
+        Vector3 aimPoint = ResolveAimPoint(target);
 
         Vector3 direction = aimPoint - weaponRoot.position;
         Vector3 barrel = weaponRoot.TransformDirection(Vector3.right);
@@ -503,12 +513,7 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         SetVisible(true);
         AimAt(target);
         Vector3 origin = muzzle.position;
-        Vector3 aimPoint = target.position + Vector3.up * 1.15f;
-        EnemyFighter targetFighter = target.GetComponentInParent<EnemyFighter>();
-        if (targetFighter != null)
-        {
-            aimPoint = targetFighter.transform.position + Vector3.up * 1.18f;
-        }
+        Vector3 aimPoint = ResolveAimPoint(target);
 
         Vector3 direction = Vector3.ProjectOnPlane(aimPoint - origin, Vector3.up);
         direction.y = aimPoint.y - origin.y;
