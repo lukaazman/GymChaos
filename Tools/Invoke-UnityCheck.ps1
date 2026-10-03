@@ -2,7 +2,7 @@
 param(
     # Editor method to run, e.g. GymChaosPoliceVerifier.Run. Omit for import/compile only.
     [string]$Method = '',
-    # Log name without extension; written to Logs/agent/<Name>.log (ignored by git).
+    # Log name without extension; written to Logs/verify/<Name>.log (ignored by git).
     [string]$Name = '',
     [string]$UnityExecutable = 'C:\Program Files\Unity\Hub\Editor\6000.5.8f1\Editor\Unity.com',
     [int]$Tail = 8,
@@ -16,7 +16,7 @@ param(
 )
 
 # Runs Unity in batch mode and prints only a compact summary (exit code, compiler
-# errors, GYMCHAOS_* markers, exceptions) so agents do not read multi-megabyte logs.
+# errors, GYMCHAOS_* markers, exceptions) so callers do not read multi-megabyte logs.
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
@@ -24,7 +24,7 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $isMainProject = [string]::IsNullOrWhiteSpace($ProjectPath)
 if ($isMainProject) { $ProjectPath = Join-Path $repositoryRoot 'GymChaos' }
 $projectPath = $ProjectPath
-$logDirectory = Join-Path $repositoryRoot 'Logs\agent'
+$logDirectory = Join-Path $repositoryRoot 'Logs\verify'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
 if ([string]::IsNullOrWhiteSpace($Name))
@@ -84,7 +84,7 @@ $arguments = @('-batchmode', '-projectPath', $projectPath, '-logFile', $logFile)
 if (-not $Graphics) { $arguments = @('-nographics') + $arguments }
 if ($Method) { $arguments += @('-executeMethod', $Method) } else { $arguments += '-quit' }
 
-# Agent runs must stay silent: GymChaosBatchAudioMute mutes the editor's
+# Batch runs must stay silent: GymChaosBatchAudioMute mutes the editor's
 # audio output in the child Unity process (lanes inherit it through this script).
 $env:GYMCHAOS_MUTE_AUDIO = '1'
 

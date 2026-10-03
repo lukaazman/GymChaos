@@ -52,13 +52,13 @@ public static class GymChaosProgressionVerifier
     private static int lockerPreviewCaptureFrame;
     private static readonly string LockerPreviewCapturePath = Path.Combine(
         Directory.GetParent(Directory.GetParent(Application.dataPath).FullName).FullName,
-        "codex-locker-outfit-preview.png");
+        "capture-locker-outfit-preview.png");
     private static readonly string LockerReflectionCapturePath = Path.Combine(
         Directory.GetParent(Directory.GetParent(Application.dataPath).FullName).FullName,
-        "codex-locker-reflection.png");
+        "capture-locker-reflection.png");
     private static readonly string LockerPlayerReflectionCapturePath = Path.Combine(
         Directory.GetParent(Directory.GetParent(Application.dataPath).FullName).FullName,
-        "codex-locker-player-reflection.png");
+        "capture-locker-player-reflection.png");
     private static Camera lockerPreviewCaptureCamera;
     private static RenderTexture lockerPreviewCaptureTarget;
     private static RenderTexture lockerPreviewPreviousTarget;

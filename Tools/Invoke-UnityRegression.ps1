@@ -22,13 +22,13 @@ param(
 
 # Prints one "REGRESSION <index> <verifier> exit=<n> seconds=<s> <first error>"
 # line per run, then REGRESSION_DONE. Runs are balanced across lanes by the
-# durations recorded in Logs/agent/regression-durations.json (longest first).
+# durations recorded in Logs/verify/regression-durations.json (longest first).
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $mainProject = Join-Path $repositoryRoot 'GymChaos'
 $check = Join-Path $PSScriptRoot 'Invoke-UnityCheck.ps1'
-$durationsPath = Join-Path $repositoryRoot 'Logs\agent\regression-durations.json'
+$durationsPath = Join-Path $repositoryRoot 'Logs\verify\regression-durations.json'
 New-Item -ItemType Directory -Path (Split-Path $durationsPath) -Force | Out-Null
 
 function Get-LaneProject([int]$lane)
@@ -118,7 +118,7 @@ $jobs = foreach ($lane in $laneRuns.Keys)
             {
                 # No verifier error: name the infrastructure cause (e.g. the
                 # ILPP pipe race when several Unity processes compile at once).
-                $logPath = Join-Path (Split-Path $check -Parent | Split-Path -Parent) "Logs\agent\$prefix-$($run.Index)-$($run.Verifier).log"
+                $logPath = Join-Path (Split-Path $check -Parent | Split-Path -Parent) "Logs\verify\$prefix-$($run.Index)-$($run.Verifier).log"
                 $firstError = if (Test-Path $logPath) {
                     Select-String -Path $logPath -Pattern 'ILPPTrigger: .*|Scripts have compiler errors|error CS\d+.*' |
                         Select-Object -First 1 | ForEach-Object { 'INFRA ' + $_.Matches[0].Value }
@@ -127,7 +127,7 @@ $jobs = foreach ($lane in $laneRuns.Keys)
             [pscustomobject]@{
                 Index = $run.Index; Verifier = $run.Verifier; Exit = $exit; Lane = $lane
                 Seconds = [int]$watch.Elapsed.TotalSeconds
-                # Passing runs print no detail: fewer tokens per regression.
+                # Passing runs print no detail: shorter output per regression.
                 Detail = if ($exit -ne 0 -and $firstError) { $firstError.Substring(0, [Math]::Min(260, $firstError.Length)) } else { '' }
             }
         }

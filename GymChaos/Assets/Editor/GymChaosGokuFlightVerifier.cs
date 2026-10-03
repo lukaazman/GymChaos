@@ -503,7 +503,7 @@ public static class GymChaosGokuFlightVerifier
         image.ReadPixels(new Rect(0, 0, 960, 540), 0, 0);
         image.Apply();
         string directory = System.IO.Path.GetFullPath(
-            System.IO.Path.Combine(Application.dataPath, "..", "..", "Logs", "agent"));
+            System.IO.Path.Combine(Application.dataPath, "..", "..", "Logs", "verify"));
         System.IO.Directory.CreateDirectory(directory);
         System.IO.File.WriteAllBytes(
             System.IO.Path.Combine(directory, fileName), image.EncodeToPNG());

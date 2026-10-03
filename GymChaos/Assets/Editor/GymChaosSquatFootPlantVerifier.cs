@@ -595,7 +595,7 @@ public static class GymChaosSquatFootPlantVerifier
     }
 
     // Graphics runs only: saves front and side renders of the squatting
-    // fighter to Logs/agent/squat-<view>.png for visual inspection.
+    // fighter to Logs/verify/squat-<view>.png for visual inspection.
     private static void CaptureSquatViews()
     {
         if (fighter == null ||
@@ -606,7 +606,7 @@ public static class GymChaosSquatFootPlantVerifier
         Transform subject = fighter.transform;
         Vector3 focus = subject.position + Vector3.up * 1.2f;
         string directory = System.IO.Path.Combine(
-            Directory.GetParent(Application.dataPath).Parent.FullName, "Logs", "agent");
+            Directory.GetParent(Application.dataPath).Parent.FullName, "Logs", "verify");
         foreach ((string view, Vector3 offset) in new[]
                  {
                      ("front", subject.forward * 3.2f),
