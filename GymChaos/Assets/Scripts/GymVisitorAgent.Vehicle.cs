@@ -925,7 +925,7 @@ public sealed partial class GymVisitorAgent
 				finalVehicleTarget
 			});
 		}
-		vehicleExitWaypointIndex = FindInitialRouteWaypoint(vehicleExitWaypoints, ((Component)fighter).transform.position, 2.2f);
+		vehicleExitWaypointIndex = FindResumeRouteWaypoint(vehicleExitWaypoints, ((Component)fighter).transform.position, FindInitialRouteWaypoint(vehicleExitWaypoints, ((Component)fighter).transform.position, 2.2f), 8f);
 		travelTarget = vehicleExitWaypoints[vehicleExitWaypointIndex];
 		vehicleTurnPending = true;
 		vehicleEntryPending = true;
