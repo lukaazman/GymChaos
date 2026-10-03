@@ -66,7 +66,7 @@ public static class GymChaosDavieBusVerifier
 
     private static void ResetState()
     {
-        started = EditorApplication.timeSinceStartup;
+        started = GymChaosVerifierClock.Now;
         parkedAt = 0d;
         phase = 0;
         bus = null;
@@ -92,12 +92,14 @@ public static class GymChaosDavieBusVerifier
     {
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
+            GymChaosVerifierClock.BeginFixedStep();
             ResetState();
             Time.timeScale = 3f;
             AudioListener.pause = true;
             Application.runInBackground = true;
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
+        GymChaosVerifierClock.EndFixedStep();
         EditorApplication.update -= Tick;
         EditorApplication.playModeStateChanged -= PlayModeChanged;
         if (Application.isBatchMode && SessionState.GetBool(RequestedKey, false))
@@ -182,7 +184,7 @@ public static class GymChaosDavieBusVerifier
                 $"position={bus.transform.position}.");
         }
 
-        parkedAt = EditorApplication.timeSinceStartup;
+        parkedAt = GymChaosVerifierClock.Now;
         phase = 2;
         Debug.Log(
             $"GYMCHAOS_DAVIE_BUS_ARRIVAL_OK parkedInLocalBay={parkedInLocalBay} " +
@@ -194,7 +196,7 @@ public static class GymChaosDavieBusVerifier
     private static void TickDeparture()
     {
         if (!departureStarted && !departureDone &&
-            EditorApplication.timeSinceStartup - parkedAt > 1.25d)
+            GymChaosVerifierClock.Now - parkedAt > 1.25d)
         {
             departureStarted = true;
             bus.DriveOut(() => departureDone = true);
@@ -371,7 +373,7 @@ public static class GymChaosDavieBusVerifier
 
     private static void CheckTimeout()
     {
-        if (EditorApplication.timeSinceStartup - started <= 90d) return;
+        if (GymChaosVerifierClock.Now - started <= 90d) return;
         throw new InvalidOperationException(
             $"Davie bus lifecycle timed out phase={phase} arrival={arrivalDone} " +
             $"departure={departureDone} parked={bus?.IsParked} " +

@@ -77,7 +77,7 @@ public static class GymChaosPoliceVerifier
 
     private static void ResetState()
     {
-        started = EditorApplication.timeSinceStartup;
+        started = GymChaosVerifierClock.Now;
         suspended = false;
         killRequested = false;
         dispatchValidated = false;
@@ -108,10 +108,9 @@ public static class GymChaosPoliceVerifier
     {
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
-            started = EditorApplication.timeSinceStartup;
+            GymChaosVerifierClock.BeginFixedStep();
+            started = GymChaosVerifierClock.Now;
             Time.timeScale = 3f;
-            // Fixed frame step so slow CI machines simulate the same as a local run.
-            Time.captureFramerate = 60;
             MuteAllAudio();
         }
 
@@ -120,7 +119,7 @@ public static class GymChaosPoliceVerifier
             return;
         }
 
-        Time.captureFramerate = 0;
+        GymChaosVerifierClock.EndFixedStep();
         EditorApplication.update -= Tick;
         EditorApplication.playModeStateChanged -= PlayModeChanged;
         SessionState.EraseBool(RequestedKey);
@@ -140,7 +139,7 @@ public static class GymChaosPoliceVerifier
         try
         {
             MuteAllAudio();
-            double elapsed = EditorApplication.timeSinceStartup - started;
+            double elapsed = GymChaosVerifierClock.Now - started;
             if (elapsed > 240d)
             {
                 throw new InvalidOperationException(
@@ -351,7 +350,7 @@ public static class GymChaosPoliceVerifier
             !director.PoliceCarParkedByGymForVerification ||
             director.DispatchPhaseForVerification != "Chase")
         {
-            if (EditorApplication.timeSinceStartup - pursuitStageStarted > 4d)
+            if (GymChaosVerifierClock.Now - pursuitStageStarted > 4d)
             {
                 throw new InvalidOperationException(
                     $"Police car did not remain parked during natural pursuit: " +
@@ -370,7 +369,7 @@ public static class GymChaosPoliceVerifier
         bool reached = distance <= Mathf.Max(2.65f, officer.CurrentAttackRange + 0.55f);
         if (!reached)
         {
-            if (EditorApplication.timeSinceStartup - pursuitStageStarted > 40d)
+            if (GymChaosVerifierClock.Now - pursuitStageStarted > 40d)
             {
                 throw new InvalidOperationException(
                     $"Policeman did not naturally reach the killer in " +
@@ -474,7 +473,7 @@ public static class GymChaosPoliceVerifier
         PursuitStage stage, Vector3 destination, string label)
     {
         pursuitStage = stage;
-        pursuitStageStarted = EditorApplication.timeSinceStartup;
+        pursuitStageStarted = GymChaosVerifierClock.Now;
         pursuitStageOfficerStart = officer != null
             ? officer.transform.position
             : Vector3.zero;
