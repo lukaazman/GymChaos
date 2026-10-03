@@ -761,6 +761,14 @@ public static class GymChaosPoliceVerifier
 
         if (elapsed > 230d)
         {
+            CharacterController controller = player.GetComponent<CharacterController>();
+            Debug.Log(
+                $"GYMCHAOS_POLICE_COMBAT_DIAG player={player.transform.position} " +
+                $"controller={(controller != null ? controller.enabled.ToString() : "none")} " +
+                $"bounds={(controller != null ? controller.bounds.ToString() : "n/a")} " +
+                $"layer={player.gameObject.layer} dead={player.IsDead} " +
+                $"lastShot={weapon.LastShotOrigin}/{weapon.LastShotDirection} " +
+                $"dialogue={GymDialogueDirector.IsDialogueActive}");
             throw new InvalidOperationException(
                 $"Police combat incomplete: hand={policeOfficer.HasObservedHandToHand} " +
                 $"ranged={policeOfficer.HasObservedRangedMode} " +
