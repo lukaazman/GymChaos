@@ -66,6 +66,32 @@ public sealed partial class GymVisitorAgent
 		}
 		return index;
 	}
+	// A visitor that starts far from the first waypoint (for example one that was
+	// sent back to the parking lot after an aborted entry) must not walk back to
+	// the door through the parking fence; resume from the nearest waypoint.
+	private static int FindResumeRouteWaypoint(Vector3[] route, Vector3 start, int initialIndex, float farFromStartRadius)
+	{
+		if (route == null || route.Length == 0 || initialIndex != 0)
+		{
+			return initialIndex;
+		}
+		if (Vector3.ProjectOnPlane(route[0] - start, Vector3.up).sqrMagnitude <= farFromStartRadius * farFromStartRadius)
+		{
+			return initialIndex;
+		}
+		int nearest = 0;
+		float nearestDistance = float.PositiveInfinity;
+		for (int i = 0; i < route.Length; i++)
+		{
+			float distance = Vector3.ProjectOnPlane(route[i] - start, Vector3.up).sqrMagnitude;
+			if (distance <= nearestDistance)
+			{
+				nearestDistance = distance;
+				nearest = i;
+			}
+		}
+		return nearest;
+	}
 	private Vector3[] BuildProteinStoreWaypoints(bool returning)
 	{
 		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
