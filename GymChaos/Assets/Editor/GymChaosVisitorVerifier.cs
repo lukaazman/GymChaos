@@ -163,7 +163,7 @@ public static class GymChaosVisitorVerifier
     {
         if (EditorApplication.isPlaying)
         {
-            enteredPlayTime = EditorApplication.timeSinceStartup;
+            enteredPlayTime = GymChaosVerifierClock.Now;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
@@ -175,16 +175,15 @@ public static class GymChaosVisitorVerifier
         {
             // Hold scheduled NPC behavior until the deterministic scene checks finish.
             Time.timeScale = 0f;
-            // Fixed frame step so slow CI machines simulate the same as a local run.
-            Time.captureFramerate = 60;
-            enteredPlayTime = EditorApplication.timeSinceStartup;
+            GymChaosVerifierClock.BeginFixedStep();
+            enteredPlayTime = GymChaosVerifierClock.Now;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
             Time.timeScale = 1f;
-            Time.captureFramerate = 0;
+            GymChaosVerifierClock.EndFixedStep();
             SetPoseSamplingBound(false);
             RestorePlayerAfterRouteScenario();
             RestoreOriginalProgressionSave();
@@ -202,7 +201,7 @@ public static class GymChaosVisitorVerifier
     {
         try
         {
-            double elapsed = EditorApplication.timeSinceStartup - enteredPlayTime;
+            double elapsed = GymChaosVerifierClock.Now - enteredPlayTime;
             PlayerMovement player = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
             GymVisitorDirector director =
                 UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>();
@@ -423,10 +422,10 @@ public static class GymChaosVisitorVerifier
                         // sample cannot fail an otherwise correct rep.
                         if (squatDepthWaitStarted < 0d)
                         {
-                            squatDepthWaitStarted = EditorApplication.timeSinceStartup;
+                            squatDepthWaitStarted = GymChaosVerifierClock.Now;
                         }
                         bool waitingForDepth = Mathf.Abs(squat.BarDropFromStart) < 0.035f &&
-                            EditorApplication.timeSinceStartup - squatDepthWaitStarted < 3d;
+                            GymChaosVerifierClock.Now - squatDepthWaitStarted < 3d;
                         bool authoredSquatActive = authoredAnimator != null &&
                             authoredAnimator.IsWorkoutPoseLocked &&
                             authoredAnimator.HasAuthoredSquatClip &&
