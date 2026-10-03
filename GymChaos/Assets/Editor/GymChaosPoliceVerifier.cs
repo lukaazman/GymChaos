@@ -110,6 +110,8 @@ public static class GymChaosPoliceVerifier
         {
             started = EditorApplication.timeSinceStartup;
             Time.timeScale = 3f;
+            // Fixed frame step so slow CI machines simulate the same as a local run.
+            Time.captureFramerate = 60;
             MuteAllAudio();
         }
 
@@ -118,6 +120,7 @@ public static class GymChaosPoliceVerifier
             return;
         }
 
+        Time.captureFramerate = 0;
         EditorApplication.update -= Tick;
         EditorApplication.playModeStateChanged -= PlayModeChanged;
         SessionState.EraseBool(RequestedKey);

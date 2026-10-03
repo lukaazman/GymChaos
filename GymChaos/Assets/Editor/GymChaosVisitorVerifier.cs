@@ -175,6 +175,8 @@ public static class GymChaosVisitorVerifier
         {
             // Hold scheduled NPC behavior until the deterministic scene checks finish.
             Time.timeScale = 0f;
+            // Fixed frame step so slow CI machines simulate the same as a local run.
+            Time.captureFramerate = 60;
             enteredPlayTime = EditorApplication.timeSinceStartup;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
@@ -182,6 +184,7 @@ public static class GymChaosVisitorVerifier
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
             Time.timeScale = 1f;
+            Time.captureFramerate = 0;
             SetPoseSamplingBound(false);
             RestorePlayerAfterRouteScenario();
             RestoreOriginalProgressionSave();
