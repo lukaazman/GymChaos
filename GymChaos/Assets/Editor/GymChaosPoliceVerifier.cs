@@ -546,8 +546,14 @@ public static class GymChaosPoliceVerifier
             return;
         }
 
+        // The player's controller is centred on its transform, so stand the
+        // feet on the ground instead of sinking the capsule into it.
+        CharacterController controller = player.GetComponent<CharacterController>();
+        float footOffset = controller != null
+            ? player.transform.position.y - controller.bounds.min.y
+            : 0f;
         destination.y = GymDoorway.Instance != null
-            ? GymDoorway.Instance.ExteriorPoint.y + 0.05f
+            ? GymDoorway.Instance.ExteriorPoint.y + 0.05f + footOffset
             : player.transform.position.y;
         Rigidbody body = player.GetComponent<Rigidbody>();
         if (body != null)
