@@ -4,7 +4,7 @@ using UnityEngine;
 
 /// <summary>
 /// Graphics verifier runs only: saves the world camera image with the given
-/// screen-space overlay canvases drawn on top into Logs/verify/&lt;file&gt;.
+/// screen-space overlay canvases drawn on top into Logs/agent/&lt;file&gt;.
 /// Overlay canvases never reach Camera.Render, so the world is rendered first,
 /// then the canvases alone (moved to the UI layer, screen-space-camera on a
 /// UI-only camera cleared to transparent), and the two are composited.
@@ -81,7 +81,7 @@ public static class GymChaosUiCapture
         image.SetPixels(world);
         image.Apply();
         string path = Path.Combine(Directory.GetParent(Application.dataPath).Parent.FullName,
-            "Logs", "verify", fileName);
+            "Logs", "agent", fileName);
         File.WriteAllBytes(path, image.EncodeToPNG());
         Object.DestroyImmediate(image);
         Debug.Log($"GYMCHAOS_UI_CAPTURE path={path}");

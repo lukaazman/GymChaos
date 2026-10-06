@@ -10,7 +10,9 @@ using UnityEngine.Rendering;
 public enum RuntimeGlbRenderProfile
 {
     Default,
-    CheapBackground
+    CheapBackground,
+    // Cheap background whose towers share one unlit chrome/glass material.
+    ChromeGlassBackground
 }
 
 /// <summary>
@@ -35,6 +37,10 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
 
     private static readonly Dictionary<string, Texture2D> FacadeFallbackTextures =
         new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+    public const string ChromeGlassMaterialName = "MAT_City_Chrome_Glass";
+    private static Material chromeGlassFacadeMaterial;
+    private static Material chromeGlassTrimMaterial;
+    private static Material chromeGlassWindowMaterial;
     private static readonly Dictionary<Material, Material> CheapMaterialCache =
         new Dictionary<Material, Material>();
 
@@ -298,7 +304,9 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
 
         Bounds combinedBounds = default;
         bool hasBounds = false;
-        bool cheapBackgroundProfile = renderProfile ==
+        bool chromeGlassProfile = renderProfile ==
+            RuntimeGlbRenderProfile.ChromeGlassBackground;
+        bool cheapBackgroundProfile = chromeGlassProfile || renderProfile ==
             RuntimeGlbRenderProfile.CheapBackground;
         int partsPerYield = cheapBackgroundProfile ? 2 : 24;
         for (int partIndex = 0; partIndex < asset.Parts.Length; partIndex++)
@@ -323,9 +331,11 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             MeshFilter filter = child.AddComponent<MeshFilter>();
             filter.sharedMesh = part.Mesh;
             MeshRenderer renderer = child.AddComponent<MeshRenderer>();
-            renderer.sharedMaterial = cheapBackgroundProfile
-                ? GetCheapBackgroundMaterial(part.Material)
-                : part.Material;
+            renderer.sharedMaterial = chromeGlassProfile
+                ? GetChromeGlassBackgroundMaterial(part.Material)
+                : cheapBackgroundProfile
+                    ? GetCheapBackgroundMaterial(part.Material)
+                    : part.Material;
             renderer.shadowCastingMode = cheapBackgroundProfile
                 ? ShadowCastingMode.Off
                 : ShadowCastingMode.On;
@@ -749,6 +759,93 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             material.SetFloat("_Cull", 0f);
         }
 
+        return material;
+    }
+
+    // Towers share one colour family across three materials on one shader:
+    // window panes and glass streaks are reflective glass; facades (dark
+    // panel texture), frames, structural metal and roofs are a dark, barely
+    // glossy body. Signs and the red spine keep the cheap unlit path.
+    private static Material GetChromeGlassBackgroundMaterial(Material source)
+    {
+        if (source == null)
+        {
+            return null;
+        }
+
+        string sourceName = source.name ?? string.Empty;
+        bool windowPane =
+            sourceName.StartsWith("MAT_Window_Emission_", StringComparison.OrdinalIgnoreCase);
+        // Tower walls (panel facades and the glass streak strips) carry a
+        // world-space window grid: only the panes reflect, the wall between
+        // them is the dark body colour.
+        bool facade =
+            sourceName.StartsWith("MAT_Facade_", StringComparison.OrdinalIgnoreCase) ||
+            sourceName.StartsWith("MAT_Reflection_Streak_", StringComparison.OrdinalIgnoreCase);
+        bool emissive = source.IsKeywordEnabled("_EMISSION");
+        Shader shader = windowPane || facade || !emissive
+            ? Resources.Load<Shader>("GymChromeGlassUnlit")
+            : null;
+        if (shader == null)
+        {
+            return GetCheapBackgroundMaterial(source);
+        }
+
+        if (windowPane)
+        {
+            if (chromeGlassWindowMaterial == null)
+            {
+                chromeGlassWindowMaterial = CreateChromeGlassMaterial(
+                    shader, "Window", 0.95f, 1f, false);
+            }
+            return chromeGlassWindowMaterial;
+        }
+
+        if (facade)
+        {
+            if (chromeGlassFacadeMaterial == null)
+            {
+                chromeGlassFacadeMaterial = CreateChromeGlassMaterial(
+                    shader, "Facade", 0.95f, 1f, true);
+            }
+            return chromeGlassFacadeMaterial;
+        }
+
+        // Window frames, structural metal and roofs: one dark,
+        // non-reflective colour shared by every tower.
+        if (chromeGlassTrimMaterial == null)
+        {
+            chromeGlassTrimMaterial = CreateChromeGlassMaterial(
+                shader, "Body", 0f, 0f, false);
+        }
+        return chromeGlassTrimMaterial;
+    }
+
+    private const float ChromeBodyBrightness = 0.36f;
+
+    private static Material CreateChromeGlassMaterial(
+        Shader shader,
+        string role,
+        float reflectivity,
+        float sunGlint,
+        bool windowGrid)
+    {
+        Material material = new Material(shader)
+        {
+            name = ChromeGlassMaterialName + " " + role + " (Cheap Background)",
+            enableInstancing = true
+        };
+        // No facade texture: the body is one flat colour (the pattern term
+        // of a white texture is constant), the curtain-wall mullions match it.
+        material.SetFloat("_BodyBrightness", ChromeBodyBrightness);
+        material.SetFloat("_PatternContrast", 1f);
+        material.SetFloat("_Reflectivity", reflectivity);
+        material.SetFloat("_SunGlint", sunGlint);
+        material.SetFloat("_WindowGrid", windowGrid ? 1f : 0f);
+        // Office-scale panes: 1.25 m glass in a 1.7 m bay, 1.9 m tall on a
+        // 3.3 m floor, so towers read as many windows, not large tiles.
+        material.SetVector("_WindowCell", new Vector4(1.7f, 3.3f, 0f, 0f));
+        material.SetVector("_WindowFill", new Vector4(0.74f, 0.58f, 0f, 0f));
         return material;
     }
 

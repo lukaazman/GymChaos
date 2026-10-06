@@ -24,6 +24,8 @@ from mathutils import Matrix, Vector
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "Tools"))
+from squat_contact_bake import bake_contacts
 
 ENEMY_CLIPS = (
     "walking",
@@ -38,6 +40,8 @@ ENEMY_CLIPS = (
     "celebration2",
     "celebration3",
 )
+
+POLICE_CLIPS = ENEMY_CLIPS + ("gun_drawing", "gun_shooting")
 
 PLAYER_CLIPS = (
     "walking",
@@ -81,6 +85,13 @@ CHARACTERS = {
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/goku_authored.fbx",
         "clip_names": ENEMY_CLIPS,
     },
+    "mark": {
+        "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/mark_rig.blend",
+        "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
+        "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/mark_authored.fbx",
+        "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/mark.png",
+        "clip_names": ("idle1", "idle2", "idle3"),
+    },
     "jaycutler": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/jaycutler_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
@@ -93,11 +104,25 @@ CHARACTERS = {
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/ronnie_authored.fbx",
         "clip_names": ENEMY_CLIPS,
     },
+    "davie": {
+        "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/davie_rig.blend",
+        "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
+        "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/davie_authored.fbx",
+        "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/davie.png",
+        "clip_names": ENEMY_CLIPS,
+    },
     "zyzz": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/zyzz_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/zyzz_authored.fbx",
         "clip_names": ENEMY_CLIPS,
+    },
+    "policeman": {
+        "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/policeman_rig.blend",
+        "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
+        "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/policeman_authored.fbx",
+        "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/policeman.png",
+        "clip_names": POLICE_CLIPS,
     },
     "player": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/Player/player_rig.blend",
@@ -677,6 +702,7 @@ def retarget_deform_action(
         else {"root", "MCH-torso.parent"}
     )
     root_scale = root_motion_scale(source, target)
+    squat_anchors = {}
 
     # Retargeting several imported FBX actions in one Blender session leaves
     # the dependency graph on the previous clip's final frame. Wake both the
@@ -763,6 +789,9 @@ def retarget_deform_action(
                     frame=output_frame,
                     group=action_name,
                 )
+
+        if action_name == "squat":
+            bake_contacts(target, squat_anchors, output_frame, action_name)
 
     action.frame_start = 1
     action.frame_end = frame_count

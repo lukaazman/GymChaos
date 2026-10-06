@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -13,18 +14,27 @@ public static class GymOutdoorBuilder
 {
     private const string RootName = "Gym Exterior (Runtime)";
     private static Renderer cachedRoomFloorRenderer;
-    private const float ParkingDepth = 18f;
+    // Every vehicle (cars, Arnold's hummer, Goku's cloud, the police car and
+    // Davie's bus) is 1.25x its original size. The parking stalls, aisle,
+    // road, bus bay and corner below scale with it so the original padding
+    // between bodies, lines and walls is kept.
+    public const float VehicleScale = 1.25f;
+    private const float ParkingBayPitch = 4.2f * VehicleScale;
+    private const float ParkingLineWidth = 0.075f * VehicleScale;
+    private const float ParkingDepth = 18f * VehicleScale;
     // Distance from the road's north edge to the parking north wall line.
     // The bus bay uses it as its depth so the bay fence continues that line.
     public const float NorthBoundaryOffsetFromRoadEdge =
         ParkingDepth * 0.5f + 0.55f - VehicleRoadWidth * 0.5f;
-    private const float ParkingAisleDepth = 6.8f;
+    private const float ParkingAisleDepth = 6.8f * VehicleScale;
     private const float ParkingLineInset = 0.7f;
     private const float PathWidth = 4.4f;
     // Two normal vehicle lanes plus shoulders. The bus stop is a
     // short side pull-off, not a permanent third lane along the whole road.
-    private const float VehicleRoadWidth = 8.2f;
+    private const float VehicleRoadWidth = 8.2f * VehicleScale;
     private const float VehicleLaneOffset = VehicleRoadWidth * 0.25f;
+    // Shoulder south of the road that the Davie bus needs for its turnaround.
+    private const float BusTurnaroundShoulder = 3.5f * VehicleScale;
     private const float BoundaryHeight = 5.2f;
     public const float SharedFenceCollisionHeight = BoundaryHeight;
     public const float SharedFenceVisibleHeight = 1.35f;
@@ -39,9 +49,11 @@ public static class GymOutdoorBuilder
     private const float ExteriorSurfaceThickness = 0.24f;
     private const float FoundationSurfaceInset = 0.02f;
     private const float RoadSurfaceThickness = 0.18f;
-    private const float VehicleRoadApproachLength = 42f;
-    private const float VehicleRoadOcclusionStart = 18f;
-    private const float VehicleRoadHiddenContinuation = 24f;
+    // Long enough for the 1.25x bus bay plus its corner clearance.
+    private const float VehicleRoadApproachLength = 50f;
+    private const float VehicleRoadOcclusionStart = 18f * VehicleScale;
+    private const float VehicleRoadHiddenContinuation = 24f * VehicleScale;
+    private const float RoadLineWidth = 0.09f * VehicleScale;
     private const float ParkingSurfaceOffset = 0.01f;
     private const float ParkingLightBaseHeight = 0.22f;
     private const float ParkingLightPoleHeight = 5.4f;
@@ -95,10 +107,13 @@ public static class GymOutdoorBuilder
     public static float ParkingBayStep { get; private set; }
     public static float ParkingBayStartX { get; private set; }
     public static float ParkingStallCenterOffset { get; private set; }
-    public static float ParkingVehicleTargetLength => 4.0f;
+    public static float ParkingVehicleTargetLength => 4.0f * VehicleScale;
 
     public static float VehicleRoadWidthForVerification => VehicleRoadWidth;
     public static float VehicleLaneOffsetForVerification => VehicleLaneOffset;
+    public static float TrafficLaneCenterZ { get; private set; }
+    public static float TrafficLaneOffset { get; private set; }
+    public static Vector3 RoadCornerLinePoint { get; private set; }
     public static float GetParkingBayCenterX(int column)
     {
         int count = Mathf.Max(1, ParkingBayCount);
@@ -199,7 +214,7 @@ public static class GymOutdoorBuilder
         Material asphalt = GymSurfaceMaterialFactory.CreateAsphalt(
             "Outdoor parking asphalt", new Color(0.045f, 0.065f, 0.1f));
         Material landscape = GymSurfaceMaterialFactory.CreateLandscape(
-            "Outdoor park ground", new Color(0.045f, 0.22f, 0.14f));
+            "Outdoor park ground", new Color(0.11f, 0.26f, 0.08f));
         Material pathMaterial = GymSurfaceMaterialFactory.CreateConcretePath(
             "Outdoor concrete path", new Color(0.13f, 0.2f, 0.28f));
         Material curbMaterial = CreateMaterial(
@@ -344,7 +359,7 @@ public static class GymOutdoorBuilder
         float doorLandingMaxX = outerPathX + 0.4f;
 
         CreateParkingMarkings(root.transform, floorY, parkingMinX, parkingMaxX, parkingCenterZ, markingMaterial);
-        CreateParkingCurb(root.transform, floorY, parkingMinX, parkingMaxX, parkingCenterZ, curbMaterial);
+        // No raised parking curbs: the lot blends flush into the courtyard.
         CreateParkingDetails(
             root.transform,
             floorY,
@@ -385,15 +400,6 @@ public static class GymOutdoorBuilder
             3f,
             pathCenterX - PathWidth * 0.5f - parkingMaxX - 0.8f);
         float courtyardInsetCenterX = parkingMaxX + 0.4f + courtyardInsetWidth * 0.5f;
-        CreateLandscapeDetails(
-            root.transform,
-            floorY,
-            roomFloor.center.x,
-            landscapeCenterZ,
-            parkingWidth,
-            planterMaterial,
-            foliageMaterial,
-            curbMaterial);
 
         // The gym shell, parking, fences and vehicle route above remain the gameplay
         // space.  The former neighbourhood buildings/foliage are intentionally
@@ -415,43 +421,63 @@ public static class GymOutdoorBuilder
             roadOcclusionStart.z + VehicleRoadHiddenContinuation);
         Vector3 roadCenter = new Vector3(
             (roadStartX + roadEndX) * 0.5f, roadSurfaceY, parkingCenterZ);
+        // The bus turnaround shoulder widens the visible carriageway south of
+        // the 8.2 m road (north edge to south wall). Centre the line and both
+        // traffic lanes on that full width so the two lanes are equal; the bus
+        // bay north of the road stays a bus-only pull-off.
+        float turnaroundShoulder = GymRoadsideBusStop.CanFitBay(
+            roadStartX, roadTurnX, roadWidth) ? BusTurnaroundShoulder : 0f;
+        float trafficCenterZ = parkingCenterZ - turnaroundShoulder * 0.5f;
+        float trafficLaneOffset = (roadWidth + turnaroundShoulder) * 0.25f;
+        TrafficLaneCenterZ = trafficCenterZ;
+        TrafficLaneOffset = trafficLaneOffset;
+        // The centre line runs from the parking mouth to the corner and
+        // meets the north-road centre line there as one solid L, so both
+        // lane pairs read as continuous through the turn.
+        float centerLineStartX = roadStartX + 0.5f;
+        float centerLineEndX = roadTurnX + RoadLineWidth * 0.5f;
         CreateBox("Road Center Line", root.transform,
-            new Vector3(roadCenter.x, floorY + 0.025f, parkingCenterZ),
-            new Vector3(roadLength - 1f, 0.035f, 0.09f), markingMaterial, false);
+            new Vector3((centerLineStartX + centerLineEndX) * 0.5f,
+                floorY + 0.025f, trafficCenterZ),
+            new Vector3(centerLineEndX - centerLineStartX, 0.035f, RoadLineWidth),
+            markingMaterial, false);
+        RoadCornerLinePoint = new Vector3(roadTurnX, floorY, trafficCenterZ);
         VehicleRoadJunctionPoint = new Vector3(
             parkingMaxX + 4.8f, floorY + 0.08f, parkingCenterZ);
         VehicleRoadTurnPoint = new Vector3(
             roadTurnX, floorY + 0.08f, parkingCenterZ);
 
+        // Junctions stay at the parking mouth (gym path walls lie just south
+        // of it); vehicles merge into the centred lanes along the straight.
         VehicleArrivalRoadJunctionPoint = VehicleRoadJunctionPoint +
             Vector3.forward * VehicleLaneOffset;
         VehicleDepartureRoadJunctionPoint = VehicleRoadJunctionPoint -
             Vector3.forward * VehicleLaneOffset;
-        VehicleArrivalRoadTurnPoint = VehicleRoadTurnPoint +
-            Vector3.left * VehicleLaneOffset + Vector3.forward * VehicleLaneOffset;
+        VehicleArrivalRoadTurnPoint = new Vector3(
+            roadTurnX - VehicleLaneOffset, floorY + 0.08f,
+            trafficCenterZ + trafficLaneOffset);
         // Turn outbound vehicles closer to the road centre; a long body otherwise
         // enters the east-corner wall clearance envelope before rotating north.
-        VehicleDepartureRoadTurnPoint = VehicleRoadTurnPoint +
-            Vector3.right * (VehicleLaneOffset * 0.5f) - Vector3.forward * VehicleLaneOffset;
+        VehicleDepartureRoadTurnPoint = new Vector3(
+            roadTurnX + VehicleLaneOffset * 0.5f, floorY + 0.08f,
+            trafficCenterZ - trafficLaneOffset);
 
         // Continue straight well beyond the player blocker, then turn behind
         // the far corner. From the accessible lot, departures visibly travel
         // into the distance and disappear only after completing the bend.
-        Vector3 extensionDelta = roadRouteSurfaceEnd -
-            new Vector3(roadTurnX, roadSurfaceY, parkingCenterZ);
-        Vector3 extensionDirection = Vector3.ProjectOnPlane(extensionDelta, Vector3.up).normalized;
-        Vector3 extensionCenter = (
-            new Vector3(roadTurnX, roadSurfaceY, parkingCenterZ) +
-            roadRouteSurfaceEnd) * 0.5f;
-        float extensionLength = Vector3.ProjectOnPlane(extensionDelta, Vector3.up).magnitude;
-        Quaternion extensionRotation = Quaternion.FromToRotation(Vector3.right, extensionDirection);
         GameObject extension = new GameObject("Visitor Vehicle Road Extension");
         extension.transform.SetParent(root.transform, true);
         extension.transform.position = roadRouteSurfaceEnd;
+        // Starts on the horizontal centre line (not at the road centre, which
+        // the bus shoulder pushes north of it) so the corner has no gap.
+        float extensionLineStartZ = trafficCenterZ - RoadLineWidth * 0.5f;
+        float extensionLineEndZ = roadRouteSurfaceEnd.z - 0.25f;
         GameObject extensionLine = CreateBox("Road Extension Center Line", root.transform,
-            extensionCenter + Vector3.up * 0.11f,
-            new Vector3(extensionLength - 0.5f, 0.035f, 0.09f), markingMaterial, false);
-        extensionLine.transform.rotation = extensionRotation;
+            new Vector3(roadTurnX, floorY + 0.025f,
+                (extensionLineStartZ + extensionLineEndZ) * 0.5f),
+            new Vector3(RoadLineWidth, 0.035f, extensionLineEndZ - extensionLineStartZ),
+            markingMaterial, false);
+        extensionLine.transform.rotation = Quaternion.identity;
         VehicleRoadOcclusionStartPoint = roadOcclusionStart;
         VehicleRoadSpawnPoint = roadRouteSurfaceEnd;
         VehicleArrivalRoadSpawnPoint = roadRouteSurfaceEnd + Vector3.left * VehicleLaneOffset;
@@ -549,7 +575,7 @@ public static class GymOutdoorBuilder
         // one shoulder-width outside the 8.2 m road envelope so the full
         // collider can arc through the lane without grazing the fence.
         float roadSouthWallZ = parkingCenterZ - roadWidth * 0.5f -
-            (busStopSectionBuilt ? 3.5f : 0f);
+            (busStopSectionBuilt ? BusTurnaroundShoulder : 0f);
         GymProteinStoreEnvironment.CreateOuterRouteGroundAndFence(
             root.transform, floorY, outerPathX, pathSouthZ, roadSouthEdgeZ,
             roadSouthWallZ, asphalt, boundaryMaterial,
@@ -804,6 +830,13 @@ public static class GymOutdoorBuilder
             courtyardMinZ,
             courtyardMaxZ);
         GymOutdoorFenceFinisher.Finish(root.transform);
+        // One continuous exterior ground: the separate surfaces keep their
+        // names and colliders but share material, world UVs and flat normals.
+        GymExteriorGroundUnifier.Apply(
+            root.transform,
+            floorY,
+            asphalt,
+            new HashSet<Material> { courtyardMaterial, asphalt, pathMaterial });
         bool layoutContractPassed = ValidateExteriorLayout(
             root,
             floorY,
@@ -815,7 +848,7 @@ public static class GymOutdoorBuilder
             new Vector3(roomFloor.center.x, floorY, parkingCenterZ),
             new Vector3(parkingWidth, BoundaryHeight, ParkingDepth));
         ParkingBayCount = Mathf.Clamp(
-            Mathf.FloorToInt((parkingWidth - 2f * ParkingLineInset) / 4.2f), 4, 9);
+            Mathf.FloorToInt((parkingWidth - 2f * ParkingLineInset) / ParkingBayPitch), 4, 9);
         ParkingBayStep = (parkingWidth - 2f * ParkingLineInset) / ParkingBayCount;
         ParkingBayStartX = parkingMinX + ParkingLineInset;
         ParkingStallCenterOffset =
@@ -855,6 +888,14 @@ public static class GymOutdoorBuilder
             roadOcclusionStart,
             PathWidth,
             roadWidth);
+        // Planting fills the unbuilt land between the gym, the store and the
+        // city ring; it needs the final colliders and the city envelope.
+        Physics.SyncTransforms();
+        GymOutdoorFoliage.Build(
+            root.transform,
+            floorY,
+            GymCityDystopiaSurroundings.ProtectedBounds,
+            landscape);
         IsBuilt = true;
 
         Debug.Log(
@@ -889,7 +930,7 @@ public static class GymOutdoorBuilder
         int bayCount = ParkingBayCount > 0
             ? ParkingBayCount
             : Mathf.Clamp(Mathf.FloorToInt(
-                (maxX - minX - 2f * ParkingLineInset) / 4.2f), 4, 9);
+                (maxX - minX - 2f * ParkingLineInset) / ParkingBayPitch), 4, 9);
         float usableWidth = maxX - minX - 2f * ParkingLineInset;
         float bayStep = usableWidth / bayCount;
         float startX = minX + ParkingLineInset;
@@ -901,7 +942,7 @@ public static class GymOutdoorBuilder
                 parent,
                 new Vector3(startX + bayStep * i, floorY + 0.025f,
                     (southRowOuterZ + southRowAisleZ) * 0.5f),
-                new Vector3(0.075f, 0.035f, southRowLineLength),
+                new Vector3(ParkingLineWidth, 0.035f, southRowLineLength),
                 markingMaterial,
                 false);
             CreateBox(
@@ -909,7 +950,7 @@ public static class GymOutdoorBuilder
                 parent,
                 new Vector3(startX + bayStep * i, floorY + 0.025f,
                     (northRowAisleZ + northRowOuterZ) * 0.5f),
-                new Vector3(0.075f, 0.035f, northRowLineLength),
+                new Vector3(ParkingLineWidth, 0.035f, northRowLineLength),
                 markingMaterial,
                 false);
         }
@@ -918,28 +959,28 @@ public static class GymOutdoorBuilder
             "Parking South Outer Line",
             parent,
             new Vector3((minX + maxX) * 0.5f, floorY + 0.026f, southRowOuterZ + 0.48f),
-            new Vector3(maxX - minX - 1.1f, 0.035f, 0.075f),
+            new Vector3(maxX - minX - 1.1f, 0.035f, ParkingLineWidth),
             markingMaterial,
             false);
         CreateBox(
             "Parking South Aisle Line",
             parent,
             new Vector3((minX + maxX) * 0.5f, floorY + 0.026f, southRowAisleZ - 0.18f),
-            new Vector3(maxX - minX - 1.1f, 0.035f, 0.075f),
+            new Vector3(maxX - minX - 1.1f, 0.035f, ParkingLineWidth),
             markingMaterial,
             false);
         CreateBox(
             "Parking North Aisle Line",
             parent,
             new Vector3((minX + maxX) * 0.5f, floorY + 0.026f, northRowAisleZ + 0.18f),
-            new Vector3(maxX - minX - 1.1f, 0.035f, 0.075f),
+            new Vector3(maxX - minX - 1.1f, 0.035f, ParkingLineWidth),
             markingMaterial,
             false);
         CreateBox(
             "Parking North Outer Line",
             parent,
             new Vector3((minX + maxX) * 0.5f, floorY + 0.026f, northRowOuterZ - 0.48f),
-            new Vector3(maxX - minX - 1.1f, 0.035f, 0.075f),
+            new Vector3(maxX - minX - 1.1f, 0.035f, ParkingLineWidth),
             markingMaterial,
             false);
     }
@@ -1016,38 +1057,6 @@ public static class GymOutdoorBuilder
             }
         }
         GymProteinStoreEnvironment.RemoveLegacyEntryDecorations();
-    }
-
-    private static void CreateParkingCurb(
-        Transform parent,
-        float floorY,
-        float minX,
-        float maxX,
-        float centerZ,
-        Material curbMaterial)
-    {
-        float halfDepth = ParkingDepth * 0.5f;
-        CreateBox(
-            "Parking North Curb",
-            parent,
-            new Vector3((minX + maxX) * 0.5f, floorY + 0.08f, centerZ + halfDepth - 0.22f),
-            new Vector3(maxX - minX, 0.16f, 0.24f),
-            curbMaterial,
-            false);
-        CreateBox(
-            "Parking West Curb",
-            parent,
-            new Vector3(minX + 0.22f, floorY + 0.08f, centerZ),
-            new Vector3(0.24f, 0.16f, ParkingDepth),
-            curbMaterial,
-            false);
-        CreateBox(
-            "Parking South Curb",
-            parent,
-            new Vector3((minX + maxX) * 0.5f, floorY + 0.08f, centerZ - halfDepth + 0.22f),
-            new Vector3(maxX - minX, 0.16f, 0.24f),
-            curbMaterial,
-            false);
     }
 
     private static void CreateParkingDetails(
@@ -1189,55 +1198,11 @@ public static class GymOutdoorBuilder
                 "Parking Aisle Dash",
                 parent,
                 new Vector3(minX + 2f + dashStep * (i + 0.5f), floorY + 0.03f, centerZ),
-                new Vector3(Mathf.Min(2.2f, dashStep * 0.55f), 0.035f, 0.09f),
+                new Vector3(Mathf.Min(2.2f * VehicleScale, dashStep * 0.55f), 0.035f, RoadLineWidth),
                 markingMaterial,
                 false);
         }
 
-    }
-
-    private static void CreateLandscapeDetails(
-        Transform parent,
-        float floorY,
-        float centerX,
-        float centerZ,
-        float width,
-        Material planterMaterial,
-        Material foliageMaterial,
-        Material metalMaterial)
-    {
-        float[] offsets = { -0.32f, 0f, 0.32f };
-        for (int index = 0; index < offsets.Length; index++)
-        {
-            float x = centerX + width * offsets[index];
-            CreateBox(
-                "Park Landscape Planter",
-                parent,
-                new Vector3(x, floorY + 0.30f, centerZ),
-                new Vector3(3.8f, 0.60f, 1.35f),
-                planterMaterial,
-                false);
-            CreateCylinder(
-                "Park Landscape Shrub",
-                parent,
-                new Vector3(x, floorY + 1.18f, centerZ),
-                new Vector3(0.72f, 0.88f, 0.72f),
-                foliageMaterial);
-            CreateCylinder(
-                "Park Landscape Shrub Accent",
-                parent,
-                new Vector3(x + (index - 1) * 0.72f, floorY + 0.92f, centerZ + 0.18f),
-                new Vector3(0.42f, 0.58f, 0.42f),
-                foliageMaterial);
-        }
-
-        CreateBox(
-            "Park Landscape Rail",
-            parent,
-            new Vector3(centerX, floorY + 0.55f, centerZ - 1.75f),
-            new Vector3(Mathf.Max(8f, width - 6f), 0.10f, 0.10f),
-            metalMaterial,
-            false);
     }
 
     private static void CreateNeighbourhood(Transform parent, float centerX, float floorY,
@@ -2700,7 +2665,9 @@ public static class GymOutdoorBuilder
 
         if (!keepCollider)
         {
-            Object.Destroy(box.GetComponent<Collider>());
+            // Immediate, so physics queries later in the same build frame
+            // (foliage placement) do not see visual-only boxes as solid.
+            Object.DestroyImmediate(box.GetComponent<Collider>());
         }
 
         return box;

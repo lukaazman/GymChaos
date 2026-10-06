@@ -151,7 +151,7 @@ public static class GymBackRoomBuilder
         GameObject rootObject = new GameObject(RootName);
         rootObject.transform.SetParent(parent, true);
 
-        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", new Color(0.025f, 0.04f, 0.075f));
+        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", new Color(0.025f, 0.04f, 0.075f), new Vector2(BackWidth, BackDepth));
         Material wallMaterial = CreateMaterial("Locker room wall", new Color(0.22f, 0.25f, 0.29f), 0f, 0.28f);
         Material trimMaterial = CreateMaterial("Locker room trim", new Color(0.035f, 0.045f, 0.06f), 0.35f, 0.64f);
         Material accentMaterial = CreateMaterial("Locker room accent", new Color(0.82f, 0.13f, 0.08f), 0.05f, 0.42f);

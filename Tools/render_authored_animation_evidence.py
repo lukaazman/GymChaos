@@ -101,7 +101,13 @@ def render_character(character, config):
     fill_object = bpy.data.objects.new("Fill", fill)
     scene.collection.objects.link(fill_object)
 
-    poses = PLAYER_POSES if character == "player" else POSES
+    configured_clips = set(config["clip_names"])
+    base_poses = PLAYER_POSES if character == "player" else POSES
+    poses = [pose for pose in base_poses if pose[0] in configured_clips]
+    if character != "player":
+        for idle_name in ("idle1", "idle2", "idle3"):
+            if idle_name in configured_clips and (idle_name, 0.5) not in poses:
+                poses.append((idle_name, 0.5))
     for clip_name, normalized_time in poses:
         action = action_for(clip_name)
         exporter.assign_action_slot(armature, action)

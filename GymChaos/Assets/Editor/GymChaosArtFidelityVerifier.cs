@@ -79,9 +79,12 @@ public static class GymChaosArtFidelityVerifier
         new SurfaceContract("gymRubber", "Rubber Floor", "Dark navy gym rubber floor"),
         new SurfaceContract("lockerRubber", "Locker Room Floor", "Locker room rubber floor"),
         new SurfaceContract("bathroomTile", "Bathroom divider south", "Bathroom tile"),
-        new SurfaceContract("courtyard", "Exterior Courtyard Foundation", "Exterior courtyard foundation"),
+        // Exterior ground is one continuous slab: every named outdoor surface
+        // shares the parking asphalt material (GymExteriorGroundUnifier); the
+        // landscape strip behind the parking wall is planting grass.
+        new SurfaceContract("courtyard", "Exterior Courtyard Foundation", "Outdoor parking asphalt"),
         new SurfaceContract("asphalt", "Mini Parking Lot", "Outdoor parking asphalt"),
-        new SurfaceContract("concretePath", "Path from Gym Door", "Outdoor concrete path"),
+        new SurfaceContract("concretePath", "Path from Gym Door", "Outdoor parking asphalt"),
         new SurfaceContract("landscape", "Parking Park Landscape", "Outdoor park ground"),
     };
 

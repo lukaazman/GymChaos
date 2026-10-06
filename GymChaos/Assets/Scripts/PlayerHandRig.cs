@@ -1001,7 +1001,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         // rotations on bones that the next clip does not key.
         RestoreAnimatedBones();
         RestoreVerificationModelTransform();
-        clip.SampleAnimation(modelRoot, Mathf.Max(0f, sampleTime));
+        GymClipSampler.Sample(clip, modelRoot, Mathf.Max(0f, sampleTime));
         // Rigify FBX baking can emit evaluated deform-bone scale channels
         // although the authored player motion is rotation/translation based.
         // Keep this player's own imported rest scales while preserving the

@@ -48,7 +48,7 @@ public static class GymChaosClassSessionPlay
         SessionState.SetInt(MigratedValueKey, PlayerPrefs.GetInt(LegacyMigratedKey, -1));
         // Crash safety: the same values also go to a git-ignored file.
         string backupPath = Path.Combine(Directory.GetParent(Application.dataPath).Parent.FullName,
-            "Logs", "verify", "classes-playerprefs-backup.json");
+            "Logs", "agent", "classes-playerprefs-backup.json");
         File.WriteAllText(backupPath, PlayerPrefs.GetString(LegacyProgressionKey, string.Empty));
         PlayerPrefs.DeleteKey(LegacyProgressionKey);
         PlayerPrefs.DeleteKey(LegacyMigratedKey);
@@ -1170,7 +1170,7 @@ public static class GymChaosClassSessionPlay
             }
             string suffix = i == 0 ? string.Empty : "-" + width + "x" + height;
             string path = Path.Combine(Directory.GetParent(Application.dataPath).Parent.FullName,
-                "Logs", "verify", "classes-" + label + suffix + ".png");
+                "Logs", "agent", "classes-" + label + suffix + ".png");
             File.WriteAllBytes(path, image.EncodeToPNG());
             UnityEngine.Object.DestroyImmediate(image);
             target.Release();

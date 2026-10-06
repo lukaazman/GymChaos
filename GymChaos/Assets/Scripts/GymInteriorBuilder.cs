@@ -74,7 +74,7 @@ public static class GymInteriorBuilder
         mainGymBoundsReady = true;
 
         GameObject root = new GameObject(RootName);
-        Material floor = GymSurfaceMaterialFactory.CreateGymFloor("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f));
+        Material floor = GymSurfaceMaterialFactory.CreateGymFloor("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f), new Vector2(width, depth));
         Material wall = CreateMaterial("Warm concrete walls", new Color(0.36f, 0.39f, 0.41f), 0f, 0.25f);
         Material ceiling = CreateMaterial("Ceiling", new Color(0.12f, 0.14f, 0.16f), 0.05f, 0.24f);
         Material accent = CreateMaterial("Gym accent", new Color(0.78f, 0.13f, 0.07f), 0.05f, 0.45f);

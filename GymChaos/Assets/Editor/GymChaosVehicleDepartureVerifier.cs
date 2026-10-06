@@ -990,8 +990,8 @@ public static class GymChaosVehicleDepartureVerifier
             GameObject.Find("Davie Temporary Bus Stop Sign") != null)
             throw new InvalidOperationException(
                 "Bus stop still contains a freestanding sign instead of road paint.");
-        if (GymRoadsideBusStop.BusBayLengthForVerification < 12f ||
-            GymRoadsideBusStop.BusBayLengthForVerification > 18f)
+        if (GymRoadsideBusStop.BusBayLengthForVerification < 12f * GymOutdoorBuilder.VehicleScale ||
+            GymRoadsideBusStop.BusBayLengthForVerification > 18f * GymOutdoorBuilder.VehicleScale)
             throw new InvalidOperationException(
                 $"Bus pull-off is not local to one bus: " +
                 $"length={GymRoadsideBusStop.BusBayLengthForVerification:F2}m.");

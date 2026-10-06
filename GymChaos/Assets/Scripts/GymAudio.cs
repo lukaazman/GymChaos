@@ -14,7 +14,18 @@ public enum GymSoundEffect
     ThrownWallImpact,
     ThrownMachineImpact,
     ThrownEnemyImpact,
-    ThrownBodyImpact
+    ThrownBodyImpact,
+    Jump,
+    Land,
+    UiHover,
+    UiClick,
+    UiConfirm,
+    UiBack,
+    UiError,
+    Pickup,
+    ItemDrop,
+    ActionConfirm,
+    LevelUp
 }
 
 public sealed class GymAudio : MonoBehaviour
@@ -49,12 +60,39 @@ public sealed class GymAudio : MonoBehaviour
         {
             { GymSoundEffect.PunchAction, new ClipDefinition("free_punch.wav", AudioType.WAV) },
             { GymSoundEffect.PunchFeedback, new ClipDefinition("punch_landed.wav", AudioType.WAV) },
-            { GymSoundEffect.GlassShatter, new ClipDefinition("glass_shatter.ogg", AudioType.OGGVORBIS, 0.24f) },
+            { GymSoundEffect.GlassShatter, new ClipDefinition("glass_shatter.wav", AudioType.WAV, 0.24f) },
             { GymSoundEffect.ThrownWallImpact, new ClipDefinition("throw_wall_impact.wav", AudioType.WAV) },
             { GymSoundEffect.ThrownMachineImpact, new ClipDefinition("throw_machine_impact.wav", AudioType.WAV) },
-            { GymSoundEffect.ThrownEnemyImpact, new ClipDefinition("throw_enemy_impact.ogg", AudioType.OGGVORBIS) },
-            { GymSoundEffect.ThrownBodyImpact, new ClipDefinition("throw_body_impact.ogg", AudioType.OGGVORBIS) }
+            { GymSoundEffect.ThrownEnemyImpact, new ClipDefinition("throw_enemy_impact.wav", AudioType.WAV) },
+            { GymSoundEffect.ThrownBodyImpact, new ClipDefinition("throw_body_impact.wav", AudioType.WAV) },
+            // Made by Tools/generate_sfx.py.
+            { GymSoundEffect.Jump, new ClipDefinition("jump.wav", AudioType.WAV) },
+            { GymSoundEffect.Land, new ClipDefinition("land.wav", AudioType.WAV) },
+            { GymSoundEffect.UiHover, new ClipDefinition("ui_hover.wav", AudioType.WAV) },
+            { GymSoundEffect.UiClick, new ClipDefinition("ui_click.wav", AudioType.WAV) },
+            { GymSoundEffect.UiConfirm, new ClipDefinition("ui_confirm.wav", AudioType.WAV) },
+            { GymSoundEffect.UiBack, new ClipDefinition("ui_back.wav", AudioType.WAV) },
+            { GymSoundEffect.UiError, new ClipDefinition("ui_error.wav", AudioType.WAV) },
+            { GymSoundEffect.Pickup, new ClipDefinition("pickup.wav", AudioType.WAV) },
+            { GymSoundEffect.ItemDrop, new ClipDefinition("item_drop.wav", AudioType.WAV) },
+            { GymSoundEffect.ActionConfirm, new ClipDefinition("action_confirm.wav", AudioType.WAV) },
+            { GymSoundEffect.LevelUp, new ClipDefinition("level_up.wav", AudioType.WAV) }
         };
+
+    // Interface and first-person cues: played flat (2D) from one pooled
+    // source that ignores AudioListener.pause, so menus opened while the
+    // game is paused still answer.
+    private const float UiRepeatGuardSeconds = 0.035f;
+    private AudioSource flatSource;
+    private readonly Dictionary<GymSoundEffect, float> lastFlatPlay =
+        new Dictionary<GymSoundEffect, float>();
+
+    public static int FlatPlayCountForVerification { get; private set; }
+    public static GymSoundEffect LastFlatEffectForVerification { get; private set; }
+    public static readonly Dictionary<GymSoundEffect, int> PlayCountsForVerification =
+        new Dictionary<GymSoundEffect, int>();
+    public bool AllClipsLoadedForVerification => clips.Count == Definitions.Count;
+    public static int DefinitionCountForVerification => Definitions.Count;
 
     private static GymAudio instance;
 
@@ -97,6 +135,21 @@ public sealed class GymAudio : MonoBehaviour
         if (audio != null)
         {
             audio.QueuePlay(effect, position, volume);
+        }
+    }
+
+    /// <summary>Plays a non-positional cue (UI, the player's own body).</summary>
+    public static void Play2D(GymSoundEffect effect, float volume = 1f)
+    {
+        if (effect == GymSoundEffect.None)
+        {
+            return;
+        }
+
+        GymAudio audio = EnsureInstance();
+        if (audio != null)
+        {
+            audio.QueueFlat(effect, volume);
         }
     }
 
@@ -227,6 +280,56 @@ public sealed class GymAudio : MonoBehaviour
             $"GYMCHAOS_SFX_PRELOAD_READY count={clips.Count}/{Definitions.Count}", this);
     }
 
+    private void QueueFlat(GymSoundEffect effect, float volume)
+    {
+        // Hover sweeps and held keys can fire the same cue every frame.
+        float now = Time.unscaledTime;
+        if (lastFlatPlay.TryGetValue(effect, out float last) &&
+            now - last < UiRepeatGuardSeconds)
+        {
+            return;
+        }
+        lastFlatPlay[effect] = now;
+
+        volume = Mathf.Clamp01(volume);
+        if (clips.TryGetValue(effect, out AudioClip clip) && clip != null)
+        {
+            PlayFlat(effect, clip, volume);
+            return;
+        }
+
+        // Interface cues are only useful immediately; a late play after the
+        // clip loads would sound like lag, so a miss only starts the load.
+        if (loading.Add(effect))
+        {
+            StartCoroutine(LoadClipAndFlush(effect));
+        }
+    }
+
+    private void PlayFlat(GymSoundEffect effect, AudioClip clip, float volume)
+    {
+        if (flatSource == null)
+        {
+            flatSource = gameObject.AddComponent<AudioSource>();
+            flatSource.playOnAwake = false;
+            flatSource.loop = false;
+            flatSource.spatialBlend = 0f;
+            flatSource.ignoreListenerPause = true;
+            flatSource.priority = 32;
+        }
+
+        flatSource.PlayOneShot(clip, volume);
+        FlatPlayCountForVerification++;
+        LastFlatEffectForVerification = effect;
+        CountPlay(effect);
+    }
+
+    private static void CountPlay(GymSoundEffect effect)
+    {
+        PlayCountsForVerification[effect] =
+            PlayCountsForVerification.TryGetValue(effect, out int count) ? count + 1 : 1;
+    }
+
     private void QueuePlay(GymSoundEffect effect, Vector3 position, float volume)
     {
         volume = Mathf.Clamp01(volume);
@@ -325,6 +428,7 @@ public sealed class GymAudio : MonoBehaviour
         source.maxDistance = OneShotMaxDistance;
         source.dopplerLevel = 0f;
         source.Play();
+        CountPlay(effect);
         float cleanupDelay = Mathf.Max(0.1f, clip.length) + 0.15f;
         if (Definitions.TryGetValue(effect, out ClipDefinition definition) &&
             definition.MaxDuration > 0f)

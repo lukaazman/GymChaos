@@ -50,6 +50,7 @@ public sealed class GymPauseMenu : MonoBehaviour
         }
         instance.player = source;
         instance.ShowPausePage();
+        GymAudio.Play2D(GymSoundEffect.UiClick, 0.55f);
     }
 
     internal static void HandlePauseInput()
@@ -63,6 +64,8 @@ public sealed class GymPauseMenu : MonoBehaviour
         {
             return;
         }
+
+        GymAudio.Play2D(GymSoundEffect.UiBack, 0.55f);
 
         if ((instance.optionsPanel != null && instance.optionsPanel.activeSelf) ||
             (instance.failurePage != null && instance.failurePage.activeSelf))

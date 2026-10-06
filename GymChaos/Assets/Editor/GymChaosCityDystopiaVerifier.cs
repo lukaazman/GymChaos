@@ -253,7 +253,7 @@ public static class GymChaosCityDystopiaVerifier
             $"horizontalOverlaps={GymCityDystopiaSurroundings.HorizontalOverlaps} " +
             $"children8={Bool(cityChildCount)} sides4={Bool(allSides)} " +
             $"corners4={Bool(allCorners)} ground4={Bool(cityGroundInfill)} " +
-            $"geometry={Bool(cityHasGeometry)} facadeTextures={Bool(texturedFacadeMaterials)} " +
+            $"geometry={Bool(cityHasGeometry)} unifiedChromeGlass={Bool(texturedFacadeMaterials)} " +
             $"cityColliders={Bool(!cityHasNoColliders)} " +
             $"placementOutside={Bool(placementsOutsideEnvelope)} " +
             $"lockerClear={Bool(lockerRoomClear)} " +
@@ -592,12 +592,9 @@ public static class GymChaosCityDystopiaVerifier
     {
         HashSet<string> required = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "MAT_Window_Frame_Dark",
-            "MAT_Window_Emission_Warm",
-            "MAT_Window_Emission_Cool",
-            "MAT_Reflection_Streak_Warm",
-            "MAT_Reflection_Streak_Cool",
-            "MAT_Reflection_Streak_Dim",
+            "MAT_City_Chrome_Glass Facade",
+            "MAT_City_Chrome_Glass Body",
+            "MAT_City_Chrome_Glass Window",
             "MAT_Red_Spine_Emission"
         };
         MeshRenderer[] renderers =
@@ -627,38 +624,91 @@ public static class GymChaosCityDystopiaVerifier
         return required.Count == 0;
     }
 
+    // Towers must read as one colour family: every tower renderer except the
+    // sign/spine accents uses the shared chrome/glass shader through three
+    // shared materials (textured facade, trim, window glass) with one steel
+    // tint; only the window glass is strongly reflective, the body is dark.
     private static bool HasTexturedFacadeMaterials(GameObject cityRoot)
     {
-        int facadeMaterialCount = 0;
-        HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        HashSet<Material> chrome = new HashSet<Material>();
+        bool facadeTextured = false;
         MeshRenderer[] renderers = cityRoot.GetComponentsInChildren<MeshRenderer>(true);
         for (int index = 0; index < renderers.Length; index++)
         {
+            if (renderers[index].name.StartsWith("City Dystopia Ground", StringComparison.Ordinal))
+            {
+                continue;
+            }
             Material[] materials = renderers[index].sharedMaterials;
             for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
             {
                 Material material = materials[materialIndex];
-                if (material == null ||
-                    !material.name.StartsWith("MAT_Facade_Procedural_", StringComparison.OrdinalIgnoreCase) ||
-                    material.mainTexture == null)
+                if (material == null || material.shader == null)
                 {
                     continue;
                 }
-
-                string family = material.name;
-                int suffix = family.IndexOf(".001", StringComparison.Ordinal);
-                if (suffix > 0)
+                if (material.name.StartsWith("MAT_Facade_Procedural_", StringComparison.OrdinalIgnoreCase) ||
+                    material.name.StartsWith("MAT_Roof_", StringComparison.OrdinalIgnoreCase) ||
+                    material.name.StartsWith("MAT_Structural_", StringComparison.OrdinalIgnoreCase) ||
+                    material.name.StartsWith("MAT_Window_", StringComparison.OrdinalIgnoreCase) ||
+                    material.name.StartsWith("MAT_Reflection_Streak_", StringComparison.OrdinalIgnoreCase))
                 {
-                    family = family.Substring(0, suffix);
+                    // A per-source tower colour leaked past the shared material.
+                    return false;
                 }
-                if (seen.Add(family))
+                if (material.shader.name == "GymChaos/Unlit Chrome Glass")
                 {
-                    facadeMaterialCount++;
+                    chrome.Add(material);
+                    facadeTextured |= material.HasProperty("_BaseMap") && material.GetTexture("_BaseMap") != null;
                 }
             }
         }
 
-        return facadeMaterialCount >= 4;
+        // Only windows reflect: plain window panes and the window-gridded
+        // curtain walls; the body (facades, frames, metal, roofs) is one
+        // dark, non-reflective colour without a facade pattern.
+        if (chrome.Count != 3 || facadeTextured)
+        {
+            return false;
+        }
+        float windowReflectivity = -1f;
+        float curtainReflectivity = -1f;
+        float bodyReflectivity = -1f;
+        float bodyGlint = 0f;
+        foreach (Material material in chrome)
+        {
+            float reflectivity = material.GetFloat("_Reflectivity");
+            bool grid = material.GetFloat("_WindowGrid") > 0.5f;
+            if (material.name.IndexOf(" Window", StringComparison.Ordinal) >= 0 && !grid)
+                windowReflectivity = reflectivity;
+            else if (material.name.IndexOf(" Facade", StringComparison.Ordinal) >= 0 && grid)
+                curtainReflectivity = reflectivity;
+            else if (material.name.IndexOf(" Body", StringComparison.Ordinal) >= 0 && !grid)
+            {
+                bodyReflectivity = reflectivity;
+                bodyGlint = material.GetFloat("_SunGlint");
+            }
+        }
+        Debug.Log(
+            $"GYMCHAOS_TOWER_MATERIAL_ROLES window={windowReflectivity:F2} " +
+            $"curtain={curtainReflectivity:F2} body={bodyReflectivity:F2} bodyGlint={bodyGlint:F2}");
+        if (windowReflectivity < 0.8f || curtainReflectivity < 0.8f ||
+            bodyReflectivity < 0f || bodyReflectivity > 0.01f || bodyGlint > 0.01f)
+        {
+            return false;
+        }
+        Debug.Log("GYMCHAOS_TOWER_WINDOWS_ONLY_OK");
+        Color? tint = null;
+        foreach (Material material in chrome)
+        {
+            Color color = material.GetColor("_BaseColor");
+            if (tint.HasValue && ((Vector4)(tint.Value - color)).sqrMagnitude > 1e-6f)
+            {
+                return false;
+            }
+            tint = color;
+        }
+        return true;
     }
 
     private static bool HasStableFirstPersonMaterials()

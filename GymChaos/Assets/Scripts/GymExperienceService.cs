@@ -461,6 +461,9 @@ public sealed class GymExperienceService : MonoBehaviour
             leveled = true;
         }
 
+        GymAudio.Play2D(
+            leveled ? GymSoundEffect.LevelUp : GymSoundEffect.ActionConfirm,
+            leveled ? 0.75f : 0.32f);
         if (leveled)
         {
             levelChoiceVisible = true;
@@ -1485,7 +1488,7 @@ public sealed class GymExperienceService : MonoBehaviour
             hovered
                 ? new Color(1f, 0.82f, 0.35f, 1f)
                 : new Color(0.48f, 0.86f, 1f, 0.78f));
-        return GUI.Button(rect, label, style);
+        return GymUiSounds.ImGuiButton(rect, label, style);
     }
     // ---- locker outfit menu (presented by GymLockerMenuUI) ----
 

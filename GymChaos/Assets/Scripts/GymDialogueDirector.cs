@@ -95,6 +95,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
             int choice = instance.ReadChoicePressed();
             if (choice >= 0)
             {
+                GymAudio.Play2D(GymSoundEffect.UiConfirm, 0.6f);
                 instance.SelectChoice(choice);
             }
             return;
@@ -102,6 +103,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
         if (advancePressed)
         {
+            GymAudio.Play2D(GymSoundEffect.UiClick, 0.5f);
             instance.AdvanceNode();
         }
     }

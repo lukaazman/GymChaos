@@ -1059,7 +1059,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
 
         RestoreVisibleRestPose();
-        clip.SampleAnimation(modelRoot.gameObject, Mathf.Max(0f, sampleTime));
+        GymClipSampler.Sample(clip, modelRoot.gameObject, Mathf.Max(0f, sampleTime));
         // Blender's Rigify bake writes evaluated deform-bone scale channels
         // even though this retarget is rotation/translation driven. Restore
         // each character's own imported rest scales so those bake artifacts

@@ -66,7 +66,9 @@ public static class GymChaosOutdoorPerimeterVerifier
         {
             double elapsed = EditorApplication.timeSinceStartup - started;
             if (!GymOutdoorBuilder.IsBuilt ||
-                !GymProteinStoreEnvironment.IsLoaded)
+                !GymProteinStoreEnvironment.IsLoaded ||
+                GymOutdoorFoliage.LoadedPlants + GymOutdoorFoliage.FailedPlants <
+                    GymOutdoorFoliage.RequestedPlants)
             {
                 if (elapsed > 45d)
                     throw new TimeoutException("Outdoor builders did not settle.");
@@ -109,6 +111,27 @@ public static class GymChaosOutdoorPerimeterVerifier
                     $"boundaries={boundaries} boundaryDetails={boundaryDetails}.");
             }
 
+            if (!HasSeamlessGround(root.transform, out string groundDetails))
+            {
+                throw new InvalidOperationException(
+                    $"Outdoor seamless ground contract failed: {groundDetails}.");
+            }
+            Debug.Log($"GYMCHAOS_OUTDOOR_SEAMLESS_GROUND_OK {groundDetails}", root);
+
+            if (!HasEqualTrafficLanes(root.transform, out string laneDetails))
+            {
+                throw new InvalidOperationException(
+                    $"Traffic lane width contract failed: {laneDetails}.");
+            }
+            Debug.Log($"GYMCHAOS_OUTDOOR_EQUAL_LANES_OK {laneDetails}", root);
+
+            if (!HasPlantedSurroundings(root.transform, out string foliageDetails))
+            {
+                throw new InvalidOperationException(
+                    $"Outdoor foliage contract failed: {foliageDetails}.");
+            }
+            Debug.Log($"GYMCHAOS_OUTDOOR_FOLIAGE_CONTRACT_OK {foliageDetails}", root);
+
             Debug.Log(
                 $"GYMCHAOS_OUTDOOR_PERIMETER_OK overlaps={overlaps} " +
                 $"seamGap={seamGap:F3} fence={fence} boundaries={boundaries} " +
@@ -120,6 +143,177 @@ public static class GymChaosOutdoorPerimeterVerifier
             Debug.LogException(exception);
             Finish(1);
         }
+    }
+
+    // Every walkable exterior surface must render as one slab: one shared
+    // material, the same top height, no visible vertical side strips, and no
+    // raised parking curbs splitting the lot from the courtyard.
+    private static bool HasSeamlessGround(Transform root, out string details)
+    {
+        string[] names =
+        {
+            "Exterior Courtyard Foundation",
+            "Mini Parking Lot",
+            "Path from Gym Door",
+            "Visitor Vehicle Road",
+            "Protein Store Entry Walkway",
+            "Protein Store Platform",
+            "Protein Store Route South",
+            "Protein Store Route North",
+            "Protein Store Route East",
+            "Protein Store Route West South",
+            "Protein Store Route West North"
+        };
+        Material shared = null;
+        float topMin = float.PositiveInfinity;
+        float topMax = float.NegativeInfinity;
+        int sideTriangles = 0;
+        for (int i = 0; i < names.Length; i++)
+        {
+            Transform node = FindRecursive(root, names[i]);
+            MeshRenderer renderer = node != null ? node.GetComponent<MeshRenderer>() : null;
+            MeshFilter filter = node != null ? node.GetComponent<MeshFilter>() : null;
+            if (renderer == null || filter == null || filter.sharedMesh == null)
+            {
+                details = $"missing={names[i]}";
+                return false;
+            }
+            foreach (Material material in renderer.sharedMaterials)
+            {
+                if (shared == null) shared = material;
+                if (material != shared)
+                {
+                    details = $"materialMismatch={names[i]}:{(material != null ? material.name : "null")}";
+                    return false;
+                }
+            }
+            Mesh mesh = filter.sharedMesh;
+            Vector3[] vertices = mesh.vertices;
+            int[] triangles = mesh.triangles;
+            for (int t = 0; t + 2 < triangles.Length; t += 3)
+            {
+                Vector3 a = node.TransformPoint(vertices[triangles[t]]);
+                Vector3 b = node.TransformPoint(vertices[triangles[t + 1]]);
+                Vector3 c = node.TransformPoint(vertices[triangles[t + 2]]);
+                Vector3 normal = Vector3.Cross(b - a, c - a).normalized;
+                if (Mathf.Abs(normal.y) < 0.5f) sideTriangles++;
+            }
+            // The foundation intentionally sits a hair below the named
+            // surfaces to avoid z-fighting; it is not part of the top band.
+            if (i > 0)
+            {
+                topMin = Mathf.Min(topMin, renderer.bounds.max.y);
+                topMax = Mathf.Max(topMax, renderer.bounds.max.y);
+            }
+        }
+        bool curbs = FindRecursive(root, "Parking North Curb") != null ||
+            FindRecursive(root, "Parking West Curb") != null ||
+            FindRecursive(root, "Parking South Curb") != null;
+        float topSpread = topMax - topMin;
+        details = $"surfaces={names.Length} material={(shared != null ? shared.name : "null")} " +
+            $"topSpread={topSpread:F4} sideTriangles={sideTriangles} curbs={curbs} " +
+            $"unified={GymExteriorGroundUnifier.UnifiedSurfaceCount}";
+        return shared != null && topSpread <= 0.002f && sideTriangles == 0 && !curbs;
+    }
+
+    // The visible carriageway runs from the road's north edge (the bus bay is
+    // a separate pull-off) to the south wall face. The centre line and both
+    // traffic lanes must split that width evenly.
+    private static bool HasEqualTrafficLanes(Transform root, out string details)
+    {
+        Transform line = FindRecursive(root, "Road Center Line");
+        Transform southWall = FindRecursive(root, "Visitor Road South Wall");
+        Renderer wallRenderer = southWall != null ? southWall.GetComponent<Renderer>() : null;
+        if (line == null || wallRenderer == null)
+        {
+            details = $"line={line != null} southWall={wallRenderer != null}";
+            return false;
+        }
+        float northEdge = GymOutdoorBuilder.ParkingBounds.center.z +
+            GymOutdoorBuilder.VehicleRoadWidthForVerification * 0.5f;
+        float southFace = wallRenderer.bounds.max.z;
+        float centre = GymOutdoorBuilder.TrafficLaneCenterZ;
+        float northLane = northEdge - centre;
+        float southLane = centre - southFace;
+        float arrivalFromCentre = GymOutdoorBuilder.VehicleArrivalRoadTurnPoint.z - centre;
+        float departureFromCentre = centre - GymOutdoorBuilder.VehicleDepartureRoadTurnPoint.z;
+        details = $"northLane={northLane:F2} southLane={southLane:F2} " +
+            $"lineZ={line.position.z:F2} centre={centre:F2} " +
+            $"arrival={arrivalFromCentre:F2} departure={departureFromCentre:F2}";
+        return Mathf.Abs(northLane - southLane) <= 0.35f &&
+            Mathf.Abs(line.position.z - centre) <= 0.01f &&
+            Mathf.Abs(arrivalFromCentre - departureFromCentre) <= 0.01f &&
+            Mathf.Abs(arrivalFromCentre - northLane * 0.5f) <= 0.35f;
+    }
+
+    // Plants fill only unbuilt land inside the city ring: every plant is on
+    // the planting ground (no visible built surface below), within the ring
+    // envelope, collider-free, textured and non-metallic, with mixed species.
+    private static bool HasPlantedSurroundings(Transform root, out string details)
+    {
+        Transform foliage = FindRecursive(root, GymOutdoorFoliage.RootName);
+        Transform ground = FindRecursive(root, GymOutdoorFoliage.GroundName);
+        bool fakePlanter = FindRecursive(root, "Park Landscape Planter") != null;
+        bool fakeShrub = FindRecursive(root, "Park Landscape Shrub") != null;
+        if (foliage == null || ground == null || fakePlanter || fakeShrub)
+        {
+            details = $"foliage={foliage != null} ground={ground != null} " +
+                $"fakePlanter={fakePlanter} fakeShrub={fakeShrub}";
+            return false;
+        }
+
+        Bounds envelope = GymOutdoorFoliage.PlantingBounds;
+        HashSet<string> species = new HashSet<string>();
+        int onBuilt = 0;
+        int outside = 0;
+        int colliders = 0;
+        int untextured = 0;
+        int metallic = 0;
+        for (int i = 0; i < foliage.childCount; i++)
+        {
+            Transform plant = foliage.GetChild(i);
+            if (plant.name == GymOutdoorFoliage.GroundName)
+            {
+                continue;
+            }
+            species.Add(plant.name);
+            Vector3 p = plant.position;
+            if (p.x < envelope.min.x || p.x > envelope.max.x ||
+                p.z < envelope.min.z || p.z > envelope.max.z)
+            {
+                outside++;
+            }
+            foreach (RaycastHit hit in Physics.RaycastAll(
+                new Vector3(p.x, p.y + 40f, p.z), Vector3.down, 42f,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            {
+                Renderer below = hit.collider.GetComponent<Renderer>();
+                if (below != null && below.enabled &&
+                    !hit.collider.name.StartsWith("Plane", StringComparison.OrdinalIgnoreCase))
+                {
+                    onBuilt++;
+                    break;
+                }
+            }
+            colliders += plant.GetComponentsInChildren<Collider>(true).Length;
+            foreach (MeshRenderer renderer in plant.GetComponentsInChildren<MeshRenderer>(true))
+            {
+                Material material = renderer.sharedMaterial;
+                if (material == null || material.mainTexture == null) untextured++;
+                else if (material.HasProperty("_Metallic") && material.GetFloat("_Metallic") > 0.05f) metallic++;
+            }
+        }
+        details = $"plants={GymOutdoorFoliage.RequestedPlants} loaded={GymOutdoorFoliage.LoadedPlants} " +
+            $"failed={GymOutdoorFoliage.FailedPlants} trees={GymOutdoorFoliage.TreeCount} " +
+            $"bushes={GymOutdoorFoliage.BushCount} species={species.Count} onBuilt={onBuilt} " +
+            $"outside={outside} colliders={colliders} untextured={untextured} metallic={metallic}";
+        return GymOutdoorFoliage.RequestedPlants >= 60 &&
+            GymOutdoorFoliage.FailedPlants == 0 &&
+            GymOutdoorFoliage.TreeCount >= 15 &&
+            GymOutdoorFoliage.BushCount >= 30 &&
+            species.Count >= 6 &&
+            onBuilt == 0 && outside == 0 && colliders == 0 &&
+            untextured == 0 && metallic == 0;
     }
 
     private static int CountCoplanarSurfaceOverlaps(

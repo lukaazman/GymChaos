@@ -11,10 +11,14 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private const float CloudSpeed = 48f;
     private const string DavieBusAsset =
         "BodyBuilders/vehicles/Davie_Bus.glb";
-    private const float DavieBusTargetLength = 10.4f;
+    // Every vehicle is 1.25x its original size (GymOutdoorBuilder.VehicleScale);
+    // distances measured in vehicle lengths scale with it.
+    private const float S = GymOutdoorBuilder.VehicleScale;
+    private const float DavieBusTargetLength = 10.4f * S;
     private const string ArnoldHummerAsset =
         "BodyBuilders/vehicles/Arnold_Hummer.glb";
-    private const float ArnoldHummerTargetLength = 4.0f;
+    private const float ArnoldHummerTargetLength = 4.0f * S;
+    private const float CloudTargetLength = 2.8f * S;
     private const float TurnSpeed = 5f;
     private const float MaxGroundRouteDeltaTime = 0.05f;
     private const float MaxGroundRouteStep = 0.4f;
@@ -23,10 +27,10 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     // no gap shows under the wheels.
     private const float RouteHeightAboveFloor = 0.08f;
     public const float TyreContactSink = 0.015f;
-    private const float LaneSpawnSpacing = 7.5f;
-    private const float ForwardSensorMinimumDistance = 2.35f;
-    private const float ForwardSensorMaximumDistance = 3.35f;
-    private const float ForwardSensorHalfWidth = 0.92f;
+    private const float LaneSpawnSpacing = 7.5f * S;
+    private const float ForwardSensorMinimumDistance = 2.35f * S;
+    private const float ForwardSensorMaximumDistance = 3.35f * S;
+    private const float ForwardSensorHalfWidth = 0.92f * S;
     private const float CrossingPredictionSeconds = 0.45f;
     private static readonly List<GymVisitorVehicle> activeGroundTraffic =
         new List<GymVisitorVehicle>();
@@ -278,7 +282,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             // was wider than the narrowest generated bay and the old route
             // point was not aligned with the painted bay centers.
             vehicle.FitVisual(visual, identity == BodybuilderIdentity.Goku
-                ? 2.8f : GymOutdoorBuilder.ParkingVehicleTargetLength);
+                ? CloudTargetLength : GymOutdoorBuilder.ParkingVehicleTargetLength);
             vehicle.ApplyOriginalMaterial(visual);
             vehicle.AddPhysicalBody(visual);
             if (vehicle.IsCloud) vehicle.CreateRiderAnchor(visual);
@@ -440,7 +444,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private Vector3[] CreateDavieBusArrivalRoute()
     {
         float y = parkingPoint.y;
-        float approachX = roadTurnPoint.x + 2f;
+        float approachX = roadTurnPoint.x + 2f * S;
         float laneZ = junctionPoint.z;
         Vector3 start = transform.position;
         start.x = approachX;
@@ -451,8 +455,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             start,
             new Vector3(approachX, y, laneZ)
         };
-        float curveStartX = GymRoadsideBusStop.BusBayEndX + 1f;
-        float curveEndX = parkingPoint.x + 4f;
+        float curveStartX = GymRoadsideBusStop.BusBayEndX + 1f * S;
+        float curveEndX = parkingPoint.x + 4f * S;
         const int curveSamples = 12;
         for (int i = 0; i <= curveSamples; i++)
         {
@@ -475,15 +479,15 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         float y = parkingPoint.y;
         float returnZ = GymRoadsideBusStop.DavieBusReturnLanePoint.z;
-        float turnX = parkingPoint.x - 9f;
+        float turnX = parkingPoint.x - 9f * S;
         Vector3 exitTurn = departureRoadTurnPoint;
         Vector3 exitRoad = departureRoadPoint;
         return new[]
         {
             new Vector3(parkingPoint.x, y, parkingPoint.z),
-            new Vector3(turnX + 5.5f, y, parkingPoint.z),
+            new Vector3(turnX + 5.5f * S, y, parkingPoint.z),
             new Vector3(turnX, y, (parkingPoint.z + returnZ) * 0.5f),
-            new Vector3(turnX + 5.5f, y, returnZ),
+            new Vector3(turnX + 5.5f * S, y, returnZ),
             // Start the left turn early: the 10.4 m body swings its nose
             // wide, and the corner's east wall sits just past the lane.
             new Vector3(exitTurn.x - BusExitTurnLead, y, returnZ),
@@ -492,17 +496,17 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         };
     }
 
-    private const float BusExitTurnLead = 3.5f;
-    private const float BusExitTurnRise = 7f;
+    private const float BusExitTurnLead = 3.5f * S;
+    private const float BusExitTurnRise = 7f * S;
 
     // Bus path following: the body always moves along its nose and yaws at a
     // speed-limited rate (v / minimum turn radius), so it turns while it
     // drives instead of sliding sideways between waypoints.
-    private const float BusArrivalMinTurnRadius = 6f;
-    private const float BusDepartureMinTurnRadius = 4f;
-    private const float BusCornerFillet = 3f;
-    private const float BusLookaheadMin = 1.2f;
-    private const float BusLookaheadPerSpeed = 0.35f;
+    private const float BusArrivalMinTurnRadius = 6f * S;
+    private const float BusDepartureMinTurnRadius = 4f * S;
+    private const float BusCornerFillet = 3f * S;
+    private const float BusLookaheadMin = 1.2f * S;
+    private const float BusLookaheadPerSpeed = 0.35f * S;
     private bool followingBusPath;
 
     private IEnumerator FollowBusPath(Vector3[] points, bool park, float speed)
@@ -1416,7 +1420,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         BoxCollider bodyCollider = GetComponent<BoxCollider>();
         if (bodyCollider == null)
         {
-            return IsBus ? DavieBusTargetLength * 0.5f : 1.7f;
+            return IsBus ? DavieBusTargetLength * 0.5f : 1.7f * S;
         }
         return GetColliderExtentAlong(bodyCollider, direction);
     }
@@ -1934,6 +1938,21 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         engine.rolloffMode = AudioRolloffMode.Logarithmic;
         engine.dopplerLevel = 0.35f;
         engine.volume = IsCloud ? 0.18f : 0.24f;
+        engine.clip = GetEngineLoopClip(IsCloud);
+    }
+
+    private static AudioClip carEngineLoopClip;
+    private static AudioClip cloudEngineLoopClip;
+
+    // Shared by visitor cars, the bus and the police car. Built once per
+    // kind; every source plays the same in-memory loop.
+    public static AudioClip GetEngineLoopClip(bool cloud)
+    {
+        AudioClip cached = cloud ? cloudEngineLoopClip : carEngineLoopClip;
+        if (cached != null)
+        {
+            return cached;
+        }
         const int sampleRate = 22050;
         const int sampleCount = sampleRate * 2;
         float[] samples = new float[sampleCount];
@@ -1941,7 +1960,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         {
             float loop = i / (float)sampleCount;
             float phase = loop * Mathf.PI * 2f;
-            if (IsCloud)
+            if (cloud)
             {
                 // A light, airy flight bed for the cloud. Every oscillator
                 // completes an integer number of cycles, so the loop boundary
@@ -1970,10 +1989,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             }
         }
         AudioClip clip = AudioClip.Create(
-            IsCloud ? "Goku day flying loop" : "Car driving loop",
+            cloud ? "Goku day flying loop" : "Car driving loop",
             sampleCount, 1, sampleRate, false);
         clip.SetData(samples, 0);
-        engine.clip = clip;
+        if (cloud) cloudEngineLoopClip = clip;
+        else carEngineLoopClip = clip;
+        return clip;
     }
 
     private static string GetResource(BodybuilderIdentity value)

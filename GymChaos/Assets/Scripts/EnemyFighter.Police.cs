@@ -498,8 +498,15 @@ public partial class EnemyFighter
         float pathX = GymOutdoorBuilder.ProteinStoreParkingBypassPoint.x;
         Vector3 exterior = GymDoorway.Instance.ExteriorPoint;
         Vector3 pathSouth = new Vector3(pathX, y, exterior.z + 2.8f);
+        // North end of the gym path: past the end of the path's inner wall
+        // (it runs up to the road's south edge), so the leg to the parking
+        // entry clears the wall whatever the road width.
+        float roadSouthEdgeZ = GymOutdoorBuilder.ParkingBounds.center.z -
+            GymOutdoorBuilder.VehicleRoadWidthForVerification * 0.5f;
         Vector3 pathNorth = new Vector3(
-            pathX, y, GymOutdoorBuilder.ProteinStoreParkingBypassPoint.z + 3.0f);
+            pathX, y, Mathf.Max(
+                GymOutdoorBuilder.ProteinStoreParkingBypassPoint.z + 3.0f,
+                roadSouthEdgeZ + 0.5f));
         AddDistinctPoliceWaypoint(corridor, GymDoorway.Instance.InteriorPoint);
         AddDistinctPoliceWaypoint(corridor, exterior);
         AddDistinctPoliceWaypoint(corridor, pathSouth);

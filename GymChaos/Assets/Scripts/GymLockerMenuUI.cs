@@ -159,6 +159,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
         // the pause menu in the same frame.
         if (ReadEscape())
         {
+            GymAudio.Play2D(GymSoundEffect.UiBack, 0.55f);
             service.CloseLockerMenuFromUi();
             SetShown(false);
         }

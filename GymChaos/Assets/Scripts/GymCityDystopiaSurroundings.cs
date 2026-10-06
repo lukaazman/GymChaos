@@ -65,8 +65,9 @@ public static class GymCityDystopiaSurroundings
             return;
         }
 
-        float parkingMinZ = parkingCenterZ - 9f - 1.25f;
-        float parkingMaxZ = parkingCenterZ + 9f + 1.25f;
+        float parkingHalfDepth = 9f * GymOutdoorBuilder.VehicleScale;
+        float parkingMinZ = parkingCenterZ - parkingHalfDepth - 1.25f;
+        float parkingMaxZ = parkingCenterZ + parkingHalfDepth + 1.25f;
         float protectedMinX = Mathf.Min(
             roomFloor.min.x - 1.1f,
             parkingMinX - 1.25f,
@@ -122,6 +123,12 @@ public static class GymCityDystopiaSurroundings
         CityRendererCount = 0;
         CheapRendererCount = 0;
         CityColliderCount = 0;
+
+        // Chrome towers default to daylight until GymTimeOfDay drives it.
+        if (Object.FindFirstObjectByType<GymTimeOfDay>() == null)
+        {
+            Shader.SetGlobalFloat("_GymChromeDaylight", 1f);
+        }
 
         GameObject root = new GameObject(RootName);
         root.transform.SetParent(parent, true);
@@ -229,8 +236,10 @@ public static class GymCityDystopiaSurroundings
         Bounds protectedBounds,
         float floorY)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
-            Shader.Find("Unlit/Color") ?? Shader.Find("Unlit/Texture");
+        // Lit, in the paving colour the park ground fades into at its edge,
+        // and at the park ground's height: park and tower bases meet flush.
+        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ??
+            Shader.Find("Standard");
         if (shader == null)
         {
             return;
@@ -239,7 +248,7 @@ public static class GymCityDystopiaSurroundings
         Material material = new Material(shader)
         {
             name = "City Dystopia Ground Infill",
-            color = new Color(0.012f, 0.031f, 0.036f, 1f),
+            color = GymOutdoorFoliage.CityPavingColor,
             enableInstancing = true
         };
         if (material.HasProperty("_BaseColor"))
@@ -248,14 +257,14 @@ public static class GymCityDystopiaSurroundings
         }
         if (material.HasProperty("_Metallic"))
         {
-            material.SetFloat("_Metallic", 0.18f);
+            material.SetFloat("_Metallic", 0f);
         }
         if (material.HasProperty("_Smoothness"))
         {
-            material.SetFloat("_Smoothness", 0.52f);
+            material.SetFloat("_Smoothness", 0.08f);
         }
 
-        float y = floorY - 0.08f;
+        float y = floorY + GymOutdoorFoliage.GroundTopOffset - 0.08f;
         float depth = CityGroundDepth;
         float outerWidth = protectedBounds.size.x + depth * 2f;
         float outerDepth = protectedBounds.size.z + depth * 2f;
@@ -345,7 +354,7 @@ public static class GymCityDystopiaSurroundings
             settleOnSupport: true,
             supportY: tracker.FloorY,
             onLoaded: loaded => tracker.Record(objectName, side, loaded),
-            renderProfile: RuntimeGlbRenderProfile.CheapBackground);
+            renderProfile: RuntimeGlbRenderProfile.ChromeGlassBackground);
     }
 
     private sealed class CityDystopiaBuildTracker

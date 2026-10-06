@@ -10,17 +10,19 @@ public static class GymRoadsideBusStop
     private const string RootName = "Davie Roadside Bus Stop (Runtime)";
     private const string DavieBusAsset =
         "BodyBuilders/vehicles/Davie_Bus.glb";
-    private const float DavieBusTargetLength = 10.4f;
-    private const float DavieBusEstimatedHalfWidth = 1.45f;
+    // Vehicle-relative distances follow the shared 1.25x vehicle scale.
+    private const float S = GymOutdoorBuilder.VehicleScale;
+    private const float DavieBusTargetLength = 10.4f * S;
+    private const float DavieBusEstimatedHalfWidth = 1.45f * S;
     public const float BusBayStartOffset = 18.0f;
-    public const float BusBayEndInset = 7.0f;
+    public const float BusBayEndInset = 7.0f * S;
     // The outer bay fence continues the parking north wall line.
     public const float BusBayDepth = GymOutdoorBuilder.NorthBoundaryOffsetFromRoadEdge;
     private const float MinimumBayExtraLength = 2.0f;
     private const float MinimumRoadWidth = 7.5f;
     private const float FenceClearance = 0.45f;
     private const float MinimumLaneClearance = 0.15f;
-    private const float MinimumCornerClearance = 5.5f;
+    private const float MinimumCornerClearance = 5.5f * S;
     private static GameObject davieBusPreviewRoot;
     private static bool dynamicDavieBusActive;
 
@@ -75,6 +77,15 @@ public static class GymRoadsideBusStop
         {
             davieBusPreviewRoot.SetActive(!active);
         }
+    }
+
+    // Same envelope test Build uses, so the road can size its lanes before
+    // the bus stop exists.
+    public static bool CanFitBay(float roadStartX, float roadTurnX, float roadWidth)
+    {
+        float bayLength = (roadTurnX - BusBayEndInset) - (roadStartX + BusBayStartOffset);
+        return roadWidth >= MinimumRoadWidth &&
+            bayLength >= DavieBusTargetLength + MinimumBayExtraLength;
     }
 
     public static bool Build(
@@ -214,7 +225,7 @@ public static class GymRoadsideBusStop
             0.12f,
             yellow);
 
-        float legendCenterX = bayStartX + 5.0f;
+        float legendCenterX = bayStartX + 5.0f * S;
         CreateRoadLegend(
             root.transform,
             legendCenterX,
@@ -224,14 +235,14 @@ public static class GymRoadsideBusStop
 
         // Parked 3.3 m inside the bay's east end: a forward pull-in then keeps
         // the bus tail clear of the road wall beside the bay mouth.
-        float busCenterX = bayEndX - DavieBusTargetLength * 0.5f - 3.3f;
+        float busCenterX = bayEndX - DavieBusTargetLength * 0.5f - 3.3f * S;
         DavieBusCenterPoint = new Vector3(busCenterX, floorY, busCenterZ);
         DavieBusPassengerPoint = new Vector3(
-            busCenterX - DavieBusTargetLength * 0.5f + 1.75f,
+            busCenterX - DavieBusTargetLength * 0.5f + 1.75f * S,
             floorY,
             passengerZ);
         DavieBusFrontApproachPoint = new Vector3(
-            busCenterX - DavieBusTargetLength * 0.5f - 1.10f,
+            busCenterX - DavieBusTargetLength * 0.5f - 1.10f * S,
             floorY,
             passengerZ);
         DavieBusPedestrianExitPoint = new Vector3(
@@ -241,15 +252,15 @@ public static class GymRoadsideBusStop
         // lane, never reuse the inbound lane.
         float returnLaneZ = roadCenterZ - Mathf.Abs(arrivalLaneOffset);
         DavieBusBayEntryApproachPoint = new Vector3(
-            bayEndX + 2.0f, floorY, roadCenterZ + arrivalLaneOffset);
+            bayEndX + 2.0f * S, floorY, roadCenterZ + arrivalLaneOffset);
         DavieBusBayEntryPoint = new Vector3(
-            bayEndX - 0.8f, floorY, busCenterZ);
+            bayEndX - 0.8f * S, floorY, busCenterZ);
         DavieBusBayParkingTurnPoint = new Vector3(
-            bayEndX - 0.8f, floorY, busCenterZ);
+            bayEndX - 0.8f * S, floorY, busCenterZ);
         DavieBusArrivalApproachPoint = DavieBusBayEntryApproachPoint;
-        float turnaroundCenterX = bayStartX + 10.5f;
+        float turnaroundCenterX = bayStartX + 10.5f * S;
         float turnaroundCenterZ = (busCenterZ + returnLaneZ) * 0.5f;
-        DavieBusTurnaroundRadiusX = 6.5f;
+        DavieBusTurnaroundRadiusX = 6.5f * S;
         DavieBusTurnaroundRadiusZ =
             Mathf.Abs(busCenterZ - returnLaneZ) * 0.5f;
         DavieBusTurnaroundCenterPoint = new Vector3(
@@ -350,8 +361,8 @@ public static class GymRoadsideBusStop
             bayStartGap >= 0.12f &&
             bayEndGap >= 0.12f &&
             cornerGap >= MinimumCornerClearance &&
-            bounds.size.x >= 9.5f &&
-            bounds.size.x <= 11.5f;
+            bounds.size.x >= 9.5f * S &&
+            bounds.size.x <= 11.5f * S;
 
         DavieBusBounds = bounds;
         IsDavieBusReady = contractPassed;

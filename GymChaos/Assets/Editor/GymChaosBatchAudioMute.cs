@@ -4,7 +4,7 @@ using UnityEditor;
 using UnityEngine;
 
 /// <summary>
-/// Batch runs (Tools/Invoke-UnityCheck.ps1 sets GYMCHAOS_MUTE_AUDIO=1)
+/// Agent batch runs (Tools/Invoke-UnityCheck.ps1 sets GYMCHAOS_MUTE_AUDIO=1)
 /// must not play music, sirens or engine sounds through the user's speakers.
 /// The editor master mute silences every AudioSource without touching
 /// AudioListener.volume or playback state, so verifiers that check audio
@@ -65,7 +65,7 @@ public static class GymChaosBatchAudioMute
         if (!Application.isBatchMode && File.Exists(MarkerPath))
         {
             Restore();
-            Debug.Log("GymChaos: restored the Editor audio mute setting left by an interrupted batch run.");
+            Debug.Log("GymChaos: restored the Editor audio mute setting left by an interrupted agent run.");
         }
     }
 }

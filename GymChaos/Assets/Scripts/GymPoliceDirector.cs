@@ -12,7 +12,7 @@ using UnityEngine.Networking;
 public sealed class GymPoliceDirector : MonoBehaviour
 {
     private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar.glb";
-    private const float PoliceCarTargetLength = 4.0f;
+    private const float PoliceCarTargetLength = 4.0f * GymOutdoorBuilder.VehicleScale;
     private const float PoliceCarSpeed =
         GymVisitorVehicle.NormalDriveSpeed * 3f;
     private const float PoliceCarProbeRadius = 1.05f;
@@ -45,6 +45,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private Vector3[] currentRoute;
     private string lastLoggedCarBlocker = string.Empty;
     private AudioSource policeSiren;
+    private AudioSource policeEngine;
     private AudioClip policeSirenClip;
     private Coroutine policeSirenLoadRoutine;
     private bool policeSirenLoadStarted;
@@ -320,6 +321,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
         policeCarStopWithinRoadEnvelope = false;
         policeCarRouteOverlapCount = 0;
         policeCarReady = true;
+        CreatePoliceEngineAudio(root);
         BeginPoliceSirenLoad();
         Debug.Log(
             $"GYMCHAOS_POLICE_CAR_READY asset={PoliceCarAsset} " +
@@ -539,7 +541,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
 
     private bool IsParkingStallEmpty(Vector3 stall)
     {
-        Vector3 halfExtents = new Vector3(1.1f, 0.9f,
+        Vector3 halfExtents = new Vector3(1.1f * GymOutdoorBuilder.VehicleScale, 0.9f,
             GymOutdoorBuilder.ParkingVehicleTargetLength * 0.5f);
         int count = Physics.OverlapBoxNonAlloc(
             stall + Vector3.up * 1.2f, halfExtents, carOverlapHits,
@@ -678,10 +680,36 @@ public sealed class GymPoliceDirector : MonoBehaviour
         }
     }
 
+    // Engine loop under the siren: plays only while the car drives, the
+    // parked car is silent (same rule as visitor vehicles).
+    private void CreatePoliceEngineAudio(GameObject car)
+    {
+        policeEngine = car.AddComponent<AudioSource>();
+        policeEngine.playOnAwake = false;
+        policeEngine.loop = true;
+        policeEngine.clip = GymVisitorVehicle.GetEngineLoopClip(false);
+        policeEngine.volume = 0.3f;
+        policeEngine.spatialBlend = 1f;
+        policeEngine.rolloffMode = AudioRolloffMode.Logarithmic;
+        policeEngine.minDistance = 3f;
+        policeEngine.maxDistance = 32f;
+        policeEngine.dopplerLevel = 0.35f;
+        policeEngine.pitch = 1.08f;
+    }
+
+    public bool IsPoliceEnginePlayingForVerification =>
+        policeEngine != null && policeEngine.isPlaying;
+    public bool HasPoliceEngineForVerification => policeEngine != null;
+
     private void SetPoliceCarMoving(bool moving)
     {
         bool changed = policeCarMoving != moving;
         policeCarMoving = moving;
+        if (policeEngine != null)
+        {
+            if (moving && !policeEngine.isPlaying) policeEngine.Play();
+            else if (!moving && policeEngine.isPlaying) policeEngine.Stop();
+        }
 
         if (moving)
         {

@@ -463,6 +463,7 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         Cursor.visible = true;
         if (ReadEscapePressed())
         {
+            GymAudio.Play2D(GymSoundEffect.UiBack, 0.55f);
             Close();
         }
     }

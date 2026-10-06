@@ -17,6 +17,13 @@ public class PlayerMovement : MonoBehaviour
     public float walkSpeed = 6f;
     public float runSpeed = 11f;
     public float jumpPower = 7f;
+    private const float LandingMinAirTime = 0.2f;
+    private const float LandingMinFallSpeed = 3.2f;
+    private bool landingAirborne;
+    private float landingAirborneSince;
+    private float landingPeakFallSpeed;
+    public int JumpSoundCountForVerification { get; private set; }
+    public int LandSoundCountForVerification { get; private set; }
     public float gravity = 20f;
     public float lookSpeed = 2f;
     public float lookXLimit = 70f;
@@ -158,6 +165,9 @@ public class PlayerMovement : MonoBehaviour
 
     [DllImport("__Internal")]
     private static extern void GymChaosExitPointerLock();
+
+    [DllImport("__Internal")]
+    private static extern void GymChaosSetPointerLockAllowed(int allowed);
 
     [DllImport("__Internal")]
     private static extern int GymChaosIsPointerLocked();
@@ -338,6 +348,47 @@ public class PlayerMovement : MonoBehaviour
         return angle;
     }
 
+    // The browser locks the pointer from its own mousedown handler, before
+    // Unity sees the click. Tell it whether this frame is one where desktop
+    // would capture on click (gameplay, no menu, dialogue or overlay), so a
+    // click on a menu button never hides the cursor in WebGL.
+    private bool cursorCaptureAllowedThisFrame;
+    private int publishedCursorCaptureAllowed = -1;
+
+    public bool CursorCaptureAllowedForVerification => cursorCaptureAllowedThisFrame;
+
+    private void LateUpdate()
+    {
+        // A menu or dialogue opened later in this frame (Esc, talk) wins.
+        if (GymPauseMenu.IsVisible || GymDialogueDirector.IsDialogueActive ||
+            GymRadioSoundCloudPopup.IsAnyVisible)
+        {
+            cursorCaptureAllowedThisFrame = false;
+        }
+        PublishCursorCaptureAllowed();
+    }
+
+    private void OnDisable()
+    {
+        // The start screen disables the player; its menu clicks must never
+        // lock the pointer.
+        cursorCaptureAllowedThisFrame = false;
+        PublishCursorCaptureAllowed();
+    }
+
+    private void PublishCursorCaptureAllowed()
+    {
+        int allowed = cursorCaptureAllowedThisFrame ? 1 : 0;
+        if (allowed == publishedCursorCaptureAllowed)
+        {
+            return;
+        }
+        publishedCursorCaptureAllowed = allowed;
+#if UNITY_WEBGL && !UNITY_EDITOR
+        GymChaosSetPointerLockAllowed(allowed);
+#endif
+    }
+
     public void CaptureCursorForGameplay()
     {
         if (playerCamera == null || IsDead)
@@ -445,6 +496,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         suppressGameplayInputThisFrame = false;
+        cursorCaptureAllowedThisFrame = false;
         TickHealthRegeneration();
 
         if (GymDialogueDirector.IsDialogueActive)
@@ -482,6 +534,7 @@ public class PlayerMovement : MonoBehaviour
         // user gesture. Wait for a real click, then retry the same request so
         // the deployed build behaves like the editor without stealing the
         // click as an attack or shove.
+        cursorCaptureAllowedThisFrame = !IsDead && pendingWeightStation == null;
         if (!IsDead && pendingWeightStation == null && TryCaptureCursor())
         {
             return;
@@ -794,6 +847,8 @@ public class PlayerMovement : MonoBehaviour
             {
                 verticalVelocity = jumpPower;
                 grounded = false;
+                GymAudio.Play2D(GymSoundEffect.Jump, 0.5f);
+                JumpSoundCountForVerification++;
             }
         }
         else
@@ -815,6 +870,39 @@ public class PlayerMovement : MonoBehaviour
         totalMotion.y = verticalVelocity;
         characterController.Move(totalMotion * Time.deltaTime);
         impactVelocity = Vector3.Lerp(impactVelocity, Vector3.zero, 6f * Time.deltaTime);
+        UpdateLandingSound();
+    }
+
+    // Landing cue: only after a real airborne phase, so stair steps and the
+    // grounded flicker on slopes stay silent. Louder for harder landings.
+    private void UpdateLandingSound()
+    {
+        if (!characterController.isGrounded)
+        {
+            if (!landingAirborne)
+            {
+                landingAirborne = true;
+                landingAirborneSince = Time.time;
+                landingPeakFallSpeed = 0f;
+            }
+            landingPeakFallSpeed = Mathf.Min(landingPeakFallSpeed, verticalVelocity);
+            return;
+        }
+
+        if (!landingAirborne)
+        {
+            return;
+        }
+
+        landingAirborne = false;
+        if (Time.time - landingAirborneSince >= LandingMinAirTime &&
+            landingPeakFallSpeed <= -LandingMinFallSpeed)
+        {
+            float impact = Mathf.InverseLerp(
+                LandingMinFallSpeed, 14f, -landingPeakFallSpeed);
+            GymAudio.Play2D(GymSoundEffect.Land, Mathf.Lerp(0.35f, 0.85f, impact));
+            LandSoundCountForVerification++;
+        }
     }
 
     private void ApplyGroundFriction(Vector2 moveInput)
@@ -1202,6 +1290,7 @@ public class PlayerMovement : MonoBehaviour
 
         heldItem = candidate;
         heldItem.PickUp(carryAnchor, playerCamera.transform.forward, playerColliders);
+        GymAudio.Play2D(GymSoundEffect.Pickup, 0.6f);
         if (handRig != null)
         {
             handRig.SetHolding(true);
@@ -1217,6 +1306,7 @@ public class PlayerMovement : MonoBehaviour
 
         heldItem.Drop(transform.forward * 2f + Vector3.up, playerColliders, collisionRestoreDelay);
         heldItem = null;
+        GymAudio.Play2D(GymSoundEffect.ItemDrop, 0.45f);
         if (handRig != null)
         {
             handRig.SetHolding(false);
@@ -1251,6 +1341,7 @@ public class PlayerMovement : MonoBehaviour
 
         heldItem.Throw(throwImpulse, playerColliders, collisionRestoreDelay, allowSpin);
         heldItem = null;
+        GymAudio.Play2D(GymSoundEffect.ItemDrop, 0.75f);
         useRightThrowNext = !useRightThrowNext;
     }
 
@@ -2609,7 +2700,7 @@ public class PlayerMovement : MonoBehaviour
             : new Color(0.34f, 0.48f, 0.64f, 0.9f);
         GUI.DrawTexture(new Rect(rect.x, rect.y, 3f, rect.height), Texture2D.whiteTexture);
         GUI.color = previousColor;
-        return GUI.Button(rect, label, style);
+        return GymUiSounds.ImGuiButton(rect, label, style);
     }
 
     private void DrawWeightSelection()

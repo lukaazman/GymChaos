@@ -290,6 +290,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         }
         if (ReadCancelPressed())
         {
+            GymAudio.Play2D(GymSoundEffect.UiBack, 0.55f);
             Back();
             return;
         }

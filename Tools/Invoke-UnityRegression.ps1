@@ -6,7 +6,7 @@ param(
         'GymChaosLockerVisitVerifier', 'GymChaosVisitorVerifier', 'GymChaosEnemyBehaviorVerifier',
         'GymChaosVehicleTrafficVerifier', 'GymChaosVehicleDepartureVerifier', 'GymChaosDavieBusVerifier',
         'GymChaosDoorwayPriorityVerifier', 'GymChaosDeadliftPathVerifier', 'GymChaosMembersCountVerifier',
-        'GymChaosVisitorUnstickVerifier', 'GymChaosPlayModeVerifier'),
+        'GymChaosVisitorUnstickVerifier', 'GymChaosPlayModeVerifier', 'GymChaosOverhaulVerifier'),
     [string]$Prefix = 'regression',
     # Parallel Unity processes. Lane 1 is the repository project; lanes 2..N
     # are mirror projects under .lanes/ (Assets and Packages are junctions,

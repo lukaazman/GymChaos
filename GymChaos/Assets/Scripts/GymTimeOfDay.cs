@@ -62,6 +62,8 @@ public sealed class GymTimeOfDay : MonoBehaviour
     public float Time01 => time01;
     public int CurrentDay => currentDay;
     public float SimulatedDayLengthSeconds => simulatedDayLengthSeconds;
+    private static readonly int ChromeDaylightId =
+        Shader.PropertyToID("_GymChromeDaylight");
     public bool IsNight => CalculateDaylight(time01) < 0.25f;
 
     public static GymTimeOfDay CreateForScene(
@@ -411,6 +413,7 @@ public sealed class GymTimeOfDay : MonoBehaviour
         UpdateProceduralSkybox(night);
         EnsureGameplaySkyboxCamera(night);
         UpdateSkyEffects(daylight, night);
+        Shader.SetGlobalFloat(ChromeDaylightId, daylight);
 
         if (!loggedLighting || lastUsingSun != useSun)
         {

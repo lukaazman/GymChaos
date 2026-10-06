@@ -23,6 +23,12 @@ mergeInto(LibraryManager.library, {
       if (!canvas.requestPointerLock || document.pointerLockElement === canvas) {
         return;
       }
+      // Menus, dialogue, the locker and other overlays keep the cursor
+      // free: only frames where desktop would capture on click set this
+      // flag (the start screen never does), so menu clicks never lock.
+      if (window.__gymChaosPointerLockAllowed !== true) {
+        return;
+      }
 
       try {
         var request = canvas.requestPointerLock();
@@ -34,6 +40,15 @@ mergeInto(LibraryManager.library, {
         // next click retries it, and the rejection must stay non-fatal.
       }
     }, false);
+  },
+
+  GymChaosSetPointerLockAllowed: function (allowed) {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    // Only gates new lock requests; releasing an active lock stays with
+    // the game (GymChaosExitPointerLock), exactly as on desktop.
+    window.__gymChaosPointerLockAllowed = allowed !== 0;
   },
 
   GymChaosExitPointerLock: function () {

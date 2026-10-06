@@ -1,4 +1,4 @@
-"""Round-trip verification for the seven authored GymChaos character FBXs."""
+"""Round-trip verification for the authored GymChaos character FBXs."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ ENEMY_CLIPS = (
     "walking", "running", "idle1", "idle2", "idle3", "punch_combo",
     "flying", "squat", "celebration1", "celebration2", "celebration3",
 )
+POLICE_CLIPS = ENEMY_CLIPS + ("gun_drawing", "gun_shooting")
 PLAYER_CLIPS = (
     "walking", "running", "idle1", "idle2", "idle3", "crouched_walking",
     "jumping", "punch_left", "punch_right", "throw_frisbee",
@@ -27,8 +28,17 @@ EXPORTS = {
             ENEMY_CLIPS,
         )
         for name in ("arnold_authored", "cbum_authored", "goku_authored",
-                     "jaycutler_authored", "ronnie_authored", "zyzz_authored")
+                     "jaycutler_authored", "ronnie_authored", "zyzz_authored",
+                     "davie_authored")
     },
+    "policeman_authored": (
+        PROJECT / "GymChaos/Assets/Resources/Characters/Enemies/policeman_authored.fbx",
+        POLICE_CLIPS,
+    ),
+    "mark_authored": (
+        PROJECT / "GymChaos/Assets/Resources/Characters/Enemies/mark_authored.fbx",
+        ("idle1", "idle2", "idle3"),
+    ),
     "player_authored": (
         PROJECT / "GymChaos/Assets/Resources/Player/player_authored.fbx",
         PLAYER_CLIPS,

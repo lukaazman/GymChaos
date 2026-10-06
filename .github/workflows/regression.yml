@@ -37,6 +37,7 @@ jobs:
           - MembersCount
           - VisitorUnstick
           - PlayMode
+          - Overhaul
     steps:
       - name: Checkout
         uses: actions/checkout@v4
