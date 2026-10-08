@@ -81,8 +81,10 @@ public partial class EnemyFighter : MonoBehaviour
     [SerializeField] private float throwPushbackMaxSpeed = 4.2f;
     [SerializeField] private float policeTargetRefreshInterval = 0.18f;
     [SerializeField] private float policeMinimumTargetLock = 0f;
-    [SerializeField] private float roamSpeedMin = 1.15f;
-    [SerializeField] private float roamSpeedMax = 2.35f;
+    // Free-roam walking pace: the default walk (1.75 m/s, the mean of the
+    // old per-waypoint range) up to 1.25x of it, drifting every few seconds.
+    [SerializeField] private float roamSpeedMin = 1.75f;
+    [SerializeField] private float roamSpeedMax = 1.75f * 1.25f;
     [SerializeField] private float roamIdleMin = 3.4f;
     [SerializeField] private float roamIdleMax = 6.2f;
     [SerializeField] private float roamRandomDestinationChance = 0.1f;
@@ -136,6 +138,8 @@ public partial class EnemyFighter : MonoBehaviour
     private float roamIdleUntil;
     private float nextTreadmillDecisionTime;
     private float roamSpeed;
+    private float roamSpeedTarget;
+    private float nextRoamSpeedChangeTime;
     private float stalledRoamTime;
     private Vector3 roamDirection;
     private float roamDirectionHoldUntil;
@@ -483,6 +487,9 @@ public partial class EnemyFighter : MonoBehaviour
         treadmillExitTargetPosition = Vector3.zero;
         treadmillNextSpeedChangeTime = 0f;
         roamSpeed = Random.Range(roamSpeedMin, roamSpeedMax);
+        roamSpeedTarget = roamSpeed;
+        nextRoamSpeedChangeTime = Time.time + Random.Range(
+            RoamSpeedChangeMinSeconds, RoamSpeedChangeMaxSeconds);
         // Give each identity a deterministic stagger with a small random
         // nudge: some are already walking on Play, while at least one remains
         // idle briefly. This avoids the whole room switching state together.

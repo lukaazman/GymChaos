@@ -4,44 +4,55 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Mounts the authored protein.com mall module in the existing exterior gap.
-/// The store is kept as one runtime-loaded GLB so its Blender materials remain
-/// visible in the Unity scene, while a small explicit collision shell keeps
-/// the open entrance and the shared parking route usable.
+/// Mounts the protein.com store (Assets/ProteinStore/v2, one runtime-loaded
+/// GLB) in the walled square east of the gym path. The building fills the
+/// square with a small gap to the low walls; its door opens straight onto the
+/// south end of the gym path through an opening in the path's outer wall.
+/// The collision shell is created from constants, so routes are blocked
+/// correctly before the GLB finishes loading; fixtures get their colliders
+/// once it has loaded.
 /// </summary>
 public static class GymProteinStoreEnvironment
 {
     private const string RootName = "Protein Store (Runtime)";
-    private const string AssetPath =
-        "BodyBuilders/outside/protein_store_lowpoly.glb";
+    private const string AssetPath = "BodyBuilders/outside/protein_store.glb";
 
-    // These are the exported GLB bounds in the loader's Unity-facing axes.
-    // The facade stays proportional to the gym while the depth is fitted to
-    // the narrow storefront strip beside the shared path.
-    private const float SourceWidth = 12.0f;
-    private const float SourceDepth = 10.81f;
-    private const float SourceHeight = 6.08f;
-    private const float ShellWidth = 12.0f;
-    private const float ShellDepth = 8.30f;
-    private const float ShellHeight = 5.50f;
-    private const float StoreScale = 0.86f * EnemyFighter.GameplayScale;
-    private const float StoreDepthScale = 1.08f * EnemyFighter.GameplayScale;
-    // The exported storefront front is the authored Blender FRONT_Y value.
-    // -6.65 was the full decorative bounds minimum, so using it here put the
-    // checkout worker behind the rear wall instead of in the staff gap.
-    private const float CheckoutWorkerAuthoredX = 3.04f;
-    // Keep Mark behind the checkout, but leave enough front clearance for his
-    // scaled capsule and enough rear clearance that the wall does not hide
-    // his body. The previous 1.05 m inset placed him almost inside the wall.
-    private const float CheckoutWorkerBackWallInset = 3.0f;
-    private const float PlatformWidth = 16.0f;
-    private const float PlatformDepth = 15.0f;
-    private const float ConnectorWidth = 4.40f;
-    private const float StoreBackClearance = 0.42f;
-    private const float StorePathClearance = 0.42f;
-    private const float StoreSouthClearance = 0.32f;
+    // Module dimensions from create_protein_store_v2.py (metres). The GLB
+    // is placed with a 180 degree yaw: authored +X runs world east (from the
+    // storefront to the back wall) and authored +Y runs world north.
+    private const float ModuleDepth = 23.4f;
+    private const float ModuleWidth = 20.1f;
+    private const float ModuleWall = 0.25f;
+    private const float ModuleWallHeight = 4.4f;
+    private const float ModuleHeight = 5.08f;
+    private const float DoorLocalZ = -2.76f;
+    private const float DoorWidth = 2.6f;
+    // Opening in the gym path's outer wall, starting at the path's south end.
+    public const float PathOpeningWidth = 2.8f;
+    // Gap between the building and the site's low walls.
+    private const float StorePadding = 0.7f;
+    // The walled site keeps the size it had around the first store.
+    private const float SiteSouthBelowPathEnd = 6.597f;
+    private const float SiteEastFromPath = 25.30f;
+    // Checkout: where a customer stands in front of the counter and where
+    // Mark stands behind it (authored X, authored Y = world north).
+    private static readonly Vector2 CounterCustomerLocal = new Vector2(-7.2f, -5.35f);
+    private static readonly Vector2 CounterStaffLocal = new Vector2(-7.4f, -8.25f);
+    // Where store visitors stop: the counter first, then two open spots
+    // by the shelves, so two shoppers never queue for the same point.
+    private static readonly Vector2[] VisitSpotLocal =
+    {
+        CounterCustomerLocal, new Vector2(-1.0f, -1.4f), new Vector2(0.5f, -6.5f)
+    };
+    private static readonly UnityEngine.Object[] visitSpotOwners =
+        new UnityEngine.Object[VisitSpotLocal.Length];
+    private static readonly Vector2[] InteriorLightLocal =
+    {
+        new Vector2(-7.5f, -4.5f), new Vector2(-7.5f, 4.5f), new Vector2(0f, -4.5f),
+        new Vector2(0f, 4.5f), new Vector2(7.5f, -4.5f), new Vector2(7.5f, 4.5f)
+    };
     private const float StoreDoorClearance = 1.25f;
-    private const float RouteClearance = 1.70f;
+    private const float ParkingBypassOffset = 7.247f;
 
     public static bool IsBuilt { get; private set; }
     public static bool IsLoaded { get; private set; }
@@ -54,13 +65,13 @@ public static class GymProteinStoreEnvironment
     public static float EntryFenceLargestGap { get; private set; }
     public static Bounds StoreBounds { get; private set; }
     public static Bounds SiteBounds { get; private set; }
-    // World footprint of the shop's collision shell (side and back walls).
+    // World footprint of the building.
     public static Bounds ShellFootprint { get; private set; }
-    // x of the authored facade (pillars and display panels) in front of it.
+    // x of the storefront's outer face.
     public static float FacadeX { get; private set; }
-    // The facade pillars stand this far in front of the shell side walls.
-    private const float FacadeInsetFromShell = 0.45f;
     public static Bounds OuterRouteBounds { get; private set; }
+    public static float EntranceMinZ { get; private set; }
+    public static float EntranceMaxZ { get; private set; }
     public static Vector3 StoreEntrancePoint { get; private set; }
     public static Vector3 StoreFrontClearPoint { get; private set; }
     public static Vector3 StoreWestApproachPoint { get; private set; }
@@ -74,12 +85,20 @@ public static class GymProteinStoreEnvironment
     public static Vector3 StoreGateWestClearPoint { get; private set; }
     public static Vector3 StoreGymPathSouthClearPoint { get; private set; }
     public static Vector3 StoreVisitApproachPoint { get; private set; }
+    public static Vector3 StoreInsideDoorPoint { get; private set; }
     public static Vector3 StoreWorkerPoint { get; private set; }
     public static Quaternion StoreWorkerRotation { get; private set; }
     public static float InnerFenceStartZ { get; private set; }
     public static int RuntimeInteriorLightCount { get; private set; }
     public static Transform RuntimeRoot { get; private set; }
     public static string RuntimeAssetPath => AssetPath;
+
+    /// <summary>The store door's opening in the path's outer wall.</summary>
+    public static void GetPathOpening(float pathSouthZ, out float minZ, out float maxZ)
+    {
+        minZ = pathSouthZ + GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
+        maxZ = minZ + PathOpeningWidth;
+    }
 
     private static float entryFenceExpectedStartX;
     private static float entryFenceExpectedEndX;
@@ -362,140 +381,113 @@ public static class GymProteinStoreEnvironment
         IsBuilt = true;
         IsLoaded = false;
         LoadFailed = false;
+        System.Array.Clear(visitSpotOwners, 0, visitSpotOwners.Length);
         LoadedRendererCount = 0;
         LoadedMaterialCount = 0;
         TransparentFridgePanelCount = 0;
         EntryFenceJunctionCount = 0;
         EntryFenceLargestGap = float.PositiveInfinity;
-        entryFenceExpectedStartX = 0f;
-        entryFenceExpectedEndX = 0f;
-        entryFenceCenterZ = 0f;
-        entryFenceHalfOffset = 0f;
         entryFenceFloorY = floorY;
 
-        // Keep the whole authored module in the storefront strip between the
-        // gym wall and the existing shared pedestrian path. The frontage and
-        // height stay mall-readable; only the depth is compressed so the path
-        // never runs through the shop.
-        float worldDepth = SourceDepth * StoreDepthScale;
-        float worldWidth = SourceWidth * StoreScale;
-        float worldHeight = SourceHeight * StoreScale;
-        float platformMinX = outerPathX + 4.50f;
-        float centerX = platformMinX + 0.50f + worldDepth * 0.5f;
-        float frontX = platformMinX + 0.50f;
-        // Keep the gym door's complete wall-to-interior corridor open. The
-        // storefront starts farther along the same path, while still using
-        // the existing inner guard as its north-side continuation.
-        float centerZ = doorway.ExteriorPoint.z;
+        // The door sits at the south end of the gym path; the building is
+        // anchored by that door and fills the walled square to the east.
+        GetPathOpening(pathSouthZ, out float openingMinZ, out float openingMaxZ);
+        EntranceMinZ = openingMinZ;
+        EntranceMaxZ = openingMaxZ;
+        float entranceZ = (openingMinZ + openingMaxZ) * 0.5f;
+        float pathWallEastX = outerPathX + GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
+        float pathWallWestX = outerPathX - GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
+        FacadeX = pathWallEastX + StorePadding;
+        float centerX = FacadeX + ModuleDepth * 0.5f;
+        float centerZ = entranceZ - DoorLocalZ;
+        Vector3 center = new Vector3(centerX, floorY, centerZ);
+        StoreBounds = new Bounds(center + Vector3.up * (ModuleHeight * 0.5f),
+            new Vector3(ModuleDepth, ModuleHeight, ModuleWidth));
+        ShellFootprint = new Bounds(center, new Vector3(ModuleDepth, 0.2f, ModuleWidth));
+        float siteSouth = pathSouthZ - SiteSouthBelowPathEnd;
+        float siteEast = outerPathX + SiteEastFromPath;
+        float siteNorth = centerZ + ModuleWidth * 0.5f + StorePadding +
+            GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
+        SiteBounds = new Bounds(
+            new Vector3((outerPathX + siteEast) * 0.5f, floorY, (siteSouth + siteNorth) * 0.5f),
+            new Vector3(siteEast - outerPathX, 0.2f, siteNorth - siteSouth));
 
-        StoreBounds = new Bounds(
-            new Vector3(centerX, floorY + worldHeight * 0.5f, centerZ),
-            new Vector3(worldDepth, worldHeight, worldWidth));
-        SiteBounds = new Bounds(new Vector3(platformMinX + PlatformWidth * 0.5f, floorY, centerZ),
-            new Vector3(PlatformWidth, 0.20f, PlatformDepth));
-        ShellFootprint = new Bounds(
-            new Vector3(centerX, floorY, centerZ),
-            new Vector3(ShellDepth * StoreDepthScale, 0.2f, ShellWidth * StoreScale));
-        FacadeX = ShellFootprint.min.x - FacadeInsetFromShell;
-        StoreEntrancePoint = new Vector3(frontX + 0.05f, floorY, centerZ);
-        StoreFrontClearPoint = new Vector3(
-            frontX + RouteClearance, floorY, centerZ);
-        StoreWestApproachPoint = doorway.ExteriorPoint;
-
-        // The shop is a physical obstacle beside the shared north/south path.
-        // Route traffic around its full footprint with a rectangular dog-leg;
-        // the reverse sequence is used for arrivals and departures, so cars
-        // and pedestrians never need a backwards teleport or a wall shortcut.
-        float storeRouteZ = Mathf.Max(
-            StoreBounds.extents.z + RouteClearance,
-            ShellDepth * StoreDepthScale * 0.5f + RouteClearance);
-        float westRouteX = pathCenterX;
-        float storeWestRouteX = StoreBounds.min.x - RouteClearance;
-        float storeEastRouteX = StoreBounds.max.x + RouteClearance + 2.55f;
-        StoreSouthCurvePointE = new Vector3(
-            storeWestRouteX, floorY, centerZ - storeRouteZ);
-        StoreSouthCurvePointD = new Vector3(
-            storeWestRouteX, floorY, centerZ - storeRouteZ);
-        StoreSouthCurvePointC = new Vector3(
-            storeEastRouteX, floorY, centerZ - storeRouteZ);
-        StoreSouthCurvePointB = new Vector3(
-            storeEastRouteX, floorY, centerZ + storeRouteZ);
-        StoreWestApproachPoint = new Vector3(
-            storeWestRouteX, floorY, centerZ + storeRouteZ);
+        // Walking route: gym door -> path in front of the opening -> through
+        // the opening -> just inside the door -> the checkout counter.
+        StoreGymPathClearPoint = new Vector3(pathCenterX, floorY, entranceZ);
+        StoreGymPathSouthClearPoint = StoreGymPathClearPoint;
+        StoreGateWestClearPoint = new Vector3(pathWallWestX - 0.95f, floorY, entranceZ);
+        StoreVisitApproachPoint = new Vector3((pathWallEastX + FacadeX) * 0.5f, floorY, entranceZ);
+        StoreEntrancePoint = new Vector3(FacadeX + 0.35f, floorY, entranceZ);
+        StoreInsideDoorPoint = new Vector3(FacadeX + 1.0f, floorY, entranceZ);
+        StoreFrontClearPoint = LocalToWorld(center, CounterCustomerLocal);
+        StoreWorkerPoint = LocalToWorld(center, CounterStaffLocal);
+        // Mark faces the counter and the customers north of it.
+        StoreWorkerRotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+        StoreWestApproachPoint = StoreGateWestClearPoint;
+        // The old loop round the shop no longer exists; these legacy points
+        // collapse onto the path in front of the opening.
+        StoreSouthCurvePointB = StoreGymPathClearPoint;
+        StoreSouthCurvePointC = StoreGymPathClearPoint;
+        StoreSouthCurvePointD = StoreGymPathClearPoint;
+        StoreSouthCurvePointE = StoreGymPathClearPoint;
+        StoreEastRoutePoint = StoreGymPathClearPoint;
         StoreParkingBypassPoint = new Vector3(
-            westRouteX, floorY, centerZ + storeRouteZ);
-        StoreEastRoutePoint = new Vector3(
-            storeEastRouteX, floorY, centerZ + storeRouteZ);
-        // Cross the shared path through its authored outer-fence opening.
-        // This keeps the visitor capsule clear of the south wall endpoint.
-        StoreGymPathSouthClearPoint = new Vector3(
-            outerPathX + 2.20f,
-            floorY,
-            centerZ - (ConnectorWidth * 0.5f +
-                GymOutdoorBuilder.SharedFenceWallThickness * 0.1f) - 1.35f);
-        StoreGymPathClearPoint = new Vector3(
-            outerPathX + 2.20f, floorY, centerZ);
-        StoreVisitApproachPoint = new Vector3(
-            storeWestRouteX, floorY, centerZ);
-        // Anchor Mark against the rear wall rather than to the checkout mesh
-        // origin. The imported counter is made from several primitives, so
-        // its authored centre placed the scaled capsule inside the counter.
-        float workerWorldX =
-            StoreBounds.max.x - CheckoutWorkerBackWallInset;
-        float workerWorldZ = centerZ - CheckoutWorkerAuthoredX * StoreScale;
-        StoreWorkerPoint = new Vector3(
-            workerWorldX,
-            floorY,
-            workerWorldZ);
-        StoreWorkerRotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
-        // The shop replaces the inner guard for its own frontage; resume the
-        // existing inner fence immediately after the shop's north edge.
+            pathCenterX, floorY, doorway.ExteriorPoint.z + ParkingBypassOffset);
         InnerFenceStartZ = doorway.ExteriorPoint.z + StoreDoorClearance;
 
-        CreateAccessGround(
+        // Short paved link through the opening and two low walls that close
+        // it off from the gaps beside the building.
+        // Paving under the wall opening, between the path surface and the
+        // site ground (which runs on from the wall line to the shop).
+        float pathEdgeX = pathCenterX + pathWidth * 0.5f;
+        CreateGroundBox(
+            "Protein Store Entry Walkway",
             parent,
-            pathCenterX + pathWidth * 0.5f,
-            floorY,
-            frontX,
-            centerZ,
-            centerZ,
-            pathCenterX,
-            pathWidth,
+            new Vector3((pathEdgeX + outerPathX) * 0.5f, floorY - 0.045f, entranceZ),
+            new Vector3(outerPathX - pathEdgeX, 0.09f, openingMaxZ - openingMinZ),
             pathMaterial,
-            markingMaterial);
-        float connectorFenceHalfOffset = ConnectorWidth * 0.5f +
-            GymOutdoorBuilder.SharedFenceWallThickness * 0.1f;
-        // Keep a physical gate between the shared path and storefront.
-        // The rails remain collision-aware; the opening lets visitors cross
-        // the outer path without entering the shop facade.
-        // The walkway is a closed corridor from the path wall to the shop
-        // facade. Its fences start on the path wall's outer face, so nothing
-        // sticks out into the shared path, and end on the facade.
-        float entryFenceStartX = outerPathX - GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
-        float entryFenceGateCenterX = outerPathX + 2.20f;
-        entryFenceExpectedStartX = entryFenceStartX;
+            true);
+        float halfThickness = GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
+        // Both walls start on the path wall's centre line: the south one
+        // continues the path's south wall straight to the storefront.
+        entryFenceExpectedStartX = outerPathX;
         entryFenceExpectedEndX = FacadeX;
-        entryFenceCenterZ = centerZ;
-        entryFenceHalfOffset = connectorFenceHalfOffset;
-        // Keep the visitor capsule inside the corridor before it turns west
-        // toward the gym door.
-        float gateVisitorClearance = Mathf.Max(
-            0.82f,
-            EnemyFighter.GetBodyRadiusForIdentity(BodybuilderIdentity.Cbum) + 0.18f);
-        StoreGateWestClearPoint = new Vector3(
-            entryFenceGateCenterX - 2.20f + gateVisitorClearance,
-            floorY,
-            centerZ);
-        CreateAccessFence(parent, floorY, entryFenceStartX, FacadeX,
-            centerZ - connectorFenceHalfOffset,
-            centerZ - connectorFenceHalfOffset,
+        entryFenceCenterZ = entranceZ;
+        entryFenceHalfOffset = (openingMaxZ - openingMinZ) * 0.5f + halfThickness;
+        CreateAccessFence(parent, floorY, outerPathX, FacadeX,
+            openingMinZ - halfThickness, openingMinZ - halfThickness,
             boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
             "Protein Store Entry Fence South");
-        CreateAccessFence(parent, floorY, entryFenceStartX, FacadeX,
-            centerZ + connectorFenceHalfOffset, centerZ + connectorFenceHalfOffset,
+        CreateAccessFence(parent, floorY, outerPathX, FacadeX,
+            openingMaxZ + halfThickness, openingMaxZ + halfThickness,
             boundaryMaterial, boundaryTrimMaterial, boundaryRibMaterial,
             "Protein Store Entry Fence North");
-        CreateFacadeGuards(parent, floorY, centerZ);
+
+        Vector3 storePosition = center;
+        GameObject storeRoot = RuntimeGlbSceneLoader.Request(
+            AssetPath,
+            parent,
+            storePosition,
+            Quaternion.Euler(0f, 180f, 0f),
+            Vector3.one,
+            RootName,
+            0,
+            settleOnSupport: false,
+            supportY: floorY,
+            onLoaded: loaded => OnStoreLoaded(loaded, floorY));
+
+        if (storeRoot == null)
+        {
+            LoadFailed = true;
+            Debug.LogError(
+                $"GYMCHAOS_PROTEIN_STORE_LOAD_FAIL path={AssetPath} " +
+                "reason=request_returned_null");
+            return;
+        }
+
+        RuntimeRoot = storeRoot.transform;
+        CreateStoreCollisionShell(storeRoot.transform, center, floorY, entranceZ);
         int measuredJunctions;
         float measuredLargestGap;
         bool measuredRouteClear;
@@ -511,41 +503,60 @@ public static class GymProteinStoreEnvironment
             out measuredRouteClear);
         EntryFenceJunctionCount = measuredJunctions;
         EntryFenceLargestGap = measuredLargestGap;
-
-        Vector3 storePosition = new Vector3(centerX, floorY, centerZ);
-        GameObject storeRoot = RuntimeGlbSceneLoader.Request(
-            AssetPath,
-            parent,
-            storePosition,
-            Quaternion.Euler(0f, -90f, 0f),
-            new Vector3(StoreScale, StoreScale, StoreDepthScale),
-            RootName,
-            0,
-            settleOnSupport: true,
-            supportY: floorY,
-            onLoaded: loaded => OnStoreLoaded(loaded, floorY));
-
-        if (storeRoot == null)
-        {
-            LoadFailed = true;
-            Debug.LogError(
-                $"GYMCHAOS_PROTEIN_STORE_LOAD_FAIL path={AssetPath} " +
-                "reason=request_returned_null");
-            return;
-        }
-
-        RuntimeRoot = storeRoot.transform;
-        CreateStoreCollisionShell(storeRoot.transform);
         ColliderCount = storeRoot.GetComponentsInChildren<Collider>(true).Length;
         Physics.SyncTransforms();
 
+        float padSouth = ShellFootprint.min.z - (siteSouth + halfThickness);
+        float padEast = (siteEast - halfThickness) - ShellFootprint.max.x;
         Debug.Log(
             $"GYMCHAOS_PROTEIN_STORE_REQUESTED path={AssetPath} " +
-            $"position={storePosition} scale=({StoreScale:F2},{StoreScale:F2},{StoreDepthScale:F2}) " +
-            $"expectedBounds={StoreBounds} entrance={StoreEntrancePoint} " +
-            $"parkingBypass={StoreParkingBypassPoint} colliders={ColliderCount} " +
-            $"sharedParking=1 materialSource=embedded_glb",
+            $"position={storePosition} footprint={ShellFootprint} " +
+            $"entrance={openingMinZ:F2}->{openingMaxZ:F2} facadeX={FacadeX:F2} " +
+            $"padWest={StorePadding:F2} padSouth={padSouth:F2} padEast={padEast:F2} " +
+            $"counter={StoreFrontClearPoint} worker={StoreWorkerPoint} colliders={ColliderCount}",
             storeRoot);
+    }
+
+    /// <summary>
+    /// The spot `owner` stops at inside the shop: the one it already holds,
+    /// else the first free one (the counter is preferred).
+    /// </summary>
+    public static Vector3 ReserveVisitSpot(UnityEngine.Object owner)
+    {
+        int free = -1;
+        for (int index = 0; index < visitSpotOwners.Length; index++)
+        {
+            if (visitSpotOwners[index] == owner && owner != null)
+            {
+                return LocalToWorld(ShellFootprint.center, VisitSpotLocal[index]);
+            }
+            if (free < 0 && visitSpotOwners[index] == null)
+            {
+                free = index;
+            }
+        }
+        if (free < 0)
+        {
+            return StoreFrontClearPoint;
+        }
+        visitSpotOwners[free] = owner;
+        return LocalToWorld(ShellFootprint.center, VisitSpotLocal[free]);
+    }
+
+    public static void ReleaseVisitSpot(UnityEngine.Object owner)
+    {
+        for (int index = 0; index < visitSpotOwners.Length; index++)
+        {
+            if (visitSpotOwners[index] == owner)
+            {
+                visitSpotOwners[index] = null;
+            }
+        }
+    }
+
+    private static Vector3 LocalToWorld(Vector3 center, Vector2 local)
+    {
+        return new Vector3(center.x + local.x, center.y, center.z + local.y);
     }
 
     private static void OnStoreLoaded(GameObject loaded, float floorY)
@@ -564,9 +575,16 @@ public static class GymProteinStoreEnvironment
             loaded.GetComponentsInChildren<MeshRenderer>(true);
         for (int index = 0; index < renderers.Length; index++)
         {
-            if (renderers[index] == null) continue;
-            renderers[index].shadowCastingMode = ShadowCastingMode.Off;
-            renderers[index].receiveShadows = false;
+            MeshRenderer renderer = renderers[index];
+            if (renderer == null) continue;
+            // Only the shell casts shadows: it keeps the sun out of the shop
+            // without paying for thousands of small product casters.
+            string name = renderer.name;
+            bool shell = name.StartsWith("Roof", StringComparison.Ordinal) ||
+                name.StartsWith("Solid_Walls", StringComparison.Ordinal) ||
+                name.StartsWith("Solid_Storefront", StringComparison.Ordinal);
+            renderer.shadowCastingMode = shell ? ShadowCastingMode.On : ShadowCastingMode.Off;
+            renderer.receiveShadows = !name.StartsWith("Products_", StringComparison.Ordinal);
         }
 
         AddStoreObjectColliders(loaded);
@@ -634,26 +652,22 @@ public static class GymProteinStoreEnvironment
             return;
         }
 
-        Vector3 center = StoreBounds.center;
-        float ceilingClearance = Mathf.Min(0.55f, StoreBounds.extents.y * 0.18f);
-        for (int index = 0; index < 2; index++)
+        Vector3 center = ShellFootprint.center;
+        for (int index = 0; index < InteriorLightLocal.Length; index++)
         {
             GameObject lightObject = new GameObject(
                 "Protein Store Interior Light " + (index + 1));
             lightObject.transform.SetParent(loaded.transform, true);
-            lightObject.transform.position = center + Vector3.up *
-                (StoreBounds.extents.y - ceilingClearance) +
-                Vector3.forward * (index == 0 ? -1.7f : 1.7f);
+            lightObject.transform.position =
+                LocalToWorld(center, InteriorLightLocal[index]) + Vector3.up * 3.6f;
             Light light = lightObject.AddComponent<Light>();
             light.type = LightType.Point;
-            light.color = new Color(1f, 0.96f, 0.87f);
-            // Toned down from 180/6.5 m: less glare on the glossy shelves and
-            // fewer lit pixels per light.
-            light.intensity = 120f;
-            light.range = 5.5f;
+            light.color = new Color(1f, 0.97f, 0.9f);
+            light.intensity = 35f;
+            light.range = 8.5f;
             light.shadows = LightShadows.None;
         }
-        RuntimeInteriorLightCount = 2;
+        RuntimeInteriorLightCount = InteriorLightLocal.Length;
     }
 
     private static bool IsFridgeGlassRenderer(Renderer renderer)
@@ -664,11 +678,7 @@ public static class GymProteinStoreEnvironment
         }
 
         string lowerName = renderer.name.ToLowerInvariant();
-        return (lowerName.Contains("coldfridge") ||
-            lowerName.Contains("energycooler") ||
-            lowerName.Contains("fridge") ||
-            lowerName.Contains("cooler")) &&
-            lowerName.Contains("glass");
+        return lowerName.Contains("fridge") && lowerName.Contains("glass");
     }
 
     private static bool IsTransparentMaterial(Material material)
@@ -684,34 +694,42 @@ public static class GymProteinStoreEnvironment
             material.HasProperty("_BaseColor") &&
             material.GetColor("_BaseColor").a < 0.99f;
     }
-    private static void CreateStoreCollisionShell(Transform storeRoot)
+
+    // Walls and the storefront (minus the door) as boxes from the module
+    // constants, so the shop blocks people before its GLB has loaded.
+    private static void CreateStoreCollisionShell(
+        Transform storeRoot, Vector3 center, float floorY, float entranceZ)
     {
-        // The front remains intentionally open. Side/back shell colliders
-        // protect the mall module without sealing the entrance or its ramp.
-        AddCollider(
-            storeRoot,
-            "Protein Store Collision - Floor",
-            new Vector3(0f, -0.08f, 0f),
-            new Vector3(ShellWidth, 0.16f, ShellDepth),
-            isTrigger: true);
-        AddCollider(
-            storeRoot,
-            "Protein Store Collision - Back Wall",
-            new Vector3(0f, ShellHeight * 0.5f,
-                -ShellDepth * 0.5f + 0.12f),
-            new Vector3(ShellWidth, ShellHeight, 0.24f));
-        AddCollider(
-            storeRoot,
-            "Protein Store Collision - Left Wall",
-            new Vector3(-ShellWidth * 0.5f + 0.11f, ShellHeight * 0.5f, 0f),
-            new Vector3(0.22f, ShellHeight, ShellDepth));
-        AddCollider(
-            storeRoot,
-            "Protein Store Collision - Right Wall",
-            new Vector3(ShellWidth * 0.5f - 0.11f, ShellHeight * 0.5f, 0f),
-            new Vector3(0.22f, ShellHeight, ShellDepth));
+        float h = ModuleWallHeight;
+        float minX = center.x - ModuleDepth * 0.5f;
+        float maxX = center.x + ModuleDepth * 0.5f;
+        float minZ = center.z - ModuleWidth * 0.5f;
+        float maxZ = center.z + ModuleWidth * 0.5f;
+        float doorMin = entranceZ - DoorWidth * 0.5f;
+        float doorMax = entranceZ + DoorWidth * 0.5f;
+        void Wall(string name, float x0, float x1, float z0, float z1)
+        {
+            GameObject wall = new GameObject("Protein Store Collision - " + name);
+            wall.transform.SetParent(storeRoot, true);
+            wall.transform.position = new Vector3((x0 + x1) * 0.5f, floorY + h * 0.5f, (z0 + z1) * 0.5f);
+            BoxCollider collider = wall.AddComponent<BoxCollider>();
+            collider.size = new Vector3(x1 - x0, h, z1 - z0);
+        }
+        Wall("Back Wall", maxX - ModuleWall, maxX, minZ, maxZ);
+        Wall("North Wall", minX, maxX, maxZ - ModuleWall, maxZ);
+        Wall("South Wall", minX, maxX, minZ, minZ + ModuleWall);
+        Wall("Storefront South", minX, minX + ModuleWall, minZ, doorMin);
+        Wall("Storefront North", minX, minX + ModuleWall, doorMax, maxZ);
+        // Above the door: keeps jumps from clipping into the fascia.
+        GameObject lintel = new GameObject("Protein Store Collision - Door Lintel");
+        lintel.transform.SetParent(storeRoot, true);
+        lintel.transform.position = new Vector3(minX + ModuleWall * 0.5f, floorY + (2.7f + h) * 0.5f, entranceZ);
+        lintel.AddComponent<BoxCollider>().size = new Vector3(ModuleWall, h - 2.7f, doorMax - doorMin);
     }
 
+    // Fixtures authored as "Solid_*" (counters, shelving, fridges, display
+    // platforms) block movement; products, signs and glass do not. Walls and
+    // the storefront already have the constant shell above.
     private static void AddStoreObjectColliders(GameObject loaded)
     {
         MeshFilter[] filters = loaded.GetComponentsInChildren<MeshFilter>(true);
@@ -723,54 +741,10 @@ public static class GymProteinStoreEnvironment
             {
                 continue;
             }
-
-            Renderer renderer = filter.GetComponent<Renderer>();
-            if (renderer == null)
-            {
-                continue;
-            }
-
-            Vector3 worldSize = renderer.bounds.size;
-            float horizontal = Mathf.Max(worldSize.x, worldSize.z);
-            float horizontalMin = Mathf.Min(worldSize.x, worldSize.z);
-            string lowerName = filter.name.ToLowerInvariant();
-            bool decoration =
-                lowerName.Contains("light") ||
-                lowerName.Contains("logo") ||
-                lowerName.Contains("sign") ||
-                lowerName.Contains("label") ||
-                lowerName.Contains("text") ||
-                lowerName.Contains("ceiling") ||
-                lowerName.Contains("roof") ||
-                lowerName.Contains("window") ||
-                lowerName.Contains("glass");
-            bool architecturalSurface =
-                lowerName.Contains("wall") ||
-                lowerName.Contains("floor");
-            bool fixture =
-                lowerName.Contains("counter") ||
-                lowerName.Contains("checkout") ||
-                lowerName.Contains("shelf") ||
-                lowerName.Contains("rack") ||
-                lowerName.Contains("display") ||
-                lowerName.Contains("fridge") ||
-                lowerName.Contains("freezer") ||
-                lowerName.Contains("cabinet") ||
-                lowerName.Contains("register") ||
-                lowerName.Contains("desk") ||
-                lowerName.Contains("table") ||
-                lowerName.Contains("bench") ||
-                lowerName.Contains("stand") ||
-                lowerName.Contains("case") ||
-                lowerName.Contains("pillar") ||
-                lowerName.Contains("column");
-            bool substantialObject =
-                horizontal >= 0.70f &&
-                horizontalMin >= 0.16f &&
-                worldSize.y >= 0.20f &&
-                horizontal <= 5.0f;
-            if (decoration || architecturalSurface ||
-                (!fixture && !substantialObject))
+            string name = filter.name;
+            if (!name.StartsWith("Solid_", StringComparison.Ordinal) ||
+                name.StartsWith("Solid_Walls", StringComparison.Ordinal) ||
+                name.StartsWith("Solid_Storefront", StringComparison.Ordinal))
             {
                 continue;
             }
@@ -788,7 +762,6 @@ public static class GymProteinStoreEnvironment
         }
     }
 
-
     public static void RemoveLegacyEntryDecorations()
     {
         GameObject root = GameObject.Find(RootName);
@@ -799,12 +772,11 @@ public static class GymProteinStoreEnvironment
 
         string[] legacyPrefixes =
         {
-            "Protein Store Entry Fence South ",
-            "Protein Store Entry Fence North ",
             "Protein Store Entry Bollard",
             "Protein Store Connector Edge",
             "Protein Store Side Path Edge",
-            "Protein Store Entry Edge "
+            "Protein Store Entry Edge ",
+            "Protein Store Facade Guard"
         };
         Transform[] children = root.GetComponentsInChildren<Transform>(true);
         for (int index = children.Length - 1; index >= 0; index--)
@@ -825,68 +797,6 @@ public static class GymProteinStoreEnvironment
                 }
             }
         }
-        EnsureEntryLowWalls(root);
-    }
-
-    private static void EnsureEntryLowWalls(GameObject root)
-    {
-        if (root == null ||
-            (root.transform.Find("Protein Store Entry Fence South Low Wall") != null &&
-             root.transform.Find("Protein Store Entry Fence North Low Wall") != null))
-        {
-            return;
-        }
-
-        Transform walkwayTransform = root.transform.Find("Protein Store Entry Walkway");
-        Renderer walkway = walkwayTransform != null
-            ? walkwayTransform.GetComponent<Renderer>()
-            : null;
-        if (walkway == null)
-        {
-            return;
-        }
-
-        Material wall = CreateMaterial(
-            "Exterior boundary wall", new Color(0.07f, 0.13f, 0.21f),
-            0.35f, 0.42f);
-        Material coping = CreateMaterial(
-            "Exterior boundary coping", new Color(0.16f, 0.29f, 0.42f),
-            0.55f, 0.5f);
-        Material ribs = CreateMaterial(
-            "Exterior boundary ribs", new Color(0.02f, 0.05f, 0.09f),
-            0.75f, 0.3f);
-        Bounds bounds = walkway.bounds;
-        float halfWidth = ConnectorWidth * 0.5f +
-            GymOutdoorBuilder.SharedFenceWallThickness * 0.1f;
-        float endX = FacadeX > bounds.max.x ? FacadeX : bounds.max.x;
-        CreateAccessFence(root.transform, bounds.max.y, bounds.min.x + 0.3f, endX,
-            bounds.center.z - halfWidth, bounds.center.z - halfWidth,
-            wall, coping, ribs, "Protein Store Entry Fence South");
-        CreateAccessFence(root.transform, bounds.max.y, bounds.min.x + 0.3f, endX,
-            bounds.center.z + halfWidth, bounds.center.z + halfWidth,
-            wall, coping, ribs, "Protein Store Entry Fence North");
-    }
-
-    // The facade's display panels have no physics. Invisible guards behind
-    // them keep the open front limited to the doorway, so the corridor is
-    // the only way in and out of the shop.
-    private static void CreateFacadeGuards(Transform parent, float floorY, float centerZ)
-    {
-        float doorHalfWidth = ConnectorWidth * 0.5f;
-        float thickness = ShellFootprint.min.x - FacadeX;
-        float x = FacadeX + thickness * 0.5f;
-        float height = GymOutdoorBuilder.SharedFenceCollisionHeight;
-        void Guard(string name, float minZ, float maxZ)
-        {
-            if (maxZ - minZ < 0.1f) return;
-            GameObject guard = new GameObject(name);
-            guard.transform.SetParent(parent, true);
-            guard.transform.position = new Vector3(x, floorY + height * 0.5f, (minZ + maxZ) * 0.5f);
-            BoxCollider collider = guard.AddComponent<BoxCollider>();
-            collider.size = new Vector3(thickness, height, maxZ - minZ);
-        }
-        Guard("Protein Store Facade Guard South", ShellFootprint.min.z, centerZ - doorHalfWidth);
-        Guard("Protein Store Facade Guard North", centerZ + doorHalfWidth, ShellFootprint.max.z);
     }
 
     private static void AddCollider(
@@ -906,76 +816,34 @@ public static class GymProteinStoreEnvironment
         collider.isTrigger = isTrigger;
     }
 
+    // The walled site: one paved ground over the whole square plus its
+    // south, east and west-return low walls (the path wall and the road
+    // wall close the other sides).
     public static void CreateOuterRouteGroundAndFence(
         Transform parent, float floorY, float west, float pathSouthZ, float north,
         float fenceNorth,
         Material ground, Material wall, Material trim, Material ribs)
     {
-        float south = StoreSouthCurvePointD.z - 2.5f;
-        float east = StoreEastRoutePoint.x + 3.5f;
+        float south = pathSouthZ - SiteSouthBelowPathEnd;
+        float east = west + SiteEastFromPath;
         OuterRouteBounds = new Bounds(
             new Vector3((west + east) * 0.5f, floorY, (south + north) * 0.5f),
             new Vector3(east - west, 0.2f, north - south));
-        void Surface(string name, float x0, float x1, float z0, float z1)
-        {
-            if (x1 <= x0 || z1 <= z0) return;
-            CreateGroundBox(name, parent,
-                new Vector3((x0 + x1) * 0.5f, floorY - 0.1f, (z0 + z1) * 0.5f),
-                new Vector3(x1 - x0, 0.2f, z1 - z0), ground, true);
-        }
-        Surface("Protein Store Route South", west, east, south, SiteBounds.min.z);
-        Surface("Protein Store Route North", west, east, SiteBounds.max.z, north);
-        Surface("Protein Store Route East", SiteBounds.max.x, east,
-            SiteBounds.min.z, SiteBounds.max.z);
-        float entryHalfWidth = Mathf.Min(Mathf.Max(2.4f, 4.4f - 0.25f), ConnectorWidth) * 0.5f;
-        Surface("Protein Store Route West South", west, SiteBounds.min.x,
-            SiteBounds.min.z, SiteBounds.center.z - entryHalfWidth);
-        Surface("Protein Store Route West North", west, SiteBounds.min.x,
-            SiteBounds.center.z + entryHalfWidth, SiteBounds.max.z);
+        CreateGroundBox("Protein Store Site Ground", parent,
+            new Vector3((west + east) * 0.5f, floorY - 0.1f, (south + north) * 0.5f),
+            new Vector3(east - west, 0.2f, north - south), ground, true);
         CreateAccessFence(parent, floorY, west, east, south, south,
             wall, trim, ribs, "Protein Store Perimeter South");
         CreateAccessFence(parent, floorY, east, east, south, fenceNorth,
             wall, trim, ribs, "Protein Store Perimeter East");
         CreateAccessFence(parent, floorY, west, west, south, pathSouthZ,
             wall, trim, ribs, "Protein Store Perimeter West Return");
-    }
-
-    private static void CreateAccessGround(
-        Transform parent,
-        float roomEast,
-        float floorY,
-        float frontX,
-        float centerZ,
-        float bypassZ,
-        float pathCenterX,
-        float pathWidth,
-        Material pathMaterial,
-        Material markingMaterial)
-    {
-        float sharedPathLeftX = pathCenterX - pathWidth * 0.5f;
-        float entryMinX = roomEast;
-        float entryMaxX = SiteBounds.min.x;
-        float entryWidth = Mathf.Max(0.5f, entryMaxX - entryMinX);
-        float entryZWidth = Mathf.Min(
-            Mathf.Max(2.4f, pathWidth - 0.25f),
-            ConnectorWidth);
-        CreateGroundBox(
-            "Protein Store Entry Walkway",
-            parent,
-            new Vector3(
-                (entryMinX + entryMaxX) * 0.5f,
-                floorY - 0.045f,
-                centerZ),
-            new Vector3(entryWidth, 0.09f, entryZWidth),
-            pathMaterial,
-            true);
-
-        CreateBox("Protein Store Platform", parent,
-            new Vector3(SiteBounds.center.x, floorY - 0.10f, SiteBounds.center.z),
-            new Vector3(PlatformWidth, 0.20f, PlatformDepth), pathMaterial, true);
-
-        // Keep the connector visually plain. The side rails provide the only
-        // entrance detailing, matching the surrounding parking fence language.
+        float halfThickness = GymOutdoorBuilder.SharedFenceWallThickness * 0.5f;
+        Debug.Log(
+            $"GYMCHAOS_PROTEIN_STORE_SITE site=({west + halfThickness:F2},{south + halfThickness:F2})" +
+            $"->({east - halfThickness:F2},{fenceNorth - halfThickness:F2}) store={ShellFootprint.min.x:F2}," +
+            $"{ShellFootprint.min.z:F2}->{ShellFootprint.max.x:F2},{ShellFootprint.max.z:F2} " +
+            $"padNorth={(fenceNorth - halfThickness) - ShellFootprint.max.z:F2}");
     }
 
     private static void CreateAccessFence(
@@ -1056,25 +924,6 @@ public static class GymProteinStoreEnvironment
             : new Vector3(GymOutdoorBuilder.SharedFenceWallThickness,
                 GymOutdoorBuilder.SharedFenceCollisionHeight, length);
         collision.isTrigger = false;
-    }
-
-    private static void CreateEntranceBollards(
-        Transform parent,
-        float floorY,
-        float frontX,
-        float centerZ,
-        Material material)
-    {
-        for (int side = -1; side <= 1; side += 2)
-        {
-            CreateVisualBox(
-                "Protein Store Entry Bollard",
-                parent,
-                new Vector3(frontX + 0.24f, floorY + 0.35f,
-                    centerZ + side * 1.45f),
-                new Vector3(0.18f, 0.70f, 0.18f),
-                material);
-        }
     }
 
     private static void CreateBoxBetween(

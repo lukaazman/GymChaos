@@ -832,6 +832,10 @@ public sealed partial class GymVisitorAgent
 		{
 			return false;
 		}
+		if (IsOtherInboundOnSharedConnector(this))
+		{
+			return false;
+		}
 		if ((UnityEngine.Object)(object)activeVehicleApproachAgent == (UnityEngine.Object)null ||
 			!((Behaviour)activeVehicleApproachAgent).isActiveAndEnabled ||
 			!activeVehicleApproachAgent.IsUsingSharedParkingConnector)
@@ -1122,8 +1126,10 @@ public sealed partial class GymVisitorAgent
 			return true;
 		}
 
-		bool isInboundToGym = state == VisitorState.ApproachingGymFromVehicle ||
-			state == VisitorState.ReturningFromProteinStore;
+		// Passengers walking from their cars queue for the door at the door
+		// queue window (see TryAcquireDoorwayEntrySlot), not in the car park:
+		// a door owner still far up its route left them idling by their cars.
+		bool isInboundToGym = state == VisitorState.ReturningFromProteinStore;
 		if (isInboundToGym &&
 			activeDoorwayEntryAgent != null &&
 			activeDoorwayEntryAgent != this &&
@@ -1133,10 +1139,23 @@ public sealed partial class GymVisitorAgent
 			return false;
 		}
 
+		bool walkingFromCar = state == VisitorState.ApproachingGymFromVehicle;
 		if ((UnityEngine.Object)(object)activeVehicleApproachAgent != (UnityEngine.Object)null &&
 			(UnityEngine.Object)(object)activeVehicleApproachAgent != (UnityEngine.Object)(object)this &&
 			((Behaviour)activeVehicleApproachAgent).isActiveAndEnabled &&
 			activeVehicleApproachAgent.IsUsingSharedParkingConnector)
+		{
+			// Passengers walking from their cars to the gym all move the same
+			// way and cannot deadlock each other; they share the connector
+			// instead of idling one by one in front of their cars. A store
+			// trip only crosses near the door, where the doorway queue already
+			// orders people. Only a visitor walking back to a car (the
+			// opposite direction along the whole connector) makes them wait.
+			return walkingFromCar &&
+				(activeVehicleApproachAgent.state != VisitorState.ApproachingVehicle ||
+				 IsBlockingConnectorOwner(activeVehicleApproachAgent));
+		}
+		if (!walkingFromCar && IsOtherInboundOnSharedConnector(this))
 		{
 			return false;
 		}
@@ -1150,6 +1169,41 @@ public sealed partial class GymVisitorAgent
 
 		activeVehicleApproachAgent = this;
 		return true;
+	}
+	// Face to face on the connector: the owner walking back to its car has
+	// stopped for this visitor. Waiting here as well would deadlock both, so
+	// this visitor keeps walking and passes the owner.
+	private bool IsBlockingConnectorOwner(GymVisitorAgent owner)
+	{
+		if (owner == null || owner.fighter == null || fighter == null)
+		{
+			return false;
+		}
+		string blocker = owner.fighter.LastVisitorRouteBlocker;
+		return !string.IsNullOrEmpty(blocker) &&
+			blocker.IndexOf("owner=" + fighter.Identity, StringComparison.Ordinal) >= 0;
+	}
+	// Only an inbound walker close enough to meet this visitor on the
+	// connector makes it wait; one far away (or still queuing by its car)
+	// would otherwise hold every departure indefinitely.
+	private const float InboundMeetDistance = 8f;
+	private static bool IsOtherInboundOnSharedConnector(GymVisitorAgent self)
+	{
+		for (int i = 0; i < activeAgents.Count; i++)
+		{
+			GymVisitorAgent other = activeAgents[i];
+			if (other != null && other != self && other.isActiveAndEnabled &&
+				other.state == VisitorState.ApproachingGymFromVehicle &&
+				other.IsUsingSharedParkingConnector &&
+				(self == null || self.fighter == null || other.fighter == null ||
+				 Vector3.ProjectOnPlane(other.fighter.VisitorPhysicsPosition -
+					self.fighter.VisitorPhysicsPosition, Vector3.up).magnitude < InboundMeetDistance) &&
+				(self == null || !self.IsBlockingConnectorOwner(other)))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 	public void ReleaseVehicleApproachReservation()
 	{

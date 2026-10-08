@@ -707,6 +707,7 @@ public static class GymOutdoorFoliage
             grassMaterial.SetColor("_BaseColor", Color.white);
         }
         GroundMaterial = grassMaterial;
+        GymVegetationNightTint.Register(grassMaterial, texture);
 
         // One flat quad out to the city ring, whose top it matches exactly.
         float y = floorY + GroundTopOffset;
@@ -810,8 +811,8 @@ public static class GymOutdoorFoliage
         }
 
         Color32[] pixels = new Color32[width * height];
-        Color lawnDark = new Color(0.12f, 0.27f, 0.07f);
-        Color lawnLight = new Color(0.2f, 0.38f, 0.11f);
+        Color lawnDark = new Color(0.13f, 0.32f, 0.07f);
+        Color lawnLight = new Color(0.23f, 0.45f, 0.11f);
         Color gravel = new Color(0.44f, 0.41f, 0.35f);
         Color edging = new Color(0.2f, 0.2f, 0.19f);
         Color mulch = new Color(0.11f, 0.08f, 0.055f);
@@ -833,8 +834,9 @@ public static class GymOutdoorFoliage
                 Color color = Color.Lerp(lawnDark, lawnLight, patch * 0.8f + 0.1f + stripe);
                 color *= 1f + grain * 0.18f;
 
-                // Mulch under the fence hedges.
-                float mulchAmount = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(1.3f, 2.2f, d));
+                // A thin mulch line at the hedge bases only: narrow strips
+                // along walls stay lawn so their plants sit in grass.
+                float mulchAmount = 0.6f * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.35f, 0.9f, d)));
                 color = Color.Lerp(color, mulch * (1f + grain * 0.4f), mulchAmount);
 
                 // Gravel paths with a darker stone edging.
@@ -852,7 +854,7 @@ public static class GymOutdoorFoliage
                 color *= 1f - 0.28f * Sample(shadeField, wx, wz);
 
                 // Fade into the city paving at the outer edge.
-                float toCity = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.2f, 4.5f, edge));
+                float toCity = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.1f, 1.4f, edge));
                 color = Color.Lerp(color, CityPavingColor, toCity);
                 if (px == 0 && py == height / 2)
                 {
@@ -897,14 +899,15 @@ public static class GymOutdoorFoliage
                     for (int x = cx * cellsPerChunk; x < Mathf.Min(nx, (cx + 1) * cellsPerChunk); x++)
                     {
                         int index = z * nx + x;
-                        if (built[index] || distance[index] < 0.7f ||
+                        if (built[index] || distance[index] < 0.35f ||
                             pathDistance[index] < PathHalfWidth + 0.2f ||
-                            edgeDistance[index] < 2.5f)
+                            edgeDistance[index] < 0.9f)
                         {
                             continue;
                         }
-                        // Fewer blades on mulch, denser on open lawn.
-                        float density = tuftsPerCell * Mathf.InverseLerp(0.7f, 2.4f, distance[index]);
+                        // Thinner at hedge bases and wall strips, denser on open lawn.
+                        float density = tuftsPerCell * Mathf.Lerp(
+                            0.45f, 1f, Mathf.InverseLerp(0.35f, 2.4f, distance[index]));
                         int tufts = Mathf.FloorToInt(density + (float)random.NextDouble());
                         for (int t = 0; t < tufts; t++)
                         {
@@ -992,11 +995,11 @@ public static class GymOutdoorFoliage
             wrapMode = TextureWrapMode.Clamp,
             filterMode = FilterMode.Bilinear
         };
-        Color root = new Color(0.08f, 0.18f, 0.05f);
+        Color root = new Color(0.09f, 0.22f, 0.05f);
         for (int x = 0; x < columns; x++)
         {
             float t = x / (float)(columns - 1);
-            Color tip = Color.Lerp(new Color(0.26f, 0.46f, 0.11f), new Color(0.4f, 0.55f, 0.16f), t);
+            Color tip = Color.Lerp(new Color(0.28f, 0.52f, 0.11f), new Color(0.42f, 0.6f, 0.16f), t);
             for (int y = 0; y < rows; y++)
             {
                 float v = y / (float)(rows - 1);
@@ -1013,6 +1016,7 @@ public static class GymOutdoorFoliage
         }
         material.doubleSidedGI = true;
         material.enableInstancing = true;
+        GymVegetationNightTint.Register(material, gradient);
         return material;
     }
 

@@ -316,6 +316,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
 
         policeCar = root;
         FitCarVisual(root);
+        GymVehicleWheelSpinner.Attach(root, () => policeCarMoving);
         AddCarCollider(root);
         policeCarRouteBoundsClear = true;
         policeCarStopWithinRoadEnvelope = false;
@@ -661,11 +662,12 @@ public sealed class GymPoliceDirector : MonoBehaviour
         policeSiren.playOnAwake = false;
         policeSiren.loop = true;
         policeSiren.clip = policeSirenClip;
-        policeSiren.volume = 0.55f;
+        // Louder and wider than the shared engine loop under it.
+        policeSiren.volume = 0.95f;
         policeSiren.spatialBlend = 1f;
         policeSiren.rolloffMode = AudioRolloffMode.Logarithmic;
-        policeSiren.minDistance = 4f;
-        policeSiren.maxDistance = 42f;
+        policeSiren.minDistance = 6f;
+        policeSiren.maxDistance = 60f;
         policeSiren.dopplerLevel = 0f;
         policeSirenLoopConfigured = true;
         policeSirenLoadFinished = true;
@@ -688,7 +690,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
         policeEngine.playOnAwake = false;
         policeEngine.loop = true;
         policeEngine.clip = GymVisitorVehicle.GetEngineLoopClip(false);
-        policeEngine.volume = 0.3f;
+        policeEngineFader = GymEngineAudioFader.Attach(policeEngine, 0.3f);
         policeEngine.spatialBlend = 1f;
         policeEngine.rolloffMode = AudioRolloffMode.Logarithmic;
         policeEngine.minDistance = 3f;
@@ -697,8 +699,10 @@ public sealed class GymPoliceDirector : MonoBehaviour
         policeEngine.pitch = 1.08f;
     }
 
+    private GymEngineAudioFader policeEngineFader;
     public bool IsPoliceEnginePlayingForVerification =>
-        policeEngine != null && policeEngine.isPlaying;
+        policeEngine != null && policeEngine.isPlaying &&
+        (policeEngineFader == null || policeEngineFader.IsDriving);
     public bool HasPoliceEngineForVerification => policeEngine != null;
 
     private void SetPoliceCarMoving(bool moving)
@@ -707,7 +711,9 @@ public sealed class GymPoliceDirector : MonoBehaviour
         policeCarMoving = moving;
         if (policeEngine != null)
         {
-            if (moving && !policeEngine.isPlaying) policeEngine.Play();
+            GymVisitorVehicle.RefreshEngineClip(policeEngine, false);
+            if (policeEngineFader != null) policeEngineFader.SetDriving(moving);
+            else if (moving && !policeEngine.isPlaying) policeEngine.Play();
             else if (!moving && policeEngine.isPlaying) policeEngine.Stop();
         }
 

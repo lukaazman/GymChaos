@@ -25,7 +25,8 @@ public enum GymSoundEffect
     Pickup,
     ItemDrop,
     ActionConfirm,
-    LevelUp
+    LevelUp,
+    VehicleDriving
 }
 
 public sealed class GymAudio : MonoBehaviour
@@ -65,18 +66,23 @@ public sealed class GymAudio : MonoBehaviour
             { GymSoundEffect.ThrownMachineImpact, new ClipDefinition("throw_machine_impact.wav", AudioType.WAV) },
             { GymSoundEffect.ThrownEnemyImpact, new ClipDefinition("throw_enemy_impact.wav", AudioType.WAV) },
             { GymSoundEffect.ThrownBodyImpact, new ClipDefinition("throw_body_impact.wav", AudioType.WAV) },
-            // Made by Tools/generate_sfx.py.
+            // User-provided (Assets/BodyBuilders/sound/sfx: jump, land,
+            // confirm, car); the rest are made by Tools/generate_sfx.py.
             { GymSoundEffect.Jump, new ClipDefinition("jump.wav", AudioType.WAV) },
             { GymSoundEffect.Land, new ClipDefinition("land.wav", AudioType.WAV) },
             { GymSoundEffect.UiHover, new ClipDefinition("ui_hover.wav", AudioType.WAV) },
-            { GymSoundEffect.UiClick, new ClipDefinition("ui_click.wav", AudioType.WAV) },
+            // Every UI press (confirm, exit/back, generic click) uses the
+            // user-provided confirm.wav.
+            { GymSoundEffect.UiClick, new ClipDefinition("ui_confirm.wav", AudioType.WAV) },
             { GymSoundEffect.UiConfirm, new ClipDefinition("ui_confirm.wav", AudioType.WAV) },
-            { GymSoundEffect.UiBack, new ClipDefinition("ui_back.wav", AudioType.WAV) },
+            { GymSoundEffect.UiBack, new ClipDefinition("ui_confirm.wav", AudioType.WAV) },
             { GymSoundEffect.UiError, new ClipDefinition("ui_error.wav", AudioType.WAV) },
             { GymSoundEffect.Pickup, new ClipDefinition("pickup.wav", AudioType.WAV) },
             { GymSoundEffect.ItemDrop, new ClipDefinition("item_drop.wav", AudioType.WAV) },
             { GymSoundEffect.ActionConfirm, new ClipDefinition("action_confirm.wav", AudioType.WAV) },
-            { GymSoundEffect.LevelUp, new ClipDefinition("level_up.wav", AudioType.WAV) }
+            { GymSoundEffect.LevelUp, new ClipDefinition("level_up.wav", AudioType.WAV) },
+            // Looped by vehicles while they drive; never played as a one-shot.
+            { GymSoundEffect.VehicleDriving, new ClipDefinition("car_driving.wav", AudioType.WAV) }
         };
 
     // Interface and first-person cues: played flat (2D) from one pooled
@@ -93,6 +99,8 @@ public sealed class GymAudio : MonoBehaviour
         new Dictionary<GymSoundEffect, int>();
     public bool AllClipsLoadedForVerification => clips.Count == Definitions.Count;
     public static int DefinitionCountForVerification => Definitions.Count;
+    public static string FileNameForVerification(GymSoundEffect effect) =>
+        Definitions.TryGetValue(effect, out ClipDefinition definition) ? definition.FileName : null;
 
     private static GymAudio instance;
 
@@ -136,6 +144,30 @@ public sealed class GymAudio : MonoBehaviour
         {
             audio.QueuePlay(effect, position, volume);
         }
+    }
+
+    /// <summary>
+    /// Returns a preloaded clip for a looping source (vehicle engines), or
+    /// null while it is still loading. A miss starts the load.
+    /// </summary>
+    public static AudioClip GetLoadedClip(GymSoundEffect effect)
+    {
+        GymAudio audio = EnsureInstance();
+        if (audio == null || effect == GymSoundEffect.None)
+        {
+            return null;
+        }
+
+        if (audio.clips.TryGetValue(effect, out AudioClip clip) && clip != null)
+        {
+            return clip;
+        }
+
+        if (audio.loading.Add(effect))
+        {
+            audio.StartCoroutine(audio.LoadClipAndFlush(effect));
+        }
+        return null;
     }
 
     /// <summary>Plays a non-positional cue (UI, the player's own body).</summary>

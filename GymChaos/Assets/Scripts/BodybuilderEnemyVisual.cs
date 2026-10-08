@@ -1804,7 +1804,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             censor.SetDead(true);
         }
 
-        CreateNameLabel(visualRoot, bodyRenderer, identity, bodyHeight * 0.13f);
+        CreateNameLabel(visualRoot, bodyRenderer, identity,
+            bodyHeight * ScreenSpaceCharacterLabel.NameHeightFactor);
     }
 
     private static void CreateDeathMarkersAndName(
@@ -1837,7 +1838,8 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             censor.SetDead(true);
         }
 
-        CreateNameLabel(visualRoot, bodyRenderer, identity, bodyRenderer.bounds.size.y * 0.13f);
+        CreateNameLabel(visualRoot, bodyRenderer, identity,
+            bodyRenderer.bounds.size.y * ScreenSpaceCharacterLabel.NameHeightFactor);
     }
 
     private static FaceCensorProfile GetImportedFaceCensorProfile(

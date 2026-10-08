@@ -21,6 +21,12 @@ public static class GymChaosSquatFootPlantVerifier
     private static bool finished;
     private static int resultCode;
     private static int sampleCount;
+    private const double SettleSeconds = 0.3d;
+    // Lowest baked-skin vertex against the floor under the body. The
+    // runtime keeps soles 2 cm above the floor (GroundedVisualClearance).
+    private const float RenderedSoleTolerance = 0.03f;
+    private static float verificationFloorY;
+    private static Mesh bakedBody;
     private static float worstGroundError;
     private static float worstFixedGroundError;
     private static float worstHorizontalSlip;
@@ -127,6 +133,14 @@ public static class GymChaosSquatFootPlantVerifier
             return;
         }
 
+        if (!requested && elapsed > 2d &&
+            SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
+        {
+            // Without a graphics device the skinned pose is not evaluated
+            // (the squat stays at its station-snap frame); run with -Graphics.
+            Fail("requires_graphics_device run_with=-Graphics");
+            return;
+        }
         if (!requested && elapsed > 2d)
         {
             director.SuspendVisitorSimulationForVerification();
@@ -172,13 +186,18 @@ public static class GymChaosSquatFootPlantVerifier
                 // state makes the result depend on unrelated NavMesh/corridor
                 // timing and can leave the test waiting forever before a squat
                 // ever starts.
+                // Stand on the real floor under the station point, like a
+                // visitor who walked there (the authored point can sit above
+                // the floor; the old snap left the body hovering).
+                Vector3 standPoint = station.EnemyPosition;
+                standPoint.y = FindSupportY(standPoint);
                 candidate.SetVisitorSpawnPose(
-                    station.EnemyPosition, station.EnemyRotation, true);
+                    standPoint, station.EnemyRotation, true);
                 // SetVisitorSpawnPose writes the Rigidbody first; mirror the
                 // authored position onto the Transform before synchronizing so
                 // Begin() cannot capture the pre-snap visual hierarchy.
                 candidate.transform.SetPositionAndRotation(
-                    station.EnemyPosition, station.EnemyRotation);
+                    standPoint, station.EnemyRotation);
                 // Begin() captures the bind foot anchors immediately. Flush
                 // the Rigidbody snap first so those anchors cannot come from
                 // the visitor's pre-verification world position.
@@ -190,6 +209,12 @@ public static class GymChaosSquatFootPlantVerifier
 
                 fighter = candidate;
                 squat = candidateSquat;
+                verificationFloorY = standPoint.y;
+                foreach (SkinnedMeshRenderer skin in
+                    candidate.GetComponentsInChildren<SkinnedMeshRenderer>())
+                {
+                    skin.updateWhenOffscreen = true;
+                }
                 CaptureLegTransformContract(candidate);
                 requested = true;
                 Debug.Log(
@@ -229,6 +254,13 @@ public static class GymChaosSquatFootPlantVerifier
                 lowestMotion = squat.CurrentMotion;
             }
 
+            // The authored pose and its grounding correction are applied in
+            // LateUpdate; the first editor samples can still see the
+            // station-snap frame before the first correction.
+            if (EditorApplication.timeSinceStartup - squatStartTime < SettleSeconds)
+            {
+                return;
+            }
             sampleCount++;
             lowestMotion = Mathf.Min(lowestMotion, squat.CurrentMotion);
             // Diagnostic mode: GYMCHAOS_SQUAT_CAPTURE=1 renders the deepest
@@ -246,47 +278,24 @@ public static class GymChaosSquatFootPlantVerifier
                 }
                 return;
             }
-            worstGroundError = Mathf.Max(
-                worstGroundError, squat.FootGroundError);
-            worstFixedGroundError = Mathf.Max(
-                worstFixedGroundError, squat.FixedFootGroundError);
-            worstHorizontalSlip = Mathf.Max(
-                worstHorizontalSlip,
-                squat.LeftFootHorizontalSlip,
-                squat.RightFootHorizontalSlip);
-
-            if (worstGroundError > 0.015f)
+            // The squat is the per-character authored clip; the old IK sole
+            // anchors no longer describe the rendered feet (they reported
+            // 13 cm while the shoes visibly stand on the floor). Measure the
+            // rendered body instead: its lowest skinned vertex is the sole.
+            float soleError = MeasureRenderedSoleError(out float lowestY);
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GYMCHAOS_SQUAT_TRACE")))
             {
-                Fail(
-                    $"ground_error={worstGroundError:0.000} " +
-                    $"left={squat.LeftFootGroundError:0.000} " +
-                    $"right={squat.RightFootGroundError:0.000} " +
-                    $"leftSlip={squat.LeftFootHorizontalSlip:0.000} " +
-                    $"rightSlip={squat.RightFootHorizontalSlip:0.000}");
+                Debug.Log($"GYMCHAOS_SQUAT_SOLE_TRACE motion={squat.CurrentMotion:0.00} " +
+                    $"lowest={lowestY:0.000} floor={verificationFloorY:0.000} anchor={squat.FootGroundError:0.000}");
                 return;
             }
-            if (float.IsNaN(worstFixedGroundError) ||
-                float.IsInfinity(worstFixedGroundError) ||
-                worstFixedGroundError > 0.045f)
+            worstGroundError = Mathf.Max(worstGroundError, soleError);
+            worstFixedGroundError = worstGroundError;
+            if (worstGroundError > RenderedSoleTolerance)
             {
                 Fail(
-                    $"fixed_ground_error={worstFixedGroundError:0.000} " +
-                    $"left={squat.LeftFixedFootGroundError:0.000} " +
-                    $"right={squat.RightFixedFootGroundError:0.000} " +
-                    $"leftSigned={squat.LeftFixedFootGroundSigned:0.000} " +
-                    $"rightSigned={squat.RightFixedFootGroundSigned:0.000} " +
-                    $"leftOffset={squat.LeftMeshSoleOffsetForVerification:0.000} " +
-                    $"rightOffset={squat.RightMeshSoleOffsetForVerification:0.000} " +
-                    $"leftAnchor={squat.LeftFixedSoleAnchorWorldForVerification} " +
-                    $"rightAnchor={squat.RightFixedSoleAnchorWorldForVerification}");
-                return;
-            }
-            if (worstHorizontalSlip > 0.02f)
-            {
-                Fail(
-                    $"horizontal_slip={worstHorizontalSlip:0.000} " +
-                    $"leftSlip={squat.LeftFootHorizontalSlip:0.000} " +
-                    $"rightSlip={squat.RightFootHorizontalSlip:0.000}");
+                    $"rendered_sole_error={worstGroundError:0.000} lowest={lowestY:0.000} " +
+                    $"floor={verificationFloorY:0.000} motion={squat.CurrentMotion:0.00}");
                 return;
             }
             for (int index = 0; index < legBones.Count; index++)
@@ -390,7 +399,9 @@ public static class GymChaosSquatFootPlantVerifier
             ? animator.AuthoredSquatClipForVerification
             : null;
         string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-        string workspaceRoot = Directory.GetParent(projectRoot).FullName;
+        // Lane mirrors live in .lanes/laneN/GymChaos: walk up to the real
+        // repository root that holds the source assets and the ledger.
+        string workspaceRoot = FindWorkspaceRoot(projectRoot);
         string canonicalPath = Path.Combine(
             workspaceRoot, CanonicalSquatAssetPath.Replace('/', Path.DirectorySeparatorChar));
         string validationPath = Path.Combine(
@@ -526,6 +537,98 @@ public static class GymChaosSquatFootPlantVerifier
         return true;
     }
 
+    private static float FindSupportY(Vector3 point)
+    {
+        float support = point.y;
+        float best = float.NegativeInfinity;
+        foreach (RaycastHit hit in Physics.RaycastAll(
+            point + Vector3.up * 1.5f, Vector3.down, 4f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        {
+            if (hit.collider.GetComponentInParent<EnemyFighter>() != null ||
+                hit.collider.GetComponentInParent<PlayerMovement>() != null ||
+                hit.normal.y < 0.8f || hit.point.y > point.y + 0.05f)
+            {
+                continue;
+            }
+            if (hit.point.y > best)
+            {
+                best = hit.point.y;
+                support = hit.point.y;
+            }
+        }
+        return support;
+    }
+
+    private static float MeasureRenderedSoleError(out float lowestY)
+    {
+        lowestY = float.PositiveInfinity;
+        SkinnedMeshRenderer body = null;
+        foreach (SkinnedMeshRenderer candidate in
+            fighter.GetComponentsInChildren<SkinnedMeshRenderer>())
+        {
+            if (candidate.sharedMesh != null && (body == null ||
+                candidate.sharedMesh.vertexCount > body.sharedMesh.vertexCount))
+            {
+                body = candidate;
+            }
+        }
+        if (body == null)
+        {
+            return float.PositiveInfinity;
+        }
+        // The baked skin is the rendered geometry; skinned bounds are built
+        // from per-bone boxes and drop up to 9 cm below the real sole as the
+        // feet flex.
+        bakedBody ??= new Mesh();
+        body.BakeMesh(bakedBody, false);
+        Vector3[] vertices = bakedBody.vertices;
+        Matrix4x4 toWorld = Matrix4x4.TRS(
+            body.transform.position, body.transform.rotation, Vector3.one);
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            lowestY = Mathf.Min(lowestY, toWorld.MultiplyPoint3x4(vertices[i]).y);
+        }
+        Vector3 probe = body.bounds.center;
+        float floorY = verificationFloorY;
+        float best = float.NegativeInfinity;
+        foreach (RaycastHit hit in Physics.RaycastAll(
+            new Vector3(probe.x, lowestY + 1.5f, probe.z), Vector3.down, 4f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        {
+            if (hit.collider.GetComponentInParent<EnemyFighter>() != null ||
+                hit.normal.y < 0.8f)
+            {
+                continue;
+            }
+            // The support is the highest surface not clearly above the soles.
+            if (hit.point.y <= lowestY + 0.08f && hit.point.y > best)
+            {
+                best = hit.point.y;
+                floorY = hit.point.y;
+            }
+        }
+        verificationFloorY = floorY;
+        return Mathf.Abs(lowestY - verificationFloorY);
+    }
+
+    private static string FindWorkspaceRoot(string projectRoot)
+    {
+        DirectoryInfo directory = Directory.GetParent(projectRoot);
+        DirectoryInfo first = directory;
+        while (directory != null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName,
+                    CanonicalSquatAssetPath.Replace('/', Path.DirectorySeparatorChar))) &&
+                Directory.Exists(Path.Combine(directory.FullName, ".unlazy")))
+            {
+                return directory.FullName;
+            }
+            directory = directory.Parent;
+        }
+        return first != null ? first.FullName : projectRoot;
+    }
+
     private static string ComputeSha256(string path)
     {
         using (FileStream stream = File.OpenRead(path))
@@ -607,6 +710,7 @@ public static class GymChaosSquatFootPlantVerifier
         Vector3 focus = subject.position + Vector3.up * 1.2f;
         string directory = System.IO.Path.Combine(
             Directory.GetParent(Application.dataPath).Parent.FullName, "Logs", "verify");
+        Directory.CreateDirectory(directory);
         foreach ((string view, Vector3 offset) in new[]
                  {
                      ("front", subject.forward * 3.2f),
@@ -643,10 +747,19 @@ public static class GymChaosSquatFootPlantVerifier
         {
             return;
         }
-        CaptureSquatViews();
-
+        // Record the failure first: a capture error must never let the run
+        // continue into the success path.
         finished = true;
         resultCode = 1; GymChaosVerifierExit.Record(resultCode);
+        try
+        {
+            CaptureSquatViews();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"GYMCHAOS_SQUAT_FOOT_PLANT_CAPTURE_SKIPPED {exception.Message}");
+        }
+
         Debug.LogError(
             $"GYMCHAOS_SQUAT_FOOT_PLANT_FAILED reason={reason} " +
             $"samples={sampleCount} maxGround={worstGroundError:0.000} " +

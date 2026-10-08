@@ -288,7 +288,21 @@ public sealed partial class GymVisitorAgent
 		// Reserve the narrow shared connector only when an arriving visitor is
 		// close enough to enter. Once the capsule clears the doorway, the next
 		// visitor may proceed without waiting for the first visitor's workout.
-		return state == VisitorState.ApproachingGymFromVehicle && IsAtDoorwayEntryQueueWindow();
+		// The last route points can still be far up the path (the bus gate
+		// route); only a visitor actually near the door occupies it, so one
+		// stalled further away no longer holds everyone else in the queue.
+		return state == VisitorState.ApproachingGymFromVehicle && IsAtDoorwayEntryQueueWindow() &&
+			IsNearDoorwayExterior(DoorwayEntryOccupiedRadius);
+	}
+	private const float DoorwayEntryOccupiedRadius = 6f;
+	private bool IsNearDoorwayExterior(float radius)
+	{
+		if (doorway == null || fighter == null)
+		{
+			return true;
+		}
+		return Vector3.ProjectOnPlane(fighter.VisitorPhysicsPosition - doorway.ExteriorPoint, Vector3.up)
+			.sqrMagnitude <= radius * radius;
 	}
 	private bool TryAcquireDoorwayEntrySlot()
 	{
@@ -299,7 +313,8 @@ public sealed partial class GymVisitorAgent
 			(UnityEngine.Object)(object)activeVehicleApproachAgent != (UnityEngine.Object)(object)this &&
 			((Behaviour)activeVehicleApproachAgent).isActiveAndEnabled &&
 			activeVehicleApproachAgent.IsUsingSharedParkingConnector &&
-			IsNearDoorwayConnector(activeVehicleApproachAgent))
+			IsNearDoorwayConnector(activeVehicleApproachAgent) &&
+			!IsBlockingConnectorOwner(activeVehicleApproachAgent))
 		{
 			return false;
 		}

@@ -397,10 +397,12 @@ public sealed class GymHud : MonoBehaviour
         stamina.fillShape.color = exhausted ? PersonaMenuStyle.Muted : stamina.baseColor;
     }
 
-    /// <summary>Only exhaustion gets a line; plain sprinting shows no popup.</summary>
+    /// <summary>
+    /// No stamina text at all: exhaustion shows only as the muted bar colour.
+    /// </summary>
     public static string SprintStateText(bool exhausted, bool sprinting)
     {
-        return exhausted ? "EXHAUSTED  -  RELEASE TO RECOVER" : string.Empty;
+        return string.Empty;
     }
 
     private void RefreshIdentity()

@@ -13,29 +13,12 @@ public static class GymChaosArtFidelityVerifier
     private const string RequestedKey = "GymChaos.ArtFidelityVerificationRequested";
     private const int CaptureWidth = 960;
     private const int CaptureHeight = 540;
-    private const int ProductCaptureLayer = 30;
     private static readonly string EvidenceFolder = "Assets/VisualFidelity/evidence_unity";
     private static double startedAt;
     private static bool completed;
     private static bool initialized;
     private static Camera captureCamera;
     private static GameObject captureLight;
-
-    private sealed class ProductFamily
-    {
-        public string Name;
-        public string[] Prefixes;
-        public string LabelToken;
-        public string[] FormTokens;
-
-        public ProductFamily(string name, string labelToken, string[] prefixes, string[] formTokens)
-        {
-            Name = name;
-            LabelToken = labelToken;
-            Prefixes = prefixes;
-            FormTokens = formTokens;
-        }
-    }
 
     private sealed class SurfaceContract
     {
@@ -67,13 +50,6 @@ public static class GymChaosArtFidelityVerifier
         public float Score;
     }
 
-    private sealed class ProductViewCandidate
-    {
-        public Renderer Renderer;
-        public Vector3 Direction;
-        public CaptureMetrics Metrics;
-    }
-
     private static readonly SurfaceContract[] RequiredSurfaces =
     {
         new SurfaceContract("gymRubber", "Rubber Floor", "Dark navy gym rubber floor"),
@@ -86,25 +62,6 @@ public static class GymChaosArtFidelityVerifier
         new SurfaceContract("asphalt", "Mini Parking Lot", "Outdoor parking asphalt"),
         new SurfaceContract("concretePath", "Path from Gym Door", "Outdoor parking asphalt"),
         new SurfaceContract("landscape", "Parking Park Landscape", "Outdoor park ground"),
-    };
-
-    private static readonly ProductFamily[] ProductFamilies =
-    {
-        new ProductFamily("whey", "WHEY", new[] { "Protein_Right" },
-            new[] { "PouchBody", "ProteinTubBody" }),
-        new ProductFamily("creatine", "CREATINE", new[] { "Creatine_Back" },
-            new[] { "PouchBody" }),
-        new ProductFamily("pre_workout", "PRE_WORKOUT", new[] { "PreWorkout_Left" },
-            new[] { "PreWorkoutBody" }),
-        new ProductFamily("shaker", "SHAKER", new[] { "Shakers_Left" },
-            new[] { "BottleBody", "ShakerFlipTop" }),
-        new ProductFamily("protein_bar", "PROTEIN_BAR", new[] { "ProteinBars" },
-            new[] { "BarBody" }),
-        new ProductFamily("energy", "ENERGY",
-            new[] { "EnergyDrinks_Cooler", "ColdFridge_RearLeft_Can" },
-            new[] { "EnergyCanBody" }),
-        new ProductFamily("rtd_shake", "RTD_SHAKE", new[] { "ColdFridge_RearLeft_Rtd" },
-            new[] { "RtdBody", "RtdShoulder" }),
     };
 
     static GymChaosArtFidelityVerifier()
@@ -196,21 +153,22 @@ public static class GymChaosArtFidelityVerifier
             string surfaceDetails = ValidateSurfaces();
             string productDetails = ValidateRuntimeProductFamilies(
                 GymProteinStoreEnvironment.RuntimeRoot);
-            if (GymProteinStoreEnvironment.TransparentFridgePanelCount < 2)
-                throw new InvalidOperationException("Runtime store does not expose both transparent fridge panels.");
+            if (GymProteinStoreEnvironment.TransparentFridgePanelCount < 6)
+                throw new InvalidOperationException("Runtime store does not expose its six transparent fridge doors.");
 
             CreateCaptureRig();
             List<string> captures = CaptureRequiredViews();
-            if (captures.Count < 20)
+            int requiredCaptures = StoreSectionOnly ? 12 : 20;
+            if (captures.Count < requiredCaptures)
                 throw new InvalidOperationException(
-                    $"Expected at least 20 direct art captures, got {captures.Count}.");
+                    $"Expected at least {requiredCaptures} direct art captures, got {captures.Count}.");
 
             initialized = true;
             completed = true;
             Debug.Log(
                 "GYMCHAOS_ART_FIDELITY_OK " +
                 "graphics=Direct3D12 " +
-                $"surfaces=7 storeExterior=1 storeInterior=1 productFamilies=7 " +
+                $"surfaces=7 storeExterior=1 storeInterior=1 productFamilies={ProductGroups.Length} " +
                 $"packageLabels={productDetails} " +
                 $"captures={captures.Count} " +
                 $"paths={string.Join(",", captures)} " +
@@ -223,7 +181,8 @@ public static class GymChaosArtFidelityVerifier
         {
             Debug.LogException(exception);
             Debug.LogError("GYMCHAOS_ART_FIDELITY_FAIL " + exception.Message);
-            SessionState.EraseBool(RequestedKey);
+            // Keep RequestedKey: PlayModeChanged needs it to exit batch mode
+            // with a failure code instead of leaving Unity running.
             EditorApplication.isPlaying = false;
         }
     }
@@ -279,32 +238,30 @@ public static class GymChaosArtFidelityVerifier
         return varied;
     }
 
+    // protein.com v2 merges each category's products into one textured mesh
+    // (labels come from the packaging atlas), so check the categories the
+    // store must stock and that each holds real geometry.
+    private static readonly (string Family, string Group)[] ProductGroups =
+    {
+        ("whey", "Products_Protein"), ("isolate", "Products_Isolate"),
+        ("creatine", "Products_Creatine"), ("pre_workout", "Products_PreWorkout"),
+        ("protein_bar", "Products_Bars"), ("drinks", "Products_Drinks"),
+        ("snacks_shakers", "Products_Snacks")
+    };
+
     private static string ValidateRuntimeProductFamilies(Transform root)
     {
         if (root == null) throw new InvalidOperationException("ProteinStore runtime root is null.");
-        Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
-        List<string> names = transforms.Select(transform => transform.name).ToList();
+        MeshFilter[] filters = root.GetComponentsInChildren<MeshFilter>(true);
         List<string> details = new List<string>();
-        for (int index = 0; index < ProductFamilies.Length; index++)
+        foreach ((string family, string group) in ProductGroups)
         {
-            ProductFamily family = ProductFamilies[index];
-            List<string> familyNames = names.Where(name =>
-                family.Prefixes.Any(prefix => name.StartsWith(prefix, StringComparison.Ordinal))).ToList();
-            List<string> labels = familyNames.Where(name =>
-                name.IndexOf("_LabelPanel_PROTEINI_SI_", StringComparison.Ordinal) >= 0 &&
-                name.IndexOf(family.LabelToken, StringComparison.Ordinal) >= 0).ToList();
-            bool form = familyNames.Any(name => family.FormTokens.Any(
-                token => name.Contains(token, StringComparison.Ordinal)));
-            if (familyNames.Count == 0 || labels.Count == 0 || !form)
-            {
-                string sample = string.Join("|", familyNames
-                    .Where(name => name.IndexOf("Label", StringComparison.OrdinalIgnoreCase) >= 0)
-                    .Take(4));
+            int vertices = filters.Where(filter => filter.name == group && filter.sharedMesh != null)
+                .Sum(filter => filter.sharedMesh.vertexCount);
+            if (vertices < 200)
                 throw new InvalidOperationException(
-                    $"Product family contract failed: {family.Name} " +
-                    $"geometry={familyNames.Count} labels={labels.Count} form={form} sample={sample}");
-            }
-            details.Add($"{family.Name}:{labels.Count}");
+                    $"Product family contract failed: {family} group={group} vertices={vertices}");
+            details.Add($"{family}:{vertices}");
         }
         return string.Join(",", details);
     }
@@ -337,6 +294,12 @@ public static class GymChaosArtFidelityVerifier
         Directory.CreateDirectory(absoluteFolder);
         List<string> captures = new List<string>();
 
+        if (StoreSectionOnly)
+        {
+            CaptureStoreViews(absoluteFolder, captures);
+            return captures;
+        }
+
         Bounds gymBounds;
         Bounds lockerBounds;
         if (!GymInteriorBuilder.TryGetMainGymBounds(out gymBounds) ||
@@ -354,9 +317,17 @@ public static class GymChaosArtFidelityVerifier
         Renderer bathroomTile = FindRenderer("Bathroom divider south");
         if (bathroomTile == null)
             throw new InvalidOperationException("Bathroom tile renderer disappeared before capture.");
+        // Look at the tiled divider from inside the locker room; a fixed
+        // world offset ended up outside the building after the room moved.
+        Vector3 intoRoom = Vector3.ProjectOnPlane(
+            lockerBounds.center - bathroomTile.bounds.center, Vector3.up);
+        if (intoRoom.sqrMagnitude < 0.01f) intoRoom = Vector3.right;
+        intoRoom.Normalize();
+        Vector3 tileEye = bathroomTile.bounds.center + intoRoom * 3.2f + Vector3.up * 1.2f;
+        tileEye.x = Mathf.Clamp(tileEye.x, lockerBounds.min.x + 0.4f, lockerBounds.max.x - 0.4f);
+        tileEye.z = Mathf.Clamp(tileEye.z, lockerBounds.min.z + 0.4f, lockerBounds.max.z - 0.4f);
         CaptureBounds("bathroom-tile", bathroomTile.bounds,
-            bathroomTile.bounds.center + new Vector3(4.8f, 2.4f, -4.8f),
-            bathroomTile.bounds.center, absoluteFolder, captures, fieldOfView: 48f);
+            tileEye, bathroomTile.bounds.center, absoluteFolder, captures, fieldOfView: 60f);
 
         Bounds parking = GymOutdoorBuilder.ParkingBounds;
         CaptureBounds("outdoor-surfaces", parking,
@@ -390,6 +361,17 @@ public static class GymChaosArtFidelityVerifier
             landscape.bounds.center + Vector3.up * 0.08f,
             absoluteFolder, captures, fieldOfView: 50f);
 
+        CaptureStoreViews(absoluteFolder, captures);
+        return captures;
+    }
+
+    // GYMCHAOS_ART_SECTION=store: a short run that renders only the shop.
+    private static bool StoreSectionOnly => string.Equals(
+        Environment.GetEnvironmentVariable("GYMCHAOS_ART_SECTION"), "store",
+        StringComparison.OrdinalIgnoreCase);
+
+    private static void CaptureStoreViews(string absoluteFolder, List<string> captures)
+    {
         Bounds store = GymProteinStoreEnvironment.StoreBounds;
         Vector3 frontDirection = Vector3.ProjectOnPlane(
             GymProteinStoreEnvironment.StoreFrontClearPoint - store.center, Vector3.up);
@@ -407,307 +389,35 @@ public static class GymChaosArtFidelityVerifier
             absoluteFolder, captures);
         Bounds fridgeBounds;
         if (!TryFindAggregateBounds(GymProteinStoreEnvironment.RuntimeRoot,
-                new[] { "EnergyCooler_FrontRight", "ColdFridge_Extra" }, out fridgeBounds))
+                new[] { "Solid_Fridge_", "Fridge_" }, out fridgeBounds))
             throw new InvalidOperationException("Runtime fridge bounds disappeared before capture.");
-        CaptureBounds("protein-store-fridges", fridgeBounds,
-            fridgeBounds.center + frontDirection * 3.4f + Vector3.up * 1.2f,
-            fridgeBounds.center + Vector3.up * 0.15f,
-            absoluteFolder, captures, fieldOfView: 46f);
-        Bounds frontRightFridge;
-        Bounds extraFridge;
-        if (!TryFindAggregateBounds(GymProteinStoreEnvironment.RuntimeRoot,
-                new[] { "EnergyCooler_FrontRight" }, out frontRightFridge) ||
-            !TryFindAggregateBounds(GymProteinStoreEnvironment.RuntimeRoot,
-                new[] { "ColdFridge_Extra" }, out extraFridge))
-            throw new InvalidOperationException(
-                "Both transparent fridge bounds disappeared before closeup capture.");
-        Renderer frontRightGlass = FindRenderer("EnergyCooler_FrontRight_Glass");
-        Renderer extraGlass = FindRenderer("ColdFridge_Extra_Glass");
-        Vector3 frontRightDirection = FridgeFrontDirection(frontRightFridge, frontRightGlass);
-        Vector3 extraDirection = FridgeFrontDirection(extraFridge, extraGlass);
-        CaptureFridgeCloseup(
-            "protein-store-fridge-front-right", frontRightFridge, frontRightGlass,
-            frontRightDirection, absoluteFolder, captures);
-        CaptureFridgeCloseup(
-            "protein-store-fridge-extra", extraFridge, extraGlass,
-            extraDirection, absoluteFolder, captures);
-
-        for (int index = 0; index < ProductFamilies.Length; index++)
+        Vector3 storeCentre = store.center;
+        CaptureFixture("protein-store-fridges", fridgeBounds, storeCentre, 3.4f, absoluteFolder, captures);
+        // One close view per category fixture, from the aisle in front of it.
+        (string Capture, string Fixture)[] shelves =
         {
-            ProductFamily family = ProductFamilies[index];
-            if (!CaptureProductFamily(family, GymProteinStoreEnvironment.RuntimeRoot,
-                    absoluteFolder, captures))
-                throw new InvalidOperationException(
-                    $"No direct visual product capture was usable for {family.Name}.");
-        }
-
-        return captures;
-    }
-
-    private static Vector3 FridgeFrontDirection(Bounds fridgeBounds, Renderer glass)
-    {
-        Vector3 direction = glass != null
-            ? Vector3.ProjectOnPlane(glass.bounds.center - fridgeBounds.center, Vector3.up)
-            : Vector3.zero;
-        if (direction.sqrMagnitude < 0.01f)
-            direction = Vector3.ProjectOnPlane(
-                GymProteinStoreEnvironment.StoreFrontClearPoint - fridgeBounds.center,
-                Vector3.up);
-        return direction.sqrMagnitude >= 0.01f ? direction.normalized : Vector3.back;
-    }
-
-    private static void CaptureFridgeCloseup(
-        string label,
-        Bounds fridgeBounds,
-        Renderer glass,
-        Vector3 outwardDirection,
-        string absoluteFolder,
-        List<string> captures)
-    {
-        Vector3 front = glass != null ? glass.bounds.center : fridgeBounds.center;
-        Vector3 cameraPosition = front + outwardDirection * 3.1f + Vector3.up * 0.42f;
-        Vector3 target = front + Vector3.up * 0.16f;
-        string[] prefixes = label.EndsWith("front-right", StringComparison.Ordinal)
-            ? new[] { "EnergyCooler_FrontRight", "EnergyDrinks_Cooler" }
-            : new[] { "ColdFridge_Extra", "ColdFridge_RearLeft" };
-        Dictionary<GameObject, int> previousLayers = new Dictionary<GameObject, int>();
-        Renderer[] targetRenderers = GymProteinStoreEnvironment.RuntimeRoot
-            .GetComponentsInChildren<Renderer>(true)
-            .Where(renderer => renderer != null && prefixes.Any(prefix =>
-                renderer.name.StartsWith(prefix, StringComparison.Ordinal)))
-            .ToArray();
-        for (int index = 0; index < targetRenderers.Length; index++)
-        {
-            GameObject targetObject = targetRenderers[index].gameObject;
-            if (!previousLayers.ContainsKey(targetObject))
-                previousLayers.Add(targetObject, targetObject.layer);
-            targetObject.layer = ProductCaptureLayer;
-        }
-
-        int previousCullingMask = captureCamera.cullingMask;
-        captureCamera.cullingMask = 1 << ProductCaptureLayer;
-        try
-        {
-            CaptureBounds(
-                label, fridgeBounds, cameraPosition, target, absoluteFolder, captures,
-                fieldOfView: 48f);
-        }
-        finally
-        {
-            foreach (KeyValuePair<GameObject, int> entry in previousLayers)
-                if (entry.Key != null) entry.Key.layer = entry.Value;
-            captureCamera.cullingMask = previousCullingMask;
-        }
-    }
-
-    private static bool CaptureProductFamily(
-        ProductFamily family,
-        Transform root,
-        string absoluteFolder,
-        List<string> captures)
-    {
-        List<Renderer> renderers = FindFamilyLabelRenderers(family, root);
-        Renderer labelRenderer = renderers.FirstOrDefault();
-        if (labelRenderer == null)
-        {
-            Debug.LogError(
-                $"GYMCHAOS_ART_PRODUCT_VIEW_FAIL family={family.Name} labels=0");
-            return false;
-        }
-
-        List<Renderer> productRenderers = FindProductUnitRenderers(labelRenderer, root);
-        if (productRenderers.Count == 0)
-        {
-            Debug.LogError(
-                $"GYMCHAOS_ART_PRODUCT_VIEW_FAIL family={family.Name} " +
-                $"label={labelRenderer.name} productUnit=0");
-            return false;
-        }
-
-        Bounds productBounds = CalculateRendererBounds(productRenderers);
-        int previousCullingMask = captureCamera.cullingMask;
-        Dictionary<GameObject, int> previousLayers = new Dictionary<GameObject, int>();
-        for (int index = 0; index < productRenderers.Count; index++)
-        {
-            GameObject productObject = productRenderers[index].gameObject;
-            if (!previousLayers.ContainsKey(productObject))
-                previousLayers.Add(productObject, productObject.layer);
-            productObject.layer = ProductCaptureLayer;
-        }
-
-        captureCamera.cullingMask = 1 << ProductCaptureLayer;
-        List<ProductViewCandidate> candidates = new List<ProductViewCandidate>();
-        try
-        {
-            Material[] originalLabelMaterials = labelRenderer.sharedMaterials;
-            Material markerMaterial = CreateProductMarkerMaterial();
-            Material[] markerMaterials = new Material[Mathf.Max(1, originalLabelMaterials.Length)];
-            for (int materialIndex = 0; materialIndex < markerMaterials.Length; materialIndex++)
-                markerMaterials[materialIndex] = markerMaterial;
-            try
-            {
-                labelRenderer.sharedMaterials = markerMaterials;
-                List<Vector3> directions = GetProductViewDirections(labelRenderer);
-                for (int directionIndex = 0; directionIndex < directions.Count; directionIndex++)
-                {
-                    Vector3 direction = directions[directionIndex];
-                    Vector3 cameraPosition = ProductCameraPosition(productBounds, direction);
-                    CaptureMetrics metrics = RenderPreview(
-                        productBounds, cameraPosition, labelRenderer.bounds.center);
-                    candidates.Add(new ProductViewCandidate
-                    {
-                        Renderer = labelRenderer,
-                        Direction = direction,
-                        Metrics = metrics,
-                    });
-                }
-            }
-            finally
-            {
-                labelRenderer.sharedMaterials = originalLabelMaterials;
-                UnityEngine.Object.DestroyImmediate(markerMaterial);
-            }
-
-            ProductViewCandidate best = candidates
-                .Where(candidate => candidate.Metrics.MarkerPixels > 20)
-                .Where(candidate => candidate.Metrics.VisuallyUseful)
-                .OrderByDescending(candidate => candidate.Metrics.Score)
-                .FirstOrDefault();
-            if (best == null)
-            {
-                best = candidates
-                    .Take(Mathf.Min(2, candidates.Count))
-                    .Where(candidate => candidate.Metrics.VisuallyUseful)
-                    .OrderByDescending(candidate => candidate.Metrics.Score)
-                    .FirstOrDefault();
-            }
-            if (best == null)
-            {
-                string bestDiagnostics = string.Join(" | ", candidates
-                    .OrderByDescending(candidate => candidate.Metrics.Score)
-                    .Take(3)
-                    .Select(candidate =>
-                        $"{candidate.Direction}:{candidate.Metrics.Score:0.000}"));
-                Debug.LogError(
-                    $"GYMCHAOS_ART_PRODUCT_VIEW_FAIL family={family.Name} " +
-                    $"candidates={candidates.Count} top={bestDiagnostics}");
-                return false;
-            }
-
-            ProductViewCandidate opposite = candidates
-                .Where(candidate => Vector3.Dot(candidate.Direction, best.Direction) < -0.55f)
-                .OrderByDescending(candidate => candidate.Metrics.Score)
-                .FirstOrDefault();
-            if (opposite == null)
-            {
-                opposite = candidates
-                    .Where(candidate => Vector3.Dot(candidate.Direction, best.Direction) < 0.95f)
-                    .OrderByDescending(candidate => candidate.Metrics.Score)
-                    .FirstOrDefault();
-            }
-            if (opposite == null) opposite = best;
-
-            CaptureBounds(
-                "product-" + family.Name + "-normal",
-                productBounds,
-                ProductCameraPosition(productBounds, best.Direction),
-                labelRenderer.bounds.center,
-                absoluteFolder,
-                captures,
-                fieldOfView: 38f,
-                allowEmpty: false);
-            CaptureBounds(
-                "product-" + family.Name + "-opposite",
-                productBounds,
-                ProductCameraPosition(productBounds, opposite.Direction),
-                labelRenderer.bounds.center,
-                absoluteFolder,
-                captures,
-                fieldOfView: 38f,
-                allowEmpty: true);
-            Debug.Log(
-                $"GYMCHAOS_ART_PRODUCT_VIEW_OK family={family.Name} " +
-                $"unit={labelRenderer.name} productRenderers={productRenderers.Count} " +
-                $"labelForward={labelRenderer.transform.forward} " +
-                $"normalDirection={best.Direction} score={best.Metrics.Score:0.000} " +
-                $"markerPixels={best.Metrics.MarkerPixels} " +
-                $"oppositeDirection={opposite.Direction} " +
-                $"oppositeScore={opposite.Metrics.Score:0.000}");
-            return true;
-        }
-        finally
-        {
-            foreach (KeyValuePair<GameObject, int> entry in previousLayers)
-                if (entry.Key != null) entry.Key.layer = entry.Value;
-            captureCamera.cullingMask = previousCullingMask;
-        }
-    }
-
-    private static Material CreateProductMarkerMaterial()
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
-            Shader.Find("Unlit/Color") ?? Shader.Find("Standard");
-        if (shader == null)
-            throw new InvalidOperationException("No shader available for product marker preview.");
-        Material marker = new Material(shader)
-        {
-            name = "GymChaos Product Capture Marker",
+            ("protein-store-shelf-protein", "Solid_WallBay_N02"),
+            ("protein-store-shelf-isolate", "Solid_WallBay_N10"),
+            ("protein-store-shelf-preworkout", "Solid_WallBay_S01"),
+            ("protein-store-shelf-creatine", "Solid_WallBay_S08"),
+            ("protein-store-shelf-bars", "Solid_Gondola_1W"),
+            ("protein-store-shelf-snacks", "Solid_WallBay_N15"),
+            ("protein-store-counter", "Solid_Counter"),
+            ("protein-store-fridge-close", "Solid_Fridge_2"),
+            ("protein-store-promo", "Solid_Promo_0"),
         };
-        Color markerColor = new Color(0.05f, 0.95f, 0.12f, 1f);
-        if (marker.HasProperty("_BaseColor")) marker.SetColor("_BaseColor", markerColor);
-        if (marker.HasProperty("_Color")) marker.SetColor("_Color", markerColor);
-        return marker;
-    }
-
-    private static List<Renderer> FindProductUnitRenderers(Renderer labelRenderer, Transform root)
-    {
-        string labelMarker = "_LabelPanel_PROTEINI_SI_";
-        int markerIndex = labelRenderer.name.IndexOf(labelMarker,
-            StringComparison.Ordinal);
-        if (markerIndex <= 0) return new List<Renderer>();
-        string unitPrefix = labelRenderer.name.Substring(0, markerIndex);
-        Renderer[] allRenderers = root.GetComponentsInChildren<Renderer>(true);
-        return allRenderers.Where(renderer => renderer != null &&
-                (renderer.name.Equals(unitPrefix, StringComparison.Ordinal) ||
-                    renderer.name.StartsWith(unitPrefix + "_", StringComparison.Ordinal) ||
-                    renderer.name.StartsWith(unitPrefix + " ", StringComparison.Ordinal)))
-            .ToList();
-    }
-
-    private static Bounds CalculateRendererBounds(List<Renderer> renderers)
-    {
-        Bounds bounds = renderers[0].bounds;
-        for (int index = 1; index < renderers.Count; index++)
-            bounds.Encapsulate(renderers[index].bounds);
-        return bounds;
-    }
-
-    private static List<Renderer> FindFamilyLabelRenderers(ProductFamily family, Transform root)
-    {
-        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
-        List<Renderer> matches = renderers.Where(renderer => renderer != null &&
-            renderer.name.IndexOf("_LabelPanel_PROTEINI_SI_", StringComparison.Ordinal) >= 0 &&
-            renderer.name.IndexOf(family.LabelToken, StringComparison.Ordinal) >= 0 &&
-            family.Prefixes.Any(prefix => renderer.name.StartsWith(prefix,
-                StringComparison.Ordinal))).ToList();
-
-        // Energy cans have a dedicated cooler. Prefer that front-facing family
-        // before the legacy rear-fridge can fallback, otherwise a valid label
-        // contract can still produce the wrong category in the direct capture.
-        if (family.Name == "energy")
+        foreach ((string capture, string fixture) in shelves)
         {
-            List<Renderer> cooler = matches.Where(renderer =>
-                renderer.name.StartsWith("EnergyDrinks_Cooler", StringComparison.Ordinal))
-                .ToList();
-            if (cooler.Count > 0) matches = cooler;
+            if (!TryFindAggregateBounds(GymProteinStoreEnvironment.RuntimeRoot,
+                    new[] { fixture }, out Bounds bounds))
+                throw new InvalidOperationException($"Store fixture {fixture} is missing.");
+            // The counter faces north (customers); shelves face the store centre.
+            Vector3 lookFrom = fixture == "Solid_Counter"
+                ? bounds.center + Vector3.forward * 4f
+                : storeCentre;
+            CaptureFixture(capture, bounds, lookFrom,
+                fixture == "Solid_Counter" ? 4.8f : 2.4f, absoluteFolder, captures);
         }
-
-        return matches
-            .OrderBy(renderer => Mathf.Abs(renderer.bounds.center.y -
-                GymProteinStoreEnvironment.StoreBounds.center.y))
-            .ThenBy(renderer => renderer.name, StringComparer.Ordinal)
-            .Take(24)
-            .ToList();
     }
 
     private static List<Vector3> GetProductViewDirections(Renderer renderer)
@@ -743,41 +453,17 @@ public static class GymChaosArtFidelityVerifier
         return bounds.center + direction.normalized * distance + Vector3.up * 0.12f;
     }
 
-    private static CaptureMetrics RenderPreview(
-        Bounds bounds, Vector3 cameraPosition, Vector3 target)
+    private static void CaptureFixture(
+        string name, Bounds bounds, Vector3 storeCentre, float distance,
+        string absoluteFolder, List<string> captures)
     {
-        const int previewWidth = 320;
-        const int previewHeight = 180;
-        if (captureCamera == null) throw new InvalidOperationException("Capture camera missing.");
-        captureCamera.fieldOfView = 38f;
-        captureCamera.transform.SetPositionAndRotation(
-            cameraPosition,
-            Quaternion.LookRotation(target - cameraPosition, Vector3.up));
-        RenderTexture targetTexture = new RenderTexture(
-            previewWidth, previewHeight, 24, RenderTextureFormat.ARGB32);
-        RenderTexture previousActive = RenderTexture.active;
-        RenderTexture previousTarget = captureCamera.targetTexture;
-        try
-        {
-            captureCamera.targetTexture = targetTexture;
-            captureCamera.Render();
-            RenderTexture.active = targetTexture;
-            Texture2D image = new Texture2D(previewWidth, previewHeight,
-                TextureFormat.RGB24, false);
-            image.ReadPixels(new Rect(0, 0, previewWidth, previewHeight), 0, 0);
-            image.Apply(false, false);
-            CaptureMetrics metrics = AnalyzePixels(image.GetPixels32(), previewWidth,
-                previewHeight);
-            UnityEngine.Object.DestroyImmediate(image);
-            return metrics;
-        }
-        finally
-        {
-            captureCamera.targetTexture = previousTarget;
-            RenderTexture.active = previousActive;
-            targetTexture.Release();
-            UnityEngine.Object.DestroyImmediate(targetTexture);
-        }
+        Vector3 toCentre = Vector3.ProjectOnPlane(storeCentre - bounds.center, Vector3.up);
+        if (toCentre.sqrMagnitude < 0.01f) toCentre = Vector3.left;
+        toCentre.Normalize();
+        CaptureBounds(name, bounds,
+            bounds.center + toCentre * distance + Vector3.up * 0.4f,
+            bounds.center,
+            absoluteFolder, captures, fieldOfView: 50f);
     }
 
     private static bool TryFindAggregateBounds(
@@ -849,11 +535,16 @@ public static class GymChaosArtFidelityVerifier
             CaptureMetrics metrics = AnalyzePixels(
                 image.GetPixels32(), CaptureWidth, CaptureHeight);
             if (!metrics.VisuallyUseful && !allowEmpty)
+            {
+                // Keep the rejected frame next to the evidence for diagnosis.
+                File.WriteAllBytes(Path.Combine(absoluteFolder, label + "-rejected.png"),
+                    image.EncodeToPNG());
                 throw new InvalidOperationException(
                     $"Capture {label} is visually empty: pixels={metrics.VisiblePixels} " +
                     $"luminance={metrics.LuminanceMin:0.000}-{metrics.LuminanceMax:0.000} " +
                     $"variance={metrics.Variance:0.000000} colorful={metrics.ColorfulPixels} " +
                     $"edges={metrics.EdgePixels} bounds={bounds}");
+            }
 
             string filename = label + ".png";
             File.WriteAllBytes(Path.Combine(absoluteFolder, filename), image.EncodeToPNG());

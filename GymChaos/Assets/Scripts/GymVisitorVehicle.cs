@@ -39,6 +39,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private BodybuilderIdentity identity;
     private PlayerMovement player;
     private AudioSource engine;
+    private GymEngineAudioFader engineFader;
     private AudioSource horn;
     private AudioClip hornClip;
     private float currentDriveSpeed;
@@ -108,6 +109,51 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             }
         }
         return false;
+    }
+    // Distance east of the parking mouth inside which an arriving car
+    // already owns the shared connector (about two seconds of driving).
+    private const float ParkingConnectorApproachMargin = 14f;
+
+    /// <summary>
+    /// True only while another car is actually entering the shared parking
+    /// connector. A car still far down the access road, or the bus heading
+    /// for the roadside stop, does not cross a passenger's walk to the gym.
+    /// A car already stopped for a pedestrian lets the passenger go first,
+    /// otherwise both would wait for each other.
+    /// </summary>
+    public static bool HasConflictingParkingArrivalExcept(
+        GymVisitorVehicle ignoredVehicle)
+    {
+        for (int i = activeGroundTraffic.Count - 1; i >= 0; i--)
+        {
+            GymVisitorVehicle other = activeGroundTraffic[i];
+            if (other == null)
+            {
+                activeGroundTraffic.RemoveAt(i);
+                continue;
+            }
+            if (other != ignoredVehicle && other.IsDriving &&
+                other.drivingIntoParking && !other.UsesRoadsideBusRoute &&
+                !other.IsCloud && other.IsNearParkingConnector &&
+                !other.IsYieldingToPedestrian)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool IsNearParkingConnector
+    {
+        get
+        {
+            Bounds parking = GymOutdoorBuilder.ParkingBounds;
+            Vector3 position = transform.position;
+            return position.x <= GymOutdoorBuilder.VehicleRoadJunctionPoint.x +
+                    ParkingConnectorApproachMargin &&
+                position.z >= parking.min.z - 4f &&
+                position.z <= parking.max.z + 4f;
+        }
     }
     public bool HasCompletedDeparture { get; private set; }
     public bool IsCloud => identity == BodybuilderIdentity.Goku;
@@ -187,7 +233,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public string DrivingSoundClipNameForVerification => engine?.clip?.name ?? "missing";
     public bool IsEngineMutedForVerification => engine == null || engine.mute;
     public bool IsHornMutedForVerification => horn == null || horn.mute;
-    public bool IsEngineStoppedForVerification => engine == null || !engine.isPlaying;
+    // Parked: silent, or still fading out after parking.
+    public bool IsEngineStoppedForVerification => engine == null || !engine.isPlaying ||
+        (engineFader != null && !engineFader.IsDriving);
     public static float SpawnSpacingForVerification => LaneSpawnSpacing;
     public static float SensorMaximumDistanceForVerification => ForwardSensorMaximumDistance;
     public static float SensorHalfWidthForVerification => ForwardSensorHalfWidth;
@@ -292,6 +340,11 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Debug.LogError($"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} path={resource}");
         }
         vehicle.CreateEngineAudio();
+        if (!vehicle.IsCloud)
+        {
+            // Only the separated tyre nodes roll, and only while driving.
+            GymVehicleWheelSpinner.Attach(root, () => !vehicle.IsParked);
+        }
         vehicle.IsParked = initiallyParked;
         root.SetActive(initiallyParked);
         return vehicle;
@@ -403,7 +456,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         waitingForBusTurnaround = true;
         currentDriveSpeed = 0f;
-        if (engine != null) engine.Stop();
+        SetEngineDriving(false);
 
         float nextWaitLog = Time.time + 18f;
         bool clear = false;
@@ -480,14 +533,19 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         float y = parkingPoint.y;
         float returnZ = GymRoadsideBusStop.DavieBusReturnLanePoint.z;
         float turnX = parkingPoint.x - 9f * S;
+        // The road has no shoulder: first ease up to the bay's outer side,
+        // then turn so the swept body stays between the bay fence and the
+        // south fence (tuned in a swept-body simulation of this follower).
+        float topZ = parkingPoint.z + BusDepartureBaySwing;
         Vector3 exitTurn = departureRoadTurnPoint;
         Vector3 exitRoad = departureRoadPoint;
         return new[]
         {
             new Vector3(parkingPoint.x, y, parkingPoint.z),
-            new Vector3(turnX + 5.5f * S, y, parkingPoint.z),
-            new Vector3(turnX, y, (parkingPoint.z + returnZ) * 0.5f),
-            new Vector3(turnX + 5.5f * S, y, returnZ),
+            new Vector3(parkingPoint.x - 2f * S, y, topZ),
+            new Vector3(turnX + 7f * S, y, topZ),
+            new Vector3(turnX, y, Mathf.Lerp(topZ, returnZ, 0.4f)),
+            new Vector3(turnX + 7f * S, y, returnZ),
             // Start the left turn early: the 10.4 m body swings its nose
             // wide, and the corner's east wall sits just past the lane.
             new Vector3(exitTurn.x - BusExitTurnLead, y, returnZ),
@@ -503,7 +561,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     // speed-limited rate (v / minimum turn radius), so it turns while it
     // drives instead of sliding sideways between waypoints.
     private const float BusArrivalMinTurnRadius = 6f * S;
-    private const float BusDepartureMinTurnRadius = 4f * S;
+    private const float BusDepartureMinTurnRadius = 2.4f * S;
+    private const float BusDepartureBaySwing = 1.8f;
     private const float BusCornerFillet = 3f * S;
     private const float BusLookaheadMin = 1.2f * S;
     private const float BusLookaheadPerSpeed = 0.35f * S;
@@ -887,7 +946,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private IEnumerator DriveCloudRoute(bool park, Action done)
     {
-        if (engine != null) engine.Play();
+        SetEngineDriving(true);
         Vector3 start = transform.position;
         Vector3 end = park ? parkingPoint : roadPoint;
         Vector3 controlA = park ? Vector3.Lerp(start, end, 0.36f) + Vector3.up * 5f
@@ -917,7 +976,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         transform.position = end;
         if (park) transform.rotation = ParkedRotation;
-        if (engine != null) engine.Stop();
+        SetEngineDriving(false);
         IsParked = park;
         driveRoutine = null;
         if (!park) HasCompletedDeparture = true;
@@ -1002,10 +1061,10 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         if (releaseDelay > 0f)
         {
             currentDriveSpeed = 0f;
-            if (engine != null) engine.Stop();
+            SetEngineDriving(false);
             yield return new WaitForSeconds(releaseDelay);
         }
-        if (engine != null) engine.Play();
+        SetEngineDriving(true);
         float speed = IsCloud ? CloudSpeed : DriveSpeed;
         currentDriveSpeed = 0f;
         bool followBusPath = IsBus && UsesRoadsideBusRoute && !IsCloud;
@@ -1106,7 +1165,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         {
             transform.rotation = ParkedRotation;
         }
-        if (engine != null) engine.Stop();
+        SetEngineDriving(false);
         activeGroundTraffic.Remove(this);
         IsYieldingToPedestrian = false;
         IsParked = park;
@@ -1644,20 +1703,15 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         bool outside = IsPlayerOutsideForAudio();
         bool audibleDrivingState = IsDriving && !IsParked &&
             !waitingForBusTurnaround && gameObject.activeInHierarchy;
-        bool audible = outside && audibleDrivingState;
         if (engine != null)
         {
-            engine.mute = !audible;
-            if (audible)
+            RefreshEngineClip(engine, IsCloud);
+            // Inside the gym the loop is muted; driving state fades it in
+            // and out (start/leave bay, park, despawn).
+            engine.mute = !outside;
+            if (engineFader != null)
             {
-                if (!engine.isPlaying)
-                {
-                    engine.Play();
-                }
-            }
-            else if (engine.isPlaying)
-            {
-                engine.Stop();
+                engineFader.SetDriving(audibleDrivingState);
             }
         }
 
@@ -1937,17 +1991,75 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         engine.maxDistance = IsCloud ? 36f : 30f;
         engine.rolloffMode = AudioRolloffMode.Logarithmic;
         engine.dopplerLevel = 0.35f;
-        engine.volume = IsCloud ? 0.18f : 0.24f;
         engine.clip = GetEngineLoopClip(IsCloud);
+        engineFader = GymEngineAudioFader.Attach(engine, IsCloud ? 0.18f : 0.32f);
+    }
+
+    // Swaps the procedural fallback for the recorded loop when it finishes
+    // loading after the source was created.
+    public static void RefreshEngineClip(AudioSource source, bool cloud)
+    {
+        if (cloud || source == null || source.clip != carEngineLoopClip ||
+            carEngineLoopClip == null)
+        {
+            return;
+        }
+
+        AudioClip clip = GetEngineLoopClip(false);
+        if (clip == source.clip)
+        {
+            return;
+        }
+
+        bool wasPlaying = source.isPlaying;
+        source.clip = clip;
+        if (wasPlaying)
+        {
+            source.Play();
+        }
+    }
+
+    // Start/stop the driving loop through its fader (fade in/out), never
+    // by cutting the source.
+    private void SetEngineDriving(bool driving)
+    {
+        if (engineFader != null)
+        {
+            engineFader.SetDriving(driving);
+        }
+        else if (engine != null)
+        {
+            if (driving) engine.Play();
+            else engine.Stop();
+        }
     }
 
     private static AudioClip carEngineLoopClip;
+    private static bool loggedRecordedEngineLoop;
     private static AudioClip cloudEngineLoopClip;
 
     // Shared by visitor cars, the bus and the police car. Built once per
     // kind; every source plays the same in-memory loop.
     public static AudioClip GetEngineLoopClip(bool cloud)
     {
+        if (!cloud)
+        {
+            // The recorded car loop replaces the procedural bed once loaded.
+            AudioClip recorded = GymAudio.GetLoadedClip(GymSoundEffect.VehicleDriving);
+            if (recorded != null)
+            {
+                recorded.name = "Car driving loop";
+                if (!loggedRecordedEngineLoop)
+                {
+                    loggedRecordedEngineLoop = true;
+                    Debug.Log(
+                        $"GYMCHAOS_VEHICLE_RECORDED_ENGINE_LOOP_OK clip=car_driving.wav " +
+                        $"length={recorded.length:F2} channels={recorded.channels}");
+                }
+                return recorded;
+            }
+        }
+
         AudioClip cached = cloud ? cloudEngineLoopClip : carEngineLoopClip;
         if (cached != null)
         {

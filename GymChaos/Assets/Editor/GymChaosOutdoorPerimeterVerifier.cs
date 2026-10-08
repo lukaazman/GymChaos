@@ -157,12 +157,7 @@ public static class GymChaosOutdoorPerimeterVerifier
             "Path from Gym Door",
             "Visitor Vehicle Road",
             "Protein Store Entry Walkway",
-            "Protein Store Platform",
-            "Protein Store Route South",
-            "Protein Store Route North",
-            "Protein Store Route East",
-            "Protein Store Route West South",
-            "Protein Store Route West North"
+            "Protein Store Site Ground"
         };
         Material shared = null;
         float topMin = float.PositiveInfinity;
@@ -216,22 +211,40 @@ public static class GymChaosOutdoorPerimeterVerifier
         return shared != null && topSpread <= 0.002f && sideTriangles == 0 && !curbs;
     }
 
-    // The visible carriageway runs from the road's north edge (the bus bay is
-    // a separate pull-off) to the south wall face. The centre line and both
-    // traffic lanes must split that width evenly.
+    // The two traffic lanes run from the road's north edge (the bus bay is a
+    // separate pull-off) to the south fence face, with no shoulder and no
+    // extra edge line. The centre line continues the parking aisle dashes
+    // straight, and both lanes must split the road evenly.
     private static bool HasEqualTrafficLanes(Transform root, out string details)
     {
         Transform line = FindRecursive(root, "Road Center Line");
         Transform southWall = FindRecursive(root, "Visitor Road South Wall");
         Renderer wallRenderer = southWall != null ? southWall.GetComponent<Renderer>() : null;
-        if (line == null || wallRenderer == null)
+        Transform dash = FindRecursive(root, "Parking Aisle Dash");
+        if (line == null || wallRenderer == null || dash == null)
         {
-            details = $"line={line != null} southWall={wallRenderer != null}";
+            details = $"line={line != null} southWall={wallRenderer != null} dash={dash != null}";
             return false;
         }
         float northEdge = GymOutdoorBuilder.ParkingBounds.center.z +
             GymOutdoorBuilder.VehicleRoadWidthForVerification * 0.5f;
-        float southFace = wallRenderer.bounds.max.z;
+        float southFace = GymOutdoorBuilder.TrafficSouthEdgeZ;
+        if (wallRenderer.bounds.max.z > southFace + 0.01f ||
+            wallRenderer.bounds.max.z < southFace - 0.3f)
+        {
+            details = $"southWall={wallRenderer.bounds.max.z:F2} not on lane edge={southFace:F2}";
+            return false;
+        }
+        if (FindRecursive(root, "Road South Edge Line") != null)
+        {
+            details = "extra south edge line present";
+            return false;
+        }
+        if (Mathf.Abs(dash.position.z - line.position.z) > 0.01f)
+        {
+            details = $"aisleDashZ={dash.position.z:F2} centreLineZ={line.position.z:F2} not continuous";
+            return false;
+        }
         float centre = GymOutdoorBuilder.TrafficLaneCenterZ;
         float northLane = northEdge - centre;
         float southLane = centre - southFace;
@@ -325,12 +338,7 @@ public static class GymChaosOutdoorPerimeterVerifier
             "Path from Gym Door",
             "Visitor Vehicle Road",
             "Protein Store Entry Walkway",
-            "Protein Store Platform",
-            "Protein Store Route South",
-            "Protein Store Route North",
-            "Protein Store Route East",
-            "Protein Store Route West South",
-            "Protein Store Route West North"
+            "Protein Store Site Ground"
         };
         List<SurfaceRegion> regions = new List<SurfaceRegion>();
         for (int i = 0; i < names.Length; i++)
@@ -399,7 +407,10 @@ public static class GymChaosOutdoorPerimeterVerifier
             "Outdoor Boundary - Parking East South",
             "Outdoor Boundary - Parking East North",
             "Outdoor Boundary - Parking North Extension",
-            "Outdoor Boundary - Path Outer South",
+            // The store door opening starts at the path's south end; the two
+            // store entry walls close the path wall on either side of it.
+            "Protein Store Entry Fence South Collision",
+            "Protein Store Entry Fence North Collision",
             "Outdoor Boundary - Path Outer Middle",
             "Outdoor Boundary - Path Outer North",
             "Outdoor Boundary - Path South",
@@ -482,13 +493,15 @@ public static class GymChaosOutdoorPerimeterVerifier
         details = string.Empty;
         Vector3 turn = GymOutdoorBuilder.VehicleRoadTurnPoint;
         float halfWidth = GymOutdoorBuilder.VehicleRoadWidthForVerification * 0.5f;
+        // The paved road starts at its south lane edge (no shoulder).
+        float south = GymOutdoorBuilder.TrafficSouthEdgeZ + 0.3f;
         Rect[] regions =
         {
             // x, z, width, depth
-            new Rect(171.8f, 20.6f, turn.x + halfWidth - 0.4f - 171.8f,
-                GymRoadsideBusStop.BusBayRoadEdgeZ - 0.3f - 20.6f),
-            new Rect(turn.x - halfWidth + 0.4f, 20.6f, halfWidth * 2f - 0.8f,
-                GymOutdoorBuilder.VehicleArrivalRoadSpawnPoint.z - 20.6f)
+            new Rect(171.8f, south, turn.x + halfWidth - 0.4f - 171.8f,
+                GymRoadsideBusStop.BusBayRoadEdgeZ - 0.3f - south),
+            new Rect(turn.x - halfWidth + 0.4f, south, halfWidth * 2f - 0.8f,
+                GymOutdoorBuilder.VehicleArrivalRoadSpawnPoint.z - south)
         };
         int holes = 0;
         int regionStart = 0;

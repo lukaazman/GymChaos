@@ -65,6 +65,7 @@ public sealed class GymTimeOfDay : MonoBehaviour
     private static readonly int ChromeDaylightId =
         Shader.PropertyToID("_GymChromeDaylight");
     public bool IsNight => CalculateDaylight(time01) < 0.25f;
+    public float Daylight01 => CalculateDaylight(time01);
 
     public static GymTimeOfDay CreateForScene(
         Transform parent,

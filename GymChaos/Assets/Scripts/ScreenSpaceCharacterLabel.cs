@@ -63,42 +63,52 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         GymDialogueDirector director = GymDialogueDirector.Active;
         bool isDialogueTarget = director != null && director.Target == fighter;
         bool showName = nearby || fighter.IsAggressive || isDialogueTarget;
+        bool showHealth = fighter.HasTakenDamage;
+        // The anchor sits just above the head: the stack grows upward from
+        // it (health bar, then name) so the name stays close to the head.
+        float stackBottom = Screen.height - screen.y - AnchorGapPixels;
+        if (showHealth)
+        {
+            DrawHealthBar(
+                screen.x, stackBottom - HealthBarHeight,
+                fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth),
+                fighter.HealthBarColor);
+            stackBottom -= HealthBarHeight + 2f;
+        }
+
         if (showName)
         {
             if (style == null)
             {
                 style = new GUIStyle(GUI.skin.label)
                 {
-                    alignment = TextAnchor.MiddleCenter,
+                    alignment = TextAnchor.LowerCenter,
                     fontSize = 11,
+                    padding = new RectOffset(0, 0, 0, 0),
                     normal = { textColor = Color.white }
                 };
             }
 
             const float width = 180f;
-            const float height = 24f;
+            const float height = 16f;
             GUI.Label(new Rect(
                 screen.x - width * 0.5f,
-                Screen.height - screen.y - height * 0.5f,
+                stackBottom - height,
                 width, height), displayName, style);
-        }
-
-        if (fighter.HasTakenDamage)
-        {
-            DrawHealthBar(
-                screen, fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth),
-                fighter.HealthBarColor);
         }
     }
 
-    private static void DrawHealthBar(Vector3 screen, float health01, Color fillColor)
+    private const float AnchorGapPixels = 1f;
+    private const float HealthBarHeight = 9f;
+    public static float NameHeightFactor => 0.035f;
+
+    private static void DrawHealthBar(float centerX, float top, float health01, Color fillColor)
     {
         const float barWidth = 86f;
-        const float barHeight = 9f;
         Rect border = new Rect(
-            screen.x - barWidth * 0.5f,
-            Screen.height - screen.y + 11f,
-            barWidth, barHeight);
+            centerX - barWidth * 0.5f,
+            top,
+            barWidth, HealthBarHeight);
         Rect background = new Rect(border.x + 1f, border.y + 1f, border.width - 2f, border.height - 2f);
         Rect fill = new Rect(
             background.x, background.y,

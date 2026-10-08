@@ -309,11 +309,20 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
         bool cheapBackgroundProfile = chromeGlassProfile || renderProfile ==
             RuntimeGlbRenderProfile.CheapBackground;
         int partsPerYield = cheapBackgroundProfile ? 2 : 24;
+        int skippedWindowFrameParts = 0;
         for (int partIndex = 0; partIndex < asset.Parts.Length; partIndex++)
         {
             RuntimeScenePart part = asset.Parts[partIndex];
             if (part == null || part.Mesh == null)
             {
+                continue;
+            }
+            if (chromeGlassProfile && IsTowerWindowFrameDecal(part.Material))
+            {
+                // The shader draws each tower's window grid; the authored
+                // frame squares sat on top of those panes as small dark tiles.
+                skippedWindowFrameParts++;
+                SkippedTowerWindowFramePartsForVerification++;
                 continue;
             }
 
@@ -374,7 +383,7 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             $"GYMCHAOS_RUNTIME_GLB_SCENE_READY path={relativePath} " +
             $"object={root.name} parts={asset.Parts.Length} " +
             $"bounds={combinedBounds} materials={CountMaterials(asset)} " +
-            $"layer={root.layer}",
+            $"layer={root.layer} skippedWindowFrames={skippedWindowFrameParts}",
             root);
         onLoaded?.Invoke(root);
     }
@@ -766,6 +775,21 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
     // window panes and glass streaks are reflective glass; facades (dark
     // panel texture), frames, structural metal and roofs are a dark, barely
     // glossy body. Signs and the red spine keep the cheap unlit path.
+    public const string TowerWindowFrameMaterialPrefix = "MAT_Window_Frame_";
+    public static int SkippedTowerWindowFramePartsForVerification { get; private set; }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetSkippedTowerWindowFrameCount()
+    {
+        SkippedTowerWindowFramePartsForVerification = 0;
+    }
+
+    private static bool IsTowerWindowFrameDecal(Material source)
+    {
+        return source != null && source.name != null &&
+            source.name.StartsWith(TowerWindowFrameMaterialPrefix, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static Material GetChromeGlassBackgroundMaterial(Material source)
     {
         if (source == null)

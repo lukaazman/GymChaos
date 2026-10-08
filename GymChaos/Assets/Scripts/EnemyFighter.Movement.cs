@@ -42,6 +42,7 @@ public partial class EnemyFighter
         }
 
         direction = Vector3.ProjectOnPlane(direction, Vector3.up).normalized;
+        UpdateRoamSpeed();
         body.WakeUp();
         Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
         Vector3 desiredVelocity = direction * roamSpeed;
@@ -54,8 +55,41 @@ public partial class EnemyFighter
         Quaternion lookRotation = Quaternion.LookRotation(direction, Vector3.up);
         body.MoveRotation(Quaternion.RotateTowards(
             body.rotation, lookRotation, 260f * Time.fixedDeltaTime));
-        SetAnimatedMovementFromVelocity(roamSpeed);
+        // Reference the top of the range so the walk cadence follows the
+        // actual pace instead of looking identical at every speed.
+        SetAnimatedMovementFromVelocity(Mathf.Max(roamSpeedMin, roamSpeedMax));
     }
+
+    private const float RoamSpeedChangeMinSeconds = 5f;
+    private const float RoamSpeedChangeMaxSeconds = 10f;
+    private const float RoamSpeedEaseRate = 0.3f;
+
+    // Free roam only: pick a new pace in [roamSpeedMin, roamSpeedMax] every
+    // 5-10 s and ease toward it, so walkers vary without visible jerks.
+    private void UpdateRoamSpeed()
+    {
+        float lowSpeed = Mathf.Min(roamSpeedMin, roamSpeedMax);
+        float highSpeed = Mathf.Max(roamSpeedMin, roamSpeedMax);
+        if (roamSpeedTarget <= 0f || Time.time >= nextRoamSpeedChangeTime)
+        {
+            roamSpeedTarget = Random.Range(lowSpeed, highSpeed);
+            nextRoamSpeedChangeTime = Time.time + Random.Range(
+                RoamSpeedChangeMinSeconds, RoamSpeedChangeMaxSeconds);
+        }
+        if (roamSpeed <= 0f)
+        {
+            roamSpeed = roamSpeedTarget;
+        }
+        roamSpeed = Mathf.Clamp(
+            Mathf.MoveTowards(roamSpeed, roamSpeedTarget,
+                RoamSpeedEaseRate * Time.fixedDeltaTime),
+            lowSpeed, highSpeed);
+    }
+
+    internal float RoamSpeedForVerification => roamSpeed;
+    internal float RoamSpeedMinForVerification => Mathf.Min(roamSpeedMin, roamSpeedMax);
+    internal float RoamSpeedMaxForVerification => Mathf.Max(roamSpeedMin, roamSpeedMax);
+    internal float NextRoamSpeedChangeTimeForVerification => nextRoamSpeedChangeTime;
     // One enemy per machine. A station is off limits when someone is using or
     // has reserved it, or when another neutral enemy is already walking to /
     // standing at it and is closer. Without this, several visitors picked the
@@ -144,7 +178,6 @@ public partial class EnemyFighter
         ClearRoamRoute();
         roamDirection = Vector3.zero;
         roamDirectionHoldUntil = 0f;
-        roamSpeed = Random.Range(roamSpeedMin, roamSpeedMax);
 
         // Ronnie is a police/intervention NPC, not a gym customer. Keep his
         // neutral patrol on clear room points so a machine interest (most

@@ -224,9 +224,11 @@ public static class GymChaosLockerVisitVerifier
         if (arrived &&
             agent.State != GymVisitorAgent.VisitorState.ApproachingLockerRoom &&
             agent.State != GymVisitorAgent.VisitorState.LockerRoomVisit &&
-            GymBackRoomBuilder.ReservedLockerSlotCount == 0 &&
-            GymBackRoomBuilder.VisibleBenchBagCount == 0 &&
-            !GymBackRoomBuilder.HasActiveBagVisitor)
+            // Only this visitor's slot and bag must be gone: other members
+            // may keep their gym bags on the benches until they leave.
+            !GymBackRoomBuilder.HasLockerSlot(fighter.Identity) &&
+            !GymBackRoomBuilder.IsBagVisitor(fighter.Identity) &&
+            GymBackRoomBuilder.VisibleBenchBagCount <= GymBackRoomBuilder.MemberBagCount)
         {
             if (!slotObserved || !capacityObserved || !cohortValidated ||
                 !layoutValidated || !GymBackRoomBuilder.HasAuthoredLockerProps)
@@ -537,6 +539,9 @@ public static class GymChaosLockerVisitVerifier
         try
         {
             UnityEngine.Random.InitState(92826);
+            // Members' own gym bags may be on the benches: measure the
+            // locker-visit bag rule on empty benches.
+            GymBackRoomBuilder.HideBenchBags();
             for (int cycle = 0; cycle < 500; cycle++)
             {
                 GymBackRoomBuilder.ShowBenchBagsForVisitor(BodybuilderIdentity.Cbum);

@@ -284,6 +284,43 @@ public class GymExerciseStation : MonoBehaviour
     public bool IsSquatBarOnRack => HasAuthoredSquatBar &&
         !IsEnemySquatBarAttached && !enemySquatApproachReserved &&
         (squatBarRackParent == null || sceneBar.parent == squatBarRackParent);
+    internal Transform SceneBarForVerification => sceneBar;
+    // Radius of the bar shaft: the longest bar renderer is the shaft, its
+    // smaller cross-section size is the diameter.
+    public float SquatBarShaftRadius
+    {
+        get
+        {
+            float radius = 0.02f;
+            if (sceneBar == null)
+            {
+                return radius;
+            }
+            float longest = 0f;
+            Renderer[] renderers = sceneBar.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                MeshFilter filter = renderers[i].GetComponent<MeshFilter>();
+                if (filter == null || filter.sharedMesh == null)
+                {
+                    continue;
+                }
+                Vector3 size = Vector3.Scale(
+                    filter.sharedMesh.bounds.size, renderers[i].transform.lossyScale);
+                size = new Vector3(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z));
+                float length = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+                if (length <= longest)
+                {
+                    continue;
+                }
+                longest = length;
+                float thinnest = Mathf.Min(size.x, Mathf.Min(size.y, size.z));
+                float middle = size.x + size.y + size.z - length - thinnest;
+                radius = Mathf.Min(thinnest, middle) * 0.5f;
+            }
+            return radius;
+        }
+    }
     public Vector3 EnemySquatBarCenter
     {
         get
@@ -638,7 +675,23 @@ public class GymExerciseStation : MonoBehaviour
         return (IsTreadmill || IsSquat) && enemy != null &&
             (enemyOccupant == null || enemyOccupant == enemy) &&
             enemySquatReleaseOccupant == null && playerOccupant == null &&
-            (!HasApproachLeaver() || approachLeaver == enemy);
+            (!HasApproachLeaver() || approachLeaver == enemy) &&
+            !IsHeldForSquatFinisher(enemy);
+    }
+
+    // A visitor who just racked the bar still stands in the cage until its
+    // walk-out starts (next visitor Update). Without this short hold another
+    // visitor could reserve the cage in between; the walk-out was then refused
+    // and the finisher stayed boxed in behind the bar.
+    private const float SquatFinisherHoldSeconds = 1f;
+    private EnemyFighter squatFinisher;
+    private float squatFinishedAt = float.NegativeInfinity;
+
+    private bool IsHeldForSquatFinisher(EnemyFighter enemy)
+    {
+        return squatFinisher != null && squatFinisher != enemy &&
+            Time.time - squatFinishedAt < SquatFinisherHoldSeconds &&
+            IsInsideEquipmentFootprint(squatFinisher);
     }
 
     public bool ContainsEquipmentCollider(Collider collider)
@@ -852,6 +905,8 @@ public class GymExerciseStation : MonoBehaviour
         sessionActive = false;
         squatMotion = 0f;
         enemySquatApproachReserved = false;
+        squatFinisher = enemy;
+        squatFinishedAt = Time.time;
         Debug.Log(
             $"GYMCHAOS_SQUAT_STATION_END station={EquipmentName} enemy={enemy.Identity} " +
             $"barOnRack={IsSquatBarOnRack}",
@@ -868,6 +923,10 @@ public class GymExerciseStation : MonoBehaviour
         }
 
         enemySquatReleaseOccupant = enemy;
+        if (squatFinisher == enemy)
+        {
+            squatFinisher = null;
+        }
         // A visitor finishes at the authored centre of the cage. Keep only
         // this station's colliders non-blocking during the short physical
         // walk-out; the visitor is still moved by normal Rigidbody steering,

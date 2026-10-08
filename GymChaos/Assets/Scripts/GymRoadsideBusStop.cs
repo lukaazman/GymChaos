@@ -81,6 +81,8 @@ public static class GymRoadsideBusStop
 
     // Same envelope test Build uses, so the road can size its lanes before
     // the bus stop exists.
+    private const float DavieBusReturnLaneCentreOffset = 1.85f;
+
     public static bool CanFitBay(float roadStartX, float roadTurnX, float roadWidth)
     {
         float bayLength = (roadTurnX - BusBayEndInset) - (roadStartX + BusBayStartOffset);
@@ -250,7 +252,11 @@ public static class GymRoadsideBusStop
         // Arrival uses the north/right-hand lane for the inbound approach.
         // After the U-turn the bus must return on the opposite south/right
         // lane, never reuse the inbound lane.
-        float returnLaneZ = roadCenterZ - Mathf.Abs(arrivalLaneOffset);
+        // The return run keeps the 3.6 m body inside the south lane but
+        // close to the centre line: the road has no shoulder, so the U-turn
+        // needs every metre between the bay and the south fence.
+        float returnLaneZ = roadCenterZ - Mathf.Min(
+            Mathf.Abs(arrivalLaneOffset), DavieBusReturnLaneCentreOffset);
         DavieBusBayEntryApproachPoint = new Vector3(
             bayEndX + 2.0f * S, floorY, roadCenterZ + arrivalLaneOffset);
         DavieBusBayEntryPoint = new Vector3(

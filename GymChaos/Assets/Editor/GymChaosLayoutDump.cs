@@ -82,6 +82,13 @@ public static class GymChaosLayoutDump
                 Vector3 outside = new Vector3(168.25f, -0.05f, 22f);
                 if (body != null) { body.position = outside; body.linearVelocity = Vector3.zero; }
                 player.transform.position = outside;
+                // Optional time of day for the renders (0..1, 0.5 = noon).
+                string timeOfDay = Environment.GetEnvironmentVariable("GYMCHAOS_LAYOUT_TIME");
+                if (!string.IsNullOrEmpty(timeOfDay) && GymTimeOfDay.Instance != null)
+                {
+                    GymTimeOfDay.Instance.SetTimeForVerification(
+                        float.Parse(timeOfDay, CultureInfo.InvariantCulture));
+                }
                 return;
             }
             if (now - builtAt < 8d) return;

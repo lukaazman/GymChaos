@@ -560,7 +560,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			{
 				return false;
 			}
-		if (state == VisitorState.ApproachingGymFromVehicle && GymVisitorVehicle.HasActiveParkingArrivalExcept(arrivalVehicle))
+		if (state == VisitorState.ApproachingGymFromVehicle && GymVisitorVehicle.HasConflictingParkingArrivalExcept(arrivalVehicle))
 		{
 			// Keep the director timeout from treating an authored vehicle-arrival queue as a failed route.
 			return true;
@@ -1129,11 +1129,21 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			return true;
 		}
 #endif
+		// Place the passenger at the car before any queue wait, so waiting
+		// never shows the visitor standing at a stale (inside-gym) position.
+		if (state == VisitorState.ApproachingGymFromVehicle && vehicleEntrySpawnPending)
+		{
+			vehicleEntrySpawnPending = false;
+			fighter.SetVisitorSpawnPose(vehicleEntrySpawnPoint, ((Component)fighter).transform.rotation, keepInterpolationDisabled: true);
+			Physics.SyncTransforms();
+			return true;
+		}
 		if (TickDoorwayEntryYieldForExit())
 		{
 			return true;
 		}
-		if (state == VisitorState.ApproachingGymFromVehicle && GymVisitorVehicle.HasActiveParkingArrivalExcept(arrivalVehicle))
+		if (state == VisitorState.ApproachingGymFromVehicle &&
+			GymVisitorVehicle.HasConflictingParkingArrivalExcept(arrivalVehicle))
 		{
 			// A vehicle arrival owns the shared parking connector until its
 			// complete body reaches the bay. Keep the passenger at the
@@ -1171,7 +1181,12 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		{
 			ReleaseDoorwayEntrySlot();
 		}
-		if ((state == VisitorState.EnteringDoor || state == VisitorState.EnteringRoom) && !TryAcquireDoorwayEntrySlot())
+		// A visitor already inside, clear of the doorway area, needs no door
+		// slot: waiting for it there blocked the next visitor coming through
+		// the door, who in turn held the slot (mutual wait).
+		bool needsDoorSlot = state == VisitorState.EnteringDoor ||
+			(state == VisitorState.EnteringRoom && IsDoorwayEntryAreaOccupied());
+		if (needsDoorSlot && !TryAcquireDoorwayEntrySlot())
 		{
 			fighter.StopVisitorMovement();
 			return true;
@@ -1311,6 +1326,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 					storeVisitReturning = false;
 					storeVisitWaypoints = null;
 					storeVisitWaypointIndex = 0;
+					GymProteinStoreEnvironment.ReleaseVisitSpot(this);
 					roomTravelStalledSeconds = 0f;
 					lastRoomTravelDistance = 0f;
 					fighter.ResumeVisitorRoaming();
@@ -1732,6 +1748,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		}
 		storeVisitActive = false;
 		storeVisitReturning = false;
+		GymProteinStoreEnvironment.ReleaseVisitSpot(this);
 		vehicleEntryUsesDavieBusGate = false;
 		vehicleEntryUsesProteinStoreRoute = false;
 		vehicleExitUsesDavieBusGate = false;

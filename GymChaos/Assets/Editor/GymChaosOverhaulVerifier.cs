@@ -295,6 +295,14 @@ public static class GymChaosOverhaulVerifier
     {
         if (GymAudio.DefinitionCountForVerification < 18)
             throw new InvalidOperationException("sound definitions missing");
+        // Confirm, exit/back and generic clicks all use the user's confirm.wav.
+        foreach (GymSoundEffect uiEffect in new[]
+                 { GymSoundEffect.UiConfirm, GymSoundEffect.UiBack, GymSoundEffect.UiClick })
+        {
+            if (GymAudio.FileNameForVerification(uiEffect) != "ui_confirm.wav")
+                throw new InvalidOperationException(
+                    $"{uiEffect} uses {GymAudio.FileNameForVerification(uiEffect)}, not confirm.wav");
+        }
         GymUiSounds.ScanNow();
         Selectable[] selectables = UnityEngine.Object.FindObjectsByType<Selectable>(
             FindObjectsInactive.Exclude);

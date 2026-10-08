@@ -82,6 +82,7 @@ public static class GymChaosUiCapture
         image.Apply();
         string path = Path.Combine(Directory.GetParent(Application.dataPath).Parent.FullName,
             "Logs", "agent", fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path));
         File.WriteAllBytes(path, image.EncodeToPNG());
         Object.DestroyImmediate(image);
         Debug.Log($"GYMCHAOS_UI_CAPTURE path={path}");

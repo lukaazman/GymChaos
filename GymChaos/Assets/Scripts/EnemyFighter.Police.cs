@@ -338,6 +338,13 @@ public partial class EnemyFighter
         }
         if (safeDirection.sqrMagnitude < 0.001f)
         {
+            // Pushed against a door jamb (for example around a character
+            // standing in the opening): rejoin the doorway centre line in
+            // the direction of travel instead of stopping at the wall.
+            safeDirection = GetDoorwayRecoveryDirection(direction);
+        }
+        if (safeDirection.sqrMagnitude < 0.001f)
+        {
             body.linearVelocity = Vector3.Project(body.linearVelocity, Vector3.up);
             SetAnimatedMovementFromVelocity(maxSpeed);
             return false;
@@ -375,13 +382,14 @@ public partial class EnemyFighter
     private readonly List<Collider> doorwayIgnoredColliders = new List<Collider>();
     private Collider[] officerOwnColliders;
 
-    private bool TryPassDoorwayCrowd(Vector3 direction, float distance)
+    private bool TryPassDoorwayCrowd(Vector3 direction, float distance,
+        bool skipStaticCheck = false)
     {
         GymDoorway doorway = GymDoorway.Instance;
         if (doorway == null || body == null ||
             Vector3.ProjectOnPlane(doorway.DoorCenter - body.position, Vector3.up).magnitude >
                 DoorwayCrowdRadius ||
-            !IsVisitorPathClear(direction, distance, true, null, null, true))
+            (!skipStaticCheck && !IsVisitorPathClear(direction, distance, true, null, null, true)))
         {
             return false;
         }
@@ -450,6 +458,39 @@ public partial class EnemyFighter
         onAxis.y = body.position.y;
         float lateral = Vector3.ProjectOnPlane(body.position - onAxis, Vector3.up).magnitude;
         return lateral > 0.25f ? onAxis + axis * 0.4f : onAxis + axis * 2f;
+    }
+
+    private Vector3 GetDoorwayRecoveryDirection(Vector3 travelDirection)
+    {
+        GymDoorway doorway = GymDoorway.Instance;
+        if (doorway == null || body == null ||
+            Vector3.ProjectOnPlane(doorway.DoorCenter - body.position, Vector3.up).magnitude >
+                DoorwayCrowdRadius)
+        {
+            return Vector3.zero;
+        }
+        Vector3 inwardAxis = Vector3.ProjectOnPlane(
+            doorway.InteriorPoint - doorway.ExteriorPoint, Vector3.up);
+        bool inward = Vector3.Dot(travelDirection, inwardAxis) >= 0f;
+        Vector3 toAxis = Vector3.ProjectOnPlane(
+            GetDoorwayAxisWaypoint(inward) - body.position, Vector3.up);
+        if (toAxis.sqrMagnitude < 0.0001f)
+        {
+            return Vector3.zero;
+        }
+        Vector3 axisDirection = toAxis.normalized;
+        float step = Mathf.Min(toAxis.magnitude, 1.1f);
+        Vector3 clear = FindVisitorMovementDirection(axisDirection, step, true, null);
+        // Pressed against the jamb the static probe starts inside the wall
+        // contact and always fails: pass the characters in the opening and
+        // let the physics body slide back onto the centre line (walls keep
+        // colliding).
+        if (clear.sqrMagnitude < 0.001f &&
+            TryPassDoorwayCrowd(axisDirection, step, skipStaticCheck: true))
+        {
+            clear = axisDirection;
+        }
+        return clear;
     }
 
     private void RestoreDoorwayCrowdCollisions(bool force)
@@ -521,13 +562,15 @@ public partial class EnemyFighter
             point.z <= storeBounds.max.z;
         bool officerInStore = InStore(body.position);
         bool targetInStore = InStore(targetPosition);
+        // From the gym path, through the opening at its south end and the
+        // shop door to a point just inside; aisles run on from there.
         Vector3[] storeEntry =
         {
-            GymOutdoorBuilder.ProteinStoreGateWestClearPoint,
             GymOutdoorBuilder.ProteinStoreGymPathClearPoint,
+            GymOutdoorBuilder.ProteinStoreGateWestClearPoint,
             GymProteinStoreEnvironment.StoreVisitApproachPoint,
             GymProteinStoreEnvironment.StoreEntrancePoint,
-            GymProteinStoreEnvironment.StoreFrontClearPoint
+            GymProteinStoreEnvironment.StoreInsideDoorPoint
         };
         if (officerInStore && targetInStore)
         {

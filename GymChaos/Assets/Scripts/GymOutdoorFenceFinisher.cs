@@ -7,8 +7,7 @@ using UnityEngine;
 /// corners and leave the outer corner square open. This pass makes every
 /// joint seamless: collinear runs butt end to end, an L corner is closed by
 /// the run with the free end, and a T joint stops at the face of the wall it
-/// meets. It also closes the side strips beside the Protein.com shop so no
-/// one can walk around the building.
+/// meets.
 /// </summary>
 public static class GymOutdoorFenceFinisher
 {
@@ -44,7 +43,9 @@ public static class GymOutdoorFenceFinisher
         }
 
         Physics.SyncTransforms();
-        StoreSideLocks = BuildStoreSideLocks(exteriorRoot);
+        // The shop now fills its walled site; the gaps beside it are closed
+        // by the site walls and the entry walls, so no side locks are built.
+        StoreSideLocks = 0;
         List<Wall> walls = CollectWalls(exteriorRoot);
         int resolved = ButtCollinearRuns(walls);
         MarkJoinedEnds(walls);
@@ -60,66 +61,6 @@ public static class GymOutdoorFenceFinisher
             $"GYMCHAOS_FENCE_JOINS_{(RemainingOverlaps == 0 ? "OK" : "FAIL")} " +
             $"walls={walls.Count} resolved={resolved} overlaps={RemainingOverlaps} " +
             $"storeSideLocks={StoreSideLocks}");
-    }
-
-    // Low walls that close the strips north and south of the shop, from its
-    // front corners to the road wall and to the site's south wall.
-    private static int BuildStoreSideLocks(Transform root)
-    {
-        // The shop GLB loads asynchronously, so use the shell footprint the
-        // store builder computed instead of its runtime colliders.
-        Bounds shell = GymProteinStoreEnvironment.ShellFootprint;
-        Collider roadWall = FindCollider(root, "Visitor Road South Wall Collision");
-        Collider siteSouth = FindCollider(root, "Protein Store Perimeter South Collision");
-        Transform wallTemplate = FindChild(root, "Protein Store Perimeter South Low Wall");
-        Transform copingTemplate = FindChild(root, "Protein Store Perimeter South Coping");
-        if (!GymProteinStoreEnvironment.IsBuilt || shell.size.x < 1f || roadWall == null ||
-            siteSouth == null || wallTemplate == null || copingTemplate == null)
-        {
-            Debug.LogWarning("GYMCHAOS_STORE_SIDE_LOCK_SKIPPED reason=missing_reference");
-            return 0;
-        }
-
-        Transform parent = wallTemplate.parent;
-        float thickness = GymOutdoorBuilder.SharedFenceWallThickness;
-        // Flush with the facade, directly behind its corner pillars.
-        float x = GymProteinStoreEnvironment.FacadeX + thickness * 0.5f;
-        int built = 0;
-        built += CreateLock(parent, wallTemplate, copingTemplate, "Protein Store Side Lock South",
-            x, siteSouth.bounds.max.z, shell.min.z, thickness) ? 1 : 0;
-        built += CreateLock(parent, wallTemplate, copingTemplate, "Protein Store Side Lock North",
-            x, shell.max.z, roadWall.bounds.min.z, thickness) ? 1 : 0;
-        return built;
-    }
-
-    private static bool CreateLock(Transform parent, Transform wallTemplate,
-        Transform copingTemplate, string name, float x, float minZ, float maxZ, float thickness)
-    {
-        float length = maxZ - minZ;
-        if (length < 0.2f)
-        {
-            return false;
-        }
-
-        float centerZ = (minZ + maxZ) * 0.5f;
-        Bounds wallBounds = wallTemplate.GetComponent<Renderer>().bounds;
-        Bounds copingBounds = copingTemplate.GetComponent<Renderer>().bounds;
-        GameObject wall = Object.Instantiate(wallTemplate.gameObject, parent);
-        wall.name = name + " Low Wall";
-        wall.transform.position = new Vector3(x, wallBounds.center.y, centerZ);
-        wall.transform.localScale = new Vector3(thickness, wallBounds.size.y, length);
-        GameObject coping = Object.Instantiate(copingTemplate.gameObject, parent);
-        coping.name = name + " Coping";
-        coping.transform.position = new Vector3(x, copingBounds.center.y, centerZ);
-        coping.transform.localScale = new Vector3(thickness, copingBounds.size.y, length);
-
-        GameObject collision = new GameObject(name + " Collision");
-        collision.transform.SetParent(parent, true);
-        collision.transform.position = new Vector3(x,
-            wallBounds.min.y + GymOutdoorBuilder.SharedFenceCollisionHeight * 0.5f, centerZ);
-        BoxCollider collider = collision.AddComponent<BoxCollider>();
-        collider.size = new Vector3(thickness, GymOutdoorBuilder.SharedFenceCollisionHeight, length);
-        return true;
     }
 
     private static List<Wall> CollectWalls(Transform root)
@@ -422,21 +363,5 @@ public static class GymOutdoorFenceFinisher
         Vector3 forward = transform.forward;
         return Mathf.Abs(forward.y) < 0.01f &&
             (Mathf.Abs(forward.x) < 0.01f || Mathf.Abs(forward.z) < 0.01f);
-    }
-
-    private static Transform FindChild(Transform root, string name)
-    {
-        Transform[] nodes = root.GetComponentsInChildren<Transform>(true);
-        for (int i = 0; i < nodes.Length; i++)
-        {
-            if (nodes[i].name == name) return nodes[i];
-        }
-        return null;
-    }
-
-    private static Collider FindCollider(Transform root, string name)
-    {
-        Transform node = FindChild(root, name);
-        return node != null ? node.GetComponent<Collider>() : null;
     }
 }

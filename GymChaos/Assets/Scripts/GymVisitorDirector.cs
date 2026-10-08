@@ -25,6 +25,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
         public bool workoutInProgress;
         public bool destinationChoiceMade;
         public bool lockerVisitScheduled;
+        public bool bagPickupStarted;
         public bool storeVisitScheduled;
         public bool destinationVisitInProgress;
         public bool suspendedForCombat;
@@ -62,6 +63,8 @@ public sealed class GymVisitorDirector : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float maximumWorkoutDelay = 0.13f;
     // Retained for scene and prefab compatibility; locker selection is cohort-based.
     [SerializeField, Range(0f, 1f)] private float lockerVisitChance = 0.34f;
+    // Chance that an arriving member leaves a gym bag on a locker bench.
+    [SerializeField, Range(0f, 1f)] private float memberBagChance = 0.75f;
     [SerializeField, Range(0f, 1f)] private float proteinStoreVisitChance = 0.08f;
     [SerializeField, Min(20f)] private float minimumReturnCooldownSeconds = 45f;
     [SerializeField, Min(30f)] private float maximumReturnCooldownSeconds = 80f;
@@ -990,7 +993,18 @@ public bool BeginDepartureForVerification(
         record.visitInProgress = false;
         record.workoutInProgress = false;
         ChooseDestinationVisit(record);
+        TryLeaveMemberBag(record);
         record.observedWorkoutVersion = record.agent.CompletedWorkoutVersion;
+    }
+
+    private void TryLeaveMemberBag(VisitorRecord record)
+    {
+        record.bagPickupStarted = false;
+        if (record.fighter == null || random.NextDouble() >= memberBagChance)
+        {
+            return;
+        }
+        GymBackRoomBuilder.TryPlaceMemberBag(record.fighter.Identity);
     }
 
     private void Update()
@@ -1065,6 +1079,7 @@ public bool BeginDepartureForVerification(
                     record.leaveAfter = Time.time +
                         RandomRange(minimumVisitSeconds, maximumVisitSeconds);
                     ChooseDestinationVisit(record);
+                    TryLeaveMemberBag(record);
                     Debug.Log(
                         $"GYMCHAOS_VISITOR_ENTERED_CONFIRMED enemy={record.fighter.Identity} " +
                         $"visit={record.visitsToday}",
@@ -1224,6 +1239,19 @@ public bool BeginDepartureForVerification(
                 {
                     EnsureThreeVisitors();
                     insideCount = ActiveVisitorCount;
+                }
+
+                // A member with a bag on the locker bench first walks to the
+                // locker room for it (the bag disappears when collected).
+                if (!departureDrainMode && !record.bagPickupStarted &&
+                    (insideCount > 2 || record.queuedForcedDeparture) &&
+                    GymBackRoomBuilder.HasMemberBag(record.fighter.Identity))
+                {
+                    record.bagPickupStarted = true;
+                    record.lockerVisitScheduled = true;
+                    Debug.Log(
+                        $"GYMCHAOS_LOCKER_MEMBER_BAG_PICKUP enemy={record.fighter.Identity}", this);
+                    continue;
                 }
 
                 if ((insideCount > 2 || record.queuedForcedDeparture) &&

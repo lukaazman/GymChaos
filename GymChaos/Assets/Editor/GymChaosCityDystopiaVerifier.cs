@@ -169,7 +169,10 @@ public static class GymChaosCityDystopiaVerifier
             HasChild(cityRoot.transform, "City Dystopia Corner NW") &&
             HasChild(cityRoot.transform, "City Dystopia Corner NE");
         bool cityHasGeometry = cityRootExists &&
-            cityRoot.GetComponentsInChildren<MeshRenderer>(true).Length >= 8 * 14 + 4;
+            // 14 GLB materials per placement plus the four ground infills,
+            // minus the dropped window-frame squares.
+            cityRoot.GetComponentsInChildren<MeshRenderer>(true).Length >= 8 * 14 + 4 -
+                RuntimeGlbSceneLoader.SkippedTowerWindowFramePartsForVerification;
         bool cityGroundInfill = cityRootExists &&
             HasChild(cityRoot.transform, "City Dystopia Ground North") &&
             HasChild(cityRoot.transform, "City Dystopia Ground South") &&
@@ -698,6 +701,16 @@ public static class GymChaosCityDystopiaVerifier
             return false;
         }
         Debug.Log("GYMCHAOS_TOWER_WINDOWS_ONLY_OK");
+        // The authored frame squares drew small dark tiles over the shader
+        // window panes; they must be dropped at load.
+        if (RuntimeGlbSceneLoader.SkippedTowerWindowFramePartsForVerification <= 0)
+        {
+            Debug.LogError("GYMCHAOS_TOWER_FRAME_SQUARES_FAILED skipped=0");
+            return false;
+        }
+        Debug.Log(
+            "GYMCHAOS_TOWER_FRAME_SQUARES_REMOVED_OK skipped=" +
+            RuntimeGlbSceneLoader.SkippedTowerWindowFramePartsForVerification);
         Color? tint = null;
         foreach (Material material in chrome)
         {

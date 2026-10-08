@@ -257,7 +257,10 @@ public static class GymChaosDavieBusVerifier
         Vector3 turn = GymOutdoorBuilder.VehicleRoadTurnPoint;
         // Main road runs along x (centre line z = turn.z); the side road runs
         // north along x = turn.x.
-        if (heading.x > 0.9f && position.x < turn.x - 6f)
+        // The U-turn ends by straightening into the south lane; judge the
+        // lane once the bus is back alongside its stop.
+        if (heading.x > 0.9f && position.x < turn.x - 6f &&
+            position.x > GymRoadsideBusStop.DavieBusCenterPoint.x)
         {
             if (position.z > turn.z - 0.3f)
             {

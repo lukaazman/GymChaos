@@ -637,6 +637,21 @@ public static class GymBackRoomBuilder
         return false;
     }
 
+    public static bool HasLockerSlot(BodybuilderIdentity identity)
+    {
+        for (int index = 0; index < lockerSlotReserved.Length; index++)
+        {
+            if (lockerSlotReserved[index] && lockerSlotOwners[index] == identity)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static bool IsBagVisitor(BodybuilderIdentity identity) =>
+        activeBagVisitors.Contains(identity);
+
     public static void ReleaseLockerSlot(BodybuilderIdentity identity)
     {
         for (int index = 0; index < lockerSlotReserved.Length; index++)
@@ -720,6 +735,42 @@ public static class GymBackRoomBuilder
         Debug.Log($"GYMCHAOS_LOCKER_BAGS_VISIBLE identity={identity} left={visibleBagCounts[0]} right={visibleBagCounts[1]} owners={activeBagVisitors.Count}");
     }
 
+    // Members leave their gym bag on a locker-room bench (one per bench, so
+    // at most two) and collect it before they go home.
+    public const int MaxMemberBags = 2;
+
+    public static bool TryPlaceMemberBag(BodybuilderIdentity identity)
+    {
+        if (bagOwnerBench.ContainsKey(identity))
+        {
+            return true;
+        }
+        if (bagOwnerBench.Count >= MaxMemberBags)
+        {
+            return false;
+        }
+        for (int bench = 0; bench < visibleBagCounts.Length; bench++)
+        {
+            if (visibleBagCounts[bench] != 0) continue;
+            activeBagVisitors.Add(identity);
+            bagOwnerBench.Add(identity, bench);
+            visibleBagCounts[bench] = 1;
+            visibleBagStartIndices[bench] = Random.Range(0, 2);
+            RefreshBenchBagVisibility(0);
+            RefreshBenchBagVisibility(1);
+            Debug.Log(
+                $"GYMCHAOS_LOCKER_MEMBER_BAG_PLACED identity={identity} bench={bench} " +
+                $"bags={bagOwnerBench.Count}");
+            return true;
+        }
+        return false;
+    }
+
+    public static bool HasMemberBag(BodybuilderIdentity identity) =>
+        bagOwnerBench.ContainsKey(identity);
+
+    public static int MemberBagCount => bagOwnerBench.Count;
+
     public static void HideBenchBagsForVisitor(BodybuilderIdentity identity)
     {
         if (!activeBagVisitors.Remove(identity))
@@ -732,7 +783,12 @@ public static class GymBackRoomBuilder
             bagOwnerBench.Remove(identity);
             visibleBagCounts[bench] = 0;
             RefreshBenchBagVisibility(bench);
+            Debug.Log($"GYMCHAOS_LOCKER_MEMBER_BAG_TAKEN identity={identity} bench={bench}");
         }
+        // Other owners' bags stay; the visibility gate needs a refresh once
+        // the last owner is gone.
+        RefreshBenchBagVisibility(0);
+        RefreshBenchBagVisibility(1);
     }
 
     public static void HideBenchBags()

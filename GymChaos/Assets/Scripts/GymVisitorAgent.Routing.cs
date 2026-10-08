@@ -136,20 +136,22 @@ public sealed partial class GymVisitorAgent
 		//IL_00e5: Unknown result type (might be due to invalid IL or missing references)
 		float y = (((UnityEngine.Object)(object)fighter != (UnityEngine.Object)null) ? ((Component)fighter).transform.position.y : roomTarget.y);
 		Vector3 approach = GymOutdoorBuilder.ProteinStoreVisitApproachPoint;
-		Vector3 front = GymOutdoorBuilder.ProteinStoreFrontClearPoint;
+		Vector3 front = GymProteinStoreEnvironment.ReserveVisitSpot(this);
 		Vector3 gymPath = GymOutdoorBuilder.ProteinStoreGymPathClearPoint;
 		Vector3 exterior = (((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null) ? doorway.ExteriorPoint : gymPath);
+		Vector3 inside = GymProteinStoreEnvironment.StoreInsideDoorPoint;
 		approach.y = y;
 		front.y = y;
 		gymPath.y = y;
 		exterior.y = y;
-		// Straight through the fenced entry walkway: the old dog-leg through
-		// the yard south of the shop is closed off.
+		inside.y = y;
+		// Across the path, through the opening at its south end and the shop
+		// door, then on to the checkout counter (and the same way back).
 		if (returning)
 		{
-			return (Vector3[])(object)new Vector3[3] { approach, gymPath, exterior };
+			return (Vector3[])(object)new Vector3[4] { inside, approach, gymPath, exterior };
 		}
-		return (Vector3[])(object)new Vector3[3] { gymPath, approach, front };
+		return (Vector3[])(object)new Vector3[4] { gymPath, approach, inside, front };
 	}
 	private bool MoveAlongAuthoredExteriorRoute(Vector3 target, float speed, Vector3? nextWaypoint = null, float requestedCompletionRadius = -1f)
 	{

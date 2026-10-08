@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -146,7 +147,10 @@ public static class GymChaosProteinStoreVerifier
                     GymProteinStoreEnvironment.RuntimeRoot == null) return;
                 modelContract = ValidateStoreModel(GymProteinStoreEnvironment.RuntimeRoot);
                 if (!modelContract) throw new InvalidOperationException(
-                    "Runtime shop GLB failed dual-fridge, drinks, transparency or lighting checks.");
+                    "Runtime shop GLB failed product, fridge, sign, counter or lighting checks.");
+                if (!ValidateStoreLayout(out string layoutDetails)) throw new InvalidOperationException(
+                    "Protein.com layout contract failed: " + layoutDetails);
+                Debug.Log("GYMCHAOS_PROTEIN_STORE_LAYOUT_OK " + layoutDetails);
                 fenceContract = GymProteinStoreEnvironment.HasConnectedEntryFenceContract(
                     out string fenceDetails);
                 if (!fenceContract) throw new InvalidOperationException(
@@ -250,7 +254,7 @@ public static class GymChaosProteinStoreVerifier
                     $"storeReached={storeReached} returnedToGym={returnedToGym} " +
                     $"fridgePanels={GymProteinStoreEnvironment.TransparentFridgePanelCount} " +
                     $"fenceContract={fenceContract} " +
-                    $"energyDrinks={energyDrinkCount} coldDrinks={coldDrinkCount} " +
+                    $"fridgeGlass={energyDrinkCount} drinks={coldDrinkCount} " +
                     $"runtimeLights={GymProteinStoreEnvironment.RuntimeInteriorLightCount} " +
                     $"markDialogue={dialogueContract} markTarget={dialogueTargetFound} " +
                     $"dialogueOpened={dialogueOpened} " +
@@ -382,30 +386,120 @@ public static class GymChaosProteinStoreVerifier
             UnityEngine.Object.DestroyImmediate(routeObstacle);
         routeObstacle = null;
     }
+    private static readonly string[] RequiredProductGroups =
+    {
+        "Products_Protein", "Products_Isolate", "Products_PreWorkout", "Products_Creatine",
+        "Products_Bars", "Products_Drinks", "Products_Vitamins", "Products_Snacks",
+        "Products_Amino", "Products_Checkout"
+    };
+    private static readonly string[] RequiredHeaders =
+    {
+        "PROTEIN", "PRE-WORKOUT", "CREATINE", "BARS", "DRINKS", "VITAMINS"
+    };
+
+    // v2 store: every product category on the shelves, six glass-door
+    // fridges, category headers, the storefront letters, the counter and the
+    // six runtime ceiling lights.
     private static bool ValidateStoreModel(Transform root)
     {
         energyDrinkCount = 0;
         coldDrinkCount = 0;
-        bool energyGlass = false;
-        bool coldGlass = false;
+        int fridgeGlass = 0;
+        HashSet<string> groups = new HashSet<string>();
+        HashSet<string> signs = new HashSet<string>();
+        bool letters = false;
+        bool counter = false;
         Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
         for (int index = 0; index < renderers.Length; index++)
         {
             Renderer renderer = renderers[index];
             if (renderer == null || renderer.sharedMaterial == null) continue;
             string name = renderer.name;
-            bool transparent = IsTransparent(renderer.sharedMaterial);
-            if (name.Contains("EnergyCooler_FrontRight_Glass")) energyGlass = transparent;
-            if (name.Contains("ColdFridge_Extra_Glass")) coldGlass = transparent;
-            if (name.StartsWith("EnergyDrinks_Cooler"))
-                energyDrinkCount++;
-            if (name.Contains("ColdFridge_RearLeft") &&
-                (name.Contains("Can") || name.Contains("Rtd"))) coldDrinkCount++;
+            if (name.StartsWith("Fridge_") && name.EndsWith("_Glass") &&
+                IsTransparent(renderer.sharedMaterial)) fridgeGlass++;
+            if (name.StartsWith("Products_")) groups.Add(name);
+            if (name.StartsWith("Sign_")) signs.Add(name.ToUpperInvariant());
+            letters |= name == "Sign_Letters";
+            counter |= name.StartsWith("Solid_Counter");
+            if (name == "Products_Drinks")
+            {
+                // Each 8-sided can or bottle has 8 side quads and two caps.
+                MeshFilter filter = renderer.GetComponent<MeshFilter>();
+                coldDrinkCount = filter != null && filter.sharedMesh != null
+                    ? filter.sharedMesh.vertexCount / 48 : 0;
+            }
         }
-        return energyGlass && coldGlass && energyDrinkCount >= 18 &&
-            coldDrinkCount >= 10 &&
-            GymProteinStoreEnvironment.TransparentFridgePanelCount >= 2 &&
-            GymProteinStoreEnvironment.RuntimeInteriorLightCount == 2;
+        List<string> missing = new List<string>();
+        foreach (string group in RequiredProductGroups)
+            if (!groups.Contains(group)) missing.Add(group);
+        foreach (string header in RequiredHeaders)
+        {
+            bool found = false;
+            foreach (string sign in signs) found |= sign.Contains(header);
+            if (!found) missing.Add("Sign:" + header);
+        }
+        energyDrinkCount = fridgeGlass;
+        bool ok = missing.Count == 0 && fridgeGlass >= 6 && letters && counter &&
+            coldDrinkCount >= 100 &&
+            GymProteinStoreEnvironment.TransparentFridgePanelCount >= 6 &&
+            GymProteinStoreEnvironment.RuntimeInteriorLightCount == 6;
+        Debug.Log(
+            $"GYMCHAOS_PROTEIN_STORE_MODEL_{(ok ? "OK" : "FAIL")} groups={groups.Count} " +
+            $"fridgeGlass={fridgeGlass} drinks~{coldDrinkCount} letters={letters} counter={counter} " +
+            $"lights={GymProteinStoreEnvironment.RuntimeInteriorLightCount} missing={string.Join(",", missing)}");
+        return ok;
+    }
+
+    // The building fills the walled site east of the gym path with a small
+    // gap to every low wall, and its door opening starts at the south end of
+    // the path without any wall reaching into it.
+    private static bool ValidateStoreLayout(out string details)
+    {
+        Bounds store = GymProteinStoreEnvironment.ShellFootprint;
+        Collider west = FindCollider("Outdoor Boundary - Path Outer Middle");
+        Collider south = FindCollider("Protein Store Perimeter South Collision");
+        Collider east = FindCollider("Protein Store Perimeter East Collision");
+        Collider north = FindCollider("Visitor Road South Wall Collision");
+        Collider pathEnd = FindCollider("Outdoor Boundary - Path South");
+        if (west == null || south == null || east == null || north == null)
+        {
+            details = $"walls west={west != null} south={south != null} east={east != null} north={north != null}";
+            return false;
+        }
+        float padWest = store.min.x - west.bounds.max.x;
+        float padEast = east.bounds.min.x - store.max.x;
+        float padSouth = store.min.z - south.bounds.max.z;
+        float padNorth = north.bounds.min.z - store.max.z;
+        float siteArea = (east.bounds.min.x - west.bounds.max.x) * (north.bounds.min.z - south.bounds.max.z);
+        float fill = store.size.x * store.size.z / Mathf.Max(1f, siteArea);
+        bool paddingOk = padWest >= 0.3f && padWest <= 1.2f && padEast >= 0.3f && padEast <= 1.2f &&
+            padSouth >= 0.3f && padSouth <= 1.2f && padNorth >= 0.3f && padNorth <= 1.2f;
+        float pathEndZ = pathEnd != null ? pathEnd.bounds.max.z : float.NaN;
+        bool openingAtPathEnd = pathEnd != null &&
+            Mathf.Abs(GymProteinStoreEnvironment.EntranceMinZ - pathEndZ) <= 0.05f;
+        // Nothing solid inside the opening between the path and the door.
+        float y = GymProteinStoreEnvironment.StoreEntrancePoint.y + 0.9f;
+        float z = (GymProteinStoreEnvironment.EntranceMinZ + GymProteinStoreEnvironment.EntranceMaxZ) * 0.5f;
+        Vector3 from = new Vector3(GymOutdoorBuilder.ProteinStoreGymPathClearPoint.x, y, z);
+        Vector3 to = new Vector3(GymProteinStoreEnvironment.StoreInsideDoorPoint.x, y, z);
+        Physics.SyncTransforms();
+        bool blocked = Physics.Linecast(from, to, out RaycastHit hit, ~0, QueryTriggerInteraction.Ignore) &&
+            hit.collider.GetComponentInParent<EnemyFighter>() == null &&
+            hit.collider.GetComponentInParent<PlayerMovement>() == null;
+        details = $"padWest={padWest:F2} padEast={padEast:F2} padSouth={padSouth:F2} padNorth={padNorth:F2} " +
+            $"fill={fill:F2} entrance={GymProteinStoreEnvironment.EntranceMinZ:F2}->{GymProteinStoreEnvironment.EntranceMaxZ:F2} " +
+            $"pathEnd={pathEndZ:F2} openingClear={!blocked}" +
+            (blocked ? $" blocker={hit.collider.name}" : "");
+        return paddingOk && fill >= 0.85f && openingAtPathEnd && !blocked;
+    }
+
+    private static Collider FindCollider(string name)
+    {
+        foreach (Collider collider in UnityEngine.Object.FindObjectsByType<Collider>(FindObjectsSortMode.None))
+        {
+            if (collider.name == name) return collider;
+        }
+        return null;
     }
 
     private static bool IsTransparent(Material material)

@@ -33,8 +33,6 @@ public static class GymOutdoorBuilder
     // short side pull-off, not a permanent third lane along the whole road.
     private const float VehicleRoadWidth = 8.2f * VehicleScale;
     private const float VehicleLaneOffset = VehicleRoadWidth * 0.25f;
-    // Shoulder south of the road that the Davie bus needs for its turnaround.
-    private const float BusTurnaroundShoulder = 3.5f * VehicleScale;
     private const float BoundaryHeight = 5.2f;
     public const float SharedFenceCollisionHeight = BoundaryHeight;
     public const float SharedFenceVisibleHeight = 1.35f;
@@ -113,6 +111,7 @@ public static class GymOutdoorBuilder
     public static float VehicleLaneOffsetForVerification => VehicleLaneOffset;
     public static float TrafficLaneCenterZ { get; private set; }
     public static float TrafficLaneOffset { get; private set; }
+    public static float TrafficSouthEdgeZ { get; private set; }
     public static Vector3 RoadCornerLinePoint { get; private set; }
     public static float GetParkingBayCenterX(int column)
     {
@@ -421,16 +420,14 @@ public static class GymOutdoorBuilder
             roadOcclusionStart.z + VehicleRoadHiddenContinuation);
         Vector3 roadCenter = new Vector3(
             (roadStartX + roadEndX) * 0.5f, roadSurfaceY, parkingCenterZ);
-        // The bus turnaround shoulder widens the visible carriageway south of
-        // the 8.2 m road (north edge to south wall). Centre the line and both
-        // traffic lanes on that full width so the two lanes are equal; the bus
-        // bay north of the road stays a bus-only pull-off.
-        float turnaroundShoulder = GymRoadsideBusStop.CanFitBay(
-            roadStartX, roadTurnX, roadWidth) ? BusTurnaroundShoulder : 0f;
-        float trafficCenterZ = parkingCenterZ - turnaroundShoulder * 0.5f;
-        float trafficLaneOffset = (roadWidth + turnaroundShoulder) * 0.25f;
+        // The centre line continues the parking aisle dashes in one straight
+        // line, and the two equal lanes span the whole 8.2 m road: the south
+        // fence stands on the road edge, with no extra shoulder or edge line.
+        float trafficCenterZ = parkingCenterZ;
+        float trafficLaneOffset = VehicleLaneOffset;
         TrafficLaneCenterZ = trafficCenterZ;
         TrafficLaneOffset = trafficLaneOffset;
+        TrafficSouthEdgeZ = parkingCenterZ - roadWidth * 0.5f;
         // The centre line runs from the parking mouth to the corner and
         // meets the north-road centre line there as one solid L, so both
         // lane pairs read as continuous through the turn.
@@ -571,11 +568,9 @@ public static class GymOutdoorBuilder
             $"GYMCHAOS_DAVIE_PEDESTRIAN_GATE_OK centerX={northGateCenterX:F2} " +
             $"openRoadEdge=1 wallZ={parkingCenterZ + roadWidth * 0.5f:F2} " +
             $"busGate={busStopSectionBuilt}");
-        // The bus turnaround uses the real south lane. Keep its edge fence
-        // one shoulder-width outside the 8.2 m road envelope so the full
-        // collider can arc through the lane without grazing the fence.
-        float roadSouthWallZ = parkingCenterZ - roadWidth * 0.5f -
-            (busStopSectionBuilt ? BusTurnaroundShoulder : 0f);
+        // The south fence face sits on the road edge: both lanes are equal
+        // and there is no extra paved strip beyond them.
+        float roadSouthWallZ = parkingCenterZ - roadWidth * 0.5f - SharedFenceWallThickness * 0.5f;
         GymProteinStoreEnvironment.CreateOuterRouteGroundAndFence(
             root.transform, floorY, outerPathX, pathSouthZ, roadSouthEdgeZ,
             roadSouthWallZ, asphalt, boundaryMaterial,
@@ -614,7 +609,7 @@ public static class GymOutdoorBuilder
             // The south wall sits 3.5 m outside the road for the bus
             // turnaround. The store route ground fills that shoulder only up
             // to the store's east edge; fill the rest to the corner wall.
-            float shoulderStartX = FindRendererMaxX(root.transform, "Protein Store Route North", corridorStartX);
+            float shoulderStartX = FindRendererMaxX(root.transform, "Protein Store Site Ground", corridorStartX);
             float shoulderEndX = outsideCornerX + 0.25f;
             float shoulderDepth = roadSouthEdgeZ - roadSouthWallZ;
             if (shoulderEndX - shoulderStartX > 0.2f && shoulderDepth > 0.2f)
@@ -734,12 +729,10 @@ public static class GymOutdoorBuilder
             roadSouthWallZ - visibleRoadWallHalfThickness;
         float vehicleOpeningMaxZ =
             parkingCenterZ + vehicleRoadOpeningHalfWidth;
-        const float storeOpeningWidth = 5.0f;
-        float storeOpeningCenterZ = pathSouthZ + 3.15f;
-        float storeOpeningMinZ =
-            storeOpeningCenterZ - storeOpeningWidth * 0.5f;
-        float storeOpeningMaxZ =
-            storeOpeningCenterZ + storeOpeningWidth * 0.5f;
+        // Same opening as the visible wall: the protein.com door at the
+        // path's south end.
+        GymProteinStoreEnvironment.GetPathOpening(
+            pathSouthZ, out float storeOpeningMinZ, out float storeOpeningMaxZ);
 
         float outerSouthLength = storeOpeningMinZ - pathSouthZ;
         if (outerSouthLength > 0.4f)
@@ -1767,10 +1760,9 @@ public static class GymOutdoorBuilder
             VehicleRoadWidth * 0.5f + visibleRoadWallHalfThickness;
         float outerSouthEndZ = roadSouthWallZ -
             SharedFenceWallThickness * 0.5f;
-        float storeOpeningCenterZ = pathSouthZ + 3.15f;
-        const float storeOpeningHalfWidth = 2.5f;
-        float storeOpeningMinZ = storeOpeningCenterZ - storeOpeningHalfWidth;
-        float storeOpeningMaxZ = storeOpeningCenterZ + storeOpeningHalfWidth;
+        // The protein.com door opens onto the south end of the path.
+        GymProteinStoreEnvironment.GetPathOpening(
+            pathSouthZ, out float storeOpeningMinZ, out float storeOpeningMaxZ);
         float outerSouthLength = storeOpeningMinZ - pathSouthZ;
         if (outerSouthLength > 0.4f)
         {
@@ -2159,13 +2151,25 @@ public static class GymOutdoorBuilder
             SegmentEndpoint(parkingNorthExtension, true, false),
             ref junctionCount,
             ref largestJunctionGap);
-        fenceJunctionsPassed &= ValidateFenceJunction(
-            pathSouth,
-            SegmentEndpoint(pathSouth, true, true),
-            pathOuterSouth,
-            SegmentEndpoint(pathOuterSouth, false, false),
-            ref junctionCount,
-            ref largestJunctionGap);
+        // The store door opening starts at the path's south end, so the
+        // path's south wall continues straight into the store entry wall.
+        Renderer storeEntrySouth = GetPrimaryRenderer(
+            root, "Protein Store Entry Fence South Low Wall");
+        fenceJunctionsPassed &= pathOuterSouth != null
+            ? ValidateFenceJunction(
+                pathSouth,
+                SegmentEndpoint(pathSouth, true, true),
+                pathOuterSouth,
+                SegmentEndpoint(pathOuterSouth, false, false),
+                ref junctionCount,
+                ref largestJunctionGap)
+            : ValidateFenceJunction(
+                pathSouth,
+                SegmentEndpoint(pathSouth, true, true),
+                storeEntrySouth,
+                SegmentEndpoint(storeEntrySouth, true, false),
+                ref junctionCount,
+                ref largestJunctionGap);
         fenceJunctionsPassed &= ValidateFenceJunction(
             eastPocketNorth,
             SegmentEndpoint(eastPocketNorth, true, true),

@@ -148,15 +148,14 @@ public static class GymChaosBugfixBatchVerifier
     }
 
     // Item 6: the only way into the shop is the entry walkway, and the
-    // strips beside the shop are closed.
+    // gaps between the shop and its site walls are closed.
     private static void CheckStoreFences()
     {
         if (!GymOutdoorBuilder.HasProteinStoreRoute) throw new InvalidOperationException("store not built");
         string[] required =
         {
-            "Protein Store Side Lock North Collision", "Protein Store Side Lock South Collision",
             "Protein Store Entry Fence South Collision", "Protein Store Entry Fence North Collision",
-            "Protein Store Facade Guard South", "Protein Store Facade Guard North"
+            "Protein Store Collision - Storefront South", "Protein Store Collision - Storefront North"
         };
         foreach (string name in required)
             if (GameObject.Find(name) == null) throw new InvalidOperationException($"{name} missing");
@@ -189,7 +188,7 @@ public static class GymChaosBugfixBatchVerifier
         Collider south = GameObject.Find("Protein Store Entry Fence South Collision").GetComponent<Collider>();
         Collider north = GameObject.Find("Protein Store Entry Fence North Collision").GetComponent<Collider>();
         int corridorSamples = 0;
-        for (float x = south.bounds.min.x + 0.2f; x < facadeX - 0.1f; x += 0.4f)
+        for (float x = south.bounds.min.x + 0.35f; x < facadeX - 0.1f; x += 0.2f)
         {
             Vector3 origin = new Vector3(x, walkway.y + 0.6f, walkway.z);
             if (!Physics.Raycast(origin, Vector3.back, out RaycastHit southHit, 4f, ~0, QueryTriggerInteraction.Ignore) ||
@@ -200,21 +199,22 @@ public static class GymChaosBugfixBatchVerifier
             corridorSamples++;
         }
 
-        // Walking east past the shop on either side hits a side lock.
-        Bounds shell = GymProteinStoreEnvironment.ShellFootprint;
-        Vector3[] strips =
+        // The gaps between the path wall and the storefront, north and south
+        // of the opening, are shut off from the walkway by the entry walls.
+        float gapX = (south.bounds.min.x + 0.25f + facadeX) * 0.5f;
+        (Vector3 start, Vector3 direction, Collider wall)[] gaps =
         {
-            new Vector3(facadeX - 1.2f, walkway.y + 0.6f, shell.max.z + 0.9f),
-            new Vector3(facadeX - 1.2f, walkway.y + 0.6f, shell.min.z - 1.8f)
+            (new Vector3(gapX, walkway.y + 0.6f, GymProteinStoreEnvironment.EntranceMaxZ + 2.5f), Vector3.back, north),
+            (new Vector3(gapX, walkway.y + 0.6f, GymProteinStoreEnvironment.EntranceMinZ - 2.5f), Vector3.forward, south)
         };
-        foreach (Vector3 start in strips)
+        foreach ((Vector3 start, Vector3 direction, Collider wall) in gaps)
         {
-            if (!Physics.Raycast(start, Vector3.right, out RaycastHit hit, 12f, ~0, QueryTriggerInteraction.Ignore) ||
-                !hit.collider.name.StartsWith("Protein Store Side Lock"))
+            if (!Physics.Raycast(start, direction, out RaycastHit hit, 3f, ~0, QueryTriggerInteraction.Ignore) ||
+                hit.collider != wall)
                 throw new InvalidOperationException(
-                    $"Strip beside the shop is open from {start} (hit={(hit.collider != null ? hit.collider.name : "none")})");
+                    $"Gap beside the shop is open from {start} (hit={(hit.collider != null ? hit.collider.name : "none")})");
         }
-        passed.Add($"storeFences road={roadSamples} corridor={corridorSamples} locks=2");
+        passed.Add($"storeFences road={roadSamples} corridor={corridorSamples} gaps=2");
         Debug.Log($"GYMCHAOS_STORE_FENCE_LOCK_OK roadSamples={roadSamples} corridorSamples={corridorSamples} " +
             $"facadeX={facadeX:F2} sideLocks={GymOutdoorFenceFinisher.StoreSideLocks}");
     }

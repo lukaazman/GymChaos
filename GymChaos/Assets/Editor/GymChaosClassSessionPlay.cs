@@ -49,6 +49,8 @@ public static class GymChaosClassSessionPlay
         // Crash safety: the same values also go to a git-ignored file.
         string backupPath = Path.Combine(Directory.GetParent(Application.dataPath).Parent.FullName,
             "Logs", "agent", "classes-playerprefs-backup.json");
+        // Lane mirrors start without a Logs/agent folder.
+        Directory.CreateDirectory(Path.GetDirectoryName(backupPath));
         File.WriteAllText(backupPath, PlayerPrefs.GetString(LegacyProgressionKey, string.Empty));
         PlayerPrefs.DeleteKey(LegacyProgressionKey);
         PlayerPrefs.DeleteKey(LegacyMigratedKey);
@@ -963,8 +965,8 @@ public static class GymChaosClassSessionPlay
             12f * healthRow.lossyScale.x,
             "HP / stamina / members column is not padded clear of the level box");
         Require(GymHud.SprintStateText(false, true).Length == 0 &&
-            GymHud.SprintStateText(true, true).Contains("EXHAUSTED"),
-            "Sprinting still shows a stamina popup");
+            GymHud.SprintStateText(true, true).Length == 0,
+            "The stamina bar still shows a sprint or exhaustion text");
         if (Player != null)
         {
             GymChaosUiCapture.Capture(Player.playerCamera, "hud-" + classId + ".png", hud.GetComponent<Canvas>());
@@ -1171,6 +1173,7 @@ public static class GymChaosClassSessionPlay
             string suffix = i == 0 ? string.Empty : "-" + width + "x" + height;
             string path = Path.Combine(Directory.GetParent(Application.dataPath).Parent.FullName,
                 "Logs", "agent", "classes-" + label + suffix + ".png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllBytes(path, image.EncodeToPNG());
             UnityEngine.Object.DestroyImmediate(image);
             target.Release();

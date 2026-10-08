@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -181,6 +182,9 @@ public sealed class SquatWorkoutController : MonoBehaviour
     public bool IsComplete => completed;
     public int Repetitions => repetitions;
     public Transform Traps => chest != null ? chest : hips;
+    internal Transform LeftHandBoneForVerification => leftHand;
+    internal Transform RightHandBoneForVerification => rightHand;
+    internal Transform NeckBoneForVerification => neck;
     public float CurrentMotion { get; private set; }
     public float CurrentHipDrop => currentHipDrop;
     public float CurrentKneeBend => currentKneeBend;
@@ -358,6 +362,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
         fighter.GetComponent<ExternalRiggedCharacterVisual>()?.RegroundAfterRootSnap();
         Physics.SyncTransforms();
         CaptureBasePose(fighter);
+        ResetAuthoredBarAndGrip();
         barTargetPosition = CalculateBarTargetPosition(fighter);
         if (!targetStation.TryBeginEnemySquat(fighter, Traps, barTargetPosition))
         {
@@ -385,6 +390,9 @@ public sealed class SquatWorkoutController : MonoBehaviour
         currentLeftSoleOffsetWorld = Vector3.zero;
         currentRightSoleOffsetWorld = Vector3.zero;
         authoredSquatTargetsCaptured = false;
+        authoredGroundCorrectionMeasured = false;
+        authoredGroundMeasureFrames = 0;
+        authoredGroundCorrection = 0f;
         return true;
     }
 
@@ -433,6 +441,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
         authoredSquatTargetsCaptured = false;
         hasPreviousLeftElbowPose = false;
         hasPreviousRightElbowPose = false;
+        ResetAuthoredBarAndGrip();
     }
 
     public void ConsumeCompletion()
@@ -561,13 +570,71 @@ public sealed class SquatWorkoutController : MonoBehaviour
             return;
         }
         float floorY = GetFloorY(owner);
-        float leftSigned = GetSoleAnchorWorld(leftFoot, baseLeftSoleAnchorLocal).y - floorY;
-        float rightSigned = GetSoleAnchorWorld(rightFoot, baseRightSoleAnchorLocal).y - floorY;
-        float correction = Mathf.Clamp(
-            -(leftSigned + rightSigned) * 0.5f,
-            -MaxAuthoredSquatGroundCorrection,
-            MaxAuthoredSquatGroundCorrection);
-        authoredAnimator.ApplyGroundedRootCorrection(up, correction);
+        // The bind-pose sole anchors misjudge the per-character rigs by about
+        // 13 cm (with the wrong sign), which lifted the squatting body about
+        // 6 cm off the floor. Measure the rendered skin once per set instead:
+        // the authored clip keeps both soles on one plane for the whole rep,
+        // so one root offset grounds it.
+        // The first frames of a set can still show the station-snap pose;
+        // measure once the authored clip drives the skin.
+        if (!authoredGroundCorrectionMeasured &&
+            ++authoredGroundMeasureFrames >= AuthoredGroundMeasureFrame)
+        {
+            authoredGroundCorrectionMeasured = true;
+            authoredGroundCorrection = TryMeasureRenderedSoleY(out float soleY)
+                ? Mathf.Clamp(floorY - soleY,
+                    -MaxAuthoredSquatGroundCorrection, MaxAuthoredSquatGroundCorrection)
+                : 0f;
+            Debug.Log(
+                $"GYMCHAOS_SQUAT_GROUND_MEASURED enemy={owner.Identity} " +
+                $"floor={floorY:0.000} correction={authoredGroundCorrection:0.000}", this);
+        }
+        authoredAnimator.ApplyGroundedRootCorrection(up, authoredGroundCorrection);
+    }
+
+    private const int AuthoredGroundMeasureFrame = 4;
+    private bool authoredGroundCorrectionMeasured;
+    private int authoredGroundMeasureFrames;
+    private float authoredGroundCorrection;
+    private static Mesh soleMeasureMesh;
+
+    private bool TryMeasureRenderedSoleY(out float soleY)
+    {
+        soleY = 0f;
+        SkinnedMeshRenderer body = null;
+        foreach (SkinnedMeshRenderer candidate in
+            owner.GetComponentsInChildren<SkinnedMeshRenderer>())
+        {
+            if (candidate.sharedMesh != null && (body == null ||
+                candidate.sharedMesh.vertexCount > body.sharedMesh.vertexCount))
+            {
+                body = candidate;
+            }
+        }
+        if (body == null)
+        {
+            return false;
+        }
+        if (soleMeasureMesh == null)
+        {
+            soleMeasureMesh = new Mesh { name = "Squat sole measure" };
+        }
+        // Unscaled bake: vertices relative to the renderer position/rotation.
+        body.BakeMesh(soleMeasureMesh, false);
+        Vector3[] vertices = soleMeasureMesh.vertices;
+        if (vertices.Length == 0)
+        {
+            return false;
+        }
+        Matrix4x4 toWorld = Matrix4x4.TRS(
+            body.transform.position, body.transform.rotation, Vector3.one);
+        float lowest = float.PositiveInfinity;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            lowest = Mathf.Min(lowest, toWorld.MultiplyPoint3x4(vertices[i]).y);
+        }
+        soleY = lowest;
+        return true;
     }
 
     private void ApplyRootOnlySquatFallback()
@@ -683,16 +750,18 @@ public sealed class SquatWorkoutController : MonoBehaviour
         currentRightFootRotationError = Quaternion.Angle(
             rightFoot.rotation, baseRightFootRotation);
 
-        Vector3 currentBarTarget = CalculateBarTargetPosition(owner);
+        // The bar rests on the rendered upper back (measured from the baked
+        // skin, so thick traps do not swallow it), and the hands close over
+        // it with an overhand grip. Both are layered onto the authored pose.
+        Vector3 currentBarTarget = GetAuthoredBarRestTarget(
+            CalculateBarTargetPosition(owner));
         station.SyncEnemySquatBarPose(owner, Traps, currentBarTarget);
         currentBarBodyFollowError = Vector3.Distance(
             station.EnemySquatBarCenter, currentBarTarget);
         currentBarDropFromStart = initialAttachedBarCenter.y -
             station.EnemySquatBarCenter.y;
+        ApplyAuthoredOverhandGrip(currentBarTarget);
 
-        // The scene bar is the only object layered onto the authored pose.
-        // It follows the current traps/neck target every sampled frame, while
-        // the authored hands remain exactly as exported in squat.fbx.
         if (!poseMetricLogged && CurrentMotion > 0.82f)
         {
             poseMetricLogged = true;
@@ -712,6 +781,569 @@ public sealed class SquatWorkoutController : MonoBehaviour
                 this);
         }
         return true;
+    }
+
+    // Authored squat: bar rest on the upper back and overhand grip ----------
+    // Wrists sit slightly behind the bar so the fingers wrap over its top.
+    private const float GripWristBackTilt = 0.35f;
+    private const float BarRestAboveShoulderJoints = 0.02f;
+    private const float BarRestMaxDeepPush = 0.08f;
+    // Skin farther than this from its own bone is hair or loose clothing
+    // (Goku's mane, hoods), not the back the bar rests on.
+    private const float BarSupportMaxBoneDistance = 0.30f;
+    private bool barRestCalibrated;
+    private bool barRestDeepCalibrated;
+    private Vector3 barRestLocal;
+    private Vector3 barRestDeepLocal;
+    private Mesh barRestBakeMesh;
+    private bool gripCalibrated;
+    private bool gripGeometryCached;
+    private bool gripWidthMeasured;
+    private float gripHalfWidth;
+    private Vector3 leftGripHollowLocal;
+    private Vector3 rightGripHollowLocal;
+    private Vector3 leftKnuckleAxisLocal;
+    private Vector3 rightKnuckleAxisLocal;
+    private Vector3 leftHandLengthLocal;
+    private Vector3 rightHandLengthLocal;
+    public float BarRestCorrection { get; private set; }
+    internal static bool BarRestDiagnostics;
+
+    private void OnDestroy()
+    {
+        if (barRestBakeMesh != null)
+        {
+            Destroy(barRestBakeMesh);
+            barRestBakeMesh = null;
+        }
+    }
+
+    private void ResetAuthoredBarAndGrip()
+    {
+        barRestCalibrated = false;
+        barRestDeepCalibrated = false;
+        barRestLocal = Vector3.zero;
+        // gripGeometryCached, the hollows and wrapFingers stay: they describe
+        // this fighter's hands, not the set. The grip width is re-measured.
+        gripCalibrated = false;
+        gripWidthMeasured = false;
+        BarRestCorrection = 0f;
+    }
+
+    // The bone-based target sits between the traps and neck bones; on thick
+    // scans that point is inside the body. Slide the bar straight back (or
+    // forward, if it floats) until the shaft just touches the rendered skin.
+    // Measured once standing and once at the bottom of the first rep, then
+    // kept in chest space so it rides with the torso through every rep.
+    private Vector3 GetAuthoredBarRestTarget(Vector3 boneTarget)
+    {
+        Transform anchor = Traps;
+        if (anchor == null || owner == null)
+        {
+            return boneTarget;
+        }
+        if (!barRestCalibrated)
+        {
+            // Rest the shaft on the upper back across the rear delts, at the
+            // height of the shoulder joints: below the traps and well clear
+            // of the neck.
+            if (leftUpperArm != null && rightUpperArm != null)
+            {
+                Vector3 torsoUp = GetTorsoUp(GetBarAxis());
+                Vector3 joints = (leftUpperArm.position + rightUpperArm.position) * 0.5f;
+                boneTarget += torsoUp * (Vector3.Dot(joints - boneTarget, torsoUp) + BarRestAboveShoulderJoints);
+            }
+            barRestLocal = anchor.InverseTransformPoint(SolveBarRest(boneTarget));
+            barRestCalibrated = true;
+            BarRestCorrection = Vector3.Distance(
+                boneTarget, anchor.TransformPoint(barRestLocal));
+        }
+        else if (!barRestDeepCalibrated && CurrentMotion > 0.85f)
+        {
+            // The upper back changes shape a little between standing and the
+            // bottom; measure the bottom too and blend by squat depth. A jump
+            // larger than BarRestMaxDeepPush is hair or cloth, not the back.
+            Vector3 current = anchor.TransformPoint(barRestLocal);
+            Vector3 backDirection = GetBarBackDirection();
+            float push = Mathf.Clamp(Vector3.Dot(SolveBarRest(current) - current, backDirection),
+                -BarRestMaxDeepPush, BarRestMaxDeepPush);
+            barRestDeepLocal = anchor.InverseTransformPoint(current + backDirection * push);
+            barRestDeepCalibrated = true;
+        }
+        if (barRestDeepCalibrated)
+        {
+            return anchor.TransformPoint(Vector3.Lerp(
+                barRestLocal, barRestDeepLocal, Mathf.Clamp01(CurrentMotion / 0.9f)));
+        }
+        return anchor.TransformPoint(barRestLocal);
+    }
+
+    // Goku's mane is skinned to the shoulders and hangs over the upper back;
+    // the bar goes through it onto the body, so his support skin must stay
+    // closer to its bones than the other rigs' thick traps.
+    internal float GetBarSupportMaxBoneDistance()
+    {
+        return owner != null && owner.Identity == BodybuilderIdentity.Goku
+            ? 0.17f
+            : BarSupportMaxBoneDistance;
+    }
+
+    private Vector3 GetBarAxis()
+    {
+        Vector3 axis = Vector3.ProjectOnPlane(owner.transform.right, Vector3.up);
+        return axis.sqrMagnitude > 0.0001f ? axis.normalized : Vector3.right;
+    }
+
+    private Vector3 GetTorsoUp(Vector3 axis)
+    {
+        Vector3 up = neck != null && chest != null
+            ? neck.position - chest.position
+            : owner.transform.up;
+        up = Vector3.ProjectOnPlane(up, axis);
+        return up.sqrMagnitude > 0.0001f ? up.normalized : Vector3.up;
+    }
+
+    private Vector3 GetBarBackDirection()
+    {
+        Vector3 axis = GetBarAxis();
+        Vector3 back = Vector3.Cross(axis, GetTorsoUp(axis));
+        if (Vector3.Dot(back, owner.transform.forward) > 0f)
+        {
+            back = -back;
+        }
+        return back.normalized;
+    }
+
+    private Vector3 SolveBarRest(Vector3 start)
+    {
+        Vector3 axis = GetBarAxis();
+        Vector3 torsoUp = GetTorsoUp(axis);
+        Vector3 back = GetBarBackDirection();
+        float radius = (station != null ? station.SquatBarShaftRadius : 0.02f) + 0.002f;
+        float span = leftUpperArm != null && rightUpperArm != null
+            ? Mathf.Abs(Vector3.Dot(leftUpperArm.position - rightUpperArm.position, axis)) * 0.5f * 0.85f
+            : 0.18f;
+        float maxBoneDistance = GetBarSupportMaxBoneDistance();
+        float required = float.NegativeInfinity;
+        string blocker = "none";
+        barRestBakeMesh ??= new Mesh();
+        SkinnedMeshRenderer[] skins = owner.GetComponentsInChildren<SkinnedMeshRenderer>();
+        for (int s = 0; s < skins.Length; s++)
+        {
+            SkinnedMeshRenderer skin = skins[s];
+            if (skin == null || !skin.enabled || skin.sharedMesh == null)
+            {
+                continue;
+            }
+            Vector3[] vertices = GymSkinSampler.BakeWorld(skin, barRestBakeMesh);
+            int[] dominant = GymSkinSampler.GetDominantBones(skin.sharedMesh);
+            Transform[] bones = skin.bones;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                // Arms reach the bar from outside; the head and hair sit in
+                // front of it. Only the neck, shoulders and back support it.
+                int bone = i < dominant.Length ? dominant[i] : -1;
+                Transform boneTransform = bone >= 0 && bone < bones.Length ? bones[bone] : null;
+                if (GymSkinSampler.IsInChain(boneTransform, leftUpperArm) ||
+                    GymSkinSampler.IsInChain(boneTransform, rightUpperArm) ||
+                    (neck != null && boneTransform != null && boneTransform != neck &&
+                        boneTransform.IsChildOf(neck)))
+                {
+                    continue;
+                }
+                Vector3 offset = vertices[i] - start;
+                if (Mathf.Abs(Vector3.Dot(offset, axis)) > span ||
+                    (boneTransform != null &&
+                        (vertices[i] - boneTransform.position).sqrMagnitude >
+                        maxBoneDistance * maxBoneDistance))
+                {
+                    continue;
+                }
+                float h = Vector3.Dot(offset, torsoUp);
+                if (Mathf.Abs(h) >= radius)
+                {
+                    continue;
+                }
+                float f = Vector3.Dot(offset, back);
+                float need = f + Mathf.Sqrt(radius * radius - h * h);
+                if (need > required)
+                {
+                    required = need;
+                    if (BarRestDiagnostics)
+                    {
+                        blocker = $"{skin.name}/{(boneTransform != null ? boneTransform.name : "none")}";
+                    }
+                }
+            }
+        }
+        if (BarRestDiagnostics)
+        {
+            Debug.Log($"GYMCHAOS_SQUAT_BAR_REST enemy={owner.Identity} push={required:0.000} " +
+                $"blocker={blocker} motion={CurrentMotion:0.00}");
+        }
+        return float.IsNegativeInfinity(required) ? start : start + back * required;
+    }
+
+    // Overhand grip: the hollow of each hand's curled fingers goes onto the
+    // bar axis, knuckles along the bar, wrist below and behind it. The arm
+    // reaches it with a two-bone solve that keeps the authored elbow plane;
+    // fingers keep their authored curl.
+    private void ApplyAuthoredOverhandGrip(Vector3 barCenter)
+    {
+        if (owner == null || !HasValidArmRig)
+        {
+            return;
+        }
+        Vector3 axis = GetBarAxis();
+        if (!gripCalibrated && gripGeometryCached)
+        {
+            gripCalibrated = true;
+        }
+        else if (!gripCalibrated)
+        {
+            gripCalibrated =
+                CaptureHandGrip(leftHand, leftIndexTip, leftMiddleTip, leftRingTip, leftPinkyTip,
+                    out leftGripHollowLocal, out leftKnuckleAxisLocal, out leftHandLengthLocal) &&
+                CaptureHandGrip(rightHand, rightIndexTip, rightMiddleTip, rightRingTip, rightPinkyTip,
+                    out rightGripHollowLocal, out rightKnuckleAxisLocal, out rightHandLengthLocal);
+            if (!gripCalibrated)
+            {
+                return;
+            }
+            float barRadius = station != null ? station.SquatBarShaftRadius : 0.02f;
+            // Goku's fists are skinned rigidly to the hand bone: the fingers
+            // cannot open around the bar, so the shaft runs through the
+            // middle of the closed fist (fingers overlapping the bar).
+            UsesRigidFistGrip = owner.Identity == BodybuilderIdentity.Goku;
+            if (UsesRigidFistGrip)
+            {
+                CaptureRigidFistCentres();
+            }
+            else
+            {
+                RefineGripHollows(barRadius);
+                // Hands whose authored fingers do not enclose a bar-sized
+                // hollow are wrapped around the shaft every frame.
+                wrapFingers = LeftGripClearance < 0f || RightGripClearance < 0f ||
+                    LeftGripClearance > barRadius * 1.6f || RightGripClearance > barRadius * 1.6f;
+            }
+            // The hand shape is the rig's own; measure it once per fighter.
+            gripGeometryCached = true;
+        }
+        if (gripHalfWidth <= 0f || !gripWidthMeasured)
+        {
+            // Keep each rig's own authored grip width, but outside the
+            // shoulders and inside the bar sleeves.
+            float authored = (
+                Mathf.Abs(Vector3.Dot(leftHand.TransformPoint(leftGripHollowLocal) - barCenter, axis)) +
+                Mathf.Abs(Vector3.Dot(rightHand.TransformPoint(rightGripHollowLocal) - barCenter, axis))) * 0.5f;
+            float shoulderHalf = Mathf.Abs(
+                Vector3.Dot(leftUpperArm.position - rightUpperArm.position, axis)) * 0.5f;
+            gripHalfWidth = Mathf.Clamp(authored, shoulderHalf + 0.05f, shoulderHalf + 0.32f);
+            gripWidthMeasured = true;
+        }
+
+        Vector3 torsoUp = GetTorsoUp(axis);
+        Vector3 handUp = (torsoUp + GetBarBackDirection() * GripWristBackTilt).normalized;
+        float leftSign = Vector3.Dot(leftUpperArm.position - barCenter, axis) < 0f ? -1f : 1f;
+        SolveHandOnBar(leftUpperArm, leftForearm, leftHand,
+            barCenter + axis * (leftSign * gripHalfWidth), axis * leftSign, handUp,
+            leftGripHollowLocal, leftKnuckleAxisLocal, leftHandLengthLocal);
+        SolveHandOnBar(rightUpperArm, rightForearm, rightHand,
+            barCenter - axis * (leftSign * gripHalfWidth), -axis * leftSign, handUp,
+            rightGripHollowLocal, rightKnuckleAxisLocal, rightHandLengthLocal);
+        if (wrapFingers)
+        {
+            float wrapRadius = (station != null ? station.SquatBarShaftRadius : 0.02f) + FingerHalfThickness;
+            WrapFingerAroundBar(leftIndexTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(leftMiddleTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(leftRingTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(leftPinkyTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightIndexTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightMiddleTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightRingTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightPinkyTip, barCenter, axis, wrapRadius);
+        }
+    }
+
+    // An open authored hand (Goku) has no hollow to close over the bar.
+    // Bend each phalanx about the bar axis so its far end lies on the shaft
+    // surface: the fingers then wrap over the bar instead of floating.
+    private const float FingerHalfThickness = 0.011f;
+    private bool wrapFingers;
+    public bool UsesRigidFistGrip { get; private set; }
+
+    private static void WrapFingerAroundBar(
+        Transform tip, Vector3 barCenter, Vector3 barAxis, float wrapRadius)
+    {
+        if (tip == null || tip.parent == null || tip.parent.parent == null)
+        {
+            return;
+        }
+        for (int j = 0; j < 3; j++)
+        {
+            Transform joint = j == 0 ? tip.parent.parent : j == 1 ? tip.parent : tip;
+            Vector3 pivot = joint.position;
+            Vector3 end = j == 0 ? tip.parent.position
+                : j == 1 ? tip.position
+                : tip.position + (tip.position - tip.parent.position) * 0.8f;
+            float bestAngle = 0f;
+            float bestScore = float.PositiveInfinity;
+            for (float angle = -100f; angle <= 100.1f; angle += 2.5f)
+            {
+                Vector3 rotated = pivot + Quaternion.AngleAxis(angle, barAxis) * (end - pivot);
+                Vector3 offset = rotated - barCenter;
+                float distance = (offset - barAxis * Vector3.Dot(offset, barAxis)).magnitude;
+                float score = Mathf.Abs(distance - wrapRadius) + Mathf.Abs(angle) * 0.00004f;
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestAngle = angle;
+                }
+            }
+            joint.rotation = Quaternion.AngleAxis(bestAngle, barAxis) * joint.rotation;
+        }
+    }
+
+    public float LeftGripClearance { get; private set; }
+    public float RightGripClearance { get; private set; }
+
+    // A rigid fist: its finger bones do not match the sculpted fingers, so
+    // take the middle of the distal (finger) part of the hand skin instead.
+    private void CaptureRigidFistCentres()
+    {
+        CollectHandSkin(out List<Vector3> left, out List<Vector3> right);
+        leftGripHollowLocal = FistCentreLocal(leftHand, left, leftGripHollowLocal);
+        rightGripHollowLocal = FistCentreLocal(rightHand, right, rightGripHollowLocal);
+    }
+
+    private static Vector3 FistCentreLocal(Transform hand, List<Vector3> skin, Vector3 fallback)
+    {
+        if (hand == null || skin.Count < 30)
+        {
+            return fallback;
+        }
+        Vector3 centroid = Vector3.zero;
+        for (int i = 0; i < skin.Count; i++) centroid += skin[i];
+        centroid /= skin.Count;
+        Vector3 length = centroid - hand.position;
+        if (length.sqrMagnitude < 1e-6f)
+        {
+            return fallback;
+        }
+        length.Normalize();
+        float reach = 0f;
+        for (int i = 0; i < skin.Count; i++)
+            reach = Mathf.Max(reach, Vector3.Dot(skin[i] - hand.position, length));
+        Vector3 sum = Vector3.zero;
+        int count = 0;
+        for (int i = 0; i < skin.Count; i++)
+        {
+            if (Vector3.Dot(skin[i] - hand.position, length) < reach * 0.45f) continue;
+            sum += skin[i];
+            count++;
+        }
+        return count > 0 ? hand.InverseTransformPoint(sum / count) : fallback;
+    }
+
+    private void CollectHandSkin(out List<Vector3> left, out List<Vector3> right)
+    {
+        barRestBakeMesh ??= new Mesh();
+        left = new List<Vector3>(2048);
+        right = new List<Vector3>(2048);
+        SkinnedMeshRenderer[] skins = owner.GetComponentsInChildren<SkinnedMeshRenderer>();
+        for (int s = 0; s < skins.Length; s++)
+        {
+            SkinnedMeshRenderer skin = skins[s];
+            if (skin == null || !skin.enabled || skin.sharedMesh == null)
+            {
+                continue;
+            }
+            Vector3[] vertices = GymSkinSampler.BakeWorld(skin, barRestBakeMesh);
+            int[] dominant = GymSkinSampler.GetDominantBones(skin.sharedMesh);
+            Transform[] bones = skin.bones;
+            for (int i = 0; i < vertices.Length && i < dominant.Length; i++)
+            {
+                int bone = dominant[i];
+                Transform t = bone >= 0 && bone < bones.Length ? bones[bone] : null;
+                if (GymSkinSampler.IsInChain(t, leftHand))
+                {
+                    left.Add(vertices[i]);
+                }
+                else if (GymSkinSampler.IsInChain(t, rightHand))
+                {
+                    right.Add(vertices[i]);
+                }
+            }
+        }
+    }
+
+    // The joint average only approximates the hollow of the curled fingers.
+    // Search the hand's cross-section (perpendicular to the knuckle line) on
+    // the baked skin for the point the fingers wrap around: enclosed by hand
+    // skin on most sides and about one bar radius from the nearest skin.
+    private void RefineGripHollows(float barRadius)
+    {
+        CollectHandSkin(out List<Vector3> left, out List<Vector3> right);
+        LeftGripClearance = RefineGripHollow(leftHand, left, leftKnuckleAxisLocal,
+            barRadius, ref leftGripHollowLocal);
+        RightGripClearance = RefineGripHollow(rightHand, right, rightKnuckleAxisLocal,
+            barRadius, ref rightGripHollowLocal);
+    }
+
+    private static float RefineGripHollow(
+        Transform hand, List<Vector3> skin, Vector3 knuckleAxisLocal, float barRadius,
+        ref Vector3 hollowLocal)
+    {
+        if (hand == null || skin.Count < 30)
+        {
+            return -1f;
+        }
+        Vector3 axis = hand.TransformDirection(knuckleAxisLocal).normalized;
+        Vector3 origin = hand.TransformPoint(hollowLocal);
+        Vector3 e1 = Vector3.Cross(axis, Mathf.Abs(Vector3.Dot(axis, Vector3.up)) < 0.9f
+            ? Vector3.up : Vector3.forward).normalized;
+        Vector3 e2 = Vector3.Cross(axis, e1).normalized;
+        // Only the finger span along the knuckle line can hold the bar.
+        float minAlong = float.PositiveInfinity;
+        float maxAlong = float.NegativeInfinity;
+        Vector2[] points = new Vector2[skin.Count];
+        float[] along = new float[skin.Count];
+        for (int i = 0; i < skin.Count; i++)
+        {
+            Vector3 offset = skin[i] - origin;
+            along[i] = Vector3.Dot(offset, axis);
+            points[i] = new Vector2(Vector3.Dot(offset, e1), Vector3.Dot(offset, e2));
+            minAlong = Mathf.Min(minAlong, along[i]);
+            maxAlong = Mathf.Max(maxAlong, along[i]);
+        }
+        float centre = (minAlong + maxAlong) * 0.5f;
+        float halfSpan = (maxAlong - minAlong) * 0.3f;
+        const int Sectors = 12;
+        float bestScore = float.PositiveInfinity;
+        Vector2 best = Vector2.zero;
+        float bestClearance = -1f;
+        bool[] covered = new bool[Sectors];
+        for (float x = -0.05f; x <= 0.0501f; x += 0.004f)
+        {
+            for (float y = -0.05f; y <= 0.0501f; y += 0.004f)
+            {
+                Vector2 c = new Vector2(x, y);
+                float clearance = float.PositiveInfinity;
+                for (int i = 0; i < points.Length; i++)
+                {
+                    if (Mathf.Abs(along[i] - centre) > halfSpan) continue;
+                    clearance = Mathf.Min(clearance, (points[i] - c).magnitude);
+                }
+                if (float.IsPositiveInfinity(clearance)) continue;
+                System.Array.Clear(covered, 0, Sectors);
+                float reach = clearance + 0.03f;
+                for (int i = 0; i < points.Length; i++)
+                {
+                    if (Mathf.Abs(along[i] - centre) > halfSpan) continue;
+                    Vector2 d = points[i] - c;
+                    if (d.sqrMagnitude > reach * reach) continue;
+                    int sector = (int)((Mathf.Atan2(d.y, d.x) + Mathf.PI) / (2f * Mathf.PI) * Sectors) % Sectors;
+                    covered[sector] = true;
+                }
+                int coverage = 0;
+                for (int k = 0; k < Sectors; k++) if (covered[k]) coverage++;
+                // Wrapped on at least half the circle, snug around the bar.
+                float score = Mathf.Abs(clearance - barRadius) * 100f +
+                    Mathf.Max(0, 7 - coverage) * 10f + c.magnitude * 5f;
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    best = c;
+                    bestClearance = clearance;
+                }
+            }
+        }
+        Vector3 world = origin + e1 * best.x + e2 * best.y + axis * centre;
+        hollowLocal = hand.InverseTransformPoint(world);
+        return bestClearance;
+    }
+
+    private static bool CaptureHandGrip(
+        Transform hand, Transform indexTip, Transform middleTip, Transform ringTip,
+        Transform pinkyTip, out Vector3 hollowLocal, out Vector3 knuckleAxisLocal,
+        out Vector3 lengthLocal)
+    {
+        hollowLocal = Vector3.zero;
+        knuckleAxisLocal = Vector3.right;
+        lengthLocal = Vector3.forward;
+        Transform[] tips = { indexTip, middleTip, ringTip, pinkyTip };
+        Vector3 sum = Vector3.zero;
+        Vector3 knuckles = Vector3.zero;
+        for (int i = 0; i < tips.Length; i++)
+        {
+            Transform tip = tips[i];
+            if (hand == null || tip == null || tip.parent == null || tip.parent.parent == null)
+            {
+                return false;
+            }
+            Transform middle = tip.parent;
+            Transform root = middle.parent;
+            // The last phalanx has no child; extend it by most of the middle
+            // phalanx length to reach the fingertip.
+            Vector3 end = tip.position + (tip.position - middle.position) * 0.8f;
+            sum += root.position + middle.position + tip.position + end;
+            knuckles += root.position;
+        }
+        // The joints of a curled finger enclose the hollow the bar sits in.
+        hollowLocal = hand.InverseTransformPoint(sum / 16f);
+        Vector3 knuckleCentre = knuckles / 4f;
+        Vector3 across = tips[3].parent.parent.position - tips[0].parent.parent.position;
+        knuckleAxisLocal = hand.InverseTransformDirection(across).normalized;
+        lengthLocal = hand.InverseTransformDirection(knuckleCentre - hand.position).normalized;
+        return across.sqrMagnitude > 1e-6f && lengthLocal.sqrMagnitude > 0.5f;
+    }
+
+    private static void SolveHandOnBar(
+        Transform upper, Transform fore, Transform hand, Vector3 grip, Vector3 outward,
+        Vector3 handUp, Vector3 hollowLocal, Vector3 knuckleAxisLocal, Vector3 lengthLocal)
+    {
+        // Index-to-pinky runs outward along the bar, wrist-to-knuckles points
+        // up and slightly back: for a real hand that puts the palm on the back
+        // of the bar and the fingers over its top.
+        Quaternion localFrame = Quaternion.LookRotation(lengthLocal, knuckleAxisLocal);
+        Quaternion worldFrame = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(handUp, outward), outward);
+        Quaternion handRotation = worldFrame * Quaternion.Inverse(localFrame);
+        Vector3 hollowOffset = handRotation * Vector3.Scale(hollowLocal, hand.lossyScale);
+        SolveTwoBoneArm(upper, fore, hand, grip - hollowOffset);
+        hand.rotation = handRotation;
+    }
+
+    private static void SolveTwoBoneArm(
+        Transform upper, Transform fore, Transform end, Vector3 target)
+    {
+        Vector3 a = upper.position;
+        Vector3 b = fore.position;
+        Vector3 c = end.position;
+        float l1 = Vector3.Distance(a, b);
+        float l2 = Vector3.Distance(b, c);
+        Vector3 toTarget = target - a;
+        if (l1 < 0.001f || l2 < 0.001f || toTarget.sqrMagnitude < 1e-6f)
+        {
+            return;
+        }
+        float d = Mathf.Clamp(toTarget.magnitude, Mathf.Abs(l1 - l2) + 0.001f, l1 + l2 - 0.001f);
+        Vector3 dir = toTarget.normalized;
+        // Bend in the authored elbow plane so every rig keeps its own arm.
+        Vector3 pole = Vector3.ProjectOnPlane(b - a, dir);
+        if (pole.sqrMagnitude < 1e-6f)
+        {
+            pole = Vector3.ProjectOnPlane(Vector3.down, dir);
+        }
+        pole.Normalize();
+        float cosA = Mathf.Clamp((l1 * l1 + d * d - l2 * l2) / (2f * l1 * d), -1f, 1f);
+        float sinA = Mathf.Sqrt(Mathf.Max(0f, 1f - cosA * cosA));
+        Vector3 elbow = a + dir * (l1 * cosA) + pole * (l1 * sinA);
+        upper.rotation = Quaternion.FromToRotation(b - a, elbow - a) * upper.rotation;
+        Vector3 b2 = fore.position;
+        Vector3 c2 = end.position;
+        fore.rotation = Quaternion.FromToRotation(c2 - b2, a + dir * d - b2) * fore.rotation;
     }
 
     private float GetFloorY(EnemyFighter fighter)
