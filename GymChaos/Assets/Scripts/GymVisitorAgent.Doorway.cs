@@ -780,7 +780,7 @@ public sealed partial class GymVisitorAgent
 		//IL_005b: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004a: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		GameObject desk = GameObject.Find("Reception desk");
+		GameObject desk = GymSceneLookup.Find("Reception desk");
 		Renderer[] renderers = (((UnityEngine.Object)(object)desk != (UnityEngine.Object)null) ? desk.GetComponentsInChildren<Renderer>(true) : null);
 		bool found = false;
 		bounds = default(Bounds);

@@ -407,11 +407,21 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
             filterMode = FilterMode.Bilinear,
             wrapMode = TextureWrapMode.Repeat
         };
-        if (texture.LoadImage(imageBytes, false))
+        bool decoded;
+        using (GymProfiling.GlbTextureDecode.Auto())
         {
-            material.SetTexture("_BaseMap", texture);
-            material.SetTexture("_MainTex", texture);
-            material.mainTexture = texture;
+            decoded = texture.LoadImage(imageBytes, false);
+        }
+        if (decoded)
+        {
+            // Scanned wearables share the tiny-island atlas of the character
+            // scans; keep their lower mips from mixing islands.
+            Texture sampled = relativePath.Contains("wearables/")
+                ? ScanTextureMips.Limit(texture, ownsSource: true)
+                : texture;
+            material.SetTexture("_BaseMap", sampled);
+            material.SetTexture("_MainTex", sampled);
+            material.mainTexture = sampled;
         }
         else
         {

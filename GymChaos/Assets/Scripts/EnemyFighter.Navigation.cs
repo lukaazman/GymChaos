@@ -523,7 +523,7 @@ public partial class EnemyFighter
     }
     private bool TryGetRoomBounds(out Bounds bounds)
     {
-        GameObject floor = GameObject.Find("Rubber Floor");
+        GameObject floor = GymSceneLookup.Find("Rubber Floor");
         Renderer renderer = floor != null ? floor.GetComponent<Renderer>() : null;
         if (renderer == null)
         {

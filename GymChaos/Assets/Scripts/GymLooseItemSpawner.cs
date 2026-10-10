@@ -1658,30 +1658,30 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         List<ItemSpec> specs = new List<ItemSpec>
         {
             CreateSpec(
-                "yoga_roll_rolledout.glb", "Rolled-out yoga mat", WeightType.YogaMat,
+                "yoga_roll_rolledout_lod.glb", "Rolled-out yoga mat", WeightType.YogaMat,
                 1.28f, rolledOutPosition, new Vector3(0f, 0f, 0f), floorY, false, ColliderKind.Box),
             CreateSpec(
-                "yoga_roll_halfrolled.glb", "Half-rolled yoga mat", WeightType.YogaMat,
+                "yoga_roll_halfrolled_lod.glb", "Half-rolled yoga mat", WeightType.YogaMat,
                 1.22f, halfRolledPosition, new Vector3(0f, 0f, 0f), floorY, false, ColliderKind.Box),
             CreateSpec(
-                "foam_roller.glb", "Foam roller", WeightType.FoamRoller,
+                "foam_roller_lod.glb", "Foam roller", WeightType.FoamRoller,
                 FoamRollerScale, foamPosition, new Vector3(0f, 90f, 0f), yogaSurfaceY, true, ColliderKind.CapsuleX,
                 true),
             CreateSpec(
-                "step_platform.glb", "Step platform", WeightType.StepPlatform,
+                "step_platform_lod.glb", "Step platform", WeightType.StepPlatform,
                 1.22f, stepPosition, new Vector3(0f, 0f, 0f), floorY, true, ColliderKind.Box),
             CreateSpec(
-                "red_ball.glb", "Red medicine ball", WeightType.Ball,
+                "red_ball_lod.glb", "Red medicine ball", WeightType.Ball,
                 MedicineBallScale, redBallPosition, Vector3.zero, floorY, true, ColliderKind.Sphere),
             CreateSpec(
-                "blue_ball.glb", "Blue medicine ball", WeightType.Ball,
+                "blue_ball_lod.glb", "Blue medicine ball", WeightType.Ball,
                 MedicineBallScale, blueBallPosition, Vector3.zero, floorY, true, ColliderKind.Sphere),
             CreateSpec(
-                "paper_towel.glb", "Paper towel roll", WeightType.PaperTowel,
+                "paper_towel_lod.glb", "Paper towel roll", WeightType.PaperTowel,
                 0.44f, shelf.Center + new Vector3(-0.54f, 0f, 0f), Vector3.zero,
                 shelf.TopY, true, ColliderKind.CapsuleY),
             CreateSpec(
-                "paper_towel.glb", "Paper towel roll (right)", WeightType.PaperTowel,
+                "paper_towel_lod.glb", "Paper towel roll (right)", WeightType.PaperTowel,
                 0.44f, shelf.Center + new Vector3(0.54f, 0f, 0f), Vector3.zero,
                 shelf.TopY, true, ColliderKind.CapsuleY)
         };
@@ -2521,7 +2521,12 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             filterMode = FilterMode.Bilinear,
             wrapMode = TextureWrapMode.Repeat
         };
-        if (texture.LoadImage(imageBytes, false))
+        bool decoded;
+        using (GymProfiling.GlbTextureDecode.Auto())
+        {
+            decoded = texture.LoadImage(imageBytes, false);
+        }
+        if (decoded)
         {
             material.SetTexture("_BaseMap", texture);
             material.SetTexture("_MainTex", texture);

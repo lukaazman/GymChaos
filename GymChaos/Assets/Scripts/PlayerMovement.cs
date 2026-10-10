@@ -593,13 +593,21 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
         // F triggers exactly the action its prompt shows.
-        ContextAction fPressed = ReadExerciseStartPressed()
-            ? ResolveContextAction(ContextKey.F, false, false, false, false, nearbyRadio != null,
-                nearbyExerciseStation != null)
-            : ContextAction.None;
+        ContextAction fPressed = ContextAction.None;
+        if (ReadExerciseStartPressed())
+        {
+            ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
+            fPressed = ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
+                nearbyExerciseStation != null, callFixerOnF);
+        }
         if (fPressed == ContextAction.Radio)
         {
             nearbyRadio.ToggleMusic();
+            return;
+        }
+        if (fPressed == ContextAction.CallFixer)
+        {
+            CallFixerFromReception();
             return;
         }
 
@@ -2212,7 +2220,7 @@ public class PlayerMovement : MonoBehaviour
     }
 
     public enum ContextKey { E, F }
-    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup }
+    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer }
 
     // Priority per key, highest first. Talking to a person beats a workout,
     // which beats picking something up; only one action is shown per key.
@@ -2220,15 +2228,16 @@ public class PlayerMovement : MonoBehaviour
     private static readonly ContextAction[] ContextPriority =
     {
         ContextAction.Talk, ContextAction.BackRoom, ContextAction.Workout,
-        ContextAction.Radio, ContextAction.Drop, ContextAction.Pickup
+        ContextAction.CallFixer, ContextAction.Radio, ContextAction.Drop, ContextAction.Pickup
     };
 
     public static ContextKey GetContextActionKey(ContextAction action) =>
-        action == ContextAction.Workout || action == ContextAction.Radio ? ContextKey.F : ContextKey.E;
+        action == ContextAction.Workout || action == ContextAction.Radio ||
+        action == ContextAction.CallFixer ? ContextKey.F : ContextKey.E;
 
     /// <summary>The single action shown on (and triggered by) a key.</summary>
     public static ContextAction ResolveContextAction(ContextKey key, bool talk, bool backRoom,
-        bool drop, bool pickup, bool radio, bool workout)
+        bool drop, bool pickup, bool radio, bool workout, bool callFixer = false)
     {
         for (int i = 0; i < ContextPriority.Length; i++)
         {
@@ -2237,6 +2246,7 @@ public class PlayerMovement : MonoBehaviour
                 action == ContextAction.BackRoom ? backRoom :
                 action == ContextAction.Workout ? workout :
                 action == ContextAction.Radio ? radio :
+                action == ContextAction.CallFixer ? callFixer :
                 action == ContextAction.Drop ? drop : pickup;
             if (available && GetContextActionKey(action) == key)
             {
@@ -2246,11 +2256,90 @@ public class PlayerMovement : MonoBehaviour
         return ContextAction.None;
     }
 
+    // The radio sits on the reception counter, so the receptionist's call and
+    // the radio share F there; the one the camera faces more gets the key.
+    private void ResolveReceptionFKey(out bool radio, out bool callFixer)
+    {
+        radio = nearbyRadio != null;
+        callFixer = nearbyTalkTarget != null &&
+            nearbyTalkTarget.Identity == BodybuilderIdentity.Manwithsuit1 &&
+            GymFixerDirector.Instance != null && !GymFixerDirector.Instance.IsVisitActive;
+        if (!radio || !callFixer)
+        {
+            return;
+        }
+        Transform view = playerCamera != null ? playerCamera.transform : transform;
+        float radioAngle = Vector3.Angle(view.forward, nearbyRadio.transform.position - view.position);
+        float receptionAngle = Vector3.Angle(view.forward,
+            nearbyTalkTarget.transform.position + Vector3.up * 1.4f - view.position);
+        radio = radioAngle < receptionAngle;
+        callFixer = !radio;
+    }
+
+#if UNITY_EDITOR
+    internal void LookAtForVerification(Vector3 point)
+    {
+        Vector3 flat = Vector3.ProjectOnPlane(point - transform.position, Vector3.up);
+        if (flat.sqrMagnitude > 0.0001f)
+        {
+            transform.rotation = Quaternion.LookRotation(flat.normalized, Vector3.up);
+        }
+        if (playerCamera != null)
+        {
+            Vector3 fromCamera = point - playerCamera.transform.position;
+            float horizontal = Vector3.ProjectOnPlane(fromCamera, Vector3.up).magnitude;
+            rotationX = Mathf.Clamp(-Mathf.Atan2(fromCamera.y, horizontal) * Mathf.Rad2Deg,
+                -lookXLimit, lookXLimit);
+            playerCamera.transform.localRotation = Quaternion.Euler(rotationX, 0f, 0f);
+        }
+    }
+
+    /// <summary>The action F triggers right now, with fresh nearby targets.</summary>
+    internal ContextAction ResolveFActionForVerification()
+    {
+        nearbyExerciseStation = GymExerciseStation.FindClosest(transform.position, 3.15f);
+        nearbyRadio = GymRadio.FindClosest(transform.position, 3.1f);
+        nearbyTalkTarget = GymDialogueDirector.Active != null
+            ? GymDialogueDirector.Active.FindNearbyTalkTarget(this)
+            : null;
+        ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
+        return ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
+            nearbyExerciseStation != null, callFixerOnF);
+    }
+
+    internal GymRadio NearbyRadioForVerification => nearbyRadio;
+    internal EnemyFighter NearbyTalkTargetForVerification => nearbyTalkTarget;
+    internal void PressCallFixerForVerification() => CallFixerFromReception();
+#endif
+
+    private void CallFixerFromReception()
+    {
+        GymFixerDirector director = GymFixerDirector.Instance;
+        if (director == null)
+        {
+            return;
+        }
+        GymAudio.Play2D(GymSoundEffect.UiClick, 0.5f);
+        switch (director.Summon())
+        {
+            case GymFixerDirector.SummonResult.NothingBroken:
+                GymHud.Active?.PushNotice("Nothing is broken. " + GymFixerAgent.DisplayName + " stays home", 3f, 1);
+                break;
+            case GymFixerDirector.SummonResult.AlreadyHere:
+                GymHud.Active?.PushNotice(GymFixerAgent.DisplayName + " is already here", 3f, 1);
+                break;
+            case GymFixerDirector.SummonResult.Unavailable:
+                GymHud.Active?.PushNotice(GymFixerAgent.DisplayName + " cannot come right now", 3f, 1);
+                break;
+        }
+    }
+
     private string GetContextActionMessage(ContextAction action)
     {
         switch (action)
         {
             case ContextAction.Talk: return "TALK TO MEMBER";
+            case ContextAction.CallFixer: return "CALL " + GymFixerAgent.DisplayName.ToUpperInvariant();
             case ContextAction.BackRoom:
                 return string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
                     ? "INTERACT"
@@ -2275,10 +2364,11 @@ public class PlayerMovement : MonoBehaviour
             nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
             nearbyPickup != null, nearbyRadio != null,
             nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer);
+        ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
         ContextAction fAction = ResolveContextAction(ContextKey.F,
             nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
-            nearbyPickup != null, nearbyRadio != null,
-            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer);
+            nearbyPickup != null, radioOnF,
+            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF);
         bool hasE = eAction != ContextAction.None;
         bool hasF = fAction != ContextAction.None;
         string eMessage = hasE ? GetContextActionMessage(eAction) : string.Empty;

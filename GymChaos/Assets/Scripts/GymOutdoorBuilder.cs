@@ -1085,7 +1085,7 @@ public static class GymOutdoorBuilder
                 // point +Z toward the parking centre and leave the pole/body
                 // facing the perimeter fence.
                 RuntimeGlbModelLoader.Request(
-                    "BodyBuilders/outside/streetlight.glb",
+                    "BodyBuilders/outside/streetlight_lod.glb",
                     parent,
                     new Vector3(x, parkingGroundY, z),
                     orientation,

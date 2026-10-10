@@ -10,13 +10,13 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private const float DriveSpeed = NormalDriveSpeed;
     private const float CloudSpeed = 48f;
     private const string DavieBusAsset =
-        "BodyBuilders/vehicles/Davie_Bus.glb";
+        "BodyBuilders/vehicles/Davie_Bus_lod.glb";
     // Every vehicle is 1.25x its original size (GymOutdoorBuilder.VehicleScale);
     // distances measured in vehicle lengths scale with it.
     private const float S = GymOutdoorBuilder.VehicleScale;
     private const float DavieBusTargetLength = 10.4f * S;
     private const string ArnoldHummerAsset =
-        "BodyBuilders/vehicles/Arnold_Hummer.glb";
+        "BodyBuilders/vehicles/Arnold_Hummer_lod.glb";
     private const float ArnoldHummerTargetLength = 4.0f * S;
     private const float CloudTargetLength = 2.8f * S;
     private const float TurnSpeed = 5f;
@@ -1859,7 +1859,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void ApplyOriginalMaterial(GameObject visual)
     {
-        Texture2D texture = Resources.Load<Texture2D>(GetTextureResource(identity));
+        Texture texture = ScanTextureMips.Limit(Resources.Load<Texture2D>(GetTextureResource(identity)));
         if (texture == null)
         {
             Debug.LogError($"GYMCHAOS_VEHICLE_TEXTURE_MISSING identity={identity}", this);
@@ -1888,6 +1888,10 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 source[i] = material;
             }
             renderers[r].sharedMaterials = source;
+            if (renderers[r].TryGetComponent(out MeshFilter filter) && filter.sharedMesh != null)
+            {
+                filter.sharedMesh = ScanUvInset.Apply(filter.sharedMesh, texture);
+            }
         }
     }
 

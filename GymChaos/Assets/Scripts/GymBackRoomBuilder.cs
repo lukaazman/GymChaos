@@ -13,11 +13,11 @@ public static class GymBackRoomBuilder
     private const float BackDepth = 13f;
     private const float BackHeight = 4.4f;
     private const float DoorWidth = 2.8f;
-    private const string WoodenBenchAsset = "BodyBuilders/items/wooden_bench.glb";
-    private const string ToiletAsset = "BodyBuilders/items/toilet.glb";
-    private const string SinkAsset = "BodyBuilders/items/sink.glb";
-    private const string ColorBagAsset = "BodyBuilders/items/color_bag.glb";
-    private const string BlackBagAsset = "BodyBuilders/items/black_bag.glb";
+    private const string WoodenBenchAsset = "BodyBuilders/items/wooden_bench_lod.glb";
+    private const string ToiletAsset = "BodyBuilders/items/toilet_lod.glb";
+    private const string SinkAsset = "BodyBuilders/items/sink_lod.glb";
+    private const string ColorBagAsset = "BodyBuilders/items/color_bag_lod.glb";
+    private const string BlackBagAsset = "BodyBuilders/items/black_bag_lod.glb";
     // The authored bench is imported at 2.7x and its runtime top is about
     // 0.51 m above the room floor.  Bags are settled onto that surface, not
     // onto an assumed standing-height marker.

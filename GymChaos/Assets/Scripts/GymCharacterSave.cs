@@ -22,6 +22,9 @@ public sealed class GymCharacterSave
     public float worldTime = 0.24f;
     public int worldDay;
     public string[] brokenPanels = Array.Empty<string>();
+    // Jolly Dog: when each still-broken panel was first seen (day + time01).
+    public string[] fixerIssueIds = Array.Empty<string>();
+    public float[] fixerIssueSince = Array.Empty<float>();
 
     public static GymCharacterSave New(string confirmedClass)
     {

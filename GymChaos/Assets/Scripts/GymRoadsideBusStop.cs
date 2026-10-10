@@ -9,7 +9,7 @@ public static class GymRoadsideBusStop
 {
     private const string RootName = "Davie Roadside Bus Stop (Runtime)";
     private const string DavieBusAsset =
-        "BodyBuilders/vehicles/Davie_Bus.glb";
+        "BodyBuilders/vehicles/Davie_Bus_lod.glb";
     // Vehicle-relative distances follow the shared 1.25x vehicle scale.
     private const float S = GymOutdoorBuilder.VehicleScale;
     private const float DavieBusTargetLength = 10.4f * S;

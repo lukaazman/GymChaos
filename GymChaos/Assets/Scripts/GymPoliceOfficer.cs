@@ -91,6 +91,15 @@ public sealed class GymPoliceOfficer : MonoBehaviour
             return;
         }
 
+        if (fighter.IsReturningToPoliceCar)
+        {
+            // Revived by Jolly Dog: the intervention is over, gun holstered.
+            armed = false;
+            drawingStarted = false;
+            weapon?.SetVisible(false);
+            return;
+        }
+
         if (weapon != null && weapon.IsReady && !weapon.IsVisible)
         {
             // This is sampled every frame before armed state is entered, so

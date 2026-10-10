@@ -12,7 +12,7 @@ using System.Runtime.InteropServices;
 
 public sealed class GymRadio : MonoBehaviour
 {
-    private const string RadioRelativePath = "BodyBuilders/sound/radio.glb";
+    private const string RadioRelativePath = "BodyBuilders/sound/radio_lod.glb";
     private const string PlaylistRelativePath = "BodyBuilders/sound/playlist";
     private const float TargetRadioWidth = 0.58f;
     private const float DeskEdgeInset = 0.08f;
@@ -1411,7 +1411,12 @@ public sealed class GymRadio : MonoBehaviour
             filterMode = FilterMode.Bilinear,
             wrapMode = TextureWrapMode.Repeat
         };
-        if (!texture.LoadImage(imageBytes, true))
+        bool decoded;
+        using (GymProfiling.GlbTextureDecode.Auto())
+        {
+            decoded = texture.LoadImage(imageBytes, true);
+        }
+        if (!decoded)
         {
             Destroy(texture);
             return null;

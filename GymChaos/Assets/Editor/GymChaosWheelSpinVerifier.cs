@@ -15,7 +15,7 @@ using UnityEngine;
 public static class GymChaosWheelSpinVerifier
 {
     private const string RequestedKey = "GymChaos.WheelSpinVerificationRequested";
-    private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar.glb";
+    private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar_lod.glb";
     private static readonly BodybuilderIdentity[] Identities =
     {
         BodybuilderIdentity.Cbum, BodybuilderIdentity.Zyzz, BodybuilderIdentity.JayCutler,

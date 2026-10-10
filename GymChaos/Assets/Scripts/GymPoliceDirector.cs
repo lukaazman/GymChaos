@@ -11,7 +11,7 @@ using UnityEngine.Networking;
 /// </summary>
 public sealed class GymPoliceDirector : MonoBehaviour
 {
-    private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar.glb";
+    private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar_lod.glb";
     private const float PoliceCarTargetLength = 4.0f * GymOutdoorBuilder.VehicleScale;
     private const float PoliceCarSpeed =
         GymVisitorVehicle.NormalDriveSpeed * 3f;
@@ -304,6 +304,97 @@ public sealed class GymPoliceDirector : MonoBehaviour
             $"GYMCHAOS_POLICE_CAR_PARKED_RETAINED " +
             $"position={policeCar?.transform.position} target={policeCarStopPoint}",
             this);
+    }
+
+    // Jolly Dog revived the officer: he walks back to the parked car, gets in,
+    // and the car leaves along its arrival route without the siren.
+    private bool calmDeparture;
+    private Transform officerReturnPoint;
+    public bool IsCalmDepartureActiveForVerification => calmDeparture;
+
+    public static bool BeginOfficerReturn(EnemyFighter officer)
+    {
+        if (instance == null || officer == null || !officer.IsPolice ||
+            officer.Identity != BodybuilderIdentity.Policeman)
+        {
+            return false;
+        }
+        return instance.StartOfficerReturn(officer);
+    }
+
+    private bool StartOfficerReturn(EnemyFighter officer)
+    {
+        if (policeCar == null || calmDeparture)
+        {
+            // No car left to return to: the officer simply leaves the scene.
+            Debug.Log("GYMCHAOS_POLICE_RETURN_WITHOUT_CAR", officer);
+            Destroy(officer.gameObject);
+            if (policeCar == null)
+            {
+                dispatchActive = false;
+            }
+            return true;
+        }
+
+        if (officerReturnPoint == null)
+        {
+            officerReturnPoint = new GameObject("Police Officer Return Point").transform;
+            officerReturnPoint.SetParent(transform, false);
+        }
+        Vector3 point = officerExitPosition;
+        if (point == Vector3.zero)
+        {
+            Vector3 carForward = Vector3.ProjectOnPlane(
+                policeCar.transform.forward, Vector3.up).normalized;
+            point = policeCar.transform.position -
+                carForward * (PoliceCarTargetLength * 0.5f + 1.1f);
+        }
+        point.y = floorY;
+        officerReturnPoint.position = point;
+        officer.BeginPoliceReturnToCar(officerReturnPoint, HandleOfficerReachedCar);
+        Debug.Log($"GYMCHAOS_POLICE_OFFICER_RETURNING point={point}", officer);
+        StartCoroutine(OfficerReturnWatchdog(officer));
+        return true;
+    }
+
+    private IEnumerator OfficerReturnWatchdog(EnemyFighter officer)
+    {
+        yield return new WaitForSeconds(90f);
+        if (officer != null && officer.IsReturningToPoliceCar && !calmDeparture)
+        {
+            // Blocked on the way: he gets in anyway so the car can leave.
+            Debug.LogWarning("GYMCHAOS_POLICE_OFFICER_RETURN_TIMEOUT", officer);
+            HandleOfficerReachedCar(officer);
+        }
+    }
+
+    private void HandleOfficerReachedCar(EnemyFighter officer)
+    {
+        if (officer != null)
+        {
+            Destroy(officer.gameObject);
+        }
+        if (LastOfficer == officer)
+        {
+            LastOfficer = null;
+        }
+        Debug.Log("GYMCHAOS_POLICE_OFFICER_BOARDED", this);
+        StartCoroutine(DriveAwayCalmly());
+    }
+
+    private IEnumerator DriveAwayCalmly()
+    {
+        calmDeparture = true;
+        dispatchPhase = DispatchPhase.Driving;
+        yield return new WaitForSeconds(0.8f);
+        if (policeCar != null && currentRoute != null && currentRoute.Length >= 2)
+        {
+            yield return MoveCarAlongRoute(currentRoute, false);
+        }
+        Debug.Log("GYMCHAOS_POLICE_CAR_DEPARTED", this);
+        CleanupDispatch();
+        dispatchPhase = DispatchPhase.Idle;
+        calmDeparture = false;
     }
 
     private void HandlePoliceCarLoaded(GameObject root)
@@ -743,6 +834,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private void StartPoliceSirenPlayback()
     {
         if (!policeCarMoving ||
+            calmDeparture ||
             policeSiren == null ||
             policeSirenClip == null)
         {

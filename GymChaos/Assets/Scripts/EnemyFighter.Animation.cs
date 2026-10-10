@@ -26,12 +26,63 @@ public partial class EnemyFighter
             return;
         }
 
-        float planarSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
+        // Callers write body.linearVelocity just before this, so it is the
+        // commanded speed. A body pushing into a wall keeps that speed while
+        // the solver holds it in place, which played the walk cycle on the
+        // spot. Cap it by the displacement physics actually produced.
+        float planarSpeed = Mathf.Min(
+            Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude,
+            SampleMeasuredPlanarSpeed());
         bool moving = planarSpeed > AnimationMovementSpeedThreshold;
         float normalizedSpeed = moving
             ? planarSpeed / Mathf.Max(0.01f, referenceSpeed)
             : 0f;
         SetAnimatedMovement(moving, Mathf.Clamp01(normalizedSpeed));
+    }
+    private const float MeasuredSpeedSmoothingSeconds = 0.15f;
+    private const float MeasuredSpeedMaxSampleGap = 0.25f;
+    // Below this real pace the body is held or sliding along a wall; a walk
+    // cycle there reads as walking on the spot.
+    private const float MeasuredWalkMinSpeed = 0.3f;
+    private Vector3 measuredSpeedSamplePosition;
+    private float measuredSpeedSampleTime = -1f;
+    private Vector3 measuredPlanarVelocity;
+    private bool measuredPlanarVelocityValid;
+
+    // Smoothed planar speed from the body's position between physics steps.
+    // The velocity vector is smoothed, so contact jitter back and forth
+    // cancels out. Returns +infinity without a recent sample (first call, or
+    // after another mode moved the body), so the commanded speed is used.
+    private float SampleMeasuredPlanarSpeed()
+    {
+        Vector3 position = body.position;
+        float now = Time.fixedTime;
+        float elapsed = now - measuredSpeedSampleTime;
+        if (measuredSpeedSampleTime < 0f || elapsed > MeasuredSpeedMaxSampleGap || elapsed < 0f)
+        {
+            measuredSpeedSamplePosition = position;
+            measuredSpeedSampleTime = now;
+            measuredPlanarVelocityValid = false;
+            return float.PositiveInfinity;
+        }
+        if (elapsed > 0f)
+        {
+            Vector3 instant = Vector3.ProjectOnPlane(
+                position - measuredSpeedSamplePosition, Vector3.up) / elapsed;
+            measuredSpeedSamplePosition = position;
+            measuredSpeedSampleTime = now;
+            measuredPlanarVelocity = measuredPlanarVelocityValid
+                ? Vector3.Lerp(measuredPlanarVelocity, instant,
+                    1f - Mathf.Exp(-elapsed / MeasuredSpeedSmoothingSeconds))
+                : instant;
+            measuredPlanarVelocityValid = true;
+        }
+        if (!measuredPlanarVelocityValid)
+        {
+            return float.PositiveInfinity;
+        }
+        float speed = measuredPlanarVelocity.magnitude;
+        return speed < MeasuredWalkMinSpeed ? 0f : speed;
     }
     private bool IsGoku()
     {

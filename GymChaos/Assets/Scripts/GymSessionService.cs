@@ -206,6 +206,11 @@ public sealed class GymSessionService : MonoBehaviour
                 GymTimeOfDay.Instance.RestoreSession(active.worldTime, active.worldDay);
             }
             RestoreBrokenPanels(active.brokenPanels);
+            GymFixerDirector.RestoreIssueAges(active.fixerIssueIds, active.fixerIssueSince);
+        }
+        else
+        {
+            GymFixerDirector.RestoreIssueAges(null, null);
         }
 
         if (player != null)
@@ -490,6 +495,7 @@ public sealed class GymSessionService : MonoBehaviour
             active.worldDay = GymTimeOfDay.Instance.CurrentDay;
         }
         active.brokenPanels = GlassShatterPanel.CaptureShatteredIds();
+        GymFixerDirector.CaptureIssueAges(out active.fixerIssueIds, out active.fixerIssueSince);
         active.savedUtc = DateTime.UtcNow.ToString("O");
     }
 

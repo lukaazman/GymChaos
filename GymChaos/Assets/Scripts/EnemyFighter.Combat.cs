@@ -859,6 +859,8 @@ public partial class EnemyFighter
         }
         RestoreGokuGroundPhysicsForDeath();
         deathStartedTime = Time.time;
+        livingLinearDamping = body.linearDamping;
+        livingAngularDamping = body.angularDamping;
         externalBodyAnimator?.SetDowned(true);
         SetAnimatedMovement(false);
         body.constraints = RigidbodyConstraints.None;

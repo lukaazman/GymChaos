@@ -68,11 +68,11 @@ if ($liveEditor -and -not $SummaryOnly -and $isMainProject)
     {
         Start-Sleep -Seconds 2
         $status = (& $cli command --project-path $projectPath --no-banner --json console_status) -join ''
-        if ($status -match '"compiling":false' -and $status -notmatch '"domainReloadInProgress":true') { break }
+        if ($status -match '"compiling":\s*false' -and $status -notmatch '"domainReloadInProgress":\s*true') { break }
     }
-    $failed = $status -match '"compilationFailed":true'
+    $failed = $status -match '"compilationFailed":\s*true'
     $errors = (& $cli command --project-path $projectPath --no-banner --json console --level error --tail 20) -join ''
-    $messages = [regex]::Matches($errors, '"message":"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value } |
+    $messages = [regex]::Matches($errors, '"message":\s*"((?:[^"\\]|\\.)*)"') | ForEach-Object { $_.Groups[1].Value } |
         Where-Object { $_ -match 'error CS\d+' } | Select-Object -Unique
     "UNITY_CHECK method=compile-live exit=$(if ($failed) { 1 } else { 0 }) editorPid=$($liveEditor.Id)"
     "COMPILER_ERRORS $(@($messages).Count)"

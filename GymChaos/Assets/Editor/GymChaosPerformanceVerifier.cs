@@ -49,6 +49,10 @@ public static class GymChaosPerformanceVerifier
     private static readonly string[] Markers =
     {
         "FixedUpdate.PhysicsFixedUpdate",
+        "GymChaos.GlbTextureDecode",
+        "GymChaos.GlbMeshBuild",
+        "Shader.CreateGPUProgram",
+        "PlayerLoop",
         "FixedUpdate.ScriptRunBehaviourFixedUpdate",
         "Update.ScriptRunBehaviourUpdate",
         "PreLateUpdate.ScriptRunBehaviourLateUpdate",
@@ -191,9 +195,11 @@ public static class GymChaosPerformanceVerifier
                 return;
             }
 
-            frameMs.Add(Time.unscaledDeltaTime * 1000f);
+            float frame = Time.unscaledDeltaTime * 1000f;
+            frameMs.Add(frame);
             for (int i = 0; i < recorders.Length; i++)
                 if (recorders[i].Valid) markerSums[i] += recorders[i].LastValue / 1e6;
+            if (frame > SpikeMs) LogSpike(frame);
             for (int i = 0; i < counterRecorders.Length; i++)
                 if (counterRecorders[i].Valid) counterSums[i] += counterRecorders[i].LastValue;
             if (frameMs.Count < SampleFrames) return;
@@ -215,6 +221,23 @@ public static class GymChaosPerformanceVerifier
             resultCode = 1; GymChaosVerifierExit.Record(resultCode);
             Finish();
         }
+    }
+
+    private const float SpikeMs = 45f;
+
+    // Names the markers that took the time in a hitch frame. LastValue is
+    // the previous frame's sample, which is the frame whose delta just ended.
+    private static void LogSpike(float frame)
+    {
+        var parts = new System.Text.StringBuilder();
+        for (int i = 0; i < recorders.Length; i++)
+        {
+            if (!recorders[i].Valid) continue;
+            double ms = recorders[i].LastValue / 1e6;
+            if (ms >= 2.0) parts.Append(' ').Append(Markers[i]).Append('=').Append(ms.ToString("F1"));
+        }
+        Debug.Log($"GYMCHAOS_PERF_SPIKE scenario={scenarios[scenarioIndex].Name} frameMs={frame:F1} " +
+            $"frame={Time.frameCount}{parts}");
     }
 
     private static int fixedSteps;

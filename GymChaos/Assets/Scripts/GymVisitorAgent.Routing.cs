@@ -190,7 +190,7 @@ public sealed partial class GymVisitorAgent
 		//IL_00e0: Unknown result type (might be due to invalid IL or missing references)
 		//IL_007d: Unknown result type (might be due to invalid IL or missing references)
 		float safeX = authoredPoint.x;
-		GameObject northWall = GameObject.Find("North Wall Lower");
+		GameObject northWall = GymSceneLookup.Find("North Wall Lower");
 		Collider wallCollider = (((UnityEngine.Object)(object)northWall != (UnityEngine.Object)null) ? northWall.GetComponent<Collider>() : null);
 		Bounds accessible = GymOutdoorBuilder.AccessibleBounds;
 		Bounds bounds;
@@ -695,7 +695,7 @@ public sealed partial class GymVisitorAgent
 		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
 		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		GameObject floor = GameObject.Find("Rubber Floor");
+		GameObject floor = GymSceneLookup.Find("Rubber Floor");
 		Renderer renderer = (((UnityEngine.Object)(object)floor != (UnityEngine.Object)null) ? floor.GetComponent<Renderer>() : null);
 		if ((UnityEngine.Object)(object)renderer == (UnityEngine.Object)null)
 		{

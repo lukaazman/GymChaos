@@ -61,8 +61,11 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
             bool idle = clips[i].name.IndexOf("idle", StringComparison.OrdinalIgnoreCase) >= 0;
             bool fly = clips[i].name.IndexOf("fly", StringComparison.OrdinalIgnoreCase) >= 0;
             bool celebration = clips[i].name.IndexOf("celebration", StringComparison.OrdinalIgnoreCase) >= 0;
-            clips[i].loopTime = run || walk || idle || fly || celebration;
-            clips[i].loopPose = run || walk || idle || fly || celebration;
+            // Jolly Dog's sky drop holds its falling clip until the landing.
+            bool falling = clips[i].name.IndexOf("falling", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool loop = run || walk || idle || fly || celebration || falling;
+            clips[i].loopTime = loop;
+            clips[i].loopPose = loop;
         }
         if (clips.Length > 0)
         {

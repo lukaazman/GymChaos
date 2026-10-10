@@ -65,6 +65,10 @@ Shader "GymChaos/GymGradientSky"
                 float _CloudOffset;
             CBUFFER_END
 
+            // Set globally by GymFixerDirector while Jolly Dog visits.
+            float _GymRainbowFade;
+            float4 _GymRainbowAxis;
+
             Varyings Vert(Attributes input)
             {
                 Varyings output;
@@ -146,6 +150,56 @@ Shader "GymChaos/GymGradientSky"
                 return (core + halo) * enabled * twinkle;
             }
 
+            // Zucconi's fit of the visible spectrum; x = 0 violet, 1 red.
+            float3 Spectral(float x)
+            {
+                const float3 cs = float3(3.54541723, 2.86670055, 2.29421995);
+                const float3 xs = float3(0.69548916, 0.49416934, 0.28269708);
+                const float3 ys = float3(0.02320775, 0.15936245, 0.53520021);
+                float3 y = cs * (saturate(x) - xs);
+                return saturate(max(1.0 - y * y, 0.0) - ys);
+            }
+
+            // A real rainbow sits on a cone around the antisolar point: the
+            // primary bow at ~40.5-42.5 deg (violet inside, red outside), the
+            // fainter secondary at ~50-53 deg with reversed colours, a darker
+            // Alexander band between them, and brighter sky inside the bow.
+            float3 ApplyRainbow(float3 color, float3 direction, float cloudMask)
+            {
+                float fade = saturate(_GymRainbowFade) * saturate(_Daylight);
+                if (fade <= 0.001)
+                {
+                    return color;
+                }
+
+                float3 axis = normalize(_GymRainbowAxis.xyz);
+                float angle = degrees(acos(clamp(dot(direction, axis), -1.0, 1.0)));
+                // Rain only fills part of the sky: let the arc thin out along
+                // its length and fade into the ground haze.
+                float rain = lerp(0.45, 1.0, smoothstep(0.25, 0.75,
+                    ValueNoise(direction.xz * 1.7 + float2(3.1, 7.4))));
+                float visibility = fade * rain *
+                    smoothstep(-0.01, 0.12, direction.y) *
+                    (1.0 - cloudMask * 0.7);
+
+                float primary = (angle - 40.4) / 2.2;
+                float primaryMask = smoothstep(0.0, 0.22, primary) *
+                    (1.0 - smoothstep(0.78, 1.0, primary));
+                float secondary = (angle - 50.2) / 3.0;
+                float secondaryMask = smoothstep(0.0, 0.25, secondary) *
+                    (1.0 - smoothstep(0.75, 1.0, secondary));
+                float alexander = smoothstep(42.5, 43.4, angle) *
+                    (1.0 - smoothstep(49.3, 50.2, angle));
+                float inside = smoothstep(24.0, 40.0, angle) *
+                    (1.0 - smoothstep(40.0, 40.8, angle));
+
+                color *= 1.0 - alexander * 0.08 * visibility;
+                color += inside * 0.035 * visibility;
+                color += Spectral(primary) * primaryMask * 0.62 * visibility;
+                color += Spectral(1.0 - secondary) * secondaryMask * 0.22 * visibility;
+                return color;
+            }
+
             half4 Frag(Varyings input) : SV_Target
             {
                 float3 direction = normalize(input.directionOS);
@@ -183,6 +237,7 @@ Shader "GymChaos/GymGradientSky"
                 float3 cloudColor = lerp(
                     _CloudShadow.rgb, _CloudLight.rgb, cloudLight);
                 color = lerp(color, cloudColor, cloudMask * 0.72);
+                color = ApplyRainbow(color, direction, cloudMask);
 
                 // A second, thinner high-altitude layer breaks up the single
                 // cloud band and adds distant cirrus structure without making

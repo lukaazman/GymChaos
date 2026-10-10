@@ -244,6 +244,7 @@ public class GymArenaBootstrap : MonoBehaviour
         // run spawn reconciliation again here: default scene queries exclude
         // the inactive prepared roster and used to duplicate all seven rigs.
         GymVisitorDirector.CreateForScene(player);
+        GymFixerDirector.CreateForScene();
         if (radio != null)
         {
         }

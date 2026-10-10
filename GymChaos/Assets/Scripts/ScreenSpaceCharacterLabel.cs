@@ -11,6 +11,8 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     private float heightOffset;
     private GUIStyle style;
     private EnemyFighter fighter;
+    // Name-only label for a character that is not an EnemyFighter.
+    private bool standalone;
 
     public void Configure(
         SkinnedMeshRenderer targetRenderer, string label, float offset)
@@ -20,6 +22,16 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         heightOffset = offset;
         playerCamera = Camera.main;
         fighter = GetComponentInParent<EnemyFighter>();
+    }
+
+    public void ConfigureStandalone(
+        SkinnedMeshRenderer targetRenderer, string label, float offset)
+    {
+        bodyRenderer = targetRenderer;
+        displayName = label;
+        heightOffset = offset;
+        playerCamera = Camera.main;
+        standalone = true;
     }
 
     private void OnGUI()
@@ -40,11 +52,11 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
             return;
         }
 
-        if (fighter == null)
+        if (fighter == null && !standalone)
         {
             fighter = GetComponentInParent<EnemyFighter>();
         }
-        if (fighter == null)
+        if (fighter == null && !standalone)
         {
             return;
         }
@@ -58,12 +70,13 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
             return;
         }
 
-        bool nearby = (fighter.transform.position - playerCamera.transform.position).sqrMagnitude <=
+        Vector3 anchor = standalone ? transform.position : fighter.transform.position;
+        bool nearby = (anchor - playerCamera.transform.position).sqrMagnitude <=
             NameRevealDistanceSqr;
         GymDialogueDirector director = GymDialogueDirector.Active;
-        bool isDialogueTarget = director != null && director.Target == fighter;
-        bool showName = nearby || fighter.IsAggressive || isDialogueTarget;
-        bool showHealth = fighter.HasTakenDamage;
+        bool isDialogueTarget = !standalone && director != null && director.Target == fighter;
+        bool showName = nearby || (!standalone && fighter.IsAggressive) || isDialogueTarget;
+        bool showHealth = !standalone && fighter.HasTakenDamage;
         // The anchor sits just above the head: the stack grows upward from
         // it (health bar, then name) so the name stays close to the head.
         float stackBottom = Screen.height - screen.y - AnchorGapPixels;

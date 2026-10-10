@@ -1425,82 +1425,256 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
         if (identity == BodybuilderIdentity.Manwithsuit1)
         {
-            BindSuitRightHandComponents(
-                vertices, triangles, bounds, weights,
-                rightShoulder3, rightElbow3, rightHand3);
+            BindSuitForearmByGeodesicDistance(
+                vertices, triangles, bounds, weights, rightElbow3, rightHand3);
         }
         return weights;
     }
 
-    private static void BindSuitRightHandComponents(
+    // manwithsuit1 holds a towel in his raised right hand in front of his
+    // chest. The scan is one welded surface, so the hand and towel are fused
+    // to the arm, and a straight-line arm capsule around the forearm also
+    // catches the collar and chest right behind the hand. When the forearm
+    // shook, those collar/chest vertices moved with the hand and the suit tore
+    // open around the shoulder. Here the forearm and hand influence follows
+    // the surface itself: geodesic distance from the towel tip, measured over
+    // the welded mesh. The collar and chest are far away along the surface
+    // (the path runs around the elbow and shoulder), so only the forearm,
+    // hand and towel move and the elbow blends smoothly into the static
+    // upper arm.
+    private static void BindSuitForearmByGeodesicDistance(
         Vector3[] vertices, int[] triangles, Bounds bounds, BoneWeight[] weights,
-        Vector3 rightShoulder, Vector3 rightElbow, Vector3 rightHand)
+        Vector3 rightElbow, Vector3 rightHand)
     {
-        int[] parents = new int[vertices.Length];
-        int[] counts = new int[vertices.Length];
-        Vector3[] sums = new Vector3[vertices.Length];
-        Vector3[] minima = new Vector3[vertices.Length];
-        Vector3[] maxima = new Vector3[vertices.Length];
-        for (int i = 0; i < parents.Length; i++)
-        {
-            parents[i] = i;
-            minima[i] = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
-            maxima[i] = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
-        }
-
-        for (int i = 0; i + 2 < triangles.Length; i += 3)
-        {
-            UnionVertices(parents, triangles[i], triangles[i + 1]);
-            UnionVertices(parents, triangles[i], triangles[i + 2]);
-        }
-
+        const int UpperArmBone = 7;
+        const int ForearmBone = 8;
+        const int HandBone = 14;
+        float height = Mathf.Max(0.01f, bounds.size.y);
+        int[] welded = WeldCoincidentVertices(vertices, bounds, out int weldedCount);
+        Vector3[] points = new Vector3[weldedCount];
         for (int i = 0; i < vertices.Length; i++)
         {
-            int root = FindVertexRoot(parents, i);
-            counts[root]++;
-            sums[root] += vertices[i];
-            minima[root] = Vector3.Min(minima[root], vertices[i]);
-            maxima[root] = Vector3.Max(maxima[root], vertices[i]);
+            points[welded[i]] = vertices[i];
         }
 
-        bool[] bindToArm = new bool[vertices.Length];
-        bool[] bindHeldObject = new bool[vertices.Length];
-        float height = bounds.size.y;
+        List<int>[] neighbours = new List<int>[weldedCount];
+        for (int i = 0; i < weldedCount; i++)
+        {
+            neighbours[i] = new List<int>(6);
+        }
+        for (int t = 0; t + 2 < triangles.Length; t += 3)
+        {
+            for (int k = 0; k < 3; k++)
+            {
+                int a = welded[triangles[t + k]];
+                int b = welded[triangles[t + (k + 1) % 3]];
+                if (a != b && !neighbours[a].Contains(b))
+                {
+                    neighbours[a].Add(b);
+                    neighbours[b].Add(a);
+                }
+            }
+        }
+
+        // Towel tip: the surface point that reaches furthest past the hand
+        // along the forearm direction.
+        Vector3 along = (rightHand - rightElbow).normalized;
+        int tip = -1;
+        float best = float.NegativeInfinity;
+        for (int i = 0; i < weldedCount; i++)
+        {
+            if (Vector3.Distance(points[i], rightHand) < height * 0.15f)
+            {
+                float reach = Vector3.Dot(points[i] - rightHand, along);
+                if (reach > best)
+                {
+                    best = reach;
+                    tip = i;
+                }
+            }
+        }
+        if (tip < 0)
+        {
+            Debug.LogWarning("GYMCHAOS_SUIT_FOREARM_WEIGHTS_SKIPPED reason=no_surface_near_hand");
+            return;
+        }
+
+        float[] distance = GeodesicDistances(points, neighbours, tip);
+        float tipToHand = Vector3.Distance(points[tip], rightHand);
+        float forearmLength = Vector3.Distance(rightHand, rightElbow);
+        float elbow = (tipToHand + forearmLength) * 1.1f;
+        float wrist = tipToHand + height * 0.03f;
+        int moved = 0;
         for (int i = 0; i < vertices.Length; i++)
         {
-            if (counts[i] == 0)
+            float d = distance[welded[i]];
+            // Existing forearm/hand weights came from the capsule; move them to
+            // the static upper arm and add back only the surface-based share.
+            BoneWeight source = StripToBone(weights[i], ForearmBone, HandBone, UpperArmBone);
+            float influence = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(elbow * 0.7f, elbow * 1.25f, d));
+            if (influence <= 0.001f)
+            {
+                weights[i] = source;
+                continue;
+            }
+            float handShare = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(wrist * 0.6f, wrist * 1.3f, d));
+            weights[i] = BlendWeights(source, 1f - influence,
+                HandBone, influence * handShare, ForearmBone, influence * (1f - handShare));
+            moved++;
+        }
+        Debug.Log($"GYMCHAOS_SUIT_FOREARM_WEIGHTS moved={moved} elbow={elbow / height:F3} wrist={wrist / height:F3}");
+    }
+
+    private static int[] WeldCoincidentVertices(Vector3[] vertices, Bounds bounds, out int count)
+    {
+        int[] welded = new int[vertices.Length];
+        float cell = Mathf.Max(1e-6f, bounds.size.y * 1e-5f);
+        Dictionary<Vector3Int, int> seen = new Dictionary<Vector3Int, int>(vertices.Length);
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            Vector3 v = vertices[i];
+            Vector3Int key = new Vector3Int(
+                Mathf.RoundToInt(v.x / cell), Mathf.RoundToInt(v.y / cell), Mathf.RoundToInt(v.z / cell));
+            if (!seen.TryGetValue(key, out int id))
+            {
+                id = seen.Count;
+                seen.Add(key, id);
+            }
+            welded[i] = id;
+        }
+        count = seen.Count;
+        return welded;
+    }
+
+    private static float[] GeodesicDistances(Vector3[] points, List<int>[] neighbours, int source)
+    {
+        float[] distance = new float[points.Length];
+        for (int i = 0; i < distance.Length; i++)
+        {
+            distance[i] = float.PositiveInfinity;
+        }
+        // Binary heap of (distance, vertex); stale entries are skipped.
+        List<KeyValuePair<float, int>> heap = new List<KeyValuePair<float, int>>();
+        distance[source] = 0f;
+        HeapPush(heap, 0f, source);
+        while (heap.Count > 0)
+        {
+            KeyValuePair<float, int> top = HeapPop(heap);
+            int v = top.Value;
+            if (top.Key > distance[v])
             {
                 continue;
             }
-
-            Vector3 center = sums[i] / counts[i];
-            float normalizedY = (center.y - bounds.min.y) / height;
-            float verticalSpan = maxima[i].y - minima[i].y;
-            bindHeldObject[i] = counts[i] <= 2200 &&
-                normalizedY > 0.68f && normalizedY < 0.82f &&
-                center.z > bounds.center.z + height * 0.12f &&
-                verticalSpan < height * 0.16f;
-            bindToArm[i] = bindHeldObject[i] ||
-                (counts[i] <= 2200 &&
-                center.x > bounds.center.x + height * 0.065f &&
-                normalizedY > 0.55f && normalizedY < 0.82f &&
-                verticalSpan < height * 0.25f);
-        }
-
-        for (int i = 0; i < vertices.Length; i++)
-        {
-            int root = FindVertexRoot(parents, i);
-            if (bindToArm[root])
+            List<int> list = neighbours[v];
+            for (int k = 0; k < list.Count; k++)
             {
-                float normalizedY = (vertices[i].y - bounds.min.y) / height;
-                bool distal = vertices[i].x > bounds.center.x + height * 0.075f &&
-                    normalizedY > 0.56f && normalizedY < 0.82f;
-                weights[i] = bindHeldObject[root] || distal
-                    ? SingleBone(14)
-                    : ArmWeightWithHand(vertices[i], rightShoulder, rightElbow, rightHand, 7, 8, 14);
+                int n = list[k];
+                float candidate = top.Key + Vector3.Distance(points[v], points[n]);
+                if (candidate < distance[n])
+                {
+                    distance[n] = candidate;
+                    HeapPush(heap, candidate, n);
+                }
             }
-
         }
+        return distance;
+    }
+
+    private static void HeapPush(List<KeyValuePair<float, int>> heap, float key, int value)
+    {
+        heap.Add(new KeyValuePair<float, int>(key, value));
+        int i = heap.Count - 1;
+        while (i > 0)
+        {
+            int parent = (i - 1) / 2;
+            if (heap[parent].Key <= heap[i].Key)
+            {
+                break;
+            }
+            (heap[parent], heap[i]) = (heap[i], heap[parent]);
+            i = parent;
+        }
+    }
+
+    private static KeyValuePair<float, int> HeapPop(List<KeyValuePair<float, int>> heap)
+    {
+        KeyValuePair<float, int> top = heap[0];
+        int last = heap.Count - 1;
+        heap[0] = heap[last];
+        heap.RemoveAt(last);
+        int i = 0;
+        while (true)
+        {
+            int left = i * 2 + 1;
+            if (left >= heap.Count)
+            {
+                break;
+            }
+            int smallest = left + 1 < heap.Count && heap[left + 1].Key < heap[left].Key ? left + 1 : left;
+            if (heap[i].Key <= heap[smallest].Key)
+            {
+                break;
+            }
+            (heap[smallest], heap[i]) = (heap[i], heap[smallest]);
+            i = smallest;
+        }
+        return top;
+    }
+
+    private static BoneWeight StripToBone(BoneWeight weight, int firstBone, int secondBone, int targetBone)
+    {
+        int[] bones = { weight.boneIndex0, weight.boneIndex1, weight.boneIndex2, weight.boneIndex3 };
+        float[] values = { weight.weight0, weight.weight1, weight.weight2, weight.weight3 };
+        for (int i = 0; i < 4; i++)
+        {
+            if (values[i] > 0f && (bones[i] == firstBone || bones[i] == secondBone))
+            {
+                bones[i] = targetBone;
+            }
+        }
+        return BuildWeight(bones, values);
+    }
+
+    private static BoneWeight BlendWeights(
+        BoneWeight source, float sourceScale, int boneA, float weightA, int boneB, float weightB)
+    {
+        int[] bones = { source.boneIndex0, source.boneIndex1, source.boneIndex2, source.boneIndex3, boneA, boneB };
+        float[] values =
+        {
+            source.weight0 * sourceScale, source.weight1 * sourceScale,
+            source.weight2 * sourceScale, source.weight3 * sourceScale, weightA, weightB
+        };
+        return BuildWeight(bones, values);
+    }
+
+    private static BoneWeight BuildWeight(int[] bones, float[] values)
+    {
+        // Merge duplicate bones, keep the four largest and renormalise.
+        Dictionary<int, float> merged = new Dictionary<int, float>();
+        for (int i = 0; i < bones.Length; i++)
+        {
+            if (values[i] > 0f)
+            {
+                merged[bones[i]] = (merged.TryGetValue(bones[i], out float v) ? v : 0f) + values[i];
+            }
+        }
+        List<KeyValuePair<int, float>> sorted = new List<KeyValuePair<int, float>>(merged);
+        sorted.Sort((x, y) => y.Value.CompareTo(x.Value));
+        float total = 0f;
+        for (int i = 0; i < Mathf.Min(4, sorted.Count); i++)
+        {
+            total += sorted[i].Value;
+        }
+        BoneWeight result = new BoneWeight();
+        if (total <= 0f)
+        {
+            return result;
+        }
+        if (sorted.Count > 0) { result.boneIndex0 = sorted[0].Key; result.weight0 = sorted[0].Value / total; }
+        if (sorted.Count > 1) { result.boneIndex1 = sorted[1].Key; result.weight1 = sorted[1].Value / total; }
+        if (sorted.Count > 2) { result.boneIndex2 = sorted[2].Key; result.weight2 = sorted[2].Value / total; }
+        if (sorted.Count > 3) { result.boneIndex3 = sorted[3].Key; result.weight3 = sorted[3].Value / total; }
+        return result;
     }
 
     private static bool[] MarkGokuHeadComponents(
@@ -1740,8 +1914,9 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             };
             texture.LoadImage(imageBytes);
             texture = DownscaleTexture(texture, 1024, identity + " Body Texture Low");
-            material.SetTexture("_BaseMap", texture);
-            material.mainTexture = texture;
+            Texture sampled = ScanTextureMips.Limit(texture, ownsSource: true);
+            material.SetTexture("_BaseMap", sampled);
+            material.mainTexture = sampled;
         }
 
         material.SetColor("_BaseColor", Color.white);

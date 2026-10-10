@@ -476,13 +476,16 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
                     continue;
                 }
 
-                AddMeshParts(
-                    relativePath,
-                    gltf,
-                    binary,
-                    gltf.meshes[node.mesh],
-                    node,
-                    parts, materials);
+                using (GymProfiling.GlbMeshBuild.Auto())
+                {
+                    AddMeshParts(
+                        relativePath,
+                        gltf,
+                        binary,
+                        gltf.meshes[node.mesh],
+                        node,
+                        parts, materials);
+                }
                 if (Time.realtimeSinceStartupAsDouble - sliceStarted >= 0.003)
                 {
                     yield return null;
@@ -1057,7 +1060,12 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
             TextureFormat.RGBA32,
             false,
             false);
-        if (!ImageConversion.LoadImage(result, encoded, true))
+        bool decoded;
+        using (GymProfiling.GlbTextureDecode.Auto())
+        {
+            decoded = ImageConversion.LoadImage(result, encoded, true);
+        }
+        if (!decoded)
         {
             UnityEngine.Object.Destroy(result);
             Debug.LogWarning(

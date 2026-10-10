@@ -129,11 +129,11 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             return;
         }
 
-        currentTexture = Resources.Load<Texture2D>(
+        currentTexture = ScanTextureMips.Limit(Resources.Load<Texture2D>(
             currentShirt == GymShirtColor.Black
                 ? "Characters/Textures/player_authored"
                 : "Player/Outfits/shirt_" +
-                    currentShirt.ToString().ToLowerInvariant());
+                    currentShirt.ToString().ToLowerInvariant()));
         if (currentTexture == null)
         {
             visualReady = false;
@@ -152,6 +152,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                 continue;
             }
 
+            renderer.sharedMesh = ScanUvInset.Apply(renderer.sharedMesh, currentTexture);
             Material[] materials = renderer.sharedMaterials;
             for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
             {

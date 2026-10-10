@@ -26,7 +26,9 @@ public enum GymSoundEffect
     ItemDrop,
     ActionConfirm,
     LevelUp,
-    VehicleDriving
+    VehicleDriving,
+    FixerFloor,
+    FixerGlitter
 }
 
 public sealed class GymAudio : MonoBehaviour
@@ -82,7 +84,10 @@ public sealed class GymAudio : MonoBehaviour
             { GymSoundEffect.ActionConfirm, new ClipDefinition("action_confirm.wav", AudioType.WAV) },
             { GymSoundEffect.LevelUp, new ClipDefinition("level_up.wav", AudioType.WAV) },
             // Looped by vehicles while they drive; never played as a one-shot.
-            { GymSoundEffect.VehicleDriving, new ClipDefinition("car_driving.wav", AudioType.WAV) }
+            { GymSoundEffect.VehicleDriving, new ClipDefinition("car_driving.wav", AudioType.WAV) },
+            // User-provided Jolly Dog sounds: touchdown/take-off and each repair.
+            { GymSoundEffect.FixerFloor, new ClipDefinition("floor_start_end.wav", AudioType.WAV) },
+            { GymSoundEffect.FixerGlitter, new ClipDefinition("glitter.mp3", AudioType.MPEG) }
         };
 
     // Interface and first-person cues: played flat (2D) from one pooled

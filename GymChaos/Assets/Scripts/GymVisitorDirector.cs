@@ -1882,6 +1882,42 @@ public bool BeginDepartureForVerification(
             this);
     }
 
+    public bool IsScheduledVisitor(EnemyFighter fighter)
+    {
+        return fighter != null && FindRecord(fighter.Identity)?.fighter == fighter;
+    }
+
+    /// <summary>
+    /// Jolly Dog brought a member back to life inside the gym. Resume a normal
+    /// visit: free roaming now, the usual exit once the visit time is up.
+    /// </summary>
+    public void NotifyFighterRevived(EnemyFighter fighter)
+    {
+        VisitorRecord record = fighter != null ? FindRecord(fighter.Identity) : null;
+        if (record == null || record.fighter != fighter || record.agent == null)
+        {
+            return;
+        }
+
+        record.agent.CancelForCombat();
+        record.agent.MarkInitialInside();
+        record.active = true;
+        record.suspendedForCombat = false;
+        record.visitInProgress = false;
+        record.workoutInProgress = false;
+        record.destinationChoiceMade = true;
+        record.lockerVisitScheduled = false;
+        record.storeVisitScheduled = false;
+        record.destinationVisitInProgress = false;
+        record.waitingForVehicle = false;
+        record.walkingToVehicle = false;
+        record.vehicleDepartureStarted = false;
+        record.queuedForcedDeparture = false;
+        record.activeSince = Time.time;
+        record.leaveAfter = Time.time + RandomRange(minimumVisitSeconds, maximumVisitSeconds);
+        Debug.Log($"GYMCHAOS_VISITOR_REVIVED enemy={fighter.Identity}", this);
+    }
+
     private VisitorRecord FindRecord(BodybuilderIdentity identity)
     {
         for (int i = 0; i < records.Count; i++)

@@ -665,12 +665,17 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
                 material.SetColor("_Color", texture != null ? Color.white : color);
                 if (texture != null)
                 {
+                    texture = ScanTextureMips.Limit(texture);
                     material.SetTexture("_BaseMap", texture);
                     material.SetTexture("_MainTex", texture);
                 }
                 materials[materialIndex] = material;
             }
             renderer.sharedMaterials = materials;
+            if (originalTexture != null)
+            {
+                renderer.sharedMesh = ScanUvInset.Apply(renderer.sharedMesh, originalTexture);
+            }
             renderer.enabled = true;
             renderer.updateWhenOffscreen = false;
             renderer.shadowCastingMode = ShadowCastingMode.Off;

@@ -29,14 +29,75 @@ public sealed class GlassShatterPanel : MonoBehaviour
     /// <summary>Removes a panel that was already broken in the loaded save; no reward, sound or shards.</summary>
     public void RestoreShattered()
     {
+        // An already hidden panel must still be listed after a registry reset.
+        ShatteredIds.Add(StableId);
         if (hasShattered)
         {
             return;
         }
 
         hasShattered = true;
-        ShatteredIds.Add(StableId);
-        Destroy(gameObject);
+        HideBrokenPanel();
+    }
+
+    private Vector3 fullScale;
+    private bool fullScaleKnown;
+
+    /// <summary>
+    /// Jolly Dog's spell: the panel grows back into its frame. Broken panels
+    /// stay in the scene (inactive) so the original transform and material
+    /// are still there to restore.
+    /// </summary>
+    public bool RepairByFixer()
+    {
+        if (!hasShattered || this == null)
+        {
+            return false;
+        }
+
+        hasShattered = false;
+        ShatteredIds.Remove(StableId);
+        gameObject.SetActive(true);
+        if (panelRenderer != null)
+        {
+            panelRenderer.enabled = true;
+        }
+        if (panelCollider != null)
+        {
+            panelCollider.enabled = true;
+        }
+        if (panelBody != null)
+        {
+            panelBody.detectCollisions = true;
+        }
+        StartCoroutine(GrowBackIntoFrame());
+        Debug.Log($"GYMCHAOS_GLASS_REPAIRED panel={name}", this);
+        return true;
+    }
+
+    private System.Collections.IEnumerator GrowBackIntoFrame()
+    {
+        const float Duration = 0.55f;
+        for (float elapsed = 0f; elapsed < Duration; elapsed += Time.deltaTime)
+        {
+            float t = Mathf.SmoothStep(0f, 1f, elapsed / Duration);
+            transform.localScale = new Vector3(
+                fullScale.x * t, fullScale.y * t, fullScale.z);
+            yield return null;
+        }
+        transform.localScale = fullScale;
+    }
+
+    private void HideBrokenPanel()
+    {
+        // Inactive panels drop out of default FindObjectsByType queries the
+        // same way the old destroyed panels did. A break during the grow-back
+        // must not leave the panel at its partial scale.
+        if (fullScaleKnown)
+        {
+            transform.localScale = fullScale;
+        }
+        gameObject.SetActive(false);
     }
 
     // Broken panels destroy themselves, so saves read this registry instead of the scene.
@@ -67,6 +128,8 @@ public sealed class GlassShatterPanel : MonoBehaviour
 
         panelCollider = GetComponent<Collider>();
         panelBody = GetComponent<Rigidbody>();
+        fullScale = transform.localScale;
+        fullScaleKnown = true;
         // A kinematic body makes collision delivery reliable for a static
         // runtime panel while keeping the original panel fixed in the wall.
         panelBody.isKinematic = true;
@@ -277,7 +340,7 @@ public sealed class GlassShatterPanel : MonoBehaviour
         Debug.Log(
             $"GYMCHAOS_GLASS_SHATTER panel={name} shards={shardCount} " +
             $"impactSpeed={impactSpeed:0.0}", this);
-        Object.Destroy(gameObject);
+        HideBrokenPanel();
     }
 
     private static float[] BuildVariableEdges(

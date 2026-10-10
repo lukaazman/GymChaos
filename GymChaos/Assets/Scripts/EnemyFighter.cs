@@ -601,6 +601,14 @@ public partial class EnemyFighter : MonoBehaviour
         }
     }
 
+#if UNITY_EDITOR
+    // Verifier hook: drive the normal roam movement in a fixed direction.
+    internal Vector3 verificationForcedRoamDirection;
+    internal MixamoScanRetargetAnimator.MotionState MotionStateForVerification =>
+        externalBodyAnimator != null
+            ? externalBodyAnimator.CurrentState
+            : MixamoScanRetargetAnimator.MotionState.Uninitialized;
+#endif
     private void FixedUpdate()
     {
         using var profileScope = FixedUpdateMarker.Auto();
@@ -713,6 +721,13 @@ public partial class EnemyFighter : MonoBehaviour
             }
         }
 
+#if UNITY_EDITOR
+        if (verificationForcedRoamDirection.sqrMagnitude > 0.001f)
+        {
+            ApplyRoamMovement(verificationForcedRoamDirection);
+            return;
+        }
+#endif
         bool visitorHandled;
         using (VisitorTickMarker.Auto())
         {
@@ -721,6 +736,12 @@ public partial class EnemyFighter : MonoBehaviour
         }
         if (visitorHandled)
         {
+            return;
+        }
+
+        if (policeReturnTarget != null)
+        {
+            TickPoliceReturnToCar();
             return;
         }
 

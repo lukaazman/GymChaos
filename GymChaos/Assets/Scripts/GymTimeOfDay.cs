@@ -66,6 +66,9 @@ public sealed class GymTimeOfDay : MonoBehaviour
         Shader.PropertyToID("_GymChromeDaylight");
     public bool IsNight => CalculateDaylight(time01) < 0.25f;
     public float Daylight01 => CalculateDaylight(time01);
+    /// <summary>Unit direction from the gym toward the visible sun disc.</summary>
+    public Vector3 SunDirection => sunDirection;
+    private Vector3 sunDirection = new Vector3(0f, 0.7f, 0.7f);
 
     public static GymTimeOfDay CreateForScene(
         Transform parent,
@@ -326,6 +329,7 @@ public sealed class GymTimeOfDay : MonoBehaviour
         Vector3 sunPosition = GetCelestialPosition(celestialCenter, sunAngle, celestialRadius);
         Vector3 moonPosition = GetCelestialPosition(
             celestialCenter, moonAngle, celestialRadius * 0.94f);
+        sunDirection = (sunPosition - celestialCenter).normalized;
 
         if (sunRenderer != null)
         {
