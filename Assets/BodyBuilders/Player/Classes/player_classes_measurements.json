@@ -1,0 +1,168 @@
+{
+  "baselineHeight": 0.9999899864196777,
+  "muscleTolerance": 0.08,
+  "classes": {
+    "calisthenics": {
+      "height": 0.9999899864196777,
+      "heightDelta": 0.0,
+      "headHandFootMaxMove": 0.00013822393634021511,
+      "segments": {
+        "torso": {
+          "areaRatio": 0.9325001252248626,
+          "muscleTarget": 0.85,
+          "muscleMeasured": 0.8500002782774724,
+          "deviation": 2.7827747239861367e-07
+        },
+        "upper_arm": {
+          "areaRatio": 0.8724982412087243,
+          "muscleTarget": 0.85,
+          "muscleMeasured": 0.8499979308337933,
+          "deviation": -2.069166206708495e-06
+        },
+        "forearm": {
+          "areaRatio": 0.8725012601903457,
+          "muscleTarget": 0.85,
+          "muscleMeasured": 0.8500014825768772,
+          "deviation": 1.4825768772652737e-06
+        },
+        "thigh": {
+          "areaRatio": 0.574999212103845,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.499999073063347,
+          "deviation": -9.269366529895962e-07
+        },
+        "shin": {
+          "areaRatio": 0.5750004094490705,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.5000004817047888,
+          "deviation": 4.817047888350245e-07
+        }
+      },
+      "waistAreaRatio": 0.8984980998561891,
+      "fbxBoneMaxDelta": 0.0,
+      "fbxVertices": 92190
+    },
+    "cardio": {
+      "height": 0.9999899864196777,
+      "heightDelta": 0.0,
+      "headHandFootMaxMove": 0.00013822393634021511,
+      "segments": {
+        "torso": {
+          "areaRatio": 0.77500007618701,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.5000001693044664,
+          "deviation": 1.6930446644636277e-07
+        },
+        "upper_arm": {
+          "areaRatio": 0.574999266688971,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.49999913728114226,
+          "deviation": -8.627188577414735e-07
+        },
+        "forearm": {
+          "areaRatio": 0.5749997007044843,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.4999996478876285,
+          "deviation": -3.521123714822494e-07
+        },
+        "thigh": {
+          "areaRatio": 0.5749985931891958,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.4999983449284656,
+          "deviation": -1.655071534378827e-06
+        },
+        "shin": {
+          "areaRatio": 0.5750004094490705,
+          "muscleTarget": 0.5,
+          "muscleMeasured": 0.5000004817047888,
+          "deviation": 4.817047888350245e-07
+        }
+      },
+      "waistAreaRatio": 0.751917025396662,
+      "fbxBoneMaxDelta": 0.0,
+      "fbxVertices": 92190
+    },
+    "powerlifting": {
+      "height": 0.9999899864196777,
+      "heightDelta": 0.0,
+      "headHandFootMaxMove": 1.5537235169058035e-05,
+      "segments": {
+        "torso": {
+          "areaRatio": 1.1089671800500662,
+          "muscleTarget": 1.0,
+          "muscleMeasured": 1.1256921491990588,
+          "deviation": 0.1256921491990588
+        },
+        "upper_arm": {
+          "areaRatio": 1.0496042421886655,
+          "muscleTarget": 1.0,
+          "muscleMeasured": 1.0000044747441208,
+          "deviation": 4.4747441207970695e-06
+        },
+        "forearm": {
+          "areaRatio": 1.0496000514393096,
+          "muscleTarget": 1.0,
+          "muscleMeasured": 0.9999997774383036,
+          "deviation": -2.225616964057764e-07
+        },
+        "thigh": {
+          "areaRatio": 1.0495955118455276,
+          "muscleTarget": 1.0,
+          "muscleMeasured": 0.999994689121521,
+          "deviation": -5.310878478992365e-06
+        },
+        "shin": {
+          "areaRatio": 1.0495946739282824,
+          "muscleTarget": 1.0,
+          "muscleMeasured": 0.9999937499211023,
+          "deviation": -6.250078897651612e-06
+        }
+      },
+      "waistAreaRatio": 1.3433288777274772,
+      "fbxBoneMaxDelta": 0.0,
+      "fbxVertices": 92190
+    },
+    "strongman": {
+      "height": 0.9999899864196777,
+      "heightDelta": 0.0,
+      "headHandFootMaxMove": 7.457187880519325e-05,
+      "segments": {
+        "torso": {
+          "areaRatio": 1.3350467794982008,
+          "muscleTarget": 1.15,
+          "muscleMeasured": 1.43823409979331,
+          "deviation": 0.28823409979331016
+        },
+        "upper_arm": {
+          "areaRatio": 1.2573170823673707,
+          "muscleTarget": 1.15,
+          "muscleMeasured": 1.1500013106999247,
+          "deviation": 1.310699924816916e-06
+        },
+        "forearm": {
+          "areaRatio": 1.2573178442105724,
+          "muscleTarget": 1.15,
+          "muscleMeasured": 1.1500021144459427,
+          "deviation": 2.1144459427802076e-06
+        },
+        "thigh": {
+          "areaRatio": 1.2573179868561863,
+          "muscleTarget": 1.15,
+          "muscleMeasured": 1.1500022649373352,
+          "deviation": 2.2649373352390256e-06
+        },
+        "shin": {
+          "areaRatio": 1.2573154314764405,
+          "muscleTarget": 1.15,
+          "muscleMeasured": 1.1499995690068723,
+          "deviation": -4.309931276313961e-07
+        }
+      },
+      "waistAreaRatio": 1.953568280287049,
+      "fbxBoneMaxDelta": 0.0,
+      "fbxVertices": 92190
+    }
+  },
+  "baselineFbxHeight": 0.9835276966914535,
+  "basisExportHeight": 0.999989933334291
+}

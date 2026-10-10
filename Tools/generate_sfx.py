@@ -179,14 +179,12 @@ def level_up():
     return out
 
 
+# ui_confirm (also used for clicks and back/exit), jump, land and car_driving are
+# user-provided recordings from Assets/BodyBuilders/sound/sfx; do not
+# regenerate them here.
 SOUNDS = {
     "ui_hover.wav": (ui_hover, 0.55),
-    "ui_click.wav": (ui_click, 0.75),
-    "ui_confirm.wav": (ui_confirm, 0.7),
-    "ui_back.wav": (ui_back, 0.65),
     "ui_error.wav": (ui_error, 0.6),
-    "jump.wav": (jump, 0.7),
-    "land.wav": (land, 0.85),
     "pickup.wav": (pickup, 0.7),
     "item_drop.wav": (item_drop, 0.6),
     "action_confirm.wav": (action_confirm, 0.7),

@@ -1,0 +1,83 @@
+{
+  "source": "Assets/BodyBuilders/Player/player_rig.blend",
+  "limbCore": 0.15,
+  "torsoCore": 0.55,
+  "hipCore": 0.4,
+  "jointShare": 0.3,
+  "classes": {
+    "calisthenics": {
+      "fbx": "GymChaos/Assets/Resources/Player/Classes/player_calisthenics.fbx",
+      "vertices": 92190,
+      "maxDisplacement": 0.030787561273600578,
+      "upperBulk": 0.85,
+      "lowerBulk": 0.5,
+      "softTissue": 0.0,
+      "calibrationGains": {
+        "torso": 1.1842369000572708,
+        "upper_arm.L": 1.0561458327034436,
+        "forearm.L": 1.0363898780493312,
+        "thigh.L": 1.4025580874887758,
+        "shin.L": 1.023124356313361,
+        "upper_arm.R": 1.0523876303100852,
+        "forearm.R": 1.0294177015294748,
+        "thigh.R": 1.422755525716965,
+        "shin.R": 1.021295369279364
+      }
+    },
+    "cardio": {
+      "fbx": "GymChaos/Assets/Resources/Player/Classes/player_cardio.fbx",
+      "vertices": 92190,
+      "maxDisplacement": 0.030557713029936512,
+      "upperBulk": 0.5,
+      "lowerBulk": 0.5,
+      "softTissue": 0.0,
+      "calibrationGains": {
+        "torso": 1.1698073626667909,
+        "upper_arm.L": 1.0569617883675821,
+        "forearm.L": 1.0365063444636802,
+        "thigh.L": 1.3832687525803522,
+        "shin.L": 1.023124356313361,
+        "upper_arm.R": 1.0482739483000902,
+        "forearm.R": 1.03217142026909,
+        "thigh.R": 1.400738633696401,
+        "shin.R": 1.021295369279364
+      }
+    },
+    "powerlifting": {
+      "fbx": "GymChaos/Assets/Resources/Player/Classes/player_powerlifting.fbx",
+      "vertices": 92190,
+      "maxDisplacement": 0.023579504518903987,
+      "upperBulk": 1.0,
+      "lowerBulk": 1.0,
+      "softTissue": 0.35,
+      "calibrationGains": {
+        "upper_arm.L": 1.0358975386658573,
+        "forearm.L": 1.1061859442658113,
+        "thigh.L": 1.3422850425337403,
+        "shin.L": 1.0457430482889223,
+        "upper_arm.R": 1.0534272696079654,
+        "forearm.R": 1.058056038190431,
+        "thigh.R": 1.3550711363231873,
+        "shin.R": 1.0139292323820148
+      }
+    },
+    "strongman": {
+      "fbx": "GymChaos/Assets/Resources/Player/Classes/player_strongman.fbx",
+      "vertices": 92190,
+      "maxDisplacement": 0.057483852865652656,
+      "upperBulk": 1.15,
+      "lowerBulk": 1.15,
+      "softTissue": 0.8,
+      "calibrationGains": {
+        "upper_arm.L": 1.0662007498366173,
+        "forearm.L": 1.0777100229762653,
+        "thigh.L": 1.3724593940050953,
+        "shin.L": 1.0414440655293844,
+        "upper_arm.R": 1.0707473919578696,
+        "forearm.R": 1.044568196185277,
+        "thigh.R": 1.4053447135568373,
+        "shin.R": 1.030841913343539
+      }
+    }
+  }
+}

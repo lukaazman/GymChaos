@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from pathlib import Path
 
 import bpy
@@ -38,6 +39,10 @@ EXPORTS = {
     "mark_authored": (
         PROJECT / "GymChaos/Assets/Resources/Characters/Enemies/mark_authored.fbx",
         ("idle1", "idle2", "idle3"),
+    ),
+    "jolly_dog_authored": (
+        PROJECT / "GymChaos/Assets/Resources/Characters/Fixer/jolly_dog_authored.fbx",
+        ("running", "flying", "falling", "landing", "magic_sign"),
     ),
     "player_authored": (
         PROJECT / "GymChaos/Assets/Resources/Player/player_authored.fbx",
@@ -138,6 +143,25 @@ def validate_inherited_segments(character, clip_name, armature) -> None:
             )
 
 
+def validate_glow_follows_hand(character, clip_name, armature, glow, action) -> None:
+    """The glow shell is rigid on DEF-hand.R: its offset in hand space is fixed."""
+    hand = armature.pose.bones["DEF-hand.R"]
+    start = int(action.frame_range[0])
+    end = int(action.frame_range[1])
+    offsets = []
+    for frame in (start, (start + end) // 2, end):
+        bpy.context.scene.frame_set(frame)
+        minimum, maximum = evaluated_bounds(glow)
+        center = (minimum + maximum) * 0.5
+        hand_matrix = armature.matrix_world @ hand.matrix
+        offsets.append(hand_matrix.inverted() @ center)
+    drift = max((offset - offsets[0]).length for offset in offsets)
+    if drift > 0.02:
+        raise RuntimeError(
+            f"{character}/{clip_name}: lollipop glow drifts {drift:.3f} from the hand")
+    print(f"GYMCHAOS_LOLLIPOP_GLOW_RIGID character={character} clip={clip_name} drift={drift:.4f}")
+
+
 def verify(character, path, clip_names) -> None:
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.fbx(
@@ -146,6 +170,9 @@ def verify(character, path, clip_names) -> None:
     )
     armatures = [obj for obj in bpy.context.scene.objects if obj.type == "ARMATURE"]
     meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
+    # jolly_dog carries a second skinned mesh: the lollipop glow shell.
+    glow = next((obj for obj in meshes if obj.name.startswith("lollipop_glow")), None)
+    meshes = [obj for obj in meshes if obj is not glow]
     if len(armatures) != 1 or len(meshes) != 1:
         raise RuntimeError(
             f"{character}: expected one armature/mesh, got "
@@ -168,6 +195,8 @@ def verify(character, path, clip_names) -> None:
     for clip_name in clip_names:
         action = action_for(actions, clip_name)
         assign_action(armature, action)
+        if glow is not None:
+            validate_glow_follows_hand(character, clip_name, armature, glow, action)
         start = int(round(action.frame_range[0]))
         end = int(round(action.frame_range[1]))
         frames = (start, int(round((start + end) * 0.5)), end)
@@ -208,7 +237,10 @@ def verify(character, path, clip_names) -> None:
     )
 
 
+selected = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 for character_name, (fbx_path, clips) in EXPORTS.items():
+    if selected and character_name not in selected:
+        continue
     if not fbx_path.exists():
         raise FileNotFoundError(fbx_path)
     verify(character_name, fbx_path, clips)

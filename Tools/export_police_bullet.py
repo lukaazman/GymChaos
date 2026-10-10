@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
@@ -39,6 +40,15 @@ def main():
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
     source_triangles = sum(len(polygon.vertices) - 2 for polygon in mesh.data.polygons)
+    # The GLB import splits vertices at every UV seam. Decimating that split
+    # mesh opens the seams into holes (the background showed through the tip
+    # as grey flecks). Weld coincident vertices first; UVs are per corner in
+    # Blender, so the texture mapping is kept.
+    weld = bmesh.new()
+    weld.from_mesh(mesh.data)
+    bmesh.ops.remove_doubles(weld, verts=weld.verts, dist=1e-5)
+    weld.to_mesh(mesh.data)
+    weld.free()
     modifier = mesh.modifiers.new("Decimate", "DECIMATE")
     modifier.decimate_type = "COLLAPSE"
     modifier.ratio = min(1.0, TARGET_TRIANGLES / max(source_triangles, 1))

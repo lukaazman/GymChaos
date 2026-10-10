@@ -124,6 +124,24 @@ CHARACTERS = {
         "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/policeman.png",
         "clip_names": POLICE_CLIPS,
     },
+    "jolly_dog": {
+        # The sky-dropping fixer. Its fall/landing/spell clips live in their
+        # own folder; running and flying are shared with the gym members.
+        "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/jolly_dog_rig.blend",
+        "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
+        "clip_dirs": {
+            "falling": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/jolly_dog",
+            "landing": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/jolly_dog",
+            "magic_sign": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/jolly_dog",
+        },
+        "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Fixer/jolly_dog_authored.fbx",
+        "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/jolly_dog.png",
+        "clip_names": ("running", "flying", "falling", "landing", "magic_sign"),
+        "lollipop_glow": True,
+        # The scan stands in an A-pose with the lollipop forearm bent
+        # forward; Mixamo clips rest in a T-pose. Re-rest the arms first.
+        "tpose_arms": True,
+    },
     "player": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/Player/player_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
@@ -188,6 +206,94 @@ def validate_authored_source(character_name, target, mesh) -> None:
         f"vertices={len(mesh.data.vertices)} modifier={modifiers[0].name} "
         f"weightsToNormalize={len(non_normalized)} unweighted={len(unweighted)}"
     )
+
+
+LOLLIPOP_HAND_BONE = "DEF-hand.R"
+LOLLIPOP_SOURCE_BONE = "DEF-thumb.03.R"
+
+
+def build_lollipop_glow(target: bpy.types.Object, mesh: bpy.types.Object) -> bpy.types.Object:
+    """Bind the hand-held lollipop rigidly to the palm and cut a glow shell.
+
+    The scan auto-weights the whole lollipop to the thumb tip, so every thumb
+    curl would swing the candy around. The stick and candy are re-weighted to
+    the hand bone only. The candy disc is then duplicated into its own skinned
+    mesh, slightly inflated, which the game renders as the additive glow.
+    """
+    data = mesh.data
+    world = mesh.matrix_world
+    group_names = {group.index: group.name for group in mesh.vertex_groups}
+
+    def dominant(vertex):
+        best = max(vertex.groups, key=lambda item: item.weight, default=None)
+        return group_names.get(best.group) if best is not None else None
+
+    # The stick and candy are fused with the fist in the scan, so select them
+    # geometrically: thumb-tip-weighted vertices above the thumb tip itself.
+    thumb = target.data.bones[LOLLIPOP_SOURCE_BONE]
+    thumb_top = max(
+        (target.matrix_world @ thumb.head_local).z,
+        (target.matrix_world @ thumb.tail_local).z)
+    lollipop = [
+        vertex.index for vertex in data.vertices
+        if dominant(vertex) == LOLLIPOP_SOURCE_BONE and
+        (world @ vertex.co).z > thumb_top + 0.015
+    ]
+    if len(lollipop) < 1000:
+        raise RuntimeError(f"jolly_dog: lollipop island not found ({len(lollipop)} vertices)")
+
+    hand_group = mesh.vertex_groups.get(LOLLIPOP_HAND_BONE)
+    if hand_group is None:
+        hand_group = mesh.vertex_groups.new(name=LOLLIPOP_HAND_BONE)
+    for index in lollipop:
+        for item in list(data.vertices[index].groups):
+            mesh.vertex_groups[item.group].remove([index])
+        hand_group.add([index], 1.0, "REPLACE")
+
+    points = [world @ data.vertices[index].co for index in lollipop]
+    top = max(point.z for point in points)
+    # The candy disc is ~0.14 m across; everything below it is the stick.
+    head = [point for point in points if point.z > top - 0.145]
+    minimum = Vector((min(p.x for p in head), min(p.y for p in head), min(p.z for p in head)))
+    maximum = Vector((max(p.x for p in head), max(p.y for p in head), max(p.z for p in head)))
+    center = (minimum + maximum) * 0.5
+    radius = 0.5 * max(maximum.x - minimum.x, maximum.z - minimum.z)
+    candy = {
+        index for index in lollipop
+        if ((world @ data.vertices[index].co) - center).length <= radius * 1.04
+    }
+
+    glow_data = bpy.data.meshes.new("lollipop_glow")
+    remap = {}
+    vertices = []
+    for index in sorted(candy):
+        vertex = data.vertices[index]
+        remap[index] = len(vertices)
+        vertices.append(vertex.co + vertex.normal * 0.003)
+    faces = [
+        [remap[index] for index in polygon.vertices]
+        for polygon in data.polygons
+        if all(index in candy for index in polygon.vertices)
+    ]
+    glow_data.from_pydata(vertices, [], faces)
+    glow_data.update()
+    glow_data.materials.append(bpy.data.materials.new("LollipopGlow"))
+    glow = bpy.data.objects.new("lollipop_glow", glow_data)
+    bpy.context.scene.collection.objects.link(glow)
+    glow.matrix_world = mesh.matrix_world.copy()
+    group = glow.vertex_groups.new(name=LOLLIPOP_HAND_BONE)
+    group.add(list(range(len(vertices))), 1.0, "REPLACE")
+    modifier = glow.modifiers.new("Armature", "ARMATURE")
+    modifier.object = target
+    print(
+        "GYMCHAOS_JOLLY_LOLLIPOP "
+        f"center={tuple(round(value, 4) for value in center)} "
+        f"radius={radius:.4f} lollipopVerts={len(lollipop)} "
+        f"glowVerts={len(vertices)} glowFaces={len(faces)}"
+    )
+    if len(faces) < 50:
+        raise RuntimeError("jolly_dog: lollipop glow shell has too few faces")
+    return glow
 
 
 def point_segment_distance(point: Vector, start: Vector, end: Vector) -> float:
@@ -643,6 +749,51 @@ def build_clean_export_rig(
     return export_target, export_mesh
 
 
+def realign_arms_to_tpose(target, meshes) -> None:
+    """Re-rest the arms in Mixamo's T-pose (arms along +/-X, straight).
+
+    The retarget copies rotation deltas from the source rest pose, so a target
+    resting in another arm pose plays every clip with lowered, twisted and
+    crossed arms. Pose the arm chains straight out, bake that pose into the
+    skinned meshes and make it the new rest pose.
+    """
+    bpy.context.view_layer.objects.active = target
+    for obj in bpy.context.view_layer.objects:
+        obj.select_set(obj == target)
+    bpy.ops.object.mode_set(mode="POSE")
+    chain = ("upper_arm.{}", "upper_arm.{}.001", "forearm.{}", "forearm.{}.001", "hand.{}")
+    for side, axis in (("L", Vector((1.0, 0.0, 0.0))), ("R", Vector((-1.0, 0.0, 0.0)))):
+        for part in chain:
+            name = "DEF-" + part.format(side)
+            pose_bone = target.pose.bones.get(name)
+            if pose_bone is None:
+                raise RuntimeError(f"tpose_arms: {name} missing")
+            bpy.context.view_layer.update()
+            matrix = pose_bone.matrix.copy()
+            current = matrix.col[1].to_3d().normalized()
+            rotation = current.rotation_difference(axis).to_matrix().to_4x4()
+            head = matrix.translation.copy()
+            pose_bone.matrix = (Matrix.Translation(head) @ rotation @
+                                Matrix.Translation(-head) @ matrix)
+    bpy.context.view_layer.update()
+    bpy.ops.object.mode_set(mode="OBJECT")
+    for mesh in meshes:
+        modifier = next(m for m in mesh.modifiers if m.type == "ARMATURE")
+        name = modifier.name
+        preserve = modifier.use_deform_preserve_volume
+        bpy.context.view_layer.objects.active = mesh
+        bpy.ops.object.modifier_apply(modifier=name)
+        modifier = mesh.modifiers.new(name, "ARMATURE")
+        modifier.object = target
+        modifier.use_deform_preserve_volume = preserve
+    bpy.context.view_layer.objects.active = target
+    bpy.ops.object.mode_set(mode="POSE")
+    bpy.ops.pose.select_all(action="SELECT")
+    bpy.ops.pose.armature_apply(selected=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.context.view_layer.update()
+
+
 def root_motion_scale(source: bpy.types.Object, target: bpy.types.Object) -> float:
     source_root = source.data.bones.get("mixamorig:Hips")
     source_foot = source.data.bones.get("mixamorig:LeftFoot")
@@ -819,16 +970,22 @@ def add_nla_strips(target: bpy.types.Object, actions) -> None:
         strip.extrapolation = "NOTHING"
 
 
-def select_export_objects(target: bpy.types.Object, mesh: bpy.types.Object) -> None:
+def select_export_objects(
+    target: bpy.types.Object, mesh: bpy.types.Object, extra_meshes=()
+) -> None:
     bpy.ops.object.select_all(action="DESELECT")
     target.select_set(True)
     mesh.select_set(True)
+    for extra in extra_meshes:
+        extra.select_set(True)
     bpy.context.view_layer.objects.active = target
 
 
-def export_fbx(output: Path, target: bpy.types.Object, mesh: bpy.types.Object) -> None:
+def export_fbx(
+    output: Path, target: bpy.types.Object, mesh: bpy.types.Object, extra_meshes=()
+) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    select_export_objects(target, mesh)
+    select_export_objects(target, mesh, extra_meshes)
     # The clean action is already keyed on the deform bones. Leave Rigify
     # constraints muted during the FBX serialization step so the exporter
     # cannot evaluate control/deform scale artifacts back into the clip.
@@ -873,11 +1030,18 @@ def export_authored_base_color(mesh: bpy.types.Object, output: Path) -> None:
         base_color = node.inputs.get("Base Color")
         if base_color is None:
             continue
-        for link in base_color.links:
-            source = link.from_node
-            if source is not None and source.type == "TEX_IMAGE" and source.image is not None:
+        # Follow mix nodes upstream: jolly_dog multiplies the texture by its
+        # vertex colours (exported separately as FBX vertex colours).
+        pending = [link.from_node for link in base_color.links]
+        while pending and image is None:
+            source = pending.pop(0)
+            if source is None:
+                continue
+            if source.type == "TEX_IMAGE" and source.image is not None:
                 image = source.image
                 break
+            for socket in source.inputs:
+                pending.extend(link.from_node for link in socket.links)
         if image is not None:
             break
     if image is None:
@@ -916,6 +1080,11 @@ def run(character_name: str) -> None:
         export_authored_base_color(authored_mesh, texture_output)
     keep_only_target_objects(authored_target, authored_mesh)
     target, mesh = build_clean_export_rig(authored_target, authored_mesh)
+    extra_meshes = []
+    if config.get("lollipop_glow"):
+        extra_meshes.append(build_lollipop_glow(target, mesh))
+    if config.get("tpose_arms"):
+        realign_arms_to_tpose(target, [mesh] + extra_meshes)
 
     rest_pose = {
         pose_bone.name: pose_bone.matrix.copy() for pose_bone in target.pose.bones
@@ -923,7 +1092,10 @@ def run(character_name: str) -> None:
     actions = []
     report = []
     for clip_name in config["clip_names"]:
-        if clip_name in PLAYER_ONLY_CLIPS:
+        clip_dirs = config.get("clip_dirs", {})
+        if clip_name in clip_dirs:
+            clip_path = clip_dirs[clip_name] / f"{clip_name}.fbx"
+        elif clip_name in PLAYER_ONLY_CLIPS:
             clip_path = config["clips"] / "player_only" / f"{clip_name}.fbx"
         else:
             clip_path = config["clips"] / f"{clip_name}.fbx"
@@ -957,7 +1129,7 @@ def run(character_name: str) -> None:
     bpy.context.scene.frame_end = max(
         int(round(action.frame_end)) for action in actions
     )
-    export_fbx(config["output"], target, mesh)
+    export_fbx(config["output"], target, mesh, extra_meshes)
     print(
         "GYMCHAOS_AUTHORED_EXPORT_OK "
         f"character={character_name} output={config['output']} "
