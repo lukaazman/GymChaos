@@ -5,7 +5,7 @@ public enum GymBackRoomInteractionType
 {
     Prep,
     Locker,
-    Bathroom
+    ToiletSeat
 }
 
 public sealed class GymBackRoomInteractable : MonoBehaviour
@@ -43,6 +43,11 @@ public sealed class GymBackRoomInteractable : MonoBehaviour
     private void OnDestroy()
     {
         RegisteredItems.Remove(this);
+    }
+
+    public void SetDisplayName(string displayName)
+    {
+        DisplayName = displayName;
     }
 
     public void Configure(GymBackRoomInteractionType type, string displayName,

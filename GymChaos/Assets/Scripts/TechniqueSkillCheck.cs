@@ -41,6 +41,18 @@ public sealed class TechniqueSkillCheck
         IsActive = true;
     }
 
+    /// <summary>
+    /// Same check with both windows scaled. Cardio pace gates shrink the
+    /// windows as the pace rises; at zero no hit can pass.
+    /// </summary>
+    public void Begin(int techniqueRank, float difficultyScale, float windowScale)
+    {
+        Begin(techniqueRank, difficultyScale);
+        float scale = Mathf.Clamp01(windowScale);
+        PerfectHalfAngle *= scale;
+        AcceptableHalfAngle *= scale;
+    }
+
     public WorkoutResult Tick(float deltaTime, bool actionPressed)
     {
         if (!IsActive)
@@ -73,6 +85,10 @@ public sealed class TechniqueSkillCheck
 
         float distanceFromPerfect = Mathf.Abs(Mathf.DeltaAngle(MarkerAngle, 0f));
         IsActive = false;
+        if (AcceptableHalfAngle <= 0.01f)
+        {
+            return WorkoutResult.Miss; // closed window: no hit can pass
+        }
         if (distanceFromPerfect <= PerfectHalfAngle)
         {
             return WorkoutResult.Perfect;

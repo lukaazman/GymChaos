@@ -54,6 +54,12 @@ public sealed class GymProgressionState
     public string headwear = nameof(GymHeadwear.None);
 
     public int[] dailyProgress = { 0, 0, 0 };
+    // Daily cardio challenge (one per gym day, picked from the day number).
+    public int cardioChallengeDay;
+    public int cardioChallengeKind;
+    public float cardioChallengeTarget;
+    public float cardioChallengeProgress;
+    public bool cardioChallengeCompleted;
     public bool[] dailyCompleted = { false, false, false };
 
     public void Normalize()

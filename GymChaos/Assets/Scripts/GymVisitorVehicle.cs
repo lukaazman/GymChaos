@@ -110,19 +110,31 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         return false;
     }
-    // Distance east of the parking mouth inside which an arriving car
-    // already owns the shared connector (about two seconds of driving).
-    private const float ParkingConnectorApproachMargin = 14f;
+    // A passenger stops for an arriving car only once the car is actually in
+    // its vicinity and heading its way, like real parking-lot traffic. Farther
+    // cars do not freeze every passenger; the car itself still slows for and
+    // asks pedestrians in its path to step aside (RequestVehicleYield).
+    private const float PassengerArrivalStopDistance = 9f;
+    private const float PassengerArrivalStopHalfWidth = 3.6f;
 
-    /// <summary>
-    /// True only while another car is actually entering the shared parking
-    /// connector. A car still far down the access road, or the bus heading
-    /// for the roadside stop, does not cross a passenger's walk to the gym.
-    /// A car already stopped for a pedestrian lets the passenger go first,
-    /// otherwise both would wait for each other.
-    /// </summary>
-    public static bool HasConflictingParkingArrivalExcept(
-        GymVisitorVehicle ignoredVehicle)
+    // Verification only: treat this car as driving into the car park without
+    // starting a drive, so the pedestrian rule can be probed deterministically.
+    private bool forcedParkingArrivalForVerification;
+    internal void ForceParkingArrivalForVerification(bool value)
+    {
+        forcedParkingArrivalForVerification = value;
+        if (value && !activeGroundTraffic.Contains(this))
+        {
+            activeGroundTraffic.Add(this);
+        }
+        else if (!value && !IsDriving)
+        {
+            activeGroundTraffic.Remove(this);
+        }
+    }
+
+    public static bool HasConflictingParkingArrivalNear(
+        GymVisitorVehicle ignoredVehicle, Vector3 pedestrianPosition)
     {
         for (int i = activeGroundTraffic.Count - 1; i >= 0; i--)
         {
@@ -132,10 +144,32 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 activeGroundTraffic.RemoveAt(i);
                 continue;
             }
-            if (other != ignoredVehicle && other.IsDriving &&
-                other.drivingIntoParking && !other.UsesRoadsideBusRoute &&
-                !other.IsCloud && other.IsNearParkingConnector &&
-                !other.IsYieldingToPedestrian)
+            bool forced = other.forcedParkingArrivalForVerification;
+            if (other == ignoredVehicle || !(other.IsDriving || forced) ||
+                !(other.drivingIntoParking || forced) || other.UsesRoadsideBusRoute ||
+                other.IsCloud || other.IsYieldingToPedestrian)
+            {
+                continue;
+            }
+            Transform car = other.transform;
+            Vector3 toPedestrian = Vector3.ProjectOnPlane(
+                pedestrianPosition - car.position, Vector3.up);
+            if (toPedestrian.sqrMagnitude >
+                PassengerArrivalStopDistance * PassengerArrivalStopDistance)
+            {
+                continue;
+            }
+            Vector3 forward = Vector3.ProjectOnPlane(car.forward, Vector3.up);
+            if (forward.sqrMagnitude < 0.01f)
+            {
+                return true;
+            }
+            forward.Normalize();
+            float ahead = Vector3.Dot(toPedestrian, forward);
+            float lateral = Mathf.Abs(Vector3.Dot(
+                toPedestrian, Vector3.Cross(Vector3.up, forward)));
+            // Behind the car or well off its lane: keep walking.
+            if (ahead > -1.5f && lateral < PassengerArrivalStopHalfWidth)
             {
                 return true;
             }
@@ -143,18 +177,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         return false;
     }
 
-    private bool IsNearParkingConnector
-    {
-        get
-        {
-            Bounds parking = GymOutdoorBuilder.ParkingBounds;
-            Vector3 position = transform.position;
-            return position.x <= GymOutdoorBuilder.VehicleRoadJunctionPoint.x +
-                    ParkingConnectorApproachMargin &&
-                position.z >= parking.min.z - 4f &&
-                position.z <= parking.max.z + 4f;
-        }
-    }
     public bool HasCompletedDeparture { get; private set; }
     public bool IsCloud => identity == BodybuilderIdentity.Goku;
     public bool IsBus => identity == BodybuilderIdentity.Davie;
@@ -221,6 +243,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public float BoardingReachDistance => IsCloud || IsBus ? 0.8f : 0.65f;
 #if UNITY_EDITOR
     public static float NormalDriveSpeedForVerification => DriveSpeed;
+    public bool IsDrivingIntoParkingForVerification =>
+        IsDriving && drivingIntoParking && !UsesRoadsideBusRoute && !IsCloud;
     public Vector3 ParkingPointForVerification => parkingPoint;
     public Vector3 RoadPointForVerification => roadPoint;
     public bool HasDistanceAttenuatedAudioForVerification => engine != null &&

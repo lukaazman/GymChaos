@@ -520,6 +520,11 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		}
 	}
 
+	private bool IsNearConflictingParkingArrival() =>
+		fighter != null &&
+		GymVisitorVehicle.HasConflictingParkingArrivalNear(
+			arrivalVehicle, fighter.VisitorPhysicsPosition);
+
 	public bool IsYieldingToVehicle => (UnityEngine.Object)(object)yieldingToVehicle != (UnityEngine.Object)null;
 
 	public bool CanDeactivate
@@ -560,7 +565,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			{
 				return false;
 			}
-		if (state == VisitorState.ApproachingGymFromVehicle && GymVisitorVehicle.HasConflictingParkingArrivalExcept(arrivalVehicle))
+		if (state == VisitorState.ApproachingGymFromVehicle && IsNearConflictingParkingArrival())
 		{
 			// Keep the director timeout from treating an authored vehicle-arrival queue as a failed route.
 			return true;
@@ -1143,7 +1148,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			return true;
 		}
 		if (state == VisitorState.ApproachingGymFromVehicle &&
-			GymVisitorVehicle.HasConflictingParkingArrivalExcept(arrivalVehicle))
+			IsNearConflictingParkingArrival())
 		{
 			// A vehicle arrival owns the shared parking connector until its
 			// complete body reaches the bay. Keep the passenger at the

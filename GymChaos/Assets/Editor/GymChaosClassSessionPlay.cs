@@ -893,6 +893,8 @@ public static class GymChaosClassSessionPlay
         yield return 0.1f;
 
         treadmill.BeginSession(camera);
+        // Top pace only: pace gates are covered by GymChaosCardioGateVerifier.
+        treadmill.UnlockCardioPaceForVerification();
         for (int i = 0; i < 40; i++) treadmill.TickSession(0.02f, false, true, false);
         for (int i = 0; i < 200; i++) treadmill.TickSession(0.1f, false, false, false);
         float topPace = treadmill.CurrentTreadmillSpeed;

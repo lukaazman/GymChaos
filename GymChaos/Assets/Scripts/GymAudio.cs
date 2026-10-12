@@ -28,7 +28,8 @@ public enum GymSoundEffect
     LevelUp,
     VehicleDriving,
     FixerFloor,
-    FixerGlitter
+    FixerGlitter,
+    ToiletSeat
 }
 
 public sealed class GymAudio : MonoBehaviour
@@ -87,7 +88,9 @@ public sealed class GymAudio : MonoBehaviour
             { GymSoundEffect.VehicleDriving, new ClipDefinition("car_driving.wav", AudioType.WAV) },
             // User-provided Jolly Dog sounds: touchdown/take-off and each repair.
             { GymSoundEffect.FixerFloor, new ClipDefinition("floor_start_end.wav", AudioType.WAV) },
-            { GymSoundEffect.FixerGlitter, new ClipDefinition("glitter.mp3", AudioType.MPEG) }
+            { GymSoundEffect.FixerGlitter, new ClipDefinition("glitter.mp3", AudioType.MPEG) },
+            // User-provided: every lift and drop of the bathroom toilet seat.
+            { GymSoundEffect.ToiletSeat, new ClipDefinition("toilet_seat_drop.wav", AudioType.WAV) }
         };
 
     // Interface and first-person cues: played flat (2D) from one pooled

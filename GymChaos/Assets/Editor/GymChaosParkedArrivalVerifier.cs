@@ -37,7 +37,16 @@ public static class GymChaosParkedArrivalVerifier
         public bool wasArriving;
         public Vector3 carPosition;
         public bool carPositionSet;
+        public Vector3 lastSamplePosition;
+        public bool lastSampleSet;
     }
+
+    // Passengers walking while another car drives into the car park: one far
+    // from that car keeps walking, only one in its way stops for it.
+    private const float FarFromArrivingCar = 12f;
+    private static int farTrafficSamples;
+    private static int farTrafficMoving;
+    private static int nearTrafficSamples;
 
     private static readonly Dictionary<GymVisitorAgent, Track> tracks =
         new Dictionary<GymVisitorAgent, Track>();
@@ -73,6 +82,7 @@ public static class GymChaosParkedArrivalVerifier
         finished = false;
         forced = 0;
         completedArrivals = 0;
+        farTrafficSamples = farTrafficMoving = nearTrafficSamples = 0;
         roamMin = float.PositiveInfinity;
         roamMax = 0f;
         roamSamples = 0;
@@ -200,6 +210,7 @@ public static class GymChaosParkedArrivalVerifier
         track.wasArriving = true;
         track.loggedArrival = true;
         Vector3 position = fighter.VisitorPhysicsPosition;
+        SampleConcurrentTraffic(track, fighter, position);
         if (Vector3.ProjectOnPlane(position - track.anchor, Vector3.up).magnitude > 0.6f)
         {
             track.anchor = position;
@@ -299,6 +310,39 @@ public static class GymChaosParkedArrivalVerifier
         }
     }
 
+    private static void SampleConcurrentTraffic(Track track, EnemyFighter fighter, Vector3 position)
+    {
+        Vector3 previous = track.lastSamplePosition;
+        bool hadPrevious = track.lastSampleSet;
+        track.lastSamplePosition = position;
+        track.lastSampleSet = true;
+        if (!hadPrevious) return;
+        string ownVehicle = fighter.Identity + " Visitor Vehicle";
+        float nearest = float.MaxValue;
+        foreach (GymVisitorVehicle vehicle in UnityEngine.Object.FindObjectsByType<GymVisitorVehicle>(
+            FindObjectsSortMode.None))
+        {
+            if (vehicle == null || vehicle.name == ownVehicle ||
+                !vehicle.IsDrivingIntoParkingForVerification) continue;
+            nearest = Mathf.Min(nearest,
+                Vector3.ProjectOnPlane(vehicle.transform.position - position, Vector3.up).magnitude);
+        }
+        if (nearest == float.MaxValue) return;
+        // Only passengers already out of the car and walking the car park.
+        if (!fighter.gameObject.activeInHierarchy) return;
+        float moved = Vector3.ProjectOnPlane(position - previous, Vector3.up).magnitude;
+        if (moved > 3f) return; // spawn/teleport, not walking
+        if (nearest >= FarFromArrivingCar)
+        {
+            farTrafficSamples++;
+            if (moved > 0.12f) farTrafficMoving++;
+        }
+        else
+        {
+            nearTrafficSamples++;
+        }
+    }
+
     private static void Finish()
     {
         // Completed arrivals over the whole run, plus any arrival still open:
@@ -324,6 +368,14 @@ public static class GymChaosParkedArrivalVerifier
             Fail($"roam speed never varied samples={roamSamples} changes={roamSpeedChanges}");
             return;
         }
+        if (farTrafficSamples >= 4 && farTrafficMoving * 2 < farTrafficSamples)
+        {
+            Fail($"passengers far from an arriving car stood still: moving={farTrafficMoving}/" +
+                 $"{farTrafficSamples}");
+            return;
+        }
+        Debug.Log($"GYMCHAOS_PARKED_ARRIVAL_CONCURRENT_TRAFFIC farSamples={farTrafficSamples} " +
+                  $"farMoving={farTrafficMoving} nearSamples={nearTrafficSamples}");
         finished = true;
         resultCode = 0; GymChaosVerifierExit.Record(resultCode);
         Debug.Log(

@@ -68,7 +68,13 @@ public class GymExerciseStation : MonoBehaviour
     private readonly List<Transform> bikeMovingParts = new List<Transform>();
     private readonly List<Quaternion> bikeMovingPartRotations = new List<Quaternion>();
     private float cardioPhase;
-    private float cardioBeatTimer;
+    // Cardio pace gates: the next 2-unit speed band opens only after a
+    // timing check. Not a rep; the window narrows as the pace rises.
+    public const float CardioGateStep = 2f;
+    private float cardioUnlockedSpeed = CardioGateStep;
+    private float cardioGateTargetSpeed;
+    private int cardioGatesCleared;
+    private int cardioPerfectGates;
     private readonly TechniqueSkillCheck techniqueSkillCheck = new TechniqueSkillCheck();
     private WorkoutResult lastWorkoutResult = WorkoutResult.None;
     private int comboMultiplier = 1;
@@ -285,6 +291,7 @@ public class GymExerciseStation : MonoBehaviour
     public const float DeadliftNominalStanceOffset = 0.3f;
     internal Renderer TreadmillBeltRendererForVerification => treadmillBeltRenderer;
     public float CurrentTreadmillSpeed => currentSpeed;
+    public float CurrentCardioDistance => distance;
     public bool IsSessionActive => sessionActive;
     public string EquipmentName => equipmentRoot != null ? equipmentRoot.name : string.Empty;
     public Transform EquipmentRoot => equipmentRoot;
@@ -1232,14 +1239,12 @@ public class GymExerciseStation : MonoBehaviour
     {
         if (exerciseType == GymExerciseType.Treadmill)
         {
-            string cadence = techniqueSkillCheck.IsActive ? "  |  CADENCE CHECK" : string.Empty;
-            return $"TREADMILL  |  speed {currentSpeed:0.0} km/h  |  distance {distance / 1000f:0.00} km{cadence}\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
+            return $"TREADMILL  |  speed {currentSpeed:0.0} km/h  |  distance {distance / 1000f:0.00} km  |  {GetCardioGateHud("km/h")}\n{GetCardioChallengeHud()}[W] faster   [S] slower   [SPACE] start/stop, hit pace gate   [Q] exit";
         }
 
         if (exerciseType == GymExerciseType.ExerciseBike)
         {
-            string cadence = techniqueSkillCheck.IsActive ? "  |  CADENCE CHECK" : string.Empty;
-            return $"EXERCISE BIKE  |  pace {currentSpeed:0.0}  |  distance {distance / 1000f:0.00} km{cadence}\n[W] faster   [S] slower   [SPACE] start/stop   [Q] exit";
+            return $"EXERCISE BIKE  |  pace {currentSpeed:0.0}  |  distance {distance / 1000f:0.00} km  |  {GetCardioGateHud("pace")}\n{GetCardioChallengeHud()}[W] faster   [S] slower   [SPACE] start/stop, hit pace gate   [Q] exit";
         }
 
         if (exerciseType == GymExerciseType.PullUps)
@@ -1258,6 +1263,25 @@ public class GymExerciseStation : MonoBehaviour
         return $"{displayName.ToUpperInvariant()}  |  {selectedWeight} kg  |  reps: {repetitions}  |  combo x{comboMultiplier}  |  {repState}\n[SPACE] start / hit timing   [Q] exit";
     }
 
+    private string GetCardioGateHud(string unit)
+    {
+        if (techniqueSkillCheck.IsActive)
+        {
+            return $"PACE GATE  {cardioUnlockedSpeed:0} > {cardioUnlockedSpeed + CardioGateStep:0} {unit}  hit [SPACE]";
+        }
+        return $"open to {cardioUnlockedSpeed:0} {unit}";
+    }
+
+    private static string GetCardioChallengeHud()
+    {
+        GymExperienceService service = GymExperienceService.Active;
+        if (service == null || string.IsNullOrEmpty(service.CardioChallengeLabel))
+        {
+            return string.Empty;
+        }
+        return $"CHALLENGE  {service.CardioChallengeLabel}  {service.CardioChallengeProgressText}\n";
+    }
+
     public void BeginSession(Transform cameraTransform)
     {
         sessionActive = true;
@@ -1266,7 +1290,10 @@ public class GymExerciseStation : MonoBehaviour
         sessionElapsed = 0f;
         distance = 0f;
         cardioPhase = 0f;
-        cardioBeatTimer = 4.2f;
+        cardioUnlockedSpeed = CardioGateStep;
+        cardioGateTargetSpeed = 0f;
+        cardioGatesCleared = 0;
+        cardioPerfectGates = 0;
         lastWorkoutResult = WorkoutResult.None;
         comboMultiplier = 1;
         if (RequiresWeightSelection && selectedWeight <= 0)
@@ -1280,6 +1307,10 @@ public class GymExerciseStation : MonoBehaviour
 
     public void EndSession()
     {
+        if (sessionActive && IsCardio)
+        {
+            GymExperienceService.Active?.ReportCardioStopped();
+        }
         if (sessionActive && IsCardio && distance > 0.1f)
         {
             // Class pace changes how fast the belt runs, not how much a
@@ -2266,21 +2297,23 @@ public class GymExerciseStation : MonoBehaviour
 
     private void TickCardio(float deltaTime, bool actionPressed, bool increasePressed, bool decreasePressed)
     {
-        bool cadenceCheckWasActive = techniqueSkillCheck.IsActive;
-        float maximum = exerciseType == GymExerciseType.Treadmill ? 18f : 14f;
-        if (GymExperienceService.Active != null)
+        bool gateWasActive = techniqueSkillCheck.IsActive;
+        float maximum = GetCardioMaximum();
+        if (increasePressed && !gateWasActive)
         {
-            maximum *= GymExperienceService.Active.GetCardioCapacityMultiplier();
-            // Class cardio aptitude changes only the sustainable top pace.
-            maximum *= GymExperienceService.Active.GetExercisePerformance(exerciseType);
-        }
-        maximum = Mathf.Max(1f, maximum);
-        if (increasePressed)
-        {
-            targetSpeed = Mathf.Min(maximum, Mathf.Max(1f, targetSpeed + 1f));
-            previousMovingSpeed = targetSpeed;
+            float desired = Mathf.Min(maximum, Mathf.Max(1f, targetSpeed + 1f));
+            if (desired <= cardioUnlockedSpeed + 0.001f)
+            {
+                targetSpeed = desired;
+                previousMovingSpeed = targetSpeed;
+            }
+            else if (desired > targetSpeed + 0.001f)
+            {
+                BeginCardioGate(desired, maximum);
+            }
         }
 
+        // Slowing down never needs a check, and a failed gate never slows you.
         if (decreasePressed)
         {
             targetSpeed = Mathf.Max(0f, targetSpeed - 1f);
@@ -2290,7 +2323,7 @@ public class GymExerciseStation : MonoBehaviour
             }
         }
 
-        if (actionPressed && !cadenceCheckWasActive)
+        if (actionPressed && !gateWasActive)
         {
             if (targetSpeed > 0f || currentSpeed > 0.15f)
             {
@@ -2303,44 +2336,95 @@ public class GymExerciseStation : MonoBehaviour
             }
             else
             {
-                targetSpeed = Mathf.Max(1f, previousMovingSpeed);
+                targetSpeed = Mathf.Min(cardioUnlockedSpeed, Mathf.Max(1f, previousMovingSpeed));
             }
         }
 
         currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, deltaTime * (targetSpeed > currentSpeed ? 1.6f : 2.8f));
+        float previousDistance = distance;
         distance += currentSpeed / 3.6f * deltaTime;
         cardioPhase += currentSpeed * deltaTime * (exerciseType == GymExerciseType.Treadmill ? 1.35f : 0.9f);
         AnimateActualCardioParts(deltaTime);
+        GymExperienceService.Active?.ReportCardioProgress(
+            exerciseType, currentSpeed, distance - previousDistance, deltaTime);
 
         if (techniqueSkillCheck.IsActive)
         {
-            WorkoutResult cadenceResult = techniqueSkillCheck.Tick(deltaTime, actionPressed);
-            if (cadenceResult != WorkoutResult.None)
+            WorkoutResult gateResult = techniqueSkillCheck.Tick(deltaTime, actionPressed && gateWasActive);
+            if (gateResult != WorkoutResult.None)
             {
-                lastWorkoutResult = cadenceResult;
-                if (cadenceResult == WorkoutResult.Perfect)
-                {
-                    targetSpeed = Mathf.Min(maximum, targetSpeed + 0.5f);
-                    Debug.Log($"GYMCHAOS_TECHNIQUE_PERFECT cardio={exerciseType}", this);
-                }
-                GymExperienceService.Active?.RegisterWorkoutRep(cadenceResult, exerciseType, 0);
-            }
-        }
-        else if (currentSpeed > 0.25f)
-        {
-            cardioBeatTimer -= deltaTime;
-            if (cardioBeatTimer <= 0f)
-            {
-                int rank = GymExperienceService.Active != null
-                    ? GymExperienceService.Active.GetStatRank(GymStat.Technique) : 0;
-                float cadenceDifficulty = GymExperienceService.Active != null
-                    ? GymExperienceService.Active.GetTechniqueDifficultyScale(1.08f)
-                    : 1.08f;
-                techniqueSkillCheck.Begin(rank, cadenceDifficulty);
-                cardioBeatTimer = 5.5f;
+                ResolveCardioGate(gateResult);
             }
         }
     }
+
+    private float GetCardioMaximum()
+    {
+        float maximum = exerciseType == GymExerciseType.Treadmill ? 18f : 14f;
+        if (GymExperienceService.Active != null)
+        {
+            maximum *= GymExperienceService.Active.GetCardioCapacityMultiplier();
+            // Class cardio aptitude changes only the sustainable top pace.
+            maximum *= GymExperienceService.Active.GetExercisePerformance(exerciseType);
+        }
+        return Mathf.Max(1f, maximum);
+    }
+
+    /// <summary>
+    /// Timing window for the gate that opens the band up to the given pace:
+    /// wide at a walk, narrower every band, and zero past the top pace the
+    /// player can sustain, so an unrealistic pace cannot be reached.
+    /// </summary>
+    public static float GetCardioGateWindowScale(float gateSpeed, float maximum)
+    {
+        float limit = Mathf.Max(CardioGateStep, maximum + CardioGateStep * 0.5f);
+        return Mathf.Pow(Mathf.Clamp01(1f - gateSpeed / limit), 0.6f);
+    }
+
+    private void BeginCardioGate(float desiredSpeed, float maximum)
+    {
+        cardioGateTargetSpeed = desiredSpeed;
+        float gateSpeed = cardioUnlockedSpeed + CardioGateStep;
+        int rank = GymExperienceService.Active != null
+            ? GymExperienceService.Active.GetStatRank(GymStat.Technique) : 0;
+        float difficulty = GymExperienceService.Active != null
+            ? GymExperienceService.Active.GetTechniqueDifficultyScale(1.08f)
+            : 1.08f;
+        // The marker also runs a little faster at higher paces.
+        difficulty *= 1f + Mathf.Clamp01(gateSpeed / Mathf.Max(1f, maximum)) * 0.35f;
+        techniqueSkillCheck.Begin(rank, difficulty, GetCardioGateWindowScale(gateSpeed, maximum));
+        Debug.Log(
+            $"GYMCHAOS_CARDIO_GATE_BEGIN station={exerciseType} band={cardioUnlockedSpeed:0}-{gateSpeed:0} " +
+            $"perfect={techniqueSkillCheck.PerfectHalfAngle:F2} good={techniqueSkillCheck.AcceptableHalfAngle:F2}",
+            this);
+    }
+
+    private void ResolveCardioGate(WorkoutResult result)
+    {
+        lastWorkoutResult = result;
+        bool passed = result == WorkoutResult.Perfect || result == WorkoutResult.Good ||
+            result == WorkoutResult.AutoPerfect;
+        if (passed)
+        {
+            cardioUnlockedSpeed += CardioGateStep;
+            cardioGatesCleared++;
+            if (result != WorkoutResult.Good)
+            {
+                cardioPerfectGates++;
+            }
+            targetSpeed = Mathf.Min(cardioUnlockedSpeed, Mathf.Max(targetSpeed, cardioGateTargetSpeed));
+            previousMovingSpeed = targetSpeed;
+        }
+        Debug.Log(
+            $"GYMCHAOS_CARDIO_GATE_RESULT station={exerciseType} result={result} " +
+            $"unlocked={cardioUnlockedSpeed:0} target={targetSpeed:0.0}",
+            this);
+        GymExperienceService.Active?.RegisterCardioGate(result, exerciseType, cardioUnlockedSpeed);
+    }
+
+    public float CardioUnlockedSpeed => cardioUnlockedSpeed;
+    public int CardioGatesCleared => cardioGatesCleared;
+    internal void UnlockCardioPaceForVerification() => cardioUnlockedSpeed = 1000f;
 
     private void ConfigureActualCardioParts(Transform equipment)
     {
@@ -2361,6 +2445,12 @@ public class GymExerciseStation : MonoBehaviour
             }
 
             treadmillPropertyBlock = new MaterialPropertyBlock();
+            GymTreadmillConsole console = equipment.GetComponent<GymTreadmillConsole>();
+            if (console == null)
+            {
+                console = equipment.gameObject.AddComponent<GymTreadmillConsole>();
+            }
+            console.Bind(this, treadmillBeltRenderer);
         }
         else if (exerciseType == GymExerciseType.ExerciseBike)
         {

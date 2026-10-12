@@ -60,9 +60,9 @@ public sealed class GymHud : MonoBehaviour
     private Text statsLabel;
     private Text reputationLabel;
     private RectTransform experienceFill;
-    private readonly RectTransform[] goalFills = new RectTransform[3];
-    private readonly PersonaShape[] goalShapes = new PersonaShape[3];
-    private readonly Text[] goalCounts = new Text[3];
+    private readonly RectTransform[] goalFills = new RectTransform[4];
+    private readonly PersonaShape[] goalShapes = new PersonaShape[4];
+    private readonly Text[] goalCounts = new Text[4];
     private Text dayLabel;
     private readonly Text[] noticeLabels = new Text[MaxVisibleNotices];
     private readonly GameObject[] noticeRoots = new GameObject[MaxVisibleNotices];
@@ -82,8 +82,8 @@ public sealed class GymHud : MonoBehaviour
     private int shownDay = int.MinValue;
     private string shownHeld;
     private string shownClass;
-    private readonly int[] shownGoalProgress = { int.MinValue, int.MinValue, int.MinValue };
-    private readonly bool[] shownGoalDone = new bool[3];
+    private readonly int[] shownGoalProgress = { int.MinValue, int.MinValue, int.MinValue, int.MinValue };
+    private readonly bool[] shownGoalDone = new bool[4];
     private bool shownExhausted;
     private bool shownSprinting;
     private bool visible = true;
@@ -473,6 +473,17 @@ public sealed class GymHud : MonoBehaviour
             goalShapes[i].color = done ? PersonaMenuStyle.Gold : PersonaMenuStyle.Accent;
             goalCounts[i].text = done ? "DONE" : value + " / " + target;
         }
+        const int cardioRow = 3;
+        int cardioPercent = Mathf.RoundToInt(progression.CardioChallengeFraction * 100f);
+        bool cardioDone = progression.CardioChallengeCompleted;
+        if (cardioPercent != shownGoalProgress[cardioRow] || cardioDone != shownGoalDone[cardioRow])
+        {
+            shownGoalProgress[cardioRow] = cardioPercent;
+            shownGoalDone[cardioRow] = cardioDone;
+            SetFraction(goalFills[cardioRow], cardioPercent / 100f);
+            goalShapes[cardioRow].color = cardioDone ? PersonaMenuStyle.Gold : PersonaMenuStyle.Accent;
+            goalCounts[cardioRow].text = cardioDone ? "DONE" : cardioPercent + "%";
+        }
     }
 
     // ---- construction ----
@@ -601,7 +612,7 @@ public sealed class GymHud : MonoBehaviour
     private void BuildProgress(Transform parent, Font body)
     {
         const float levelHeight = 112f;
-        const float goalHeight = 110f;
+        const float goalHeight = 136f;
         const float gap = 14f;
         RectTransform plate = Box(parent, "Level Plate", Vector2.zero, new Vector2(380f, levelHeight), true);
         Panel(plate, PersonaMenuStyle.Accent, new Color(0.035f, 0.05f, 0.1f, 1f));
@@ -619,17 +630,18 @@ public sealed class GymHud : MonoBehaviour
             new Vector2(380f, goalHeight), true);
         Panel(goals, PersonaMenuStyle.Ink, new Color(0.035f, 0.05f, 0.1f, 1f));
         dayLabel = Label(goals, "Day", body, string.Empty, 22, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft,
-            new Vector2(0.05f, 0.74f), new Vector2(0.97f, 0.98f));
-        string[] shortLabels = { "REPS", "SOCIAL", "CHAOS" };
-        for (int i = 0; i < 3; i++)
+            new Vector2(0.05f, 0.79f), new Vector2(0.97f, 0.98f));
+        string[] shortLabels = { "REPS", "SOCIAL", "CHAOS", "CARDIO" };
+        const float row = 0.18f;
+        for (int i = 0; i < shortLabels.Length; i++)
         {
-            float top = 0.7f - i * 0.22f;
+            float top = 0.76f - i * row;
             Label(goals, "Goal " + i, body, shortLabels[i], 18, PersonaMenuStyle.Muted, TextAnchor.MiddleLeft,
-                new Vector2(0.05f, top - 0.2f), new Vector2(0.24f, top));
-            goalFills[i] = Bar(goals, "Goal Bar " + i, new Vector2(0.25f, top - 0.14f), new Vector2(0.76f, top - 0.06f),
+                new Vector2(0.05f, top - 0.16f), new Vector2(0.24f, top));
+            goalFills[i] = Bar(goals, "Goal Bar " + i, new Vector2(0.25f, top - 0.115f), new Vector2(0.76f, top - 0.05f),
                 PersonaMenuStyle.Accent, out goalShapes[i]);
             goalCounts[i] = Label(goals, "Goal Count " + i, body, string.Empty, 18, PersonaMenuStyle.Ink,
-                TextAnchor.MiddleRight, new Vector2(0.78f, top - 0.2f), new Vector2(0.95f, top));
+                TextAnchor.MiddleRight, new Vector2(0.78f, top - 0.16f), new Vector2(0.95f, top));
         }
     }
 

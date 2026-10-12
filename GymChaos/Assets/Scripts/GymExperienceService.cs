@@ -443,7 +443,8 @@ public sealed class GymExperienceService : MonoBehaviour
         return 100 + offset * 35 + offset * offset * 6;
     }
 
-    public void AwardExperience(int amount, string reason, string sourceKey = null)
+    public void AwardExperience(
+        int amount, string reason, string sourceKey = null, bool playSound = true)
     {
         if (state == null || amount <= 0)
         {
@@ -466,9 +467,12 @@ public sealed class GymExperienceService : MonoBehaviour
             leveled = true;
         }
 
-        GymAudio.Play2D(
-            leveled ? GymSoundEffect.LevelUp : GymSoundEffect.ActionConfirm,
-            leveled ? 0.75f : 0.32f);
+        if (leveled || playSound)
+        {
+            GymAudio.Play2D(
+                leveled ? GymSoundEffect.LevelUp : GymSoundEffect.ActionConfirm,
+                leveled ? 0.75f : 0.32f);
+        }
         if (leveled)
         {
             levelChoiceVisible = true;
@@ -566,8 +570,7 @@ public sealed class GymExperienceService : MonoBehaviour
         {
             RegisterDailyGoal(delta > 0 ? 1 : 2);
         }
-        // Show the action's applied impact, not the final reputation total.
-        ShowStatImpact($"REP IMPACT   {applied:+#;-#;0}", 1.8f);
+        // Reputation changes are silent: only the top-right REP stat updates.
         Debug.Log(
             $"GYMCHAOS_REPUTATION_CHANGED delta={applied} value={state.reputation} reason={reason}",
             this);
@@ -607,6 +610,244 @@ public sealed class GymExperienceService : MonoBehaviour
         RegisterDailyGoal(0);
     }
 
+    // ---- daily cardio challenge ----
+
+    public enum CardioChallengeKind
+    {
+        TreadmillDistance,
+        BikeDistance,
+        ReachPace,
+        HoldPace,
+        PaceGates
+    }
+
+    private const int CardioChallengeReward = 60;
+
+    private void EnsureCardioChallenge()
+    {
+        if (state == null || state.cardioChallengeDay == state.gymDay)
+        {
+            return;
+        }
+
+        // Deterministic per day, so a reload keeps the same challenge.
+        var random = new System.Random(state.gymDay * 7919 + 17);
+        state.cardioChallengeDay = state.gymDay;
+        state.cardioChallengeKind = random.Next(0, 5);
+        state.cardioChallengeProgress = 0f;
+        state.cardioChallengeCompleted = false;
+        switch ((CardioChallengeKind)state.cardioChallengeKind)
+        {
+            case CardioChallengeKind.TreadmillDistance:
+                state.cardioChallengeTarget = 500f + random.Next(0, 7) * 100f;
+                break;
+            case CardioChallengeKind.BikeDistance:
+                state.cardioChallengeTarget = 800f + random.Next(0, 8) * 100f;
+                break;
+            case CardioChallengeKind.ReachPace:
+            {
+                // Never above what this character can open on a treadmill.
+                float reachable = 18f * GetCardioCapacityMultiplier() *
+                    GetExercisePerformance(GymExerciseType.Treadmill) * 0.8f;
+                float pace = 8f + random.Next(0, 4) * 2f;
+                state.cardioChallengeTarget = Mathf.Max(
+                    4f, Mathf.Min(pace, Mathf.Floor(reachable / 2f) * 2f));
+                break;
+            }
+            case CardioChallengeKind.HoldPace:
+                state.cardioChallengeTarget = 20f + random.Next(0, 5) * 10f;
+                break;
+            default:
+                state.cardioChallengeTarget = 2f + random.Next(0, 3);
+                break;
+        }
+        Debug.Log(
+            $"GYMCHAOS_CARDIO_CHALLENGE day={state.gymDay} kind={(CardioChallengeKind)state.cardioChallengeKind} " +
+            $"target={state.cardioChallengeTarget:0}",
+            this);
+    }
+
+    private float GetHoldPace()
+    {
+        // Held pace scales with the challenge day but stays a jog.
+        return 6f + (state.gymDay % 3) * 2f;
+    }
+
+    public CardioChallengeKind CurrentCardioChallengeKind
+    {
+        get
+        {
+            EnsureCardioChallenge();
+            return state != null ? (CardioChallengeKind)state.cardioChallengeKind : CardioChallengeKind.TreadmillDistance;
+        }
+    }
+
+    public bool CardioChallengeCompleted => state != null && state.cardioChallengeCompleted;
+
+    public float CardioChallengeFraction
+    {
+        get
+        {
+            EnsureCardioChallenge();
+            return state == null ? 0f : Mathf.Clamp01(
+                state.cardioChallengeProgress / Mathf.Max(0.01f, state.cardioChallengeTarget));
+        }
+    }
+
+    public string CardioChallengeLabel
+    {
+        get
+        {
+            EnsureCardioChallenge();
+            if (state == null)
+            {
+                return string.Empty;
+            }
+            float target = state.cardioChallengeTarget;
+            switch ((CardioChallengeKind)state.cardioChallengeKind)
+            {
+                case CardioChallengeKind.TreadmillDistance:
+                    return $"Run {target / 1000f:0.0} km on a treadmill";
+                case CardioChallengeKind.BikeDistance:
+                    return $"Ride {target / 1000f:0.0} km on a bike";
+                case CardioChallengeKind.ReachPace:
+                    return $"Reach {target:0} km/h on a treadmill";
+                case CardioChallengeKind.HoldPace:
+                    return $"Hold {GetHoldPace():0}+ pace for {target:0} s";
+                default:
+                    return $"Clear {target:0} pace gates perfectly";
+            }
+        }
+    }
+
+    public string CardioChallengeProgressText
+    {
+        get
+        {
+            EnsureCardioChallenge();
+            if (state == null)
+            {
+                return string.Empty;
+            }
+            if (state.cardioChallengeCompleted)
+            {
+                return "DONE";
+            }
+            float progress = state.cardioChallengeProgress;
+            float target = state.cardioChallengeTarget;
+            switch ((CardioChallengeKind)state.cardioChallengeKind)
+            {
+                case CardioChallengeKind.TreadmillDistance:
+                case CardioChallengeKind.BikeDistance:
+                    return $"{progress / 1000f:0.00} / {target / 1000f:0.0} km";
+                case CardioChallengeKind.ReachPace:
+                    return $"{progress:0.0} / {target:0} km/h";
+                case CardioChallengeKind.HoldPace:
+                    return $"{progress:0} / {target:0} s";
+                default:
+                    return $"{progress:0} / {target:0}";
+            }
+        }
+    }
+
+    /// <summary>Per-frame cardio progress from the player's station.</summary>
+    public void ReportCardioProgress(
+        GymExerciseType type, float speed, float metres, float seconds)
+    {
+        EnsureCardioChallenge();
+        if (state == null || state.cardioChallengeCompleted)
+        {
+            return;
+        }
+        bool treadmill = type == GymExerciseType.Treadmill;
+        switch ((CardioChallengeKind)state.cardioChallengeKind)
+        {
+            case CardioChallengeKind.TreadmillDistance:
+                if (treadmill) state.cardioChallengeProgress += Mathf.Max(0f, metres);
+                break;
+            case CardioChallengeKind.BikeDistance:
+                if (type == GymExerciseType.ExerciseBike) state.cardioChallengeProgress += Mathf.Max(0f, metres);
+                break;
+            case CardioChallengeKind.ReachPace:
+                if (treadmill) state.cardioChallengeProgress = Mathf.Max(state.cardioChallengeProgress, speed);
+                break;
+            case CardioChallengeKind.HoldPace:
+                // A drop below the pace restarts the hold.
+                state.cardioChallengeProgress = speed >= GetHoldPace() - 0.05f
+                    ? state.cardioChallengeProgress + Mathf.Max(0f, seconds)
+                    : 0f;
+                break;
+            default:
+                return;
+        }
+        CheckCardioChallenge();
+    }
+
+    /// <summary>A hold only counts while on the machine: leaving resets it.</summary>
+    public void ReportCardioStopped()
+    {
+        if (state != null && !state.cardioChallengeCompleted &&
+            (CardioChallengeKind)state.cardioChallengeKind == CardioChallengeKind.HoldPace)
+        {
+            state.cardioChallengeProgress = 0f;
+        }
+    }
+
+    /// <summary>
+    /// A pace gate result. Gates are not reps: they only open the next speed
+    /// band, pay a little XP, and count for the gate challenge.
+    /// </summary>
+    public void RegisterCardioGate(WorkoutResult result, GymExerciseType type, float unlockedSpeed)
+    {
+        EnsureCardioChallenge();
+        if (state == null)
+        {
+            return;
+        }
+        bool perfect = result == WorkoutResult.Perfect || result == WorkoutResult.AutoPerfect;
+        bool passed = perfect || result == WorkoutResult.Good;
+        string unit = type == GymExerciseType.Treadmill ? "km/h" : "pace";
+        if (passed)
+        {
+            int reward = perfect ? 4 : 2;
+            AwardExperience(reward, "pace gate", "pace-gate-" + Time.frameCount);
+            ShowFeedback($"PACE GATE {(perfect ? "PERFECT" : "GOOD")}   UP TO {unlockedSpeed:0} {unit}   +{reward} XP", 1.4f);
+            if (perfect && !state.cardioChallengeCompleted &&
+                (CardioChallengeKind)state.cardioChallengeKind == CardioChallengeKind.PaceGates)
+            {
+                state.cardioChallengeProgress += 1f;
+                CheckCardioChallenge();
+            }
+        }
+        else
+        {
+            ShowFeedback($"PACE GATE MISSED   HOLDING {unlockedSpeed:0} {unit}", 1.4f);
+        }
+    }
+
+    private void CheckCardioChallenge()
+    {
+        if (state.cardioChallengeCompleted ||
+            state.cardioChallengeProgress < state.cardioChallengeTarget - 0.001f)
+        {
+            return;
+        }
+        state.cardioChallengeCompleted = true;
+        state.cardioChallengeProgress = state.cardioChallengeTarget;
+        string label = CardioChallengeLabel;
+        AwardExperience(CardioChallengeReward, "cardio challenge", "once:cardio-challenge-" + state.gymDay);
+        ShowFeedback("Cardio challenge complete: " + label, 4f, 2);
+        if (sessionBacked)
+        {
+            GymSessionService.RequestSave("cardio-challenge");
+        }
+        else
+        {
+            SaveNow(false);
+        }
+        Debug.Log($"GYMCHAOS_CARDIO_CHALLENGE_COMPLETE day={state.gymDay} label={label}", this);
+    }
+
     public void RegisterCardio(float distanceMetres, float seconds)
     {
         if (state == null || (distanceMetres < 2f && seconds < 8f))
@@ -628,7 +869,7 @@ public sealed class GymExperienceService : MonoBehaviour
             return;
         }
 
-        AwardExperience(3, "combat hit", "combat-hit-" + enemy.Identity + "-" + enemy.name);
+        AwardExperience(3, "combat hit", "combat-hit-" + enemy.Identity + "-" + enemy.name, false);
         ChangeReputation(-2, "attacked " + enemy.Identity);
     }
 
@@ -656,7 +897,7 @@ public sealed class GymExperienceService : MonoBehaviour
             return;
         }
 
-        AwardExperience(5, "social action", "social-" + state.gymDay + "-" + reason);
+        AwardExperience(5, "social action", "social-" + state.gymDay + "-" + reason, false);
         ChangeReputation(3, reason);
     }
 
@@ -679,7 +920,7 @@ public sealed class GymExperienceService : MonoBehaviour
         string rewardKey = string.IsNullOrWhiteSpace(sourceKey)
             ? "dialogue-choice-" + state.gymDay + "-" + Time.frameCount
             : "dialogue-choice-" + state.gymDay + "-" + sourceKey;
-        AwardExperience(6, "dialogue choice", rewardKey);
+        AwardExperience(6, "dialogue choice", rewardKey, reputationDelta == 0);
     }
 
     public void RegisterDialogueStarted(BodybuilderIdentity identity)
@@ -716,7 +957,7 @@ public sealed class GymExperienceService : MonoBehaviour
             return;
         }
 
-        AwardExperience(18, "helped visitor", rewardKey);
+        AwardExperience(18, "helped visitor", rewardKey, false);
         ChangeReputation(4, "helped " + identity, countDailyGoal);
     }
 
@@ -763,20 +1004,6 @@ public sealed class GymExperienceService : MonoBehaviour
         ShowFeedback("Ready. Pick a station and put in the work.", 3f);
         Debug.Log("GYMCHAOS_LOCKER_PREP_COMPLETE day=" + state.gymDay, this);
         SaveNow();
-    }
-
-    public void UseBathroom()
-    {
-        if (EnemyFighter.IsFightActive)
-        {
-            ShowFeedback("Not while the gym is throwing hands.", 2.5f);
-            return;
-        }
-
-        temporaryFatigue = 0f;
-        EnemyFighter.ReleaseNonCombatTargetLocks(player);
-        ShowFeedback("You take a breath, wash up and head back out.", 2.8f);
-        Debug.Log("GYMCHAOS_BATHROOM_COOLDOWN_USED", this);
     }
 
     private void UpdateTemporaryFatigue(WorkoutResult result)
@@ -916,8 +1143,8 @@ public sealed class GymExperienceService : MonoBehaviour
             case GymBackRoomInteractionType.Prep:
                 instance.CompleteLockerPrep();
                 break;
-            case GymBackRoomInteractionType.Bathroom:
-                instance.UseBathroom();
+            case GymBackRoomInteractionType.ToiletSeat:
+                nearby.GetComponent<GymToiletSeat>()?.Toggle();
                 break;
         }
         return true;

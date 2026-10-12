@@ -14,7 +14,10 @@ public static class GymBackRoomBuilder
     private const float BackHeight = 4.4f;
     private const float DoorWidth = 2.8f;
     private const string WoodenBenchAsset = "BodyBuilders/items/wooden_bench_lod.glb";
-    private const string ToiletAsset = "BodyBuilders/items/toilet_lod.glb";
+    // Built by Tools/build_toilet_v2.py: open bowl with water, hinged seat and lid.
+    private const string ToiletAsset = "BodyBuilders/items/toilet_v2.glb";
+    private const float ToiletScale = 1.2f;
+    private const float ToiletHalfDepth = 0.415f;
     private const string SinkAsset = "BodyBuilders/items/sink_lod.glb";
     private const string ColorBagAsset = "BodyBuilders/items/color_bag_lod.glb";
     private const string BlackBagAsset = "BodyBuilders/items/black_bag_lod.glb";
@@ -1142,16 +1145,27 @@ public static class GymBackRoomBuilder
                 stallDoorMaxX + stallRightLength * 0.5f,
                 floorY + BackHeight * 0.5f, stallSouthZ),
             new Vector3(stallRightLength, BackHeight, 0.18f), tile, true);
+        // Tank back sits a couple of centimetres off the east wall.
+        float toiletZ = center.z + 4.25f;
+        float toiletX = eastWallInsideX - ToiletHalfDepth * ToiletScale - 0.02f;
+        GymBackRoomInteractable toiletInteraction = CreateInteractable(parent, "Toilet Seat",
+            new Vector3(toiletX - 0.8f, floorY + 1.0f, toiletZ),
+            new Vector3(1.2f, 2f, 1.2f),
+            GymBackRoomInteractionType.ToiletSeat, "Open toilet");
+        GymToiletSeat toiletSeat = toiletInteraction.gameObject.AddComponent<GymToiletSeat>();
         RequestLockerProp(
             ToiletAsset,
             parent,
-            new Vector3(eastWallInsideX - 1.0f, floorY, center.z + 4.25f),
+            new Vector3(toiletX, floorY, toiletZ),
             Quaternion.Euler(0f, -90f, 0f),
-            Vector3.one,
+            Vector3.one * ToiletScale,
             "Authored toilet",
-            new Vector3(0.56f, 1f, 0.83f),
+            new Vector3(0.53f, 1f, 0.83f),
             settleOnSupport: true,
-            addCollider: true);
+            addCollider: true,
+            onLoaded: loaded => toiletSeat.Bind(loaded.transform));
+        CreateToiletStallDetails(parent, floorY, eastWallInsideX, toiletZ,
+            stallWestX, stallSouthZ, stallDoorMinX, stallDoorMaxX, northZ, metal);
 
         CreateBox("Bathroom soap shelf", parent,
             new Vector3(eastWallInsideX - 0.34f,
@@ -1171,10 +1185,75 @@ public static class GymBackRoomBuilder
 
         CreateBathroomMirrors(
             parent, center, floorY, eastWallInsideX, mirror, metal, player);
-        CreateInteractable(parent, "Bathroom Cooldown",
-            new Vector3(center.x + 4.15f, floorY + 1.0f, center.z - 0.85f),
-            new Vector3(1.2f, 2f, 1.4f),
-            GymBackRoomInteractionType.Bathroom, "Use bathroom");
+    }
+
+    private static void CreateToiletStallDetails(
+        Transform parent, float floorY, float wallX, float toiletZ,
+        float stallWestX, float stallSouthZ, float doorMinX, float doorMaxX,
+        float northZ, Material metal)
+    {
+        Material paper = CreateMaterial("Toilet paper", new Color(0.95f, 0.94f, 0.9f), 0f, 0.1f);
+        Material core = CreateMaterial("Toilet paper core", new Color(0.55f, 0.42f, 0.3f), 0f, 0.1f);
+        Material door = CreateMaterial("Stall door", new Color(0.16f, 0.2f, 0.26f), 0.25f, 0.55f);
+
+        // Paper roll on a wall holder beside the tank, at hand height.
+        float rollZ = toiletZ - 0.66f;
+        float rollY = floorY + 0.78f;
+        CreateBox("Toilet paper holder plate", parent,
+            new Vector3(wallX - 0.012f, rollY + 0.02f, rollZ),
+            new Vector3(0.024f, 0.07f, 0.2f), metal, false);
+        CreateBox("Toilet paper holder arm", parent,
+            new Vector3(wallX - 0.07f, rollY + 0.05f, rollZ - 0.085f),
+            new Vector3(0.11f, 0.016f, 0.016f), metal, false);
+        CreateCylinderZ("Toilet paper roll", parent,
+            new Vector3(wallX - 0.1f, rollY, rollZ), 0.06f, 0.11f, paper);
+        CreateCylinderZ("Toilet paper roll core", parent,
+            new Vector3(wallX - 0.1f, rollY, rollZ), 0.022f, 0.114f, core);
+        CreateBox("Toilet paper sheet", parent,
+            new Vector3(wallX - 0.161f, rollY - 0.06f, rollZ),
+            new Vector3(0.004f, 0.12f, 0.108f), paper, false);
+
+        // Stall door left ajar inside the stall, clear of the doorway.
+        float doorWidth = doorMaxX - doorMinX - 0.06f;
+        GameObject hinge = new GameObject("Stall door hinge");
+        hinge.transform.SetParent(parent, true);
+        hinge.transform.position = new Vector3(doorMinX + 0.03f, floorY, stallSouthZ + 0.1f);
+        hinge.transform.rotation = Quaternion.Euler(0f, -93f, 0f);
+        GameObject panel = CreateBox("Stall door", parent, Vector3.zero,
+            new Vector3(doorWidth, 2.05f, 0.04f), door, false);
+        panel.transform.SetParent(hinge.transform, false);
+        panel.transform.localPosition = new Vector3(doorWidth * 0.5f, 0.15f + 1.025f, 0f);
+        GameObject handle = CreateBox("Stall door handle", parent, Vector3.zero,
+            new Vector3(0.025f, 0.16f, 0.05f), metal, false);
+        handle.transform.SetParent(hinge.transform, false);
+        handle.transform.localPosition = new Vector3(doorWidth - 0.1f, 1.05f, -0.045f);
+
+        // Dark metal skirting along the stall walls ties it to the locker trim.
+        float stallDepth = northZ - stallSouthZ;
+        CreateBox("Stall skirting west", parent,
+            new Vector3(stallWestX + 0.1f, floorY + 0.06f, stallSouthZ + stallDepth * 0.5f),
+            new Vector3(0.02f, 0.12f, stallDepth - 0.1f), metal, false);
+        CreateBox("Stall skirting east", parent,
+            new Vector3(wallX - 0.01f, floorY + 0.06f, stallSouthZ + stallDepth * 0.5f),
+            new Vector3(0.02f, 0.12f, stallDepth - 0.1f), metal, false);
+        CreateBox("Stall coat hook", parent,
+            new Vector3(stallWestX + 0.13f, floorY + 1.7f, toiletZ),
+            new Vector3(0.07f, 0.03f, 0.03f), metal, false);
+    }
+
+    private static GameObject CreateCylinderZ(
+        string name, Transform parent, Vector3 position, float radius, float length,
+        Material material)
+    {
+        GameObject cylinder = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        cylinder.name = name;
+        cylinder.transform.SetParent(parent, true);
+        cylinder.transform.position = position;
+        cylinder.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+        cylinder.transform.localScale = new Vector3(radius * 2f, length * 0.5f, radius * 2f);
+        cylinder.GetComponent<Renderer>().sharedMaterial = material;
+        Object.Destroy(cylinder.GetComponent<Collider>());
+        return cylinder;
     }
     private static void CreateBathroomMirrors(
         Transform parent, Vector3 center, float floorY, float eastWallInsideX,
