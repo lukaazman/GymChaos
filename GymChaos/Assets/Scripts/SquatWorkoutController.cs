@@ -8,7 +8,7 @@ using UnityEngine;
 /// the gameplay-facing squat measurements.
 /// </summary>
 [DefaultExecutionOrder(1100)]
-public sealed class SquatWorkoutController : MonoBehaviour
+public sealed partial class SquatWorkoutController : MonoBehaviour
 {
     private EnemyFighter owner;
     private GymExerciseStation station;
@@ -398,6 +398,11 @@ public sealed class SquatWorkoutController : MonoBehaviour
 
     public void Cancel()
     {
+        if (deadliftMode)
+        {
+            CancelDeadlift();
+            return;
+        }
         if (station != null && owner != null)
         {
             station.EndEnemySquat(owner);
@@ -461,6 +466,11 @@ public sealed class SquatWorkoutController : MonoBehaviour
         {
             return;
         }
+        if (deadliftMode)
+        {
+            UpdateDeadlift();
+            return;
+        }
 
         if (owner == null || owner.IsDead || station == null)
         {
@@ -512,6 +522,11 @@ public sealed class SquatWorkoutController : MonoBehaviour
     {
         if (!running)
         {
+            return;
+        }
+        if (deadliftMode)
+        {
+            LateUpdateDeadlift();
             return;
         }
 
@@ -816,6 +831,11 @@ public sealed class SquatWorkoutController : MonoBehaviour
             Destroy(barRestBakeMesh);
             barRestBakeMesh = null;
         }
+        if (deadliftClearanceMesh != null)
+        {
+            Destroy(deadliftClearanceMesh);
+            deadliftClearanceMesh = null;
+        }
     }
 
     private void ResetAuthoredBarAndGrip()
@@ -890,6 +910,10 @@ public sealed class SquatWorkoutController : MonoBehaviour
 
     private Vector3 GetBarAxis()
     {
+        if (deadliftMode && station != null)
+        {
+            return station.DeadliftBarAxis;
+        }
         Vector3 axis = Vector3.ProjectOnPlane(owner.transform.right, Vector3.up);
         return axis.sqrMagnitude > 0.0001f ? axis.normalized : Vector3.right;
     }
@@ -988,13 +1012,57 @@ public sealed class SquatWorkoutController : MonoBehaviour
     // bar axis, knuckles along the bar, wrist below and behind it. The arm
     // reaches it with a two-bone solve that keeps the authored elbow plane;
     // fingers keep their authored curl.
-    private void ApplyAuthoredOverhandGrip(Vector3 barCenter)
+    private void ApplyAuthoredOverhandGrip(Vector3 barCenter, Vector3? handUpOverride = null)
     {
         if (owner == null || !HasValidArmRig)
         {
             return;
         }
         Vector3 axis = GetBarAxis();
+        if (!EnsureGripCalibrated())
+        {
+            return;
+        }
+        if (gripHalfWidth <= 0f || !gripWidthMeasured)
+        {
+            // Keep each rig's own authored grip width, but outside the
+            // shoulders and inside the bar sleeves.
+            float authored = (
+                Mathf.Abs(Vector3.Dot(leftHand.TransformPoint(leftGripHollowLocal) - barCenter, axis)) +
+                Mathf.Abs(Vector3.Dot(rightHand.TransformPoint(rightGripHollowLocal) - barCenter, axis))) * 0.5f;
+            float shoulderHalf = Mathf.Abs(
+                Vector3.Dot(leftUpperArm.position - rightUpperArm.position, axis)) * 0.5f;
+            gripHalfWidth = Mathf.Clamp(authored, shoulderHalf + 0.05f, shoulderHalf + 0.32f);
+            gripWidthMeasured = true;
+        }
+
+        Vector3 torsoUp = GetTorsoUp(axis);
+        Vector3 handUp = handUpOverride ??
+            (torsoUp + GetBarBackDirection() * GripWristBackTilt).normalized;
+        float leftSign = Vector3.Dot(leftUpperArm.position - barCenter, axis) < 0f ? -1f : 1f;
+        SolveHandOnBar(leftUpperArm, leftForearm, leftHand,
+            barCenter + axis * (leftSign * gripHalfWidth), axis * leftSign, handUp,
+            leftGripHollowLocal, leftKnuckleAxisLocal, leftHandLengthLocal);
+        SolveHandOnBar(rightUpperArm, rightForearm, rightHand,
+            barCenter - axis * (leftSign * gripHalfWidth), -axis * leftSign, handUp,
+            rightGripHollowLocal, rightKnuckleAxisLocal, rightHandLengthLocal);
+        if (wrapFingers)
+        {
+            float wrapRadius = CurrentBarShaftRadius + FingerHalfThickness;
+            WrapFingerAroundBar(leftIndexTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(leftMiddleTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(leftRingTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(leftPinkyTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightIndexTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightMiddleTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightRingTip, barCenter, axis, wrapRadius);
+            WrapFingerAroundBar(rightPinkyTip, barCenter, axis, wrapRadius);
+        }
+    }
+
+    // Locates the hollow of each hand's curled fingers once per fighter.
+    private bool EnsureGripCalibrated()
+    {
         if (!gripCalibrated && gripGeometryCached)
         {
             gripCalibrated = true;
@@ -1008,9 +1076,9 @@ public sealed class SquatWorkoutController : MonoBehaviour
                     out rightGripHollowLocal, out rightKnuckleAxisLocal, out rightHandLengthLocal);
             if (!gripCalibrated)
             {
-                return;
+                return false;
             }
-            float barRadius = station != null ? station.SquatBarShaftRadius : 0.02f;
+            float barRadius = CurrentBarShaftRadius;
             // Goku's fists are skinned rigidly to the hand bone: the fingers
             // cannot open around the bar, so the shaft runs through the
             // middle of the closed fist (fingers overlapping the bar).
@@ -1030,40 +1098,7 @@ public sealed class SquatWorkoutController : MonoBehaviour
             // The hand shape is the rig's own; measure it once per fighter.
             gripGeometryCached = true;
         }
-        if (gripHalfWidth <= 0f || !gripWidthMeasured)
-        {
-            // Keep each rig's own authored grip width, but outside the
-            // shoulders and inside the bar sleeves.
-            float authored = (
-                Mathf.Abs(Vector3.Dot(leftHand.TransformPoint(leftGripHollowLocal) - barCenter, axis)) +
-                Mathf.Abs(Vector3.Dot(rightHand.TransformPoint(rightGripHollowLocal) - barCenter, axis))) * 0.5f;
-            float shoulderHalf = Mathf.Abs(
-                Vector3.Dot(leftUpperArm.position - rightUpperArm.position, axis)) * 0.5f;
-            gripHalfWidth = Mathf.Clamp(authored, shoulderHalf + 0.05f, shoulderHalf + 0.32f);
-            gripWidthMeasured = true;
-        }
-
-        Vector3 torsoUp = GetTorsoUp(axis);
-        Vector3 handUp = (torsoUp + GetBarBackDirection() * GripWristBackTilt).normalized;
-        float leftSign = Vector3.Dot(leftUpperArm.position - barCenter, axis) < 0f ? -1f : 1f;
-        SolveHandOnBar(leftUpperArm, leftForearm, leftHand,
-            barCenter + axis * (leftSign * gripHalfWidth), axis * leftSign, handUp,
-            leftGripHollowLocal, leftKnuckleAxisLocal, leftHandLengthLocal);
-        SolveHandOnBar(rightUpperArm, rightForearm, rightHand,
-            barCenter - axis * (leftSign * gripHalfWidth), -axis * leftSign, handUp,
-            rightGripHollowLocal, rightKnuckleAxisLocal, rightHandLengthLocal);
-        if (wrapFingers)
-        {
-            float wrapRadius = (station != null ? station.SquatBarShaftRadius : 0.02f) + FingerHalfThickness;
-            WrapFingerAroundBar(leftIndexTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(leftMiddleTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(leftRingTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(leftPinkyTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightIndexTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightMiddleTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightRingTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightPinkyTip, barCenter, axis, wrapRadius);
-        }
+        return gripCalibrated;
     }
 
     // An open authored hand (Goku) has no hollow to close over the bar.

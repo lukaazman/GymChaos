@@ -315,6 +315,35 @@ public partial class EnemyFighter
             roamRouteIndex++;
         }
     }
+    // Goku's body radius is about 0.6 m, so a target standing in a gap
+    // between machines can leave no navigable node within 2.2 m. Ending up
+    // to 3 m away still brings him to the gap instead of freezing far off.
+    private const float NearGoalRouteRadius = 3f;
+    // Set only while a chase (flight or the grounded fallback) asks for a
+    // route that may end beside the goal.
+    private bool allowNearGoalRoute;
+
+    private static int FindClosestExploredNode(
+        Vector3[] points, bool[] closed, int startIndex, Vector3 goal, float radius)
+    {
+        int best = -1;
+        float bestDistance = radius;
+        for (int i = 0; i < points.Length; i++)
+        {
+            if (!closed[i] || i == startIndex)
+            {
+                continue;
+            }
+            float distance = Vector3.ProjectOnPlane(goal - points[i], Vector3.up).magnitude;
+            if (distance <= bestDistance)
+            {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+        return best;
+    }
+
     private bool BuildRoamRouteToTarget(bool allowTargetEquipment)
     {
         using var profileScope = BuildRoamRouteMarker.Auto();
@@ -481,24 +510,41 @@ public partial class EnemyFighter
             }
         }
 
+        int routeEnd = goalIndex;
         if (!foundGoal || cameFrom[goalIndex] < 0)
         {
-            if (identity == BodybuilderIdentity.Goku)
+            // Flight chase only: a target standing against a machine leaves no
+            // clear final segment. End next to it (within reach of a punch)
+            // instead of failing, which left Goku without a route.
+            routeEnd = allowNearGoalRoute
+                ? FindClosestExploredNode(points, closed, startIndex, goal, NearGoalRouteRadius)
+                : -1;
+            if (routeEnd < 0)
             {
-                Debug.LogWarning($"GYMCHAOS_ROAM_ROUTE_FAILED stage=no_goal navigable={navigablePointCount}/{nodeCount} explored={exploredNodeCount} start={start} goal={goal} blocker={lastVisitorRouteBlocker}", this);
+                if (identity == BodybuilderIdentity.Goku && !allowNearGoalRoute)
+                {
+                    Debug.LogWarning($"GYMCHAOS_ROAM_ROUTE_FAILED stage=no_goal navigable={navigablePointCount}/{nodeCount} explored={exploredNodeCount} start={start} goal={goal} blocker={lastVisitorRouteBlocker}", this);
+                }
+                return false;
             }
-            return false;
         }
 
         List<Vector3> rawRoute = new List<Vector3>();
-        int routeNode = cameFrom[goalIndex];
+        int routeNode = routeEnd == goalIndex ? cameFrom[goalIndex] : routeEnd;
         while (routeNode >= 0 && routeNode != startIndex)
         {
             rawRoute.Add(points[routeNode]);
             routeNode = cameFrom[routeNode];
         }
         rawRoute.Reverse();
-        rawRoute.Add(goal);
+        if (routeEnd == goalIndex)
+        {
+            rawRoute.Add(goal);
+        }
+        else if (rawRoute.Count == 0)
+        {
+            rawRoute.Add(points[routeEnd]);
+        }
 
         // Collapse visible, collinear grid steps. The route still preserves
         // the A* detour around machines, but the actor does not make a small

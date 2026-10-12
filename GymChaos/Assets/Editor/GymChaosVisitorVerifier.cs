@@ -744,12 +744,15 @@ public static class GymChaosVisitorVerifier
                 "Ronnie and the passive receptionist were not both present at startup.");
         }
 
-        if (director.EligibleEnemyCount != 6 || director.ActiveVisitorCount < 2 ||
+        // The roster starts with at least two members, but an initial member
+        // may already be walking out to the protein store, so count roster
+        // records, not only the members currently inside the room.
+        if (director.EligibleEnemyCount != 6 || director.ActiveRosterCountForVerification < 2 ||
             director.ActiveVisitorCount > director.EligibleEnemyCount)
         {
             throw new InvalidOperationException(
                 $"Visitor roster invariant failed: eligible={director.EligibleEnemyCount} " +
-                $"active={director.ActiveVisitorCount}.");
+                $"roster={director.ActiveRosterCountForVerification} inside={director.ActiveVisitorCount}.");
         }
         ValidateAllSquatRigs(fighters, director.EligibleEnemyCount);
 

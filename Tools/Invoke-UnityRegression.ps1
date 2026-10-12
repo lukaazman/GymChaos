@@ -17,7 +17,9 @@ param(
     # Failed runs are retried this many times, sequentially on the main
     # project (no parallel load). A pass on retry is reported as flaky.
     [ValidateRange(0, 2)]
-    [int]$Retries = 1
+    [int]$Retries = 1,
+    # Print only failed or flaky runs plus the summary line.
+    [switch]$Quiet
 )
 
 # Prints one "REGRESSION <index> <verifier> exit=<n> seconds=<s> <first error>"
@@ -157,7 +159,10 @@ foreach ($result in ($results | Sort-Object Index))
         }
     }
     if ($result.Exit -ne 0) { $failed++ }
-    "REGRESSION $($result.Index) $($result.Verifier) $status seconds=$($result.Seconds) lane=$($result.Lane) $($result.Detail)"
+    if (-not $Quiet -or $status -ne 'exit=0')
+    {
+        "REGRESSION $($result.Index) $($result.Verifier) $status seconds=$($result.Seconds) lane=$($result.Lane) $($result.Detail)"
+    }
 }
 $durations | ConvertTo-Json | Set-Content $durationsPath -Encoding utf8
 "REGRESSION_DONE failed=$failed flaky=$flaky total=$($Verifiers.Count) lanes=$laneCount wallSeconds=$([int]((Get-Date) - $started).TotalSeconds)"

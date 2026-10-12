@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +40,18 @@ ENEMY_CLIPS = (
     "celebration2",
     "celebration3",
 )
+
+# Gym members also deadlift. The source is a Mixamo floor-to-lockout pull
+# (snatch.fbx); the game plays it forward, slows at the top and reverses it.
+MEMBER_CLIPS = ENEMY_CLIPS + ("deadlift",)
+
+# Clips whose name differs from their source file.
+CLIP_SOURCES = {
+    "deadlift": "snatch",
+}
+
+# Clips that keep both feet planted on fixed-length legs.
+CONTACT_CLIPS = {"squat", "deadlift"}
 
 POLICE_CLIPS = ENEMY_CLIPS + ("gun_drawing", "gun_shooting")
 
@@ -71,19 +83,19 @@ CHARACTERS = {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/arnold_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/arnold_authored.fbx",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "cbum": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/cbum_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/cbum_authored.fbx",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "goku": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/goku_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/goku_authored.fbx",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "mark": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/mark_rig.blend",
@@ -96,26 +108,26 @@ CHARACTERS = {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/jaycutler_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/jaycutler_authored.fbx",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "ronnie": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/ronnie_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/ronnie_authored.fbx",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "davie": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/davie_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/davie_authored.fbx",
         "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/davie.png",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "zyzz": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/zyzz_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/zyzz_authored.fbx",
-        "clip_names": ENEMY_CLIPS,
+        "clip_names": MEMBER_CLIPS,
     },
     "policeman": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/policeman_rig.blend",
@@ -141,6 +153,21 @@ CHARACTERS = {
         # The scan stands in an A-pose with the lollipop forearm bent
         # forward; Mixamo clips rest in a T-pose. Re-rest the arms first.
         "tpose_arms": True,
+        # The lollipop hand rests rolled about 64 degrees (index up, pinky
+        # down) where Mixamo rests palm-down, so the magic sign turned the
+        # hand and lollipop sideways. Roll it back about its own bone axis
+        # for that clip: the stick then leaves the fist on the thumb side
+        # like a wand. The run keeps the original roll, which holds the
+        # lollipop out beside the big head instead of into it.
+        "clip_rest_bone_rolls": {"magic_sign": {"DEF-hand.R": -64.0}},
+        # Mixamo's run swings the fists across a slim chest; Larry's round
+        # belly swallowed them. Carry both upper arms out from the body.
+        "clip_world_rotations": {
+            "running": {
+                "DEF-upper_arm.L": ((0.0, 1.0, 0.0), -24.0),
+                "DEF-upper_arm.R": ((0.0, 1.0, 0.0), 24.0),
+            },
+        },
     },
     "player": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/Player/player_rig.blend",
@@ -819,6 +846,8 @@ def retarget_deform_action(
     source_action: bpy.types.Action,
     action_name: str,
     rest_pose,
+    clip_rest_bone_rolls=None,
+    clip_world_rotations=None,
 ):
     """Retarget source motion directly onto this character's own DEF bones."""
     assign_action_slot(source, source_action)
@@ -834,6 +863,21 @@ def retarget_deform_action(
         pose_bone.rotation_mode = "QUATERNION"
         for constraint in pose_bone.constraints:
             constraint.mute = True
+
+    # Per-character corrections: a roll of the bone's rest about its own
+    # axis (applied under every source delta) and per-clip world rotations
+    # (applied over it). Children keep their own retargeted orientation.
+    rest_corrections = {}
+    for bone_name, degrees in (clip_rest_bone_rolls or {}).get(action_name, {}).items():
+        bone = target.data.bones.get(bone_name)
+        if bone is None:
+            raise RuntimeError(f"{action_name}: rest roll bone {bone_name} missing")
+        axis = (target.matrix_world.to_3x3() @ (bone.tail_local - bone.head_local)).normalized()
+        rest_corrections[bone_name] = Quaternion(axis, math.radians(degrees))
+    world_corrections = {
+        bone_name: Quaternion(Vector(axis).normalized(), math.radians(degrees))
+        for bone_name, (axis, degrees) in (clip_world_rotations or {}).get(action_name, {}).items()
+    }
 
     pairs = build_deform_map(source, target)
     if len(pairs) < 14:
@@ -859,10 +903,15 @@ def retarget_deform_action(
     # the dependency graph on the previous clip's final frame. Wake both the
     # newly assigned source action and the empty target action on a frame
     # before the clip so the first sampled pose cannot inherit stale state.
-    scene.frame_set(source_start - 1)
+    # Contact clips anchor the feet on the first baked frame. The deadlift
+    # starts in its deepest pull, where the retargeted feet are least
+    # reliable, so bake it from the standing lockout backwards.
+    reverse_bake = action_name == "deadlift"
+    scene.frame_set(source_end + 1 if reverse_bake else source_start - 1)
     bpy.context.view_layer.update()
 
-    for source_frame in range(source_start, source_end + 1):
+    source_frames = range(source_start, source_end + 1)
+    for source_frame in (reversed(source_frames) if reverse_bake else source_frames):
         output_frame = source_frame - source_start + 1
         scene.frame_set(source_frame)
         bpy.context.view_layer.update()
@@ -896,7 +945,12 @@ def retarget_deform_action(
                 source_pose = source_pose_rotation(source, source_pose_bone)
                 source_rest = source_rest_rotation(source, source_bone)
                 delta = source_pose @ source_rest.inverted()
-                desired_world = delta @ target_rest_rotation(target, target_bone)
+                rest_rotation = target_rest_rotation(target, target_bone)
+                if target_name in rest_corrections:
+                    rest_rotation = rest_corrections[target_name] @ rest_rotation
+                desired_world = delta @ rest_rotation
+                if target_name in world_corrections:
+                    desired_world = world_corrections[target_name] @ desired_world
                 desired_object = target_object_rotation(target, desired_world)
                 parent_rotation = parent_pose.to_3x3().to_quaternion()
                 local_rotation = parent_rotation.inverted() @ desired_object
@@ -941,7 +995,7 @@ def retarget_deform_action(
                     group=action_name,
                 )
 
-        if action_name == "squat":
+        if action_name in CONTACT_CLIPS:
             bake_contacts(target, squat_anchors, output_frame, action_name)
 
     action.frame_start = 1
@@ -1093,18 +1147,20 @@ def run(character_name: str) -> None:
     report = []
     for clip_name in config["clip_names"]:
         clip_dirs = config.get("clip_dirs", {})
+        source_name = CLIP_SOURCES.get(clip_name, clip_name)
         if clip_name in clip_dirs:
-            clip_path = clip_dirs[clip_name] / f"{clip_name}.fbx"
+            clip_path = clip_dirs[clip_name] / f"{source_name}.fbx"
         elif clip_name in PLAYER_ONLY_CLIPS:
-            clip_path = config["clips"] / "player_only" / f"{clip_name}.fbx"
+            clip_path = config["clips"] / "player_only" / f"{source_name}.fbx"
         else:
-            clip_path = config["clips"] / f"{clip_name}.fbx"
+            clip_path = config["clips"] / f"{source_name}.fbx"
         if not clip_path.exists():
             raise FileNotFoundError(clip_path)
         imported, source, source_action = import_animation(clip_path)
         try:
             action, matched, frames = retarget_deform_action(
-                target, source, source_action, clip_name, rest_pose
+                target, source, source_action, clip_name, rest_pose,
+                config.get("clip_rest_bone_rolls"), config.get("clip_world_rotations"),
             )
             actions.append(action)
             report.append(f"{clip_name}:{frames}f/{matched}bones")

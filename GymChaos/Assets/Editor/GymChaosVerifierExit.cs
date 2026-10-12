@@ -15,6 +15,7 @@ public static class GymChaosVerifierExit
     {
         int code = SessionState.GetInt(ResultKey, fallback);
         SessionState.EraseInt(ResultKey);
+        GymChaosVerifierSave.Restore();
         EditorApplication.Exit(code);
     }
 }

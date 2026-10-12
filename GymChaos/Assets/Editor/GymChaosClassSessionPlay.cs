@@ -354,7 +354,12 @@ public static class GymChaosClassSessionPlay
         GymHud.ProfiledTicks = 0;
         GymHud.ProfiledBytes = 0;
         GymHud.ProfiledFrames = 0;
-        yield return 2f;
+        // Sample a frame count, not a fixed time: under load 2 s can hold
+        // fewer than the 20 frames the average needs.
+        for (float waited = 0f; waited < 2f || (GymHud.ProfiledFrames <= 20 && waited < 20f); waited += 0.25f)
+        {
+            yield return 0.25f;
+        }
         double hudMicroseconds = GymHud.ProfiledTicks * 1000000.0 /
             System.Diagnostics.Stopwatch.Frequency / Mathf.Max(1, GymHud.ProfiledFrames);
         double hudBytes = GymHud.ProfiledBytes / (double)Mathf.Max(1, GymHud.ProfiledFrames);
@@ -833,7 +838,8 @@ public static class GymChaosClassSessionPlay
                 {
                     if (renderer.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer || !renderer.enabled) continue;
                     mirrorBodies++;
-                    Require((renderer.sharedMesh == baselineMesh) == (index == 0),
+                    // Scan meshes are swapped for their UV-inset copy at load.
+                    Require(ScanUvInset.IsInsetOf(renderer.sharedMesh, baselineMesh) == (index == 0),
                         classId + " reflection does not use its own class body");
                 }
                 Require(mirrorBodies > 0 && UnityEngine.Object.FindFirstObjectByType<PlanarGymMirror>() != null,

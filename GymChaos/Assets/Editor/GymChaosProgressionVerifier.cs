@@ -1573,13 +1573,22 @@ public static class GymChaosProgressionVerifier
                         return false;
                     }
                 }
+                // Dropped plates lie on the platform mats beyond the bar ends;
+                // any plate off the platform must rest on the gym floor.
                 if (TryFindFloorBounds(out floorBounds) &&
-                    TryGetRendererBounds(allPickups[i].transform, out Bounds looseBounds) &&
-                    (looseBounds.min.y < floorBounds.max.y - 0.025f ||
-                     looseBounds.min.y > floorBounds.max.y + 0.16f))
+                    TryGetRendererBounds(allPickups[i].transform, out Bounds looseBounds))
                 {
-                    failure = "A loose deadlift plate is not settled just above the floor.";
-                    return false;
+                    Vector3 plateCenter = looseBounds.center;
+                    bool onPlatform =
+                        plateCenter.x > platformBounds.min.x && plateCenter.x < platformBounds.max.x &&
+                        plateCenter.z > platformBounds.min.z && plateCenter.z < platformBounds.max.z;
+                    float supportY = onPlatform ? platformBounds.max.y : floorBounds.max.y;
+                    if (looseBounds.min.y < supportY - 0.025f || looseBounds.min.y > supportY + 0.16f)
+                    {
+                        failure = $"A loose deadlift plate is not settled on its support: " +
+                            $"minY={looseBounds.min.y:F3} supportY={supportY:F3} onPlatform={onPlatform}.";
+                        return false;
+                    }
                 }
             }
         }

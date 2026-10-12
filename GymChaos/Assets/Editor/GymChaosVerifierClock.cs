@@ -11,6 +11,11 @@ public static class GymChaosVerifierClock
 {
     public const int FrameRate = 60;
 
+    // Long scenario verifiers (walks to cars, store trips, bus rides) run the
+    // simulation faster than real time. Physics keeps its fixed step; only
+    // fewer rendered/Update frames are spent per simulated second.
+    public const float ScenarioTimeScale = 2f;
+
     public static void BeginFixedStep() => Time.captureFramerate = FrameRate;
 
     public static void EndFixedStep() => Time.captureFramerate = 0;

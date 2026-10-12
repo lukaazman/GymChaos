@@ -42,6 +42,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private AnimationClip authoredPunchClip;
     private AnimationClip authoredFlyingClip;
     private AnimationClip authoredSquatClip;
+    private AnimationClip authoredDeadliftClip;
+    // The workout pose plays the squat unless a deadlift set selected its own
+    // clip. The deadlift phase is a clamped position in the clip (the set
+    // runs it forward and back), never a loop.
+    private bool deadliftWorkoutClip;
     private AnimationClip authoredGunDrawingClip;
     private AnimationClip authoredGunShootingClip;
     private AnimationClip[] idleVariants = new AnimationClip[0];
@@ -116,6 +121,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public bool HasAuthoredFlyingClip => authoredFlyingClip != null;
     public bool HasAuthoredSquatClip => authoredSquatClip != null;
     public AnimationClip AuthoredSquatClipForVerification => authoredSquatClip;
+    public bool HasAuthoredDeadliftClip => authoredDeadliftClip != null;
+    public AnimationClip AuthoredDeadliftClip => authoredDeadliftClip;
+    public bool IsDeadliftWorkoutClip => deadliftWorkoutClip;
     public bool HasGunDrawingClip => authoredGunDrawingClip != null;
     public bool HasGunShootingClip => authoredGunShootingClip != null;
     public bool IsGunActionPlaying => gunActionTime >= 0f;
@@ -150,8 +158,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
                 return float.PositiveInfinity;
             }
 
+            // The grounded root is the bind position plus the clip's
+            // constant ground offset.
             Vector3 restRootWorldPosition =
-                rig.Root.parent.TransformPoint(restRootLocalPosition);
+                rig.Root.parent.TransformPoint(restRootLocalPosition) +
+                (modelRoot != null ? modelRoot.up : Vector3.up) * appliedGroundOffset;
             return Mathf.Abs(Vector3.Dot(
                 rig.Root.position - restRootWorldPosition, Vector3.up));
         }
@@ -214,6 +225,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             ? null : LoadAuthoredClip(resourcePath, "flying");
         authoredSquatClip = policeSet
             ? null : LoadAuthoredClip(resourcePath, "squat");
+        authoredDeadliftClip = policeSet
+            ? null : LoadAuthoredClip(resourcePath, "deadlift");
         authoredGunDrawingClip = policeSet
             ? LoadAuthoredClip(resourcePath, "gun_drawing") : null;
         authoredGunShootingClip = policeSet
@@ -251,6 +264,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             $"idle3={ClipName(GetVariant(idleVariants, 2))} " +
             $"flying={ClipName(authoredFlyingClip)} " +
             $"squat={ClipName(authoredSquatClip)} " +
+            $"deadlift={ClipName(authoredDeadliftClip)} " +
             $"punch_combo={ClipName(authoredPunchClip)} " +
             $"celebration1={ClipName(GetVariant(celebrationVariants, 0))} " +
             $"celebration2={ClipName(GetVariant(celebrationVariants, 1))} " +
@@ -271,6 +285,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 
         CaptureRestPose();
         configured = true;
+        clipGroundOffsets.Clear();
+        groundOffsetsMeasured = false;
+        groundOffsetsLogged = false;
         RestoreVisibleRestPose();
         if (idleClip != null)
         {
@@ -378,13 +395,288 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             return;
         }
 
-        workoutPosePhase = Mathf.Repeat(normalizedPhase, 1f);
+        workoutPosePhase = deadliftWorkoutClip
+            ? Mathf.Clamp01(normalizedPhase)
+            : Mathf.Repeat(normalizedPhase, 1f);
         workoutPosePhaseDriven = true;
     }
+
+    /// <summary>Selects the deadlift (true) or squat clip for the locked workout pose.</summary>
+    public bool SetDeadliftWorkoutClip(bool deadlift)
+    {
+        if (deadlift && authoredDeadliftClip == null)
+        {
+            return false;
+        }
+        deadliftWorkoutClip = deadlift;
+        return true;
+    }
+
+    /// <summary>
+    /// Writes the deadlift pose at <paramref name="normalized"/> right now, so
+    /// a set can measure this rig's own hands before it starts. The next
+    /// LateUpdate samples the workout pose again.
+    /// </summary>
+    public bool SampleDeadliftPoseNow(float normalized)
+    {
+        if (!configured || authoredDeadliftClip == null)
+        {
+            return false;
+        }
+        float duration = Mathf.Max(0.01f, authoredDeadliftClip.length - 0.001f);
+        return SampleDirect(authoredDeadliftClip, Mathf.Clamp01(normalized) * duration);
+    }
+
+    // Per clip, the vertical shift that puts its planted feet (lowest foot
+    // skin over the whole cycle) on the level the model was fitted to: the
+    // bind pose, because the hidden actor is fitted before any clip can be
+    // evaluated. With the skeleton root pinned, each Mixamo clip plants its
+    // feet at its own height; without this the walk or the run of some rigs
+    // sank several centimetres into the floor or the treadmill belt.
+    private readonly Dictionary<AnimationClip, float> clipGroundOffsets =
+        new Dictionary<AnimationClip, float>();
+    private const int GroundSamplesPerFrame = 16;
+    private const int MaxGroundSamplesPerClip = 64;
+    // Measured over the first visible frames: the clip sampler cannot
+    // evaluate the rig while the prepared actor is still hidden.
+    private bool groundOffsetsMeasured;
+    private bool groundOffsetsLogged;
+    private readonly List<AnimationClip> groundQueue = new List<AnimationClip>();
+    private AnimationClip groundClip;
+    private int groundSample;
+    private int groundSamples;
+    private float groundClipMin;
+    private float groundLevel = float.NaN;
+    private SkinnedMeshRenderer groundBody;
+    // Foot skin, skinned by hand: a full BakeMesh of these 100k-vertex scans
+    // per sample stalled the first frames of every visitor.
+    private Vector3[] groundFootVertices;
+    private BoneWeight[] groundFootWeights;
+    private Matrix4x4[] groundBoneMatrices;
+    private bool[] groundBoneUsed;
+    private Transform[] groundBones;
+    private Matrix4x4[] groundBindposes;
+    private Transform[] groundSnapshotBones;
+    private Vector3[] groundSnapshotPositions;
+    private Quaternion[] groundSnapshotRotations;
+    private Vector3[] groundSnapshotScales;
+    private string groundDetails = string.Empty;
+    // Ground offset of the clip sampled last; part of the grounded root.
+    private float appliedGroundOffset;
+    public float AppliedGroundOffsetForVerification => appliedGroundOffset;
+    public bool GroundOffsetsReadyForVerification => groundOffsetsLogged;
+    public float SkeletonRootHeightForVerification =>
+        rig != null && rig.Root != null && modelRoot != null
+            ? Vector3.Dot(rig.Root.position - modelRoot.position, modelRoot.up) : float.NaN;
+
+    public float GetClipGroundOffsetForVerification(AnimationClip clip) =>
+        clip != null && clipGroundOffsets.TryGetValue(clip, out float offset) ? offset : 0f;
+
+    private void BeginGroundOffsetMeasurement()
+    {
+        groundOffsetsMeasured = true;
+        clipGroundOffsets.Clear();
+        groundQueue.Clear();
+        groundClip = null;
+        groundDetails = string.Empty;
+        groundBody = FindBodyRenderer();
+        Mesh mesh = groundBody != null ? groundBody.sharedMesh : null;
+        if (mesh == null || !mesh.isReadable || rig == null ||
+            rig.LeftFoot == null || rig.RightFoot == null)
+        {
+            groundOffsetsLogged = true;
+            return;
+        }
+        // Only the skin the feet carry: toes and soles.
+        int[] dominant = GymSkinSampler.GetDominantBones(mesh);
+        groundBones = groundBody.bones;
+        groundBindposes = mesh.bindposes;
+        Vector3[] vertices = mesh.vertices;
+        BoneWeight[] weights = mesh.boneWeights;
+        List<Vector3> footVertices = new List<Vector3>();
+        List<BoneWeight> footWeights = new List<BoneWeight>();
+        groundBoneUsed = new bool[groundBones.Length];
+        for (int i = 0; i < dominant.Length && i < vertices.Length && i < weights.Length; i++)
+        {
+            Transform bone = dominant[i] >= 0 && dominant[i] < groundBones.Length ? groundBones[dominant[i]] : null;
+            if (!GymSkinSampler.IsInChain(bone, rig.LeftFoot) && !GymSkinSampler.IsInChain(bone, rig.RightFoot))
+            {
+                continue;
+            }
+            BoneWeight weight = weights[i];
+            footVertices.Add(vertices[i]);
+            footWeights.Add(weight);
+            MarkGroundBone(weight.boneIndex0, weight.weight0);
+            MarkGroundBone(weight.boneIndex1, weight.weight1);
+            MarkGroundBone(weight.boneIndex2, weight.weight2);
+            MarkGroundBone(weight.boneIndex3, weight.weight3);
+        }
+        if (footVertices.Count == 0)
+        {
+            groundOffsetsLogged = true;
+            return;
+        }
+        groundFootVertices = footVertices.ToArray();
+        groundFootWeights = footWeights.ToArray();
+        groundBoneMatrices = new Matrix4x4[groundBones.Length];
+
+        SnapshotGroundPose();
+        RestoreVisibleRestPose();
+        groundLevel = MeasureSoleNow();
+        RestoreGroundPose();
+        AnimationClip[] grounded =
+        {
+            authoredWalkingClip, authoredRunningClip,
+            GetVariant(idleVariants, 0), GetVariant(idleVariants, 1), GetVariant(idleVariants, 2),
+            authoredPunchClip,
+            GetVariant(celebrationVariants, 0), GetVariant(celebrationVariants, 1),
+            GetVariant(celebrationVariants, 2)
+        };
+        foreach (AnimationClip clip in grounded)
+        {
+            if (clip != null && !groundQueue.Contains(clip))
+            {
+                groundQueue.Add(clip);
+            }
+        }
+    }
+
+    private void MarkGroundBone(int index, float weight)
+    {
+        if (weight > 0f && index >= 0 && index < groundBoneUsed.Length)
+        {
+            groundBoneUsed[index] = true;
+        }
+    }
+
+    // A few samples per frame so the one-time measurement never spikes. The
+    // visible pose is restored afterwards, so a pose transition starting this
+    // frame never blends from a measurement pose.
+    private void TickGroundOffsetMeasurement()
+    {
+        SnapshotGroundPose();
+        float restoreGroundOffset = appliedGroundOffset;
+        int budget = GroundSamplesPerFrame;
+        while (budget-- > 0)
+        {
+            if (groundClip == null)
+            {
+                if (groundQueue.Count == 0)
+                {
+                    if (!groundOffsetsLogged)
+                    {
+                        groundOffsetsLogged = true;
+                        Debug.Log($"GYMCHAOS_CLIP_GROUND_OFFSETS identity={configuredIdentity}{groundDetails}", this);
+                    }
+                    break;
+                }
+                groundClip = groundQueue[0];
+                groundQueue.RemoveAt(0);
+                groundSample = 0;
+                // Two samples per authored frame, capped for the long idles.
+                groundSamples = Mathf.Clamp(
+                    Mathf.CeilToInt(groundClip.length * groundClip.frameRate * 2f), 8, MaxGroundSamplesPerClip);
+                groundClipMin = float.PositiveInfinity;
+            }
+            float duration = Mathf.Max(0.01f, groundClip.length - 0.001f);
+            SampleDirect(groundClip, duration * groundSample / groundSamples);
+            groundClipMin = Mathf.Min(groundClipMin, MeasureSoleNow());
+            if (++groundSample < groundSamples)
+            {
+                continue;
+            }
+            // A correction is a pose height mismatch, never a teleport.
+            float offset = Mathf.Clamp(groundLevel - groundClipMin, -0.3f, 0.3f);
+            clipGroundOffsets[groundClip] = offset;
+            groundDetails += $" {ClipName(groundClip)}={offset:0.000}";
+            groundClip = null;
+        }
+        RestoreGroundPose();
+        appliedGroundOffset = restoreGroundOffset;
+    }
+
+    private void SnapshotGroundPose()
+    {
+        if (groundSnapshotBones == null)
+        {
+            groundSnapshotBones = modelRoot.GetComponentsInChildren<Transform>(true);
+            groundSnapshotPositions = new Vector3[groundSnapshotBones.Length];
+            groundSnapshotRotations = new Quaternion[groundSnapshotBones.Length];
+            groundSnapshotScales = new Vector3[groundSnapshotBones.Length];
+        }
+        for (int i = 0; i < groundSnapshotBones.Length; i++)
+        {
+            Transform bone = groundSnapshotBones[i];
+            groundSnapshotPositions[i] = bone.localPosition;
+            groundSnapshotRotations[i] = bone.localRotation;
+            groundSnapshotScales[i] = bone.localScale;
+        }
+    }
+
+    private void RestoreGroundPose()
+    {
+        for (int i = 0; i < groundSnapshotBones.Length; i++)
+        {
+            Transform bone = groundSnapshotBones[i];
+            if (bone == null)
+            {
+                continue;
+            }
+            bone.localPosition = groundSnapshotPositions[i];
+            bone.localRotation = groundSnapshotRotations[i];
+            bone.localScale = groundSnapshotScales[i];
+        }
+    }
+
+    // Lowest foot skin above the model root, skinned by hand from the foot
+    // vertices only. An offset SampleDirect already applied is removed so
+    // every clip is measured on the same pinned root.
+    private float MeasureSoleNow()
+    {
+        for (int b = 0; b < groundBones.Length; b++)
+        {
+            if (groundBoneUsed[b] && groundBones[b] != null)
+            {
+                groundBoneMatrices[b] = groundBones[b].localToWorldMatrix * groundBindposes[b];
+            }
+        }
+        Vector3 up = modelRoot.up;
+        Vector3 origin = modelRoot.position;
+        float lowest = float.PositiveInfinity;
+        for (int i = 0; i < groundFootVertices.Length; i++)
+        {
+            Vector3 v = groundFootVertices[i];
+            BoneWeight w = groundFootWeights[i];
+            Vector3 world =
+                groundBoneMatrices[w.boneIndex0].MultiplyPoint3x4(v) * w.weight0 +
+                (w.weight1 > 0f ? groundBoneMatrices[w.boneIndex1].MultiplyPoint3x4(v) * w.weight1 : Vector3.zero) +
+                (w.weight2 > 0f ? groundBoneMatrices[w.boneIndex2].MultiplyPoint3x4(v) * w.weight2 : Vector3.zero) +
+                (w.weight3 > 0f ? groundBoneMatrices[w.boneIndex3].MultiplyPoint3x4(v) * w.weight3 : Vector3.zero);
+            lowest = Mathf.Min(lowest, Vector3.Dot(world - origin, up));
+        }
+        return lowest - appliedGroundOffset;
+    }
+
+    private SkinnedMeshRenderer FindBodyRenderer()
+    {
+        SkinnedMeshRenderer body = null;
+        foreach (SkinnedMeshRenderer candidate in modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (candidate.sharedMesh != null &&
+                (body == null || candidate.sharedMesh.vertexCount > body.sharedMesh.vertexCount))
+            {
+                body = candidate;
+            }
+        }
+        return body;
+    }
+
+    private AnimationClip WorkoutClip => deadliftWorkoutClip ? authoredDeadliftClip : authoredSquatClip;
 
     public void ReleaseWorkoutPose()
     {
         workoutPoseLocked = false;
+        deadliftWorkoutClip = false;
         workoutPosePhaseDriven = false;
         if (lastMotionState == MotionState.Uninitialized)
         {
@@ -798,23 +1090,40 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             return;
         }
 
+        if (modelRoot.gameObject.activeInHierarchy && !groundOffsetsLogged)
+        {
+            if (!groundOffsetsMeasured)
+            {
+                BeginGroundOffsetMeasurement();
+            }
+            TickGroundOffsetMeasurement();
+        }
+
         if (workoutPoseLocked)
         {
             lastMotionState = MotionState.Idle;
-            PreparePoseTransition(authoredSquatClip, "workout");
-            if (authoredSquatClip != null)
+            AnimationClip workoutClip = WorkoutClip;
+            PreparePoseTransition(workoutClip, "workout");
+            if (workoutClip != null)
             {
-                if (workoutPosePhaseDriven)
+                if (deadliftWorkoutClip)
                 {
-                    float duration = Mathf.Max(0.01f, authoredSquatClip.length - 0.001f);
-                    workoutPoseTime = workoutPosePhase * duration;
+                    SampleDirectNormalized(workoutClip, workoutPosePhase);
                 }
                 else
                 {
-                    workoutPoseTime += Time.deltaTime;
+                    if (workoutPosePhaseDriven)
+                    {
+                        float duration = Mathf.Max(0.01f, workoutClip.length - 0.001f);
+                        workoutPoseTime = workoutPosePhase * duration;
+                    }
+                    else
+                    {
+                        workoutPoseTime += Time.deltaTime;
+                    }
+                    SampleDirectLoop(workoutClip, workoutPoseTime);
                 }
-                SampleDirectLoop(authoredSquatClip, workoutPoseTime);
-                EmitAnimationMarker(MotionState.Idle, authoredSquatClip, "workout");
+                EmitAnimationMarker(MotionState.Idle, workoutClip, "workout");
             }
             else
             {
@@ -971,7 +1280,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         // translation channel). Start the squat clip directly so the solver
         // sees a coherent authored phase-zero pose; limb scales and clip data
         // remain untouched.
-        if (ReferenceEquals(nextClip, authoredSquatClip))
+        if (ReferenceEquals(nextClip, authoredSquatClip) ||
+            ReferenceEquals(nextClip, authoredDeadliftClip))
         {
             poseTransition.Cancel();
             lastSampledClip = nextClip;
@@ -1092,12 +1402,23 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         // bind position so per-foot IK has one stable support plane. Flying
         // remains the only intentional airborne root-motion exception.
         bool preserveAuthoredRootMotion =
-            ReferenceEquals(clip, flyClip) || ReferenceEquals(clip, authoredSquatClip);
+            ReferenceEquals(clip, flyClip) || ReferenceEquals(clip, authoredSquatClip) ||
+            ReferenceEquals(clip, authoredDeadliftClip);
+        appliedGroundOffset = 0f;
         if (!preserveAuthoredRootMotion && rig != null &&
             rig.Root != null && restPositions.TryGetValue(
                 rig.Root, out Vector3 rootPosition))
         {
             rig.Root.localPosition = rootPosition;
+            // The pinned root plants each clip's feet at a different height
+            // (the walk of some rigs sank ~3 cm below the run and idle). One
+            // constant per clip moves its planted feet onto the fitted floor.
+            if (!policeFirearmClip && modelRoot != null &&
+                clipGroundOffsets.TryGetValue(clip, out float groundOffset))
+            {
+                appliedGroundOffset = groundOffset;
+                rig.Root.position += modelRoot.up * groundOffset;
+            }
         }
         modelRoot.localPosition = modelBaseLocalPosition;
         modelRoot.localRotation = modelBaseLocalRotation;
@@ -1251,6 +1572,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         if (string.Equals(clipStem, "punch_combo", StringComparison.OrdinalIgnoreCase)) return authoredPunchClip;
         if (string.Equals(clipStem, "flying", StringComparison.OrdinalIgnoreCase)) return authoredFlyingClip;
         if (string.Equals(clipStem, "squat", StringComparison.OrdinalIgnoreCase)) return authoredSquatClip;
+        if (string.Equals(clipStem, "deadlift", StringComparison.OrdinalIgnoreCase)) return authoredDeadliftClip;
         if (string.Equals(clipStem, "gun_drawing", StringComparison.OrdinalIgnoreCase)) return authoredGunDrawingClip;
         if (string.Equals(clipStem, "gun_shooting", StringComparison.OrdinalIgnoreCase)) return authoredGunShootingClip;
         if (string.Equals(clipStem, "idle1", StringComparison.OrdinalIgnoreCase)) return GetVariant(idleVariants, 0);

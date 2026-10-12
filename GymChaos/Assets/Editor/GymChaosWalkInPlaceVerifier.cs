@@ -89,7 +89,8 @@ public static class GymChaosWalkInPlaceVerifier
                 case Stage.Blocked:
                     if (!TickWindow(out float blockedMoved, out var blockedState)) return;
                     Require(blockedMoved < 0.2f,
-                        $"member was not held by the wall: moved={blockedMoved:F2}");
+                        $"member was not held by the wall: identity={fighter.Identity} moved={blockedMoved:F2} " +
+                        $"state={blockedState} roaming={fighter.IsRoaming}");
                     Require(blockedState != MixamoScanRetargetAnimator.MotionState.Running,
                         $"member pushing into a wall plays {blockedState} (walk in place), moved={blockedMoved:F2}");
                     Debug.Log($"GYMCHAOS_WALK_IN_PLACE_BLOCKED_OK identity={fighter.Identity} " +
@@ -123,7 +124,12 @@ public static class GymChaosWalkInPlaceVerifier
         foreach (EnemyFighter candidate in UnityEngine.Object.FindObjectsByType<EnemyFighter>(
                      FindObjectsSortMode.None))
         {
+            // The visitor routine moves its fighter on its own (walking to a
+            // station, the lockers or the exit), which the forced roam
+            // direction does not stop. Use a member that is only roaming.
+            GymVisitorAgent agent = candidate != null ? candidate.GetComponent<GymVisitorAgent>() : null;
             if (candidate == null || candidate.IsDead || candidate.IsAggressive ||
+                !candidate.IsRoaming || (agent != null && agent.IsBusy) ||
                 candidate.GetComponent<Rigidbody>() == null ||
                 candidate.Identity == BodybuilderIdentity.Goku ||
                 candidate.Identity == BodybuilderIdentity.Ronnie ||
@@ -137,6 +143,9 @@ public static class GymChaosWalkInPlaceVerifier
             break;
         }
         if (fighter == null) return false;
+        // Freeze arrivals and departures so no visitor routine takes the
+        // chosen member away during the two measurement windows.
+        UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>()?.PauseVisitorScheduleForVerification();
 
         float floorY = fighter.transform.position.y;
         Vector3 from = new Vector3(gym.center.x, floorY + 1.1f, gym.center.z);

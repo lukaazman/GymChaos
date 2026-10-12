@@ -141,6 +141,9 @@ public static class GymChaosVehicleDepartureVerifier
 
     private static void StartRun()
     {
+        // A negative-reputation save auto-aggros every visitor, so nobody is
+        // ever free to leave and the departure is never requested.
+        GymChaosVerifierSave.Neutralize();
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         started = EditorApplication.timeSinceStartup;
         requested = false;
@@ -168,10 +171,17 @@ public static class GymChaosVehicleDepartureVerifier
             MuteAllAudio();
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
+        GymChaosVerifierSave.Restore();
         EditorApplication.update -= Tick;
         EditorApplication.playModeStateChanged -= PlayModeChanged;
         if (Application.isBatchMode && SessionState.GetBool(RequestedKey, false))
-            EditorApplication.Exit(1);
+            ExitRestoringSave(1);
+    }
+
+    private static void ExitRestoringSave(int code)
+    {
+        GymChaosVerifierSave.Restore();
+        EditorApplication.Exit(code);
     }
 
     private static void Tick()
@@ -293,7 +303,7 @@ public static class GymChaosVehicleDepartureVerifier
                     if (Application.isBatchMode)
                     {
                         PrepareVisitorsForVerifierShutdown();
-                        EditorApplication.Exit(0);
+                        ExitRestoringSave(0);
                         return;
                     }
                     PrepareVisitorsForVerifierShutdown();
@@ -344,7 +354,7 @@ public static class GymChaosVehicleDepartureVerifier
             GymChaosVerifierPrefs.DeleteKey(AllModeKey);
             if (Application.isBatchMode)
             {
-                EditorApplication.Exit(1);
+                ExitRestoringSave(1);
                 return;
             }
             PrepareVisitorsForVerifierShutdown();
@@ -530,7 +540,7 @@ public static class GymChaosVehicleDepartureVerifier
                 SessionState.EraseBool(RequestedKey);
                 GymChaosVerifierPrefs.DeleteKey(AllModeKey);
                 PrepareVisitorsForVerifierShutdown();
-                EditorApplication.Exit(0);
+                ExitRestoringSave(0);
                 return;
             }
         }
@@ -676,7 +686,7 @@ public static class GymChaosVehicleDepartureVerifier
             GymChaosVerifierPrefs.DeleteKey(GokuModeKey);
             GymChaosVerifierPrefs.DeleteKey(RouteModeKey);
             PrepareVisitorsForVerifierShutdown();
-            EditorApplication.Exit(0);
+            ExitRestoringSave(0);
             return;
         }
         // The route-quality sample covers the exterior leg; leave enough

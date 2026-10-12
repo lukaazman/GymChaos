@@ -128,7 +128,7 @@ public static class GymChaosCityDystopiaVerifier
         }
 
         if (frameSamplingStarted && frameSampleCount < 30 &&
-            now - sceneReadyAt < 3d)
+            now - sceneReadyAt < 3d + FrameSamplingWarmupSeconds)
         {
             return;
         }
@@ -318,8 +318,14 @@ public static class GymChaosCityDystopiaVerifier
         return rendererCount == GymCityDystopiaSurroundings.CityRendererCount;
     }
 
+    // Boot finishes other one-off work (loose item LODs, the receptionist
+    // skin weights, first renders) in the frames right after the city is
+    // ready. Those frames are boot cost, not the city's steady frame cost.
+    private const double FrameSamplingWarmupSeconds = 2d;
+
     internal static bool IsFrameSamplingActive =>
-        frameSamplingStarted && !verificationFinished;
+        frameSamplingStarted && !verificationFinished &&
+        EditorApplication.timeSinceStartup - sceneReadyAt >= FrameSamplingWarmupSeconds;
 
     internal static void RecordUnityFrame(float unscaledDeltaSeconds)
     {

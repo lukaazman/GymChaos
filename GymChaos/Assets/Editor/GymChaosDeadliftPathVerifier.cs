@@ -45,6 +45,7 @@ public static class GymChaosDeadliftPathVerifier
     public static void Run()
     {
         ResetState();
+        GymChaosVerifierSave.Neutralize();
         SessionState.SetBool(RequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;

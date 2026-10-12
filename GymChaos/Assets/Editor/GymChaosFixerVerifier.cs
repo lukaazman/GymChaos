@@ -295,6 +295,14 @@ public static class GymChaosFixerVerifier
         Require(dog.CastCount == fixedThisVisit, $"Casts {dog.CastCount} != repairs {fixedThisVisit}");
         foreach (float peak in dog.CastGlowPeaks)
             Require(peak > 0.9f, $"A cast's lollipop glow peaked at only {peak:F2}");
+        // magic_sign plays at double speed: a cast lasts half the clip.
+        float expectedCast = dog.MagicSignClipLength / GymFixerAgent.MagicSignSpeed;
+        Require(GymFixerAgent.MagicSignSpeed == 2f, "magic_sign is not set to double speed");
+        foreach (float seconds in dog.CastDurations)
+            Require(Mathf.Abs(seconds - expectedCast) < 0.3f,
+                $"A cast took {seconds:F2}s, expected {expectedCast:F2}s (clip {dog.MagicSignClipLength:F2}s at 2x)");
+        Debug.Log($"GYMCHAOS_FIXER_CAST_SPEED clip={dog.MagicSignClipLength:F2}s expected={expectedCast:F2}s " +
+            $"casts={string.Join(",", dog.CastDurations.ConvertAll(d => d.ToString("F2")))}");
         Require(dog.MaxGlowWhileNotCasting < 0.12f,
             $"Lollipop glowed outside casts ({dog.MaxGlowWhileNotCasting:F2})");
         Require(dog.MaxPoseSpeed < 14f,

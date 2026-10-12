@@ -97,7 +97,7 @@ public static class GymChaosDaviePedestrianVerifier
     private static void Tick()
     {
         if (!EditorApplication.isPlaying) return;
-        Time.timeScale = 1f;
+        Time.timeScale = GymChaosVerifierClock.ScenarioTimeScale;
         AudioListener.pause = true;
 
         double now = EditorApplication.timeSinceStartup;

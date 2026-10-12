@@ -14,6 +14,7 @@ public partial class EnemyFighter
         {
             externalBodyAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
         }
+        animatedMovementActive = moving;
         bool chasing = currentTarget != null && !isPassive;
         externalBodyAnimator?.SetMoving(
             moving, normalizedSpeed, forceRunningClip || isAggressive || chasing);
@@ -29,16 +30,34 @@ public partial class EnemyFighter
         // Callers write body.linearVelocity just before this, so it is the
         // commanded speed. A body pushing into a wall keeps that speed while
         // the solver holds it in place, which played the walk cycle on the
-        // spot. Cap it by the displacement physics actually produced.
-        float planarSpeed = Mathf.Min(
-            Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude,
-            SampleMeasuredPlanarSpeed());
-        bool moving = planarSpeed > AnimationMovementSpeedThreshold;
+        // spot: after PushingIdleSeconds without real progress it idles.
+        // The measured speed lags at every start and turn, so it never caps
+        // the gait directly (that flickered Run->Idle at route steps), and a
+        // single tick of zero command does not drop to idle either.
+        float commandedSpeed = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude;
+        float measuredSpeed = SampleMeasuredPlanarSpeed();
+        float step = Time.inFixedTimeStep ? Time.fixedDeltaTime : Time.deltaTime;
+        bool commanded = commandedSpeed > AnimationMovementSpeedThreshold;
+        bool noProgress = commanded && !float.IsPositiveInfinity(measuredSpeed) &&
+            measuredSpeed < Mathf.Max(MeasuredWalkMinSpeed, commandedSpeed * 0.25f);
+        pushingWithoutProgressSeconds = noProgress ? pushingWithoutProgressSeconds + step : 0f;
+        stoppedCommandSeconds = commanded ? 0f : stoppedCommandSeconds + step;
+        bool moving = commanded
+            ? pushingWithoutProgressSeconds < PushingIdleSeconds
+            : animatedMovementActive && stoppedCommandSeconds < StopIdleSeconds;
+        float planarSpeed = commanded
+            ? commandedSpeed
+            : (float.IsPositiveInfinity(measuredSpeed) ? 0f : measuredSpeed);
         float normalizedSpeed = moving
             ? planarSpeed / Mathf.Max(0.01f, referenceSpeed)
             : 0f;
         SetAnimatedMovement(moving, Mathf.Clamp01(normalizedSpeed));
     }
+    private bool animatedMovementActive;
+    private float pushingWithoutProgressSeconds;
+    private float stoppedCommandSeconds;
+    private const float PushingIdleSeconds = 0.2f;
+    private const float StopIdleSeconds = 0.1f;
     private const float MeasuredSpeedSmoothingSeconds = 0.15f;
     private const float MeasuredSpeedMaxSampleGap = 0.25f;
     // Below this real pace the body is held or sliding along a wall; a walk
@@ -147,11 +166,10 @@ public partial class EnemyFighter
                 body.position, horizontalTarget, GetChaseSpeed() * Time.fixedDeltaTime);
             MoveGokuFlightPosition(new Vector3(
                 nextPosition.x,
-                Mathf.Lerp(standingRootY, standingRootY + GokuFlightHeight, eased),
+                Mathf.Lerp(gokuFlightStartY, floorRootY + GokuFlightHeight, eased),
                 nextPosition.z));
             body.rotation = Quaternion.Slerp(
                 gokuFlightStartRotation, gokuFlightTargetRotation, eased);
-            KeepGokuAboveGround();
             externalBodyAnimator?.SetFlying(true);
             if (gokuFlightTransition >= 1f)
             {
@@ -164,7 +182,7 @@ public partial class EnemyFighter
         {
             Vector3 flightTarget = new Vector3(
                 currentTarget != null ? currentTarget.position.x : transform.position.x,
-                standingRootY + GokuFlightHeight,
+                floorRootY + GokuFlightHeight,
                 currentTarget != null ? currentTarget.position.z : transform.position.z);
             Vector3 toTarget = Vector3.ProjectOnPlane(flightTarget - body.position, Vector3.up);
             float step = GetChaseSpeed() * Time.fixedDeltaTime;
@@ -187,7 +205,6 @@ public partial class EnemyFighter
             Vector3 next = body.position + heading * Mathf.Min(step, toTarget.magnitude);
             next.y = Mathf.MoveTowards(body.position.y, flightTarget.y, step);
             MoveGokuFlightPosition(next);
-            KeepGokuAboveGround();
             externalBodyAnimator?.SetFlying(true);
             return true;
         }
@@ -199,14 +216,18 @@ public partial class EnemyFighter
             float eased = SmoothStep(gokuFlightTransition);
             body.position = new Vector3(
                 body.position.x,
-                Mathf.Lerp(gokuFlightStartY, standingRootY, eased),
+                Mathf.Lerp(gokuFlightStartY, floorRootY, eased),
                 body.position.z);
             body.rotation = Quaternion.Slerp(
                 gokuFlightStartRotation, gokuFlightTargetRotation, eased);
-            KeepGokuAboveGround();
             externalBodyAnimator?.SetFlying(false);
             if (gokuFlightTransition >= 1f)
             {
+                // Finish exactly on the floor: the grounded root is frozen on
+                // Y, so any leftover offset would leave Goku punching mid-air.
+                body.position = new Vector3(body.position.x, floorRootY, body.position.z);
+                transform.position = body.position;
+                standingRootY = floorRootY;
                 gokuFlightState = GokuFlightState.Grounded;
                 SetGokuFlightPhysics(false);
                 // The landing frame is already on the floor. Let the normal
@@ -219,41 +240,6 @@ public partial class EnemyFighter
 
         return true;
     }
-    private void KeepGokuAboveGround()
-    {
-        if (!IsGoku())
-        {
-            return;
-        }
-
-        Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
-        float minimumY = float.PositiveInfinity;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            if (renderers[i] != null && renderers[i].enabled)
-            {
-                minimumY = Mathf.Min(minimumY, renderers[i].bounds.min.y);
-            }
-        }
-
-        if (minimumY < float.PositiveInfinity)
-        {
-            float requiredMinimumY = standingRootY + GokuFlightGroundClearance;
-            if (minimumY < requiredMinimumY)
-            {
-                Vector3 correctedPosition = (body != null ? body.position : transform.position) +
-                    Vector3.up * (requiredMinimumY - minimumY);
-                if (body != null && body.isKinematic)
-                {
-                    body.position = correctedPosition;
-                }
-                else
-                {
-                    transform.position = correctedPosition;
-                }
-            }
-        }
-    }
     private void MoveGokuFlightPosition(Vector3 desiredPosition)
     {
         if (body == null)
@@ -261,7 +247,14 @@ public partial class EnemyFighter
             return;
         }
 
-        Vector3 delta = desiredPosition - body.position;
+        // Altitude changes are small and stay between the floor and the fixed
+        // flight height, so apply them directly. Scaling them with a blocked
+        // horizontal sweep left Goku flying lower whenever he pressed into an
+        // obstacle.
+        Vector3 start = body.position;
+        start.y = desiredPosition.y;
+        body.position = start;
+        Vector3 delta = desiredPosition - start;
         float distance = delta.magnitude;
         if (distance < 0.0001f)
         {
@@ -382,7 +375,17 @@ public partial class EnemyFighter
         {
             gokuFlightRouteRebuildAt = Time.time + GokuFlightRouteRebuildInterval;
             gokuFlightRouteIndex = 0;
-            if (!TryBuildVisitorRoute(flightTarget, gokuFlightRoute))
+            allowNearGoalRoute = true;
+            bool built;
+            try
+            {
+                built = TryBuildVisitorRoute(flightTarget, gokuFlightRoute);
+            }
+            finally
+            {
+                allowNearGoalRoute = false;
+            }
+            if (!built)
             {
                 gokuFlightRoute.Clear();
             }
@@ -454,11 +457,12 @@ public partial class EnemyFighter
         }
         return desired;
     }
-    // The flying clip lays the body horizontally about 0.83-1.71 m above the
-    // root. Sweep that volume, oriented along the travel direction, rather
-    // than the upright root capsule: the standing capsule reaches the floor,
-    // so benches, plates and dumbbells stopped a flight that clears them.
-    private const float GokuFlightProbeHeight = 1.27f * ExternalRiggedCharacterVisual.GokuSizeMultiplier;
+    // The flying clip lays the (already size-scaled) body horizontally about
+    // 0.8-1.75 m above the root. Sweep that volume, oriented along the travel
+    // direction, rather than the upright root capsule: the standing capsule
+    // reaches the floor, so benches, plates and dumbbells stopped a flight
+    // that clears them.
+    private const float GokuFlightProbeHeight = 1.27f;
     private const float GokuFlightTurnRate = 420f;
     private const float GokuFlightDirectLookahead = 5f;
     private const float GokuFlightRouteRebuildInterval = 0.75f;

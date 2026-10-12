@@ -83,6 +83,24 @@ public sealed class GymVisitorDirector : MonoBehaviour
 
     public static GymVisitorDirector Instance { get; private set; }
     public int EligibleEnemyCount => records.Count;
+    // Visitors on today's roster, including members who already left the
+    // room for a destination such as the protein store.
+    public int ActiveRosterCountForVerification
+    {
+        get
+        {
+            int count = 0;
+            for (int i = 0; i < records.Count; i++)
+            {
+                if (records[i].active)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+
     public int ActiveVisitorCount
     {
         get
@@ -1701,10 +1719,22 @@ public bool BeginDepartureForVerification(
 
         return false;
     }
+    // Share of scheduled workouts a member spends on the deadlift platform
+    // when it is free (otherwise they squat).
+    private const double DeadliftWorkoutChance = 0.4;
+
     private void TryStartWorkout(VisitorRecord record)
     {
+        if (random.NextDouble() < DeadliftWorkoutChance && TryStartDeadlift(record))
+        {
+            return;
+        }
         GymExerciseStation station = GymExerciseStation.FindClosestSquat(
             record.fighter.transform.position, 60f);
+        if (station == null && TryStartDeadlift(record))
+        {
+            return;
+        }
         if (station == null)
         {
             // Keep the scheduled slot alive when a player temporarily occupies
@@ -1728,6 +1758,54 @@ public bool BeginDepartureForVerification(
             $"GYMCHAOS_WORKOUT_REQUESTED enemy={record.fighter.Identity} " +
             $"type=squat station={station.EquipmentName} reps={repetitions}",
             this);
+    }
+
+    private bool TryStartDeadlift(VisitorRecord record)
+    {
+        MixamoScanRetargetAnimator animator =
+            record.fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+        if (animator == null || !animator.HasAuthoredDeadliftClip)
+        {
+            return false;
+        }
+        GymExerciseStation station = GymExerciseStation.FindAvailableDeadlift(
+            record.fighter, record.fighter.transform.position, 60f);
+        if (station == null)
+        {
+            return false;
+        }
+        int repetitions = random.Next(3, 6);
+        if (!record.agent.BeginWorkoutApproach(station, repetitions, 1f))
+        {
+            return false;
+        }
+        record.workoutInProgress = true;
+        Debug.Log(
+            $"GYMCHAOS_WORKOUT_REQUESTED enemy={record.fighter.Identity} " +
+            $"type=deadlift station={station.EquipmentName} reps={repetitions}",
+            this);
+        return true;
+    }
+
+    /// <summary>Sends one free member to the deadlift platform.</summary>
+    public bool BeginDeadliftForVerification(out EnemyFighter fighter, out GymExerciseStation station)
+    {
+        fighter = null;
+        station = null;
+        for (int i = 0; i < records.Count; i++)
+        {
+            VisitorRecord record = records[i];
+            if (record.suspendedForCombat || !record.active || record.visitInProgress ||
+                record.workoutInProgress || record.fighter.IsDead || record.fighter.IsAggressive ||
+                !record.agent.IsInsideGym || record.agent.IsBusy || !TryStartDeadlift(record))
+            {
+                continue;
+            }
+            fighter = record.fighter;
+            station = record.agent.WorkoutStationForVerification;
+            return true;
+        }
+        return false;
     }
 
     private Vector3 ChooseVisitorArrivalStage(

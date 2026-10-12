@@ -34,7 +34,9 @@ public class PickupItem : MonoBehaviour
     private bool thrownImpactSoundPlayed;
 
     public bool IsHeld { get; private set; }
-    public bool IsThrowableWeapon => canBePickedUp && weightType != WeightType.None;
+    public bool IsThrowableWeapon => canBePickedUp && !IsWorkoutLocked && weightType != WeightType.None;
+    /// <summary>Set while a gym member lifts this bar; the player cannot grab it.</summary>
+    public bool IsWorkoutLocked { get; set; }
     public string DisplayName => displayName;
     public WeightType ItemType => weightType;
     public float BaseMass => baseMass;

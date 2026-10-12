@@ -245,7 +245,7 @@ public partial class EnemyFighter
         roamTargetPurposeful = previousRoamTargetPurposeful;
         roamTargetInterestLabel = previousRoamTargetInterestLabel;
         roamTargetStation = previousRoamTargetStation;
-        if (!built && identity == BodybuilderIdentity.Goku)
+        if (!built && identity == BodybuilderIdentity.Goku && !allowNearGoalRoute)
         {
             Bounds debugFloor;
             bool hasDebugFloor = TryGetRoomBounds(out debugFloor);
@@ -951,6 +951,10 @@ public partial class EnemyFighter
             {
                 continue;
             }
+            if (GymLooseItemSpawner.IsDeadliftStationObject(hit.transform) && IsActiveDeadliftLifter())
+            {
+                continue;
+            }
             SetRouteBlocker(hit, origin, direction);
             return false;
         }
@@ -1099,6 +1103,13 @@ public partial class EnemyFighter
             return true;
         }
 
+        // The member claimed for a deadlift set walks onto the platform and
+        // up to its own bar.
+        if (IsActiveDeadliftLifter() && GymLooseItemSpawner.IsDeadliftStationObject(hit.transform))
+        {
+            return true;
+        }
+
         // Hitbox colliders are added after spawn; refresh the cached set
         // periodically instead of allocating a new array per probe hit.
         if (cachedOwnColliders == null || Time.time >= nextOwnCollidersRefresh)
@@ -1117,6 +1128,23 @@ public partial class EnemyFighter
             }
         }
 
+        return false;
+    }
+
+    private bool IsActiveDeadliftLifter()
+    {
+        RefreshDeadliftNavigationStations();
+        if (deadliftNavigationStations == null)
+        {
+            return false;
+        }
+        for (int i = 0; i < deadliftNavigationStations.Length; i++)
+        {
+            if (deadliftNavigationStations[i] != null && deadliftNavigationStations[i].ActiveLifter == this)
+            {
+                return true;
+            }
+        }
         return false;
     }
 }

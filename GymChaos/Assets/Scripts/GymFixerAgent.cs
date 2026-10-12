@@ -58,6 +58,9 @@ public sealed class GymFixerAgent : MonoBehaviour
     private static readonly string[] ClipStems =
         { "falling", "landing", "running", "magic_sign", "flying", "magic_sign" };
     private static readonly bool[] ClipLoops = { true, false, true, false, true, false };
+    // Playback rate per clip; the magic_sign casts run at double speed.
+    private static readonly float[] ClipSpeeds = { 1f, 1f, 1f, 2f, 1f, 2f };
+    public static float MagicSignSpeed => ClipSpeeds[ClipMagicA];
 
     private GymFixerDirector director;
     private Transform pivot;
@@ -109,6 +112,10 @@ public sealed class GymFixerAgent : MonoBehaviour
     // Verification evidence.
     public readonly List<string> StateHistory = new List<string>();
     public readonly List<float> CastGlowPeaks = new List<float>();
+    // Seconds each cast took; the clip runs at MagicSignSpeed.
+    public readonly List<float> CastDurations = new List<float>();
+    public float MagicSignClipLength => clips[ClipMagicA] != null ? clips[ClipMagicA].length : 0f;
+    private float castStartedAt;
     public FixerState State => state;
     public int CastCount { get; private set; }
     public int VisitIssueCount { get; private set; }
@@ -378,6 +385,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         currentIssue = null;
         StateHistory.Clear();
         CastGlowPeaks.Clear();
+        CastDurations.Clear();
         CastCount = 0;
         MaxPoseSpeed = 0f;
         MaxGlowWhileNotCasting = 0f;
@@ -714,6 +722,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         magicInput = magicInput == ClipMagicA ? ClipMagicB : ClipMagicA;
         Play(magicInput, 0.3f, true);
         magic.ResetPeak();
+        castStartedAt = Time.time;
         CastCount++;
         if (state != FixerState.Casting)
         {
@@ -748,6 +757,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         if (t >= 0.985f)
         {
             CastGlowPeaks.Add(magic.PeakEnvelope);
+            CastDurations.Add(Time.time - castStartedAt);
             BeginNextIssue();
         }
     }
@@ -832,7 +842,7 @@ public sealed class GymFixerAgent : MonoBehaviour
             total += weights[i];
             if (weights[i] > 0f || i == targetClip)
             {
-                clipTimes[i] += dt;
+                clipTimes[i] += dt * ClipSpeeds[i];
             }
         }
         if (total > 0.0001f)

@@ -35,7 +35,7 @@ public sealed partial class GymVisitorAgent
 		pendingStation = station;
 		squatStartPending = false;
 		attemptedWorkoutStations.Clear();
-		pendingRepetitions = Mathf.Clamp(repetitions, 6, 12);
+		pendingRepetitions = station.IsDeadlift ? Mathf.Clamp(repetitions, 3, 6) : Mathf.Clamp(repetitions, 6, 12);
 		pendingRepDuration = Mathf.Clamp(repDuration, 0.55f, 2.2f);
 		if (station.IsSquat)
 		{
@@ -45,6 +45,16 @@ public sealed partial class GymVisitorAgent
 				return false;
 			}
 			attemptedWorkoutStations.Add(station);
+			travelTarget = station.EnemyPosition;
+		}
+		else if (station.IsDeadlift)
+		{
+			// The platform takes one member: claim it before walking over.
+			if (!station.TryReserveEnemyDeadlift(fighter))
+			{
+				pendingStation = null;
+				return false;
+			}
 			travelTarget = station.EnemyPosition;
 		}
 		else
@@ -312,6 +322,11 @@ public sealed partial class GymVisitorAgent
 		if ((UnityEngine.Object)(object)pendingStation != (UnityEngine.Object)null && pendingStation.IsSquat && (UnityEngine.Object)(object)fighter != (UnityEngine.Object)null)
 		{
 			pendingStation.CancelEnemySquatApproach(fighter);
+		}
+		else if ((UnityEngine.Object)(object)pendingStation != (UnityEngine.Object)null && pendingStation.IsDeadlift && (UnityEngine.Object)(object)fighter != (UnityEngine.Object)null &&
+			((UnityEngine.Object)(object)squatController == (UnityEngine.Object)null || !squatController.IsDeadliftActive))
+		{
+			pendingStation.EndEnemyDeadlift(fighter);
 		}
 	}
 	private void ResetWorkoutApproachTracking()

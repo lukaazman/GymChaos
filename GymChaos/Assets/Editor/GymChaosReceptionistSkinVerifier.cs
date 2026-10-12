@@ -35,7 +35,8 @@ public static class GymChaosReceptionistSkinVerifier
     private static bool[] handVertex;
     private static float[] maxRatio;
     private static float[] minRatio;
-    private static Vector3[] firstHandPose;
+    private static Vector3[] handMin;
+    private static Vector3[] handMax;
     private static float handTravel;
     private static int frames;
     private static int captures;
@@ -252,9 +253,18 @@ public static class GymChaosReceptionistSkinVerifier
             if (ratio < minRatio[i]) minRatio[i] = ratio;
         }
 
-        if (firstHandPose == null)
+        // Peak-to-peak range of each hand vertex over the window. Measuring
+        // from the first sample only saw half the stroke whenever sampling
+        // began at the middle of the shake, so the result depended on phase.
+        if (handMin == null || handMin.Length != now.Length)
         {
-            firstHandPose = (Vector3[])now.Clone();
+            handMin = new Vector3[now.Length];
+            handMax = new Vector3[now.Length];
+            for (int i = 0; i < now.Length; i++)
+            {
+                handMin[i] = now[i] / scale;
+                handMax[i] = now[i] / scale;
+            }
         }
         else
         {
@@ -262,7 +272,10 @@ public static class GymChaosReceptionistSkinVerifier
             {
                 if (handVertex[i])
                 {
-                    handTravel = Mathf.Max(handTravel, Vector3.Distance(now[i], firstHandPose[i]) / scale);
+                    Vector3 point = now[i] / scale;
+                    handMin[i] = Vector3.Min(handMin[i], point);
+                    handMax[i] = Vector3.Max(handMax[i], point);
+                    handTravel = Mathf.Max(handTravel, (handMax[i] - handMin[i]).magnitude);
                 }
             }
         }

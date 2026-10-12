@@ -537,7 +537,7 @@ public static class GymChaosArtFidelityVerifier
             if (!metrics.VisuallyUseful && !allowEmpty)
             {
                 // Keep the rejected frame next to the evidence for diagnosis.
-                File.WriteAllBytes(Path.Combine(absoluteFolder, label + "-rejected.png"),
+                WriteEvidence(Path.Combine(absoluteFolder, label + "-rejected.png"),
                     image.EncodeToPNG());
                 throw new InvalidOperationException(
                     $"Capture {label} is visually empty: pixels={metrics.VisiblePixels} " +
@@ -547,7 +547,7 @@ public static class GymChaosArtFidelityVerifier
             }
 
             string filename = label + ".png";
-            File.WriteAllBytes(Path.Combine(absoluteFolder, filename), image.EncodeToPNG());
+            WriteEvidence(Path.Combine(absoluteFolder, filename), image.EncodeToPNG());
             captures.Add(EvidenceFolder + "/" + filename);
             Debug.Log(
                 $"GYMCHAOS_ART_CAPTURE label={label} graphics=Direct3D12 " +
@@ -683,5 +683,23 @@ public static class GymChaosArtFidelityVerifier
         }
         captureCamera = null;
         captureLight = null;
+    }
+
+    // Evidence PNGs live under Assets, so the asset importer may still hold
+    // the previous file mapped (Win32 error 1224). Retry briefly.
+    private static void WriteEvidence(string path, byte[] bytes)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.WriteAllBytes(path, bytes);
+                return;
+            }
+            catch (IOException) when (attempt < 10)
+            {
+                System.Threading.Thread.Sleep(200);
+            }
+        }
     }
 }

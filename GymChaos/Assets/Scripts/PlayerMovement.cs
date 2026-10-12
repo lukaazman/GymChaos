@@ -1577,6 +1577,11 @@ public class PlayerMovement : MonoBehaviour
         PickupItem mountedBar = mountedMarker != null
             ? mountedMarker.GetComponent<PickupItem>()
             : null;
+        if (mountedBar != null && mountedBar.IsWorkoutLocked)
+        {
+            // A gym member is lifting this bar: neither it nor its plates.
+            return null;
+        }
         return mountedBar != null && mountedBar.IsThrowableWeapon
             ? mountedBar
             : candidate;

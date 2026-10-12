@@ -131,6 +131,12 @@ public partial class EnemyFighter
 
     public bool BeginTreadmillForVerification(GymExerciseStation station, float speed)
     {
+        return BeginTreadmillForVerification(station, speed, null);
+    }
+
+    /// <summary>Verifier entry; <paramref name="running"/> pins the session mode.</summary>
+    public bool BeginTreadmillForVerification(GymExerciseStation station, float speed, bool? running)
+    {
         if (isDead || isPolice || isPassive || isAggressive)
         {
             return false;
@@ -144,11 +150,29 @@ public partial class EnemyFighter
             return false;
         }
 
+        if (running.HasValue)
+        {
+            treadmillMovementMode = running.Value
+                ? TreadmillMovementMode.Running
+                : TreadmillMovementMode.Walking;
+        }
         // Keep this editor-only verification session alive long enough to
         // collect grounded samples even when headless editor frames are slow.
         treadmillUntil = Time.time + 300f;
         treadmillNextSpeedChangeTime = Time.time + 300f;
         return true;
+    }
+
+    /// <summary>Verifier: switch a live treadmill session between walk and run.</summary>
+    public void SetTreadmillModeForVerification(bool running)
+    {
+        if (treadmillStation == null)
+        {
+            return;
+        }
+        treadmillMovementMode = running
+            ? TreadmillMovementMode.Running
+            : TreadmillMovementMode.Walking;
     }
 
     public bool QueueTreadmillForVerification(GymExerciseStation station)
@@ -546,6 +570,7 @@ public partial class EnemyFighter
     }
     private void Attack(Vector3 direction)
     {
+        attackStartsForVerification++;
         punchInProgress = externalBodyAnimator != null;
         externalBodyAnimator?.TriggerAttack();
         externalBodyAnimator?.SetPunchDirection(direction);

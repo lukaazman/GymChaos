@@ -8,7 +8,7 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
 
     public override uint GetVersion()
     {
-        return 4;
+        return 5;
     }
 
     private void OnPreprocessModel()
@@ -52,7 +52,22 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
         importer.preserveHierarchy = true;
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
         importer.materialLocation = ModelImporterMaterialLocation.InPrefab;
+    }
 
+    // Clip loop flags are set here, not in OnPreprocessModel: only at this
+    // point does defaultClipAnimations list the takes of the file being
+    // imported. Read earlier it can still hold the previous import's takes,
+    // so a re-exported FBX with a new take (deadlift) imported its walk/run
+    // with or without loop pose depending on import order.
+    private void OnPreprocessAnimation()
+    {
+        if (!assetPath.StartsWith(CharacterRoot, StringComparison.OrdinalIgnoreCase) ||
+            !assetPath.EndsWith(".fbx", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        ModelImporter importer = (ModelImporter)assetImporter;
         ModelImporterClipAnimation[] clips = importer.defaultClipAnimations;
         for (int i = 0; i < clips.Length; i++)
         {

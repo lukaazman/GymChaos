@@ -92,8 +92,11 @@ $watch = [Diagnostics.Stopwatch]::StartNew()
 $exitCode = 0
 if (-not $SummaryOnly)
 {
-    & $UnityExecutable @arguments | Out-Null
-    $exitCode = $LASTEXITCODE
+    # Hidden window: lanes run from background jobs without a console, so a
+    # direct call opened a new console window per run and stole focus.
+    $process = Start-Process -FilePath $UnityExecutable -ArgumentList $arguments `
+        -WindowStyle Hidden -Wait -PassThru
+    $exitCode = $process.ExitCode
 }
 $watch.Stop()
 

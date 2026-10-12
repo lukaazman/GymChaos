@@ -258,14 +258,19 @@ public sealed class GymExperienceService : MonoBehaviour
             timeScaleChanged = true;
         }
 
+        if (levelChoiceVisible)
+        {
+            // The uGUI choice (menu style) shows itself while a point is open.
+            GymLevelUpMenuUI.Ensure(this);
+        }
+
         if (levelChoiceVisible && !EnemyFighter.IsFightActive &&
             !GymDialogueDirector.IsDialogueActive && !levelChoiceCursorReleased &&
             player != null)
         {
             // PlayerMovement intentionally stops consuming gameplay input while
             // this overlay is open. Release the gameplay pointer here as well,
-            // otherwise IMGUI can draw clickable buttons but the locked cursor
-            // never reaches them.
+            // otherwise the locked cursor never reaches the menu buttons.
             player.SetCursorCaptured(false);
             levelChoiceCursorReleased = true;
         }
@@ -1105,6 +1110,9 @@ public sealed class GymExperienceService : MonoBehaviour
         index >= 0 && index < DailyGoalTargets.Length ? DailyGoalTargets[index] : 1;
     public int DailyGoalCount => DailyGoalTargets.Length;
 
+    /// <summary>Impact line the level-up menu shows for the next point in a tree.</summary>
+    public string GetSkillChoicePreview(GymStat stat) => GetSkillImpactText(stat, GetStatRank(stat));
+
     private string GetSkillImpactText(GymStat stat, int previousRank)
     {
         switch (stat)
@@ -1186,11 +1194,6 @@ public sealed class GymExperienceService : MonoBehaviour
             // The uGUI HUD replaces these panels and the feedback line.
             DrawProgressHud();
             DrawDailyGoals();
-        }
-        if (levelChoiceVisible && !EnemyFighter.IsFightActive &&
-            !GymDialogueDirector.IsDialogueActive)
-        {
-            DrawSkillChoiceOverlay();
         }
     }
 
@@ -1379,117 +1382,6 @@ public sealed class GymExperienceService : MonoBehaviour
         GUI.Label(rect, text, style);
     }
 
-    private void DrawSkillChoiceOverlay()
-    {
-        GUI.color = new Color(0f, 0f, 0f, 0.72f);
-        GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height), Texture2D.whiteTexture);
-        GUI.color = Color.white;
-
-        float width = Mathf.Min(680f, Screen.width - 40f);
-        Rect panel = new Rect((Screen.width - width) * 0.5f, Screen.height * 0.5f - 180f, width, 360f);
-        GUI.color = new Color(0.035f, 0.045f, 0.09f, 0.98f);
-        GUI.DrawTexture(panel, Texture2D.whiteTexture);
-        GUI.color = Color.white;
-        GUIStyle title = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 28,
-            fontStyle = FontStyle.Bold
-        };
-        title.normal.textColor = new Color(1f, 0.82f, 0.35f);
-        GUI.Label(new Rect(panel.x + 20f, panel.y + 22f, panel.width - 40f, 40f),
-            $"LEVEL {state.level}  |  CHOOSE A STAT", title);
-
-        GUIStyle body = new GUIStyle(title)
-        {
-            fontSize = 16,
-            fontStyle = FontStyle.Normal,
-            wordWrap = true
-        };
-        body.normal.textColor = Color.white;
-        GUI.Label(new Rect(panel.x + 45f, panel.y + 70f, panel.width - 90f, 44f),
-            $"One point per level. Rank {MaxStatRank} unlocks the tree's ultimate. " +
-            "Max all four trees to turn later points into Mastery.", body);
-
-        string[] choices = { "1  STRENGTH", "2  ENDURANCE", "3  TECHNIQUE", "4  REPUTATION" };
-        GymStat[] stats = { GymStat.Strength, GymStat.Endurance, GymStat.Technique, GymStat.Reputation };
-        GUIStyle choiceStyle = CreateProgressHudStyle(15, FontStyle.Bold, TextAnchor.MiddleCenter);
-        choiceStyle.normal.textColor = new Color(0.9f, 0.94f, 1f);
-        choiceStyle.hover.textColor = Color.white;
-        choiceStyle.active.textColor = Color.white;
-        choiceStyle.focused.textColor = Color.white;
-        for (int i = 0; i < choices.Length; i++)
-        {
-            Rect button = new Rect(panel.x + 44f + (i % 2) * (panel.width * 0.5f - 56f),
-                panel.y + 136f + (i / 2) * 72f, panel.width * 0.5f - 66f, 54f);
-            if (DrawSkillChoiceButton(button, choices[i], choiceStyle))
-            {
-                AllocateSkill(stats[i]);
-            }
-        }
-
-        GUIStyle footer = new GUIStyle(body)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 14
-        };
-        footer.normal.textColor = new Color(0.66f, 0.72f, 0.85f);
-        GUI.Label(new Rect(panel.x + 20f, panel.y + 302f, panel.width - 40f, 28f),
-            EnemyFighter.IsFightActive ? "Move away from the fight to spend the point." : "Press 1, 2, 3 or 4", footer);
-
-        Event current = Event.current;
-        if (current.type == EventType.KeyDown && !EnemyFighter.IsFightActive)
-        {
-            GymStat stat;
-            bool hasStat = true;
-            switch (current.keyCode)
-            {
-                case KeyCode.Alpha1:
-                case KeyCode.Keypad1:
-                    stat = GymStat.Strength;
-                    break;
-                case KeyCode.Alpha2:
-                case KeyCode.Keypad2:
-                    stat = GymStat.Endurance;
-                    break;
-                case KeyCode.Alpha3:
-                case KeyCode.Keypad3:
-                    stat = GymStat.Technique;
-                    break;
-                case KeyCode.Alpha4:
-                case KeyCode.Keypad4:
-                    stat = GymStat.Reputation;
-                    break;
-                default:
-                    stat = GymStat.Strength;
-                    hasStat = false;
-                    break;
-            }
-
-            if (hasStat)
-            {
-                AllocateSkill(stat);
-                current.Use();
-            }
-        }
-    }
-
-    private static bool DrawSkillChoiceButton(
-        Rect rect, string label, GUIStyle style)
-    {
-        bool hovered = rect.Contains(Event.current.mousePosition);
-        DrawProgressHudRect(
-            rect,
-            hovered
-                ? new Color(0.11f, 0.16f, 0.23f, 0.98f)
-                : new Color(0.055f, 0.08f, 0.12f, 0.98f));
-        DrawProgressHudRect(
-            new Rect(rect.x, rect.y, 3f, rect.height),
-            hovered
-                ? new Color(1f, 0.82f, 0.35f, 1f)
-                : new Color(0.48f, 0.86f, 1f, 0.78f));
-        return GymUiSounds.ImGuiButton(rect, label, style);
-    }
     // ---- locker outfit menu (presented by GymLockerMenuUI) ----
 
     public static System.Collections.Generic.IReadOnlyList<GymShirtColor> LockerShirts => LockerShirtOptions;

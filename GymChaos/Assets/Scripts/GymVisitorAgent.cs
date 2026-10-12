@@ -1804,7 +1804,9 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			fighter?.RestoreVisitorPoseInterpolation();
 			CancelWorkoutApproach("workout_begin_invalidated");
 		}
-		else if ((UnityEngine.Object)(object)squatController == (UnityEngine.Object)null || !squatController.Begin(pendingStation, fighter, pendingRepetitions, pendingRepDuration))
+		else if ((UnityEngine.Object)(object)squatController == (UnityEngine.Object)null || !(pendingStation.IsDeadlift
+			? squatController.BeginDeadlift(pendingStation, fighter, pendingRepetitions)
+			: squatController.Begin(pendingStation, fighter, pendingRepetitions, pendingRepDuration)))
 		{
 			fighter.ReleaseVisitorWorkoutPose();
 			fighter.RestoreVisitorPoseInterpolation();

@@ -421,6 +421,26 @@ public static class GymChaosEnemyBehaviorVerifier
 
     }
 
+    private static readonly Dictionary<EnemyFighter, Vector3> lastObservedPosition =
+        new Dictionary<EnemyFighter, Vector3>();
+    private static readonly Dictionary<EnemyFighter, double> lastObservedTime =
+        new Dictionary<EnemyFighter, double>();
+
+    private static string DescribeMotion(EnemyFighter fighter)
+    {
+        string displacement = "n/a";
+        if (lastObservedPosition.TryGetValue(fighter, out Vector3 position) &&
+            lastObservedTime.TryGetValue(fighter, out double time))
+        {
+            double dt = Time.timeAsDouble - time;
+            displacement = dt > 0d
+                ? (Vector3.ProjectOnPlane(fighter.transform.position - position, Vector3.up).magnitude / dt).ToString("0.000")
+                : "0";
+        }
+        return $"measured={fighter.MeasuredPlanarSpeedForVerification:0.000} actual={displacement} " +
+            $"blocked={fighter.CurrentRoamBlockedTime:0.00}";
+    }
+
     private static void ObserveIndependentRoaming(EnemyFighter[] fighters)
     {
         List<EnemyFighter> combatFighters = GetCombatFighters(fighters);
@@ -438,9 +458,12 @@ public static class GymChaosEnemyBehaviorVerifier
             {
                 throw new InvalidOperationException(
                     $"{fighter.Identity} switched Run->Idle mid-route without " +
-                    $"a direction change: routeRemaining={fighter.CurrentRoamRouteRemaining}.");
+                    $"a direction change: routeRemaining={fighter.CurrentRoamRouteRemaining} " +
+                    $"{DescribeMotion(fighter)}.");
             }
             previousRoamAnimationStates[fighter] = currentState;
+            Vector3 observedPosition = fighter.transform.position;
+            double observedTime = Time.timeAsDouble;
             ExternalRiggedCharacterVisual visual =
                 fighter.GetComponent<ExternalRiggedCharacterVisual>();
             if (visual != null && visual.RuntimeModelRoot != null &&
@@ -471,17 +494,23 @@ public static class GymChaosEnemyBehaviorVerifier
             if (fighter.AnimationState == MixamoScanRetargetAnimator.MotionState.Idle)
             {
                 observedIdle = true;
-                if (fighter.IsRoaming && fighter.CurrentPlanarSpeed > 0.08f)
+                // Idle is right while the body pushes into something (commanded
+                // velocity, no displacement); only real travel is a slide.
+                float measured = fighter.MeasuredPlanarSpeedForVerification;
+                if (fighter.IsRoaming && fighter.CurrentPlanarSpeed > 0.08f &&
+                    !float.IsNaN(measured) && measured >= 0.3f)
                 {
                     throw new InvalidOperationException(
                         $"{fighter.Identity} moved while its animation state was Idle: " +
-                        $"speed={fighter.CurrentPlanarSpeed:0.000}.");
+                        $"speed={fighter.CurrentPlanarSpeed:0.000} {DescribeMotion(fighter)}.");
                 }
             }
             if (fighter.AnimationState == MixamoScanRetargetAnimator.MotionState.Running)
             {
                 observedRunning = true;
             }
+            lastObservedPosition[fighter] = observedPosition;
+            lastObservedTime[fighter] = observedTime;
             if (fighter.CurrentRoamBlockedTime > 0.95f)
             {
                 throw new InvalidOperationException(

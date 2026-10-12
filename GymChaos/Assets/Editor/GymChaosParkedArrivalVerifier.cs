@@ -78,6 +78,7 @@ public static class GymChaosParkedArrivalVerifier
         roamSamples = 0;
         roamSpeedChanges = 0;
         resultCode = 1; GymChaosVerifierExit.Record(resultCode);
+        GymChaosVerifierSave.Neutralize();
         SessionState.SetBool(RequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         Hook();

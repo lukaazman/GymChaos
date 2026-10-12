@@ -131,7 +131,7 @@ public static class GymChaosProteinStoreVerifier
     private static void Tick()
     {
         if (!EditorApplication.isPlaying) return;
-        Time.timeScale = 1f;
+        Time.timeScale = GymChaosVerifierClock.ScenarioTimeScale;
         AudioListener.pause = true;
         if (startedAt <= 0d) StartTimer();
         double elapsed = EditorApplication.timeSinceStartup - startedAt;

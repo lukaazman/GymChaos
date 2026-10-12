@@ -17,9 +17,17 @@ public static class GymChaosGokuFlightVerifier
     private const string OriginalSavePresentKey =
         "GymChaos.GokuFlightVerificationOriginalSavePresent";
     private const string ProgressionSaveKey = "GymChaos.Progression.v1";
-    private const float MaxBodyTopAboveFloor = 2.6f;
-    private const float MinBodyBottomAboveFloor = 0.35f;
-    private const float MaxBodyBottomAboveFloor = 1.9f;
+    // The horizontal flying body reads as a chase at the player's chest:
+    // belly roughly 0.8-1.1 m above the floor, back below head height.
+    private const float MaxBodyTopAboveFloor = 2.0f;
+    private const float MinBodyBottomAboveFloor = 0.6f;
+    private const float MaxBodyBottomAboveFloor = 1.15f;
+    // Every flight must use the same altitude above the floor.
+    private const float MaxFlightRootSpread = 0.06f;
+    // A grounded Goku stands on the floor; the root is frozen on Y there, so
+    // any offset is a permanent hover (and punches happen mid-air).
+    private const float MaxGroundedRootOffset = 0.04f;
+    private const float MaxGroundedFeetAboveFloor = 0.15f;
 
     private static double started;
     private static double stageStarted;
@@ -36,6 +44,9 @@ public static class GymChaosGokuFlightVerifier
     private static Vector3 lastSamplePosition;
     private static Vector3 gokuStartPosition;
     private static GameObject obstacle;
+    private static GameObject groundWall;
+    private static bool groundRouteSeen;
+    private static double groundNoClearSince;
     private static bool obstacleSawFlight;
     private static float maxVerticalExtent;
     private static int tailFirstSamples;
@@ -44,6 +55,10 @@ public static class GymChaosGokuFlightVerifier
     private static float worstBottomHigh;
     private static int invisibleSamples;
     private static string lastDetails;
+    private static float flightRootLow;
+    private static float flightRootHigh;
+    private static int flightRootSamples;
+    private static int attackStartsBefore;
 
     static GymChaosGokuFlightVerifier()
     {
@@ -59,8 +74,13 @@ public static class GymChaosGokuFlightVerifier
         SessionState.SetBool(RequestedKey, true);
         // A negative-reputation save auto-aggros every visitor, which starts
         // Goku's chase before the measured setup. Run from a neutral save.
-        GymChaosVerifierPrefs.SetBool(OriginalSavePresentKey, PlayerPrefs.HasKey(ProgressionSaveKey));
-        GymChaosVerifierPrefs.SetString(OriginalSaveKey, PlayerPrefs.GetString(ProgressionSaveKey, string.Empty));
+        // Keep an older backup: after a killed run the live key is already
+        // the neutral one and the real save only exists in the backup.
+        if (!GymChaosVerifierPrefs.HasKey(OriginalSavePresentKey))
+        {
+            GymChaosVerifierPrefs.SetBool(OriginalSavePresentKey, PlayerPrefs.HasKey(ProgressionSaveKey));
+            GymChaosVerifierPrefs.SetString(OriginalSaveKey, PlayerPrefs.GetString(ProgressionSaveKey, string.Empty));
+        }
         PlayerPrefs.DeleteKey(ProgressionSaveKey);
         PlayerPrefs.Save();
         ResetState();
@@ -92,6 +112,10 @@ public static class GymChaosGokuFlightVerifier
         worstBottomLow = float.PositiveInfinity;
         worstBottomHigh = float.NegativeInfinity;
         invisibleSamples = 0;
+        flightRootLow = float.PositiveInfinity;
+        flightRootHigh = float.NegativeInfinity;
+        flightRootSamples = 0;
+        attackStartsBefore = 0;
         maxVerticalExtent = 0f;
         tailFirstSamples = 0;
         lastDetails = "none";
@@ -257,6 +281,15 @@ public static class GymChaosGokuFlightVerifier
                     return;
                 }
                 groundY = floorTopY;
+                // The verifier itself dismounts Goku through the visitor
+                // vehicle path above; that path must leave him standing on
+                // the floor, not hovering at a renderer-derived height.
+                float settledOffset = goku.transform.position.y - floorTopY;
+                if (Mathf.Abs(settledOffset) > MaxGroundedRootOffset)
+                {
+                    throw new InvalidOperationException(
+                        $"GYMCHAOS_GOKU_GROUNDED_HEIGHT_FAIL stage=settle rootAboveFloor={settledOffset:F3}");
+                }
                 goku.SetAggressiveForVerification(player);
                 Debug.Log(
                     $"GYMCHAOS_GOKU_FLIGHT_HEIGHT_SETUP goku={goku.transform.position} " +
@@ -279,6 +312,7 @@ public static class GymChaosGokuFlightVerifier
 
                 if (goku.IsFlying)
                 {
+                    SampleFlightRoot();
                     Sample();
                     flyingSamples++;
                     if (flyingSamples >= 60)
@@ -305,20 +339,41 @@ public static class GymChaosGokuFlightVerifier
                 Vector3 from = goku.transform.position;
                 Vector3[] axes = { Vector3.right, Vector3.left, Vector3.forward, Vector3.back };
                 Vector3 axis = Vector3.right;
-                float room = -1f;
+                float reach = -1f;
+                // Prefer the roomiest axis, but the player must stand where
+                // Goku's body fits: a slot between two treadmills is not a
+                // wall-detour test, Goku cannot physically get there.
+                System.Collections.Generic.List<Vector3> route =
+                    new System.Collections.Generic.List<Vector3>();
+                float bestScore = float.NegativeInfinity;
                 foreach (Vector3 candidate in axes)
                 {
                     float free = candidate.x > 0f ? floorArea.max.x - from.x
                         : candidate.x < 0f ? from.x - floorArea.min.x
                         : candidate.z > 0f ? floorArea.max.z - from.z
                         : from.z - floorArea.min.z;
-                    if (free > room)
+                    for (float candidateReach = Mathf.Min(10f, free - 1.2f);
+                        candidateReach >= 6f; candidateReach -= 0.5f)
                     {
-                        room = free;
-                        axis = candidate;
+                        Vector3 candidateTarget = from + candidate * candidateReach;
+                        if (!goku.TryBuildVisitorRoute(candidateTarget, route))
+                        {
+                            continue;
+                        }
+                        if (candidateReach > bestScore)
+                        {
+                            bestScore = candidateReach;
+                            axis = candidate;
+                            reach = candidateReach;
+                        }
+                        break;
                     }
                 }
-                float reach = Mathf.Min(10f, room - 1.2f);
+                if (reach < 0f)
+                {
+                    throw new InvalidOperationException(
+                        $"No reachable obstacle-phase target around goku={from}.");
+                }
                 Vector3 target = from + axis * reach;
                 MovePlayer(target);
                 obstacle = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -340,13 +395,18 @@ public static class GymChaosGokuFlightVerifier
             if (stage == 4)
             {
                 obstacleSawFlight |= goku.IsFlying;
+                if (goku.IsFlying)
+                {
+                    SampleFlightRoot();
+                }
                 float distance = Vector3.ProjectOnPlane(
                     player.transform.position - goku.transform.position, Vector3.up).magnitude;
                 if (Time.frameCount % 20 == 0)
                 {
                     Debug.Log(
                         $"GYMCHAOS_GOKU_FLIGHT_OBSTACLE_SAMPLE t={EditorApplication.timeSinceStartup - stageStarted:F1} " +
-                        $"goku={goku.transform.position} distance={distance:F2} flying={goku.IsFlying} blocker={goku.GokuFlightLastBlocker}");
+                        $"goku={goku.transform.position} distance={distance:F2} flying={goku.IsFlying} blocker={goku.GokuFlightLastBlocker} " +
+                        goku.GokuFlightDiagnosticsForVerification);
                 }
                 if (distance < 2.6f)
                 {
@@ -358,7 +418,18 @@ public static class GymChaosGokuFlightVerifier
                     Debug.Log(
                         $"GYMCHAOS_GOKU_FLIGHT_OBSTACLE_OK seconds=" +
                         $"{EditorApplication.timeSinceStartup - stageStarted:F1} distance={distance:F2}");
-                    Finish(0);
+                    if (flightRootSamples == 0 || flightRootHigh - flightRootLow > MaxFlightRootSpread)
+                    {
+                        throw new InvalidOperationException(
+                            $"GYMCHAOS_GOKU_FLIGHT_ALTITUDE_FAIL samples={flightRootSamples} " +
+                            $"rootLow={flightRootLow:F3} rootHigh={flightRootHigh:F3}");
+                    }
+                    Debug.Log(
+                        $"GYMCHAOS_GOKU_FLIGHT_ALTITUDE_OK samples={flightRootSamples} " +
+                        $"rootLow={flightRootLow:F3} rootHigh={flightRootHigh:F3}");
+                    attackStartsBefore = goku.AttackStartsForVerification;
+                    stage = 5;
+                    stageStarted = EditorApplication.timeSinceStartup;
                     return;
                 }
                 if (EditorApplication.timeSinceStartup - stageStarted > 12d)
@@ -367,6 +438,99 @@ public static class GymChaosGokuFlightVerifier
                         $"GYMCHAOS_GOKU_FLIGHT_OBSTACLE_FAIL Goku stayed behind the wall: " +
                         $"goku={goku.transform.position} distance={distance:F2} flying={goku.IsFlying} blocker={goku.GokuFlightLastBlocker}");
                 }
+                return;
+            }
+
+            if (stage == 5)
+            {
+                // The chase ends in a punch. Goku must have landed first: the
+                // first punch after the flight starts from the floor.
+                if (goku.AttackStartsForVerification > attackStartsBefore)
+                {
+                    float rootOffset = goku.transform.position.y - floorTopY;
+                    Renderer body = FindBodyRenderer();
+                    float feet = body != null
+                        ? BakeWorldBounds((SkinnedMeshRenderer)body).min.y - floorTopY
+                        : float.NaN;
+                    string details =
+                        $"rootAboveFloor={rootOffset:F3} feetAboveFloor={feet:F3} " +
+                        $"grounded={goku.IsGokuGrounded} flightActive={goku.IsGokuFlightActive}";
+                    if (!goku.IsGokuGrounded || goku.IsGokuFlightActive ||
+                        Mathf.Abs(rootOffset) > MaxGroundedRootOffset ||
+                        !(feet <= MaxGroundedFeetAboveFloor && feet >= -MaxGroundedFeetAboveFloor))
+                    {
+                        throw new InvalidOperationException(
+                            $"GYMCHAOS_GOKU_GROUNDED_HEIGHT_FAIL stage=punch {details}");
+                    }
+                    Debug.Log($"GYMCHAOS_GOKU_LANDED_PUNCH_OK {details}");
+                    SetUpGroundChase();
+                    stage = 6;
+                    stageStarted = EditorApplication.timeSinceStartup;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - stageStarted > 8d)
+                {
+                    throw new InvalidOperationException(
+                        $"Goku did not punch after the flight chase: {goku.GokuFlightDiagnosticsForVerification}");
+                }
+                return;
+            }
+
+            if (stage == 6)
+            {
+                // Original failure: closer than the 5.2 m flight distance Goku
+                // chases on foot, and a machine between him and the player
+                // left him standing with no-clear-direction. He must walk the
+                // room route around the wall and reach the player.
+                string reason = goku.ChaseStopReasonForVerification;
+                groundRouteSeen |= reason == "chasing-route";
+                if (reason == "no-clear-direction")
+                {
+                    if (groundNoClearSince <= 0d)
+                    {
+                        groundNoClearSince = EditorApplication.timeSinceStartup;
+                    }
+                }
+                else
+                {
+                    groundNoClearSince = 0d;
+                }
+                float distance = Vector3.ProjectOnPlane(
+                    player.transform.position - goku.transform.position, Vector3.up).magnitude;
+                if (Time.frameCount % 20 == 0)
+                {
+                    Debug.Log($"GYMCHAOS_GOKU_GROUND_CHASE_SAMPLE distance={distance:F2} " +
+                        $"flying={goku.IsGokuFlightActive} {goku.GokuFlightDiagnosticsForVerification}");
+                }
+                if (goku.IsGokuFlightActive)
+                {
+                    throw new InvalidOperationException(
+                        $"GYMCHAOS_GOKU_GROUND_CHASE_FAIL Goku took off inside the flight distance: distance={distance:F2}");
+                }
+                if (groundNoClearSince > 0d && EditorApplication.timeSinceStartup - groundNoClearSince > 2d)
+                {
+                    throw new InvalidOperationException(
+                        $"GYMCHAOS_GOKU_GROUND_CHASE_FAIL Goku stood with no-clear-direction: distance={distance:F2} " +
+                        goku.GokuFlightDiagnosticsForVerification);
+                }
+                if (distance < 2.6f)
+                {
+                    if (!groundRouteSeen)
+                    {
+                        throw new InvalidOperationException(
+                            "GYMCHAOS_GOKU_GROUND_CHASE_FAIL the wall was passed without the route fallback.");
+                    }
+                    Debug.Log($"GYMCHAOS_GOKU_GROUND_CHASE_OK seconds=" +
+                        $"{EditorApplication.timeSinceStartup - stageStarted:F1} distance={distance:F2}");
+                    Finish(0);
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - stageStarted > 15d)
+                {
+                    throw new InvalidOperationException(
+                        $"GYMCHAOS_GOKU_GROUND_CHASE_FAIL Goku did not reach the player around the wall: " +
+                        $"distance={distance:F2} routeSeen={groundRouteSeen} {goku.GokuFlightDiagnosticsForVerification}");
+                }
             }
         }
         catch (Exception exception)
@@ -374,6 +538,54 @@ public static class GymChaosGokuFlightVerifier
             Debug.LogException(exception);
             Finish(1);
         }
+    }
+
+    private static void SetUpGroundChase()
+    {
+        if (obstacle != null)
+        {
+            UnityEngine.Object.Destroy(obstacle);
+            obstacle = null;
+        }
+        Vector3 playerPosition = player.transform.position;
+        Vector3[] axes = { Vector3.right, Vector3.left, Vector3.forward, Vector3.back };
+        System.Collections.Generic.List<Vector3> route = new System.Collections.Generic.List<Vector3>();
+        foreach (Vector3 axis in axes)
+        {
+            Vector3 start = new Vector3(playerPosition.x, floorTopY, playerPosition.z) + axis * 4.2f;
+            if (!floorArea.Contains(new Vector3(start.x, floorArea.center.y, start.z)))
+            {
+                continue;
+            }
+            goku.SetVisitorSpawnPose(start, Quaternion.LookRotation(-axis, Vector3.up));
+            goku.transform.position = start;
+            Physics.SyncTransforms();
+            Vector3 wallCenter = new Vector3(playerPosition.x, floorTopY + 1.6f, playerPosition.z) + axis * 2.1f;
+            groundWall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            groundWall.name = "Goku Ground Chase Verification Wall";
+            groundWall.transform.SetPositionAndRotation(wallCenter, Quaternion.LookRotation(axis, Vector3.up));
+            groundWall.transform.localScale = new Vector3(2.6f, 3.2f, 0.3f);
+            Physics.SyncTransforms();
+            if (goku.TryBuildVisitorRoute(new Vector3(playerPosition.x, floorTopY, playerPosition.z), route))
+            {
+                goku.SetAggressiveForVerification(player);
+                groundRouteSeen = false;
+                groundNoClearSince = 0d;
+                Debug.Log($"GYMCHAOS_GOKU_GROUND_CHASE_SETUP goku={start} player={playerPosition} wall={wallCenter}");
+                return;
+            }
+            UnityEngine.Object.Destroy(groundWall);
+            groundWall = null;
+        }
+        throw new InvalidOperationException("No floor axis with a route around the ground-chase wall.");
+    }
+
+    private static void SampleFlightRoot()
+    {
+        float root = goku.transform.position.y - floorTopY;
+        flightRootLow = Mathf.Min(flightRootLow, root);
+        flightRootHigh = Mathf.Max(flightRootHigh, root);
+        flightRootSamples++;
     }
 
     private static void Sample()

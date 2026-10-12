@@ -54,7 +54,7 @@ public partial class EnemyFighter
     private bool IsDeadliftNavigationPointClear(Vector3 point)
     {
         RefreshDeadliftNavigationStations();
-        float clearance = GetBodyRadius() + 0.18f;
+        float clearance = DeadliftNavigationClearance;
         if (deadliftNavigationStations == null)
         {
             return true;
@@ -63,7 +63,7 @@ public partial class EnemyFighter
         for (int index = 0; index < deadliftNavigationStations.Length; index++)
         {
             GymDeadliftStationMarker station = deadliftNavigationStations[index];
-            if (station != null && station.isActiveAndEnabled &&
+            if (station != null && station.isActiveAndEnabled && station.ActiveLifter != this &&
                 station.IsInsideNavigationClearance(point, clearance))
             {
                 return false;
@@ -75,7 +75,7 @@ public partial class EnemyFighter
     private bool IsDeadliftNavigationSegmentClear(Vector3 from, Vector3 to)
     {
         RefreshDeadliftNavigationStations();
-        float clearance = GetBodyRadius() + 0.18f;
+        float clearance = DeadliftNavigationClearance;
         if (deadliftNavigationStations == null)
         {
             return true;
@@ -90,7 +90,7 @@ public partial class EnemyFighter
         for (int index = 0; index < deadliftNavigationStations.Length; index++)
         {
             GymDeadliftStationMarker station = deadliftNavigationStations[index];
-            if (station == null || !station.isActiveAndEnabled)
+            if (station == null || !station.isActiveAndEnabled || station.ActiveLifter == this)
             {
                 continue;
             }
@@ -631,6 +631,8 @@ public partial class EnemyFighter
 
         return false;
     }
+    // Root distance a non-lifter keeps from the deadlift platform footprint.
+    public float DeadliftNavigationClearance => GetBodyRadius() + 0.18f;
     private float GetBodyRadius()
     {
         return GetBodyRadiusForIdentity(identity);

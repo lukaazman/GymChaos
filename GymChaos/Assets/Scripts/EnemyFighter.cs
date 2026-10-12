@@ -303,8 +303,11 @@ public partial class EnemyFighter : MonoBehaviour
     // Root lift during flight. The authored flying clip already raises the
     // horizontal body about 0.85 m above the root, so this keeps the body at
     // the player's chest/eye height (about 1.2-2.1 m) instead of the ceiling.
-    private const float GokuFlightHeight = 0.4f;
-    private const float GokuFlightGroundClearance = 0.08f;
+    // Root lift above the floor while flying. The authored flying clip
+    // already holds the horizontal body about 0.75-1.75 m above the root, so
+    // a small lift keeps the belly near the player's waist instead of above
+    // the player's head.
+    private const float GokuFlightHeight = 0.15f;
     private const float GokuFlightMinimumDistance = 5.2f;
     private const float GokuSpeedMultiplier = 1.5f;
     private const float GokuFlightTransitionDuration = 0.42f;
@@ -363,6 +366,8 @@ public partial class EnemyFighter : MonoBehaviour
     public float CurrentPlanarSpeed => body != null
         ? Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up).magnitude
         : 0f;
+    public float MeasuredPlanarSpeedForVerification =>
+        measuredPlanarVelocityValid ? measuredPlanarVelocity.magnitude : float.NaN;
     public int RoamInterestCount => roamInterests.Count;
     public int RoamMachineInterestCount => collectedMachineInterestCount;
     public int RoamPersonnelInterestCount => collectedPersonnelInterestCount;
@@ -383,10 +388,18 @@ public partial class EnemyFighter : MonoBehaviour
     public BodybuilderIdentity Identity => identity;
     public bool HasVisitorAgent => visitorAgent != null;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
+    public int AttackStartsForVerification => attackStartsForVerification;
+    private int attackStartsForVerification;
     // Last reason the combat chase stopped or moved (constant strings, no allocation).
     private string chaseStopReason = "none";
     public string ChaseStopReasonForVerification => chaseStopReason;
     public string GokuFlightLastBlocker => gokuFlightLastBlocker;
+    public string GokuFlightDiagnosticsForVerification =>
+        $"state={gokuFlightState} route={gokuFlightRouteIndex}/{gokuFlightRoute.Count} " +
+        $"groundRoute={groundChaseRouteIndex}/{groundChaseRoute.Count} " +
+        $"waypoint={(gokuFlightRouteIndex < gokuFlightRoute.Count ? gokuFlightRoute[gokuFlightRouteIndex].ToString() : "none")} " +
+        $"groundedFor={Mathf.Max(0f, gokuFlightGroundedUntil - Time.time):0.0} side={gokuFlightDetourSide} " +
+        $"boxed={gokuFlightBoxedTime:0.00} stop={chaseStopReason}";
     public bool IsGokuGrounded => identity == BodybuilderIdentity.Goku &&
         gokuFlightState == GokuFlightState.Grounded;
     public bool IsGokuFlightActive => identity == BodybuilderIdentity.Goku &&
@@ -651,7 +664,9 @@ public partial class EnemyFighter : MonoBehaviour
         // enemy out of a route collision. Steer toward the nearest safe point
         // for one physics tick and let the normal visitor/roaming controller
         // resume once the platform footprint is clear.
-        if (body != null)
+        // A flying Goku passes over the low platform. Steering his kinematic
+        // flight body here and returning early froze him in mid-air.
+        if (body != null && !IsGokuFlightActive)
         {
             if (GymLooseItemSpawner.TryGetDeadliftEscapePointForEnemy(
                     this, 0.55f, out Vector3 escapePoint))
@@ -915,14 +930,38 @@ public partial class EnemyFighter : MonoBehaviour
             }
             else
             {
-                moveDirection = FindClearMovementDirection(moveDirection, distance, false, false);
+                Vector3 clearDirection = FindClearMovementDirection(moveDirection, distance, false, false);
+                bool directBlocked = clearDirection.sqrMagnitude < 0.001f;
+                chaseStopReason = "chasing";
+                if (TryGetGroundChaseWaypoint(directBlocked, out Vector3 chaseWaypoint))
+                {
+                    // Local steering alone cannot get around a machine or a
+                    // wall between the fighter and the target. Follow the
+                    // room grid route (the same planner visitors use) until
+                    // the detour is done.
+                    Vector3 toWaypoint = Vector3.ProjectOnPlane(chaseWaypoint - body.position, Vector3.up);
+                    float waypointDistance = toWaypoint.magnitude;
+                    if (waypointDistance > 0.05f)
+                    {
+                        Vector3 routeDirection = toWaypoint / waypointDistance;
+                        clearDirection = FindClearMovementDirection(
+                            routeDirection, waypointDistance, false, false);
+                        if (clearDirection.sqrMagnitude < 0.001f)
+                        {
+                            // The grid node is passable for this body radius;
+                            // the local probe is more conservative.
+                            clearDirection = routeDirection;
+                        }
+                        chaseStopReason = "chasing-route";
+                    }
+                }
+                moveDirection = clearDirection;
                 if (moveDirection.sqrMagnitude < 0.001f)
                 {
                     chaseStopReason = "no-clear-direction";
                     StopMoving();
                     return;
                 }
-                chaseStopReason = "chasing";
                 Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
                 Vector3 desiredVelocity = moveDirection * chaseSpeed;
                 // Directly steer the planar Rigidbody velocity. The old 11 N force
@@ -947,6 +986,75 @@ public partial class EnemyFighter : MonoBehaviour
             SetAnimatedMovementFromVelocity(chaseSpeed);
         }
 
+    }
+
+    private readonly List<Vector3> groundChaseRoute = new List<Vector3>();
+    private int groundChaseRouteIndex;
+    private float groundChaseRouteRebuildAt;
+    private float groundChaseRouteHoldUntil;
+    private float groundChaseRouteFailedUntil;
+    private const float GroundChaseRouteRebuildInterval = 0.75f;
+    private const float GroundChaseRouteHoldTime = 1.5f;
+    private const float GroundChaseRouteFailedRetry = 2f;
+
+    // Returns the next route waypoint while the direct chase line is blocked
+    // (and for a short hold afterwards, so the fighter finishes the detour
+    // instead of turning back into the obstacle as soon as a side gap opens).
+    private bool TryGetGroundChaseWaypoint(bool directBlocked, out Vector3 waypoint)
+    {
+        waypoint = Vector3.zero;
+        if (currentTarget == null || body == null)
+        {
+            groundChaseRoute.Clear();
+            return false;
+        }
+        if (directBlocked)
+        {
+            groundChaseRouteHoldUntil = Time.time + GroundChaseRouteHoldTime;
+            bool exhausted = groundChaseRouteIndex >= groundChaseRoute.Count;
+            if (Time.time >= groundChaseRouteFailedUntil &&
+                (exhausted || Time.time >= groundChaseRouteRebuildAt))
+            {
+                groundChaseRouteRebuildAt = Time.time + GroundChaseRouteRebuildInterval;
+                groundChaseRouteIndex = 0;
+                allowNearGoalRoute = true;
+                bool built;
+                try
+                {
+                    built = TryBuildVisitorRoute(currentTarget.position, groundChaseRoute);
+                }
+                finally
+                {
+                    allowNearGoalRoute = false;
+                }
+                if (!built)
+                {
+                    // No route (target enclosed): retry less often so stuck
+                    // fighters do not rebuild the grid every 0.75 s.
+                    groundChaseRoute.Clear();
+                    groundChaseRouteFailedUntil = Time.time + GroundChaseRouteFailedRetry;
+                }
+            }
+        }
+        else if (Time.time >= groundChaseRouteHoldUntil)
+        {
+            groundChaseRoute.Clear();
+            groundChaseRouteIndex = 0;
+            return false;
+        }
+
+        Vector3 position = body.position;
+        while (groundChaseRouteIndex < groundChaseRoute.Count &&
+            Vector3.ProjectOnPlane(groundChaseRoute[groundChaseRouteIndex] - position, Vector3.up).magnitude < 0.6f)
+        {
+            groundChaseRouteIndex++;
+        }
+        if (groundChaseRouteIndex >= groundChaseRoute.Count)
+        {
+            return false;
+        }
+        waypoint = groundChaseRoute[groundChaseRouteIndex];
+        return true;
     }
 
     public void SetDialogueLocked(bool locked, Transform conversationPartner = null)
@@ -997,33 +1105,26 @@ public partial class EnemyFighter : MonoBehaviour
         }
 
         visitorDismountGroundSnapFrames--;
-        Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
-        float lowestVisiblePoint = float.PositiveInfinity;
-        for (int i = 0; i < renderers.Length; i++)
+        // The root stays on the floor (it is frozen on Y while grounded).
+        // Moving the root to put the lowest renderer on the floor left Goku
+        // hovering or sunk for the rest of the visit, because the riding
+        // pose and the aura change the renderer bounds. Correct the imported
+        // model child against the feet instead.
+        Vector3 grounded = body != null ? body.position : transform.position;
+        if (Mathf.Abs(grounded.y - visitorDismountGroundY) > 0.001f)
         {
-            Renderer renderer = renderers[i];
-            if (renderer == null || !renderer.enabled ||
-                (!(renderer is SkinnedMeshRenderer) && !(renderer is MeshRenderer)))
+            grounded.y = visitorDismountGroundY;
+            if (body != null)
             {
-                continue;
+                body.position = grounded;
+                body.linearVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
             }
-            lowestVisiblePoint = Mathf.Min(lowestVisiblePoint, renderer.bounds.min.y);
+            transform.position = grounded;
         }
-
-        if (lowestVisiblePoint == float.PositiveInfinity) return;
-        float correction = visitorDismountGroundY - lowestVisiblePoint;
-        if (Mathf.Abs(correction) <= 0.01f || Mathf.Abs(correction) > 2.5f) return;
-        Vector3 corrected = body != null ? body.position : transform.position;
-        corrected.y += correction;
-        if (body != null)
-        {
-            body.position = corrected;
-            body.linearVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-        }
-        transform.position = corrected;
-        standingRootY = corrected.y;
-        floorRootY = corrected.y;
+        standingRootY = visitorDismountGroundY;
+        floorRootY = visitorDismountGroundY;
         Physics.SyncTransforms();
+        GetComponent<ExternalRiggedCharacterVisual>()?.RegroundAfterRootSnap();
     }
 
     public string LastVisitorRouteBlocker => lastVisitorRouteBlocker;

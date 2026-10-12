@@ -341,7 +341,8 @@ public static class GymChaosVehicleDetourVerifier
                 naturalEndpointDistance <= 0.65f)
             {
                 if (!visitorReachedBlockerApproach || !movementSegmentsClear ||
-                    maximumMovementSampleStep > 0.65f)
+                    maximumMovementSampleStep > 0.65f ||
+                    minimumBlockerDistance < approachClearance - 0.03f)
                 {
                     Fail($"natural_blocker_bypass_failed approached={visitorReachedBlockerApproach} " +
                         $"segmentsClear={movementSegmentsClear} " +
@@ -464,6 +465,14 @@ public static class GymChaosVehicleDetourVerifier
             return;
         }
 
+        float requiredSeparation = EnemyFighter.GetBodyRadiusForIdentity(visitor.Identity) +
+            EnemyFighter.GetBodyRadiusForIdentity(blocker.Identity) + 0.05f;
+        if (minimumBlockerDistance < requiredSeparation - 0.03f)
+        {
+            Fail($"visitor_entered_blocker_clearance minRootSeparation={minimumBlockerDistance:F2} " +
+                $"required={requiredSeparation:F2}");
+            return;
+        }
         if (!detourSegmentsClear || !movementSegmentsClear)
         {
             Fail($"visitor_collision_sweep_failed plannedSegments={detourSegmentsClear} " +
@@ -518,8 +527,11 @@ public static class GymChaosVehicleDetourVerifier
     {
         Vector3 segment = Vector3.ProjectOnPlane(to - from, Vector3.up);
         float distance = segment.magnitude;
+        // Static geometry only. Clearance to the blocking member is checked
+        // directly from the root separation: re-probing a 5 cm step that
+        // runs exactly along the member's clearance edge failed on rounding.
         return distance <= 0.0001f || visitor.IsVisitorExternalPathClearFrom(
-            from, segment / distance, distance);
+            from, segment / distance, distance, true);
     }
 
     private static void Fail(string reason)

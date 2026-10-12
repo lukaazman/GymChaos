@@ -12,10 +12,28 @@ public static class ScanUvInset
 {
     public const float DefaultTexels = 1.0f;
     private static readonly Dictionary<Mesh, Mesh> Inset = new Dictionary<Mesh, Mesh>();
+    // Inset copies themselves. A renderer that already shows a copy (a shirt
+    // change re-applies the texture) must keep it instead of insetting the
+    // copy again, which chained new meshes and re-ran the pass every change.
+    private static readonly HashSet<Mesh> InsetCopies = new HashSet<Mesh>();
+
+    /// True when mesh is source itself or the inset copy made from it.
+    public static bool IsInsetOf(Mesh mesh, Mesh source)
+    {
+        if (mesh == null || source == null)
+        {
+            return false;
+        }
+        return mesh == source || (Inset.TryGetValue(source, out Mesh cached) && cached == mesh);
+    }
 
     public static Mesh Apply(Mesh source, int textureSize, float texels = DefaultTexels)
     {
         if (source == null || !source.isReadable || textureSize <= 0)
+        {
+            return source;
+        }
+        if (InsetCopies.Contains(source))
         {
             return source;
         }
@@ -94,6 +112,7 @@ public static class ScanUvInset
         copy.name = source.name;
         copy.uv = moved;
         Inset[source] = copy;
+        InsetCopies.Add(copy);
         Debug.Log($"GYMCHAOS_SCAN_UV_INSET mesh={source.name} vertices={uv.Length} ms={timer.ElapsedMilliseconds}");
         return copy;
     }

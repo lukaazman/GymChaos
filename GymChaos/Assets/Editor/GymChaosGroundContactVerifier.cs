@@ -50,6 +50,15 @@ public static class GymChaosGroundContactVerifier
     [MenuItem("Tools/GymChaos/Run Ground Contact Verification")]
     public static void Run()
     {
+        // The stride check depends on imported walk/run clips looping with
+        // loop pose; an import that dropped those flags lowers the planted foot.
+        string importProblem = FindUnloopedLocomotionClip();
+        if (importProblem != null)
+        {
+            Debug.LogError("GYMCHAOS_GROUND_CONTACT_FAIL " + importProblem);
+            if (Application.isBatchMode) EditorApplication.Exit(1);
+            return;
+        }
         SessionState.SetBool(RequestedKey, true);
         GymChaosVerifierPrefs.SetBool(OriginalSavePresentKey, PlayerPrefs.HasKey(ProgressionSaveKey));
         GymChaosVerifierPrefs.SetString(OriginalSaveKey, PlayerPrefs.GetString(ProgressionSaveKey, string.Empty));
@@ -79,6 +88,8 @@ public static class GymChaosGroundContactVerifier
         resultCode = 1; GymChaosVerifierExit.Record(resultCode);
         runner = null;
         treadmill = null;
+        worstStrideSoleGap = 0f;
+        modePinned = false;
         footGaps.Clear();
         treadmillSummary = "not measured";
         strideSoleGap = float.PositiveInfinity;
@@ -120,7 +131,9 @@ public static class GymChaosGroundContactVerifier
         }
         try
         {
-            if (EditorApplication.timeSinceStartup - started > 150d)
+            // Wall-clock safety net only; every stage has its own limit. Under
+            // four parallel lanes the boot alone can take over a minute.
+            if (EditorApplication.timeSinceStartup - started > 300d)
             {
                 throw new InvalidOperationException($"Ground contact verification timed out at stage {stage}.");
             }
@@ -149,6 +162,13 @@ public static class GymChaosGroundContactVerifier
                     {
                         continue;
                     }
+                    // GYMCHAOS_GROUND_CONTACT_RUNNER=Davie pins the runner for diagnosis.
+                    string onlyRunner = Environment.GetEnvironmentVariable("GYMCHAOS_GROUND_CONTACT_RUNNER");
+                    if (!string.IsNullOrEmpty(onlyRunner) &&
+                        !string.Equals(onlyRunner, fighter.Identity.ToString(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
                     GymExerciseStation station = GymExerciseStation.FindClosestTreadmill(
                         fighter.transform.position, 100f);
                     ExternalRiggedCharacterVisual floorVisual = fighter.GetComponent<ExternalRiggedCharacterVisual>();
@@ -167,7 +187,13 @@ public static class GymChaosGroundContactVerifier
                         Vector3 floorEye = fighter.transform.position + Vector3.up * 0.005f;
                         Capture(floorEye + fighter.transform.right * 2f, floorEye, "ground-contact-floor-level.png");
                     }
-                    if (station != null && fighter.BeginTreadmillForVerification(station, 2.2f))
+                    string modeOverride = Environment.GetEnvironmentVariable("GYMCHAOS_GROUND_CONTACT_TREADMILL_MODE");
+                    // Both gaits are checked: the session starts walking and the
+                    // stride stage switches it to running. The override pins one.
+                    modePinned = !string.IsNullOrEmpty(modeOverride);
+                    bool runMode = modePinned &&
+                        string.Equals(modeOverride, "running", StringComparison.OrdinalIgnoreCase);
+                    if (station != null && fighter.BeginTreadmillForVerification(station, 2.2f, runMode))
                     {
                         runner = fighter;
                         floorRootY = fighter.transform.position.y;
@@ -257,10 +283,35 @@ public static class GymChaosGroundContactVerifier
                 if (EditorApplication.timeSinceStartup - stageStarted > 3.5d)
                 {
                     float beltTop = treadmill.TreadmillBeltRendererForVerification.bounds.max.y;
-                    strideSoleGap = Mathf.Min(strideSoleGap,
-                        LowestVertex(FindBodyRenderer(runner.gameObject)) - beltTop);
+                    float gap = LowestVertex(FindBodyRenderer(runner.gameObject)) - beltTop;
+                    if (gap < strideSoleGap)
+                    {
+                        MixamoScanRetargetAnimator strideAnimator =
+                            runner.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+                        ExternalRiggedCharacterVisual strideVisual = runner.GetComponent<ExternalRiggedCharacterVisual>();
+                        Debug.Log($"GYMCHAOS_GROUND_CONTACT_STRIDE_LOW gap={gap:F3} mode={runner.TreadmillMovementModeForVerification} " +
+                            $"clip={strideAnimator?.CurrentAnimationClipName} root={runner.transform.position.y:F3} " +
+                            $"modelRootY={(strideVisual != null && strideVisual.RuntimeModelRoot != null ? strideVisual.RuntimeModelRoot.position.y : float.NaN):F3} " +
+                            $"skelRootHeight={(strideAnimator != null ? strideAnimator.SkeletonRootHeightForVerification : float.NaN):F3} " +
+                            $"groundOffset={(strideAnimator != null ? strideAnimator.AppliedGroundOffsetForVerification : float.NaN):F3}");
+                    }
+                    strideSoleGap = Mathf.Min(strideSoleGap, gap);
                 }
                 if (EditorApplication.timeSinceStartup - stageStarted < 6d) return;
+                string strideSummary = $"runner={runner.Identity} mode={runner.TreadmillMovementModeForVerification} strideSoleGap={strideSoleGap:F3}";
+                if (strideSoleGap > 0.05f || strideSoleGap < -0.05f)
+                    throw new InvalidOperationException("GYMCHAOS_GROUND_CONTACT_FAIL treadmill stride floats: " + strideSummary);
+                Debug.Log("GYMCHAOS_GROUND_CONTACT_TREADMILL_STRIDE_MODE_OK " + strideSummary);
+                worstStrideSoleGap = Mathf.Abs(strideSoleGap) > Mathf.Abs(worstStrideSoleGap) ? strideSoleGap : worstStrideSoleGap;
+                if (!modePinned && !runner.IsTreadmillRunning)
+                {
+                    // Same runner, same belt: now the running gait.
+                    runner.SetTreadmillModeForVerification(true);
+                    strideSoleGap = float.PositiveInfinity;
+                    stageStarted = EditorApplication.timeSinceStartup;
+                    return;
+                }
+                strideSoleGap = worstStrideSoleGap;
                 if (floorSoleSamples >= 10 && (floorSoleGap > 0.04f || floorSoleGap < -0.05f))
                     throw new InvalidOperationException(
                         $"GYMCHAOS_GROUND_CONTACT_FAIL {runner.Identity} soles float on the floor: " +
@@ -393,6 +444,8 @@ public static class GymChaosGroundContactVerifier
     }
 
     private static float strideSoleGap = float.PositiveInfinity;
+    private static float worstStrideSoleGap;
+    private static bool modePinned;
     private static float floorSoleGap = float.PositiveInfinity;
     private static int floorSoleSamples;
     private static float floorRootY = -0.15f;
@@ -465,10 +518,17 @@ public static class GymChaosGroundContactVerifier
         }
         footGaps.Sort();
         // Baked vertices of these rigs sit a constant offset above the true
-        // sole. Compare against the same runner standing on the gym floor.
-        float minimum = footGaps[0] - floorBaselineOffset;
-        float median = footGaps[footGaps.Count / 2] - floorBaselineOffset;
-        treadmillSummary = $"runner={runner.Identity} minGap={minimum:F3} medianGap={median:F3}";
+        // sole. Compare against the same runner on the gym floor: the lowest
+        // sole over its strides to the belt (planted foot), which matches the
+        // planted-foot minimum measured on the belt. The single frame taken
+        // at the session start landed on a random stride phase and moved the
+        // reference by several centimetres between runs.
+        float baseline = floorSoleSamples >= 3 && !float.IsInfinity(floorSoleGap)
+            ? Mathf.Min(floorSoleGap, floorBaselineOffset) : floorBaselineOffset;
+        float minimum = footGaps[0] - baseline;
+        float median = footGaps[footGaps.Count / 2] - baseline;
+        treadmillSummary = $"runner={runner.Identity} minGap={minimum:F3} medianGap={median:F3} " +
+            $"baseline={baseline:F3} startFrameBaseline={floorBaselineOffset:F3} floorMin={floorSoleGap:F3} floorSamples={floorSoleSamples}";
         // A running gait has short flight phases, so check the planted foot
         // (minimum) tightly and the typical frame (median) loosely.
         if (minimum > 0.05f || minimum < -0.12f || median > 0.15f)
@@ -678,6 +738,29 @@ public static class GymChaosGroundContactVerifier
         SessionState.EraseBool(RequestedKey);
         EditorApplication.update -= Tick;
         EditorApplication.isPlaying = false;
+    }
+
+    private static string FindUnloopedLocomotionClip()
+    {
+        int checkedClips = 0;
+        foreach (string guid in AssetDatabase.FindAssets("t:Model", new[] { "Assets/Resources/Characters" }))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (!path.EndsWith("_authored.fbx", StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (UnityEngine.Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
+            {
+                if (!(asset is AnimationClip clip) || clip.name.StartsWith("__preview__")) continue;
+                bool locomotion = clip.name.EndsWith("walking", StringComparison.OrdinalIgnoreCase) ||
+                    clip.name.EndsWith("running", StringComparison.OrdinalIgnoreCase);
+                if (!locomotion) continue;
+                AnimationClipSettings settings = AnimationUtility.GetAnimationClipSettings(clip);
+                checkedClips++;
+                if (!settings.loopTime || !settings.loopBlend)
+                    return $"imported clip not looping: {path} {clip.name} loopTime={settings.loopTime} loopPose={settings.loopBlend}";
+            }
+        }
+        Debug.Log($"GYMCHAOS_GROUND_CONTACT_CLIP_IMPORT_OK locomotionClips={checkedClips}");
+        return checkedClips == 0 ? "no authored locomotion clips found" : null;
     }
 }
 #endif

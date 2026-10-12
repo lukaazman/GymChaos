@@ -21,6 +21,30 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
 {
     private readonly List<Collider> stationColliders = new List<Collider>();
 
+    /// <summary>
+    /// The one gym member allowed onto the platform for a deadlift set. The
+    /// navigation clearance and the platform escape ignore only this member.
+    /// </summary>
+    public EnemyFighter ActiveLifter { get; set; }
+
+    /// <summary>Settled pose of the loaded bar on the mats.</summary>
+    public bool HasLoadedBarRest { get; private set; }
+    public Vector3 LoadedBarRestPosition { get; private set; }
+    public Quaternion LoadedBarRestRotation { get; private set; }
+    public float PlatformTopY { get; private set; }
+
+    public void RecordLoadedBarRest(Transform bar, float platformTopY)
+    {
+        if (bar == null)
+        {
+            return;
+        }
+        LoadedBarRestPosition = bar.position;
+        LoadedBarRestRotation = bar.rotation;
+        PlatformTopY = platformTopY;
+        HasLoadedBarRest = true;
+    }
+
     public void RegisterCollider(Collider collider)
     {
         if (collider != null && !stationColliders.Contains(collider))
@@ -198,7 +222,7 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
         EnemyFighter enemy, float margin, out Vector3 escapePoint)
     {
         escapePoint = enemy != null ? enemy.transform.position : Vector3.zero;
-        if (enemy == null || !TryGetLocalFootprint(out Bounds localFootprint))
+        if (enemy == null || enemy == ActiveLifter || !TryGetLocalFootprint(out Bounds localFootprint))
         {
             return false;
         }
@@ -249,13 +273,73 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
             }
         }
 
-        if (!hasEnemyFootprint ||
-            enemyFootprint.max.x < localFootprint.min.x ||
-            enemyFootprint.min.x > localFootprint.max.x ||
-            enemyFootprint.max.z < localFootprint.min.z ||
-            enemyFootprint.min.z > localFootprint.max.z)
+        bool collidersOverlap = hasEnemyFootprint &&
+            enemyFootprint.max.x >= localFootprint.min.x &&
+            enemyFootprint.min.x <= localFootprint.max.x &&
+            enemyFootprint.max.z >= localFootprint.min.z &&
+            enemyFootprint.min.z <= localFootprint.max.z;
+        // Navigation refuses every move that starts inside the clearance band
+        // unless it heads for the nearest edge. Stopping the escape as soon as
+        // the colliders cleared the platform left the root in that band, and
+        // an obstacle on the nearest edge then pinned the member.
+        bool rootInsideClearance = IsInsideNavigationClearance(
+            enemy.transform.position, enemy.DeadliftNavigationClearance);
+        if (!hasEnemyFootprint || (!collidersOverlap && !rootInsideClearance))
         {
             return false;
+        }
+        if (!collidersOverlap)
+        {
+            // Only the root is in the band: step it straight out past the
+            // nearest edge of the band, the same edge navigation allows.
+            float band = enemy.DeadliftNavigationClearance + 0.1f;
+            Vector3 local = enemyLocal;
+            Vector3[] exits =
+            {
+                new Vector3(localFootprint.min.x - band, local.y, local.z),
+                new Vector3(localFootprint.max.x + band, local.y, local.z),
+                new Vector3(local.x, local.y, localFootprint.min.z - band),
+                new Vector3(local.x, local.y, localFootprint.max.z + band)
+            };
+            float[] distances =
+            {
+                local.x - localFootprint.min.x,
+                localFootprint.max.x - local.x,
+                local.z - localFootprint.min.z,
+                localFootprint.max.z - local.z
+            };
+            // Nearest edge first; skip an exit that would put the body into a
+            // wall or other static geometry beside the platform.
+            Vector3 root = exits[0];
+            bool found = false;
+            for (int pass = 0; pass < 4 && !found; pass++)
+            {
+                int best = -1;
+                for (int i = 0; i < 4; i++)
+                {
+                    if (distances[i] < float.MaxValue && (best < 0 || distances[i] < distances[best]))
+                    {
+                        best = i;
+                    }
+                }
+                if (best < 0)
+                {
+                    break;
+                }
+                distances[best] = float.MaxValue;
+                if (IsEscapePointClearOfStaticGeometry(transform.TransformPoint(exits[best]), enemy))
+                {
+                    root = exits[best];
+                    found = true;
+                }
+            }
+            if (!found)
+            {
+                return false;
+            }
+            escapePoint = transform.TransformPoint(root);
+            escapePoint.y = enemy.transform.position.y;
+            return true;
         }
 
         float safeMargin = Mathf.Max(0.45f, margin);
@@ -287,6 +371,26 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
         Vector3 delta = targetWorldCenter - currentWorldCenter;
         escapePoint = enemy.transform.position + delta;
         escapePoint.y = enemy.transform.position.y;
+        return true;
+    }
+
+    private static readonly Collider[] EscapeOverlapHits = new Collider[16];
+    private bool IsEscapePointClearOfStaticGeometry(Vector3 point, EnemyFighter enemy)
+    {
+        float radius = EnemyFighter.GetBodyRadiusForIdentity(enemy.Identity);
+        Vector3 bottom = new Vector3(point.x, enemy.transform.position.y + radius + 0.1f, point.z);
+        Vector3 top = bottom + Vector3.up * 1.0f;
+        int count = Physics.OverlapCapsuleNonAlloc(
+            bottom, top, radius, EscapeOverlapHits, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = EscapeOverlapHits[i];
+            if (hit == null || hit.attachedRigidbody != null || ContainsCollider(hit))
+            {
+                continue;
+            }
+            return false;
+        }
         return true;
     }
 
@@ -887,17 +991,22 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         CreateLoadedDeadliftBarbell(
             stationCenter, stationRotation, deadliftStationMarker);
 
+        // Dropped plates lie on the mats beyond the bar ends, where only the
+        // lifter steps. On the floor along the long side they walled off the
+        // aisle toward the door and the lane the lifter steps off into, and
+        // visitors jammed there.
         int[] loosePlateWeights = { 20, 10, 5, 20, 10, 5, 10 };
         Vector3[] loosePlatePositions =
         {
-            new Vector3(-1.55f, 0f, 1.78f),
-            new Vector3(-0.63f, 0f, 1.62f),
-            new Vector3(0.35f, 0f, 1.84f),
-            new Vector3(1.28f, 0f, 1.64f),
-            new Vector3(-1.15f, 0f, 2.24f),
-            new Vector3(0.12f, 0f, 2.28f),
-            new Vector3(1.08f, 0f, 2.18f)
+            new Vector3(-1.85f, 0f, -0.8f),
+            new Vector3(-1.85f, 0f, -0.05f),
+            new Vector3(-1.9f, 0f, 0.65f),
+            new Vector3(1.85f, 0f, -0.95f),
+            new Vector3(1.85f, 0f, -0.3f),
+            new Vector3(1.9f, 0f, 0.3f),
+            new Vector3(1.85f, 0f, 0.92f)
         };
+        float matTopY = stationCenter.y + 0.12f;
         for (int i = 0; i < loosePlateWeights.Length; i++)
         {
             CreateLooseDeadliftPlate(
@@ -906,7 +1015,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
                 loosePlateWeights[i],
                 loosePlatePositions[i],
                 (i % 2 == 0 ? -18f : 23f) + i * 7f,
-                floorY,
+                matTopY,
                 deadliftStationMarker);
         }
 
@@ -1022,6 +1131,8 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         body.isKinematic = true;
         Physics.SyncTransforms();
         SettleLoadedDeadliftBarbell(barObject, stationCenter);
+        stationMarker?.RecordLoadedBarRest(
+            barObject.transform, stationCenter.y + DeadliftPlatformThickness);
     }
 
     private const float DefaultLoadedPlateDiameter = 0.56f;

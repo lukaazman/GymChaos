@@ -174,6 +174,15 @@ public class GymExerciseStation : MonoBehaviour
         get
         {
             Vector3 position = playerPosition;
+            if (IsDeadlift && sceneBar != null)
+            {
+                // A member stands just behind the settled bar, facing it the
+                // same way the player does; the set refines this per rig.
+                Vector3 facing = DeadliftEnemyFacing;
+                Vector3 bar = DeadliftBarRestPosition;
+                position = new Vector3(bar.x, playerPosition.y, bar.z) - facing * DeadliftNominalStanceOffset;
+                return position;
+            }
             if (IsTreadmill && treadmillBeltRenderer != null)
             {
                 // The player's authored treadmill point sits over the motor
@@ -270,7 +279,10 @@ public class GymExerciseStation : MonoBehaviour
             max = Mathf.Max(max, value);
         }
     }
-    public Quaternion EnemyRotation => playerRotation;
+    public Quaternion EnemyRotation => IsDeadlift && sceneBar != null
+        ? Quaternion.LookRotation(DeadliftEnemyFacing, Vector3.up)
+        : playerRotation;
+    public const float DeadliftNominalStanceOffset = 0.3f;
     internal Renderer TreadmillBeltRendererForVerification => treadmillBeltRenderer;
     public float CurrentTreadmillSpeed => currentSpeed;
     public bool IsSessionActive => sessionActive;
@@ -586,6 +598,27 @@ public class GymExerciseStation : MonoBehaviour
         return closest;
     }
 
+    /// <summary>The deadlift platform, when this member may claim it now.</summary>
+    public static GymExerciseStation FindAvailableDeadlift(EnemyFighter enemy, Vector3 position, float maxDistance)
+    {
+        for (int i = Stations.Count - 1; i >= 0; i--)
+        {
+            GymExerciseStation station = Stations[i];
+            if (station == null || !station.IsDeadlift || station.IsOccupied ||
+                !station.IsAvailableForEnemy(enemy))
+            {
+                continue;
+            }
+            Vector3 offset = station.EnemyPosition - position;
+            offset.y = 0f;
+            if (offset.magnitude <= maxDistance)
+            {
+                return station;
+            }
+        }
+        return null;
+    }
+
     public static GymExerciseStation FindClosestSquat(Vector3 position, float maxDistance)
     {
         return FindClosestSquat(position, maxDistance, null);
@@ -672,6 +705,14 @@ public class GymExerciseStation : MonoBehaviour
 
     public bool IsAvailableForEnemy(EnemyFighter enemy)
     {
+        if (IsDeadlift)
+        {
+            // One member at a time, never while the player lifts, and only
+            // while the loaded bar lies settled on the mats.
+            return enemy != null && playerOccupant == null &&
+                (enemyOccupant == null || enemyOccupant == enemy) &&
+                (enemyOccupant == enemy || IsDeadliftBarAtRest);
+        }
         return (IsTreadmill || IsSquat) && enemy != null &&
             (enemyOccupant == null || enemyOccupant == enemy) &&
             enemySquatReleaseOccupant == null && playerOccupant == null &&
@@ -712,6 +753,208 @@ public class GymExerciseStation : MonoBehaviour
         // bar, so its collider must not block the visitor's final entry path.
         return sceneBar != null &&
             (collider.transform == sceneBar || collider.transform.IsChildOf(sceneBar));
+    }
+
+    // ---- member deadlift: one gym member lifts the station's loaded bar ----
+
+    private GymDeadliftStationMarker deadliftMarker;
+    private float deadliftMarkerSearchedAt = float.NegativeInfinity;
+    private float deadliftShaftRadius = -1f;
+    private readonly List<PickupItem> deadliftBarItems = new List<PickupItem>();
+
+    public GymDeadliftStationMarker DeadliftMarker
+    {
+        get
+        {
+            // Scene-wide search, so at most once a second while missing.
+            if (deadliftMarker == null && IsDeadlift && Time.unscaledTime - deadliftMarkerSearchedAt > 1f)
+            {
+                deadliftMarkerSearchedAt = Time.unscaledTime;
+                deadliftMarker = FindAnyObjectByType<GymDeadliftStationMarker>();
+            }
+            return deadliftMarker;
+        }
+    }
+
+    // The loaded bar and its still-mounted plates; a member set locks all of them.
+    private void SetDeadliftBarLocked(bool locked)
+    {
+        if (sceneBar == null)
+        {
+            return;
+        }
+        sceneBar.GetComponentsInChildren(true, deadliftBarItems);
+        for (int i = 0; i < deadliftBarItems.Count; i++)
+        {
+            deadliftBarItems[i].IsWorkoutLocked = locked;
+        }
+    }
+
+    public Transform DeadliftBar => IsDeadlift ? sceneBar : null;
+    public bool IsEnemyDeadliftActive => IsDeadlift && enemyOccupant != null;
+    public float DeadliftPlatformTopY => DeadliftMarker != null ? DeadliftMarker.PlatformTopY : playerPosition.y;
+    public Vector3 DeadliftBarRestPosition => DeadliftMarker != null && DeadliftMarker.HasLoadedBarRest
+        ? DeadliftMarker.LoadedBarRestPosition
+        : (sceneBar != null ? sceneBar.position : playerPosition);
+    public Quaternion DeadliftBarRestRotation => DeadliftMarker != null && DeadliftMarker.HasLoadedBarRest
+        ? DeadliftMarker.LoadedBarRestRotation
+        : (sceneBar != null ? sceneBar.rotation : playerRotation);
+
+    private bool deadliftShaftAxisResolved;
+    private Vector3 deadliftShaftAxisLocal = Vector3.right;
+
+    /// <summary>World direction of the shaft at rest, kept level.</summary>
+    public Vector3 DeadliftBarAxis
+    {
+        get
+        {
+            ResolveDeadliftShaftAxis();
+            Vector3 axis = Vector3.ProjectOnPlane(DeadliftBarRestRotation * deadliftShaftAxisLocal, Vector3.up);
+            return axis.sqrMagnitude > 0.0001f ? axis.normalized : Vector3.right;
+        }
+    }
+
+    // The longest bar renderer is the shaft; its long mesh axis, in bar space.
+    private void ResolveDeadliftShaftAxis()
+    {
+        if (deadliftShaftAxisResolved || sceneBar == null)
+        {
+            return;
+        }
+        float longest = 0f;
+        foreach (Renderer renderer in sceneBar.GetComponentsInChildren<Renderer>(true))
+        {
+            MeshFilter filter = renderer.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null)
+            {
+                continue;
+            }
+            Vector3 size = Vector3.Scale(filter.sharedMesh.bounds.size, renderer.transform.lossyScale);
+            size = new Vector3(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z));
+            int longAxis = size.x >= size.y && size.x >= size.z ? 0 : size.y >= size.z ? 1 : 2;
+            if (size[longAxis] <= longest)
+            {
+                continue;
+            }
+            longest = size[longAxis];
+            Vector3 local = longAxis == 0 ? Vector3.right : longAxis == 1 ? Vector3.up : Vector3.forward;
+            deadliftShaftAxisLocal = sceneBar.InverseTransformDirection(
+                renderer.transform.TransformDirection(local)).normalized;
+        }
+        deadliftShaftAxisResolved = longest > 0f;
+    }
+
+    /// <summary>
+    /// A member faces the shaft square-on from the side the player lifts
+    /// from (the mirror side).
+    /// </summary>
+    public Vector3 DeadliftEnemyFacing
+    {
+        get
+        {
+            Vector3 axis = DeadliftBarAxis;
+            Vector3 facing = Vector3.Cross(Vector3.up, axis).normalized;
+            Vector3 fromPlayerSide = Vector3.ProjectOnPlane(DeadliftBarRestPosition - playerPosition, Vector3.up);
+            if (Vector3.Dot(facing, fromPlayerSide) < 0f)
+            {
+                facing = -facing;
+            }
+            return facing;
+        }
+    }
+
+    public float DeadliftShaftRadius
+    {
+        get
+        {
+            if (deadliftShaftRadius <= 0f)
+            {
+                deadliftShaftRadius = SquatBarShaftRadius;
+            }
+            return deadliftShaftRadius;
+        }
+    }
+
+    /// <summary>
+    /// The bar is on the mats where the spawner settled it, with both loaded
+    /// plates still mounted and nobody holding it.
+    /// </summary>
+    public bool IsDeadliftBarAtRest
+    {
+        get
+        {
+            if (!IsDeadlift || sceneBar == null || DeadliftMarker == null || !DeadliftMarker.HasLoadedBarRest)
+            {
+                return false;
+            }
+            PickupItem pickup = sceneBar.GetComponent<PickupItem>();
+            if (pickup != null && pickup.IsHeld)
+            {
+                return false;
+            }
+            sceneBar.GetComponentsInChildren(true, deadliftBarItems);
+            int mountedPlates = 0;
+            for (int i = 0; i < deadliftBarItems.Count; i++)
+            {
+                if (deadliftBarItems[i] != pickup) mountedPlates++;
+            }
+            return mountedPlates >= 2 &&
+                Vector3.Distance(sceneBar.position, DeadliftMarker.LoadedBarRestPosition) < 0.05f &&
+                Quaternion.Angle(sceneBar.rotation, DeadliftMarker.LoadedBarRestRotation) < 3f;
+        }
+    }
+
+    public bool TryReserveEnemyDeadlift(EnemyFighter enemy)
+    {
+        if (!IsDeadlift || enemy == null || enemy.IsDead || !IsAvailableForEnemy(enemy) ||
+            !IsDeadliftBarAtRest)
+        {
+            return false;
+        }
+        enemyOccupant = enemy;
+        if (DeadliftMarker != null)
+        {
+            DeadliftMarker.ActiveLifter = enemy;
+        }
+        SetDeadliftBarLocked(true);
+        return true;
+    }
+
+    /// <summary>Moves the kinematic loaded bar so its shaft centre is at <paramref name="shaftCenter"/>.</summary>
+    public bool SyncEnemyDeadliftBar(EnemyFighter enemy, Vector3 shaftCenter)
+    {
+        if (!IsDeadlift || enemy == null || enemyOccupant != enemy || sceneBar == null)
+        {
+            return false;
+        }
+        // Never below the settled pose: the plates already touch the mats.
+        Vector3 rest = DeadliftBarRestPosition;
+        shaftCenter.y = Mathf.Max(shaftCenter.y, rest.y);
+        sceneBar.SetPositionAndRotation(shaftCenter, DeadliftBarRestRotation);
+        return true;
+    }
+
+    public void EndEnemyDeadlift(EnemyFighter enemy)
+    {
+        if (!IsDeadlift || enemy == null || enemyOccupant != enemy)
+        {
+            return;
+        }
+        enemyOccupant = null;
+        if (DeadliftMarker != null && DeadliftMarker.ActiveLifter == enemy)
+        {
+            DeadliftMarker.ActiveLifter = null;
+        }
+        if (sceneBar != null)
+        {
+            if (DeadliftMarker != null && DeadliftMarker.HasLoadedBarRest)
+            {
+                sceneBar.SetPositionAndRotation(
+                    DeadliftMarker.LoadedBarRestPosition, DeadliftMarker.LoadedBarRestRotation);
+                Physics.SyncTransforms();
+            }
+            SetDeadliftBarLocked(false);
+        }
     }
 
     public bool TryBeginEnemyTreadmill(EnemyFighter enemy, float speed)

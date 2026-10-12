@@ -1363,6 +1363,7 @@ public sealed partial class GymVisitorAgent
 		//IL_0041: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0046: Unknown result type (might be due to invalid IL or missing references)
 		vehicleRouteStalledSeconds = 0f;
+		vehicleRouteQueueWaits = 0;
 		float num;
 		if (!((UnityEngine.Object)(object)fighter != (UnityEngine.Object)null))
 		{
@@ -1375,6 +1376,8 @@ public sealed partial class GymVisitorAgent
 		}
 		lastVehicleRouteDistance = num;
 	}
+	private int vehicleRouteQueueWaits;
+
 	private void ClearVehicleRouteDetour()
 	{
 		vehicleDetourActive = false;
@@ -1410,6 +1413,7 @@ public sealed partial class GymVisitorAgent
 		{
 			lastVehicleRouteDistance = distance;
 			vehicleRouteStalledSeconds = 0f;
+			vehicleRouteQueueWaits = 0;
 			return;
 		}
 		vehicleRouteStalledSeconds += Time.fixedDeltaTime;
@@ -1421,6 +1425,17 @@ public sealed partial class GymVisitorAgent
 				vehicleRouteStalledSeconds = 0f;
 				lastVehicleRouteDistance = distance;
 				fighter.StopVisitorMovement();
+				// Two visitors meeting head-on in the one-body-wide parking
+				// connector block each other: the one waiting for the
+				// connector owner stands in the owner's lane. No detour fits,
+				// so after a second stalled window let this visitor pass
+				// through the member it is pressed against, as the doorway
+				// exit recovery already does.
+				vehicleRouteQueueWaits++;
+				if (vehicleRouteQueueWaits >= 2)
+				{
+					fighter.TryVisitorCrowdPassRouteBlocker();
+				}
 				GymVisitorAgent reservationOwner = activeVehicleApproachAgent;
 				string ownerSnapshot = reservationOwner != null && reservationOwner.fighter != null
 					? $"{reservationOwner.fighter.Identity}:{reservationOwner.state}@{reservationOwner.fighter.VisitorPhysicsPosition} target={reservationOwner.travelTarget} exit={reservationOwner.vehicleExitWaypointIndex} store={reservationOwner.storeVisitWaypointIndex}"
