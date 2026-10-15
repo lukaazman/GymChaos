@@ -10,6 +10,9 @@ using UnityEngine;
 public sealed class GymExperienceService : MonoBehaviour
 {
     public const int MaxStatRank = 10;
+    public const int MaxLoyaltyStamps = 20;
+    public const int DailyLoyaltyStampCap = 12;
+    public const int RepsPerLoyaltyStamp = 10;
     private const string SaveKey = "GymChaos.Progression.v1";
     // Bump this migration whenever the requested launch baseline changes.
     // v7 resets an existing local save once, while later reputation changes
@@ -80,7 +83,7 @@ public sealed class GymExperienceService : MonoBehaviour
     public PlayerMovement Player => player;
     public bool IsSkillChoiceVisible => levelChoiceVisible;
     public bool IsLockerMenuOpen => lockerMenuOpen;
-    public bool IsBlockingPlayerInput => lockerMenuOpen ||
+    public bool IsBlockingPlayerInput => lockerMenuOpen || GymProteinShopUI.IsOpen ||
         (levelChoiceVisible && !EnemyFighter.IsFightActive && !GymDialogueDirector.IsDialogueActive);
     public int Level => state != null ? state.level : 1;
     public int Experience => state != null ? state.experience : 0;
@@ -88,6 +91,9 @@ public sealed class GymExperienceService : MonoBehaviour
     public int SkillPoints => state != null ? state.skillPoints : 0;
     public int Reputation => state != null ? state.reputation : 0;
     public int MasteryRank => state != null ? state.masteryRank : 0;
+    public int LoyaltyStamps => state != null ? state.loyaltyStamps : 0;
+    public int LoyaltyStampsEarnedToday =>
+        state != null && state.loyaltyStampDay == state.gymDay ? state.loyaltyStampsToday : 0;
     public float TemporaryFatigue => temporaryFatigue;
     public bool AllStatsMaxed =>
         GetStatRank(GymStat.Strength) >= MaxStatRank &&
@@ -162,6 +168,8 @@ public sealed class GymExperienceService : MonoBehaviour
     /// </summary>
     public void ApplySession(GymProgressionState saved, string[] savedOneShotRewards, bool startNewDay)
     {
+        // Supplements belong to the session that bought them.
+        GymBuffs.Clear();
         state = saved != null
             ? JsonUtility.FromJson<GymProgressionState>(JsonUtility.ToJson(saved))
             : new GymProgressionState();
@@ -316,12 +324,14 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public float ScaleStrengthDamage(float baseDamage)
     {
-        return baseDamage * (1f + GetStatRank(GymStat.Strength) * 0.08f);
+        return baseDamage * (1f + GetStatRank(GymStat.Strength) * 0.08f) *
+            GymBuffs.GetMultiplier(GymBuffStat.StrengthDamage);
     }
 
     public float GetStrengthForceMultiplier()
     {
-        return 1f + GetStatRank(GymStat.Strength) * 0.042f;
+        return (1f + GetStatRank(GymStat.Strength) * 0.042f) *
+            GymBuffs.GetMultiplier(GymBuffStat.StrengthForce);
     }
 
     // Class modifiers are derived here on every read from the active class
@@ -331,19 +341,22 @@ public sealed class GymExperienceService : MonoBehaviour
         float progression = HasEnduranceUltimate
             ? 1.72f
             : 1f + GetStatRank(GymStat.Endurance) * 0.055f;
-        return progression * GymSessionService.ActiveClass.sprintSpeed;
+        return progression * GymSessionService.ActiveClass.sprintSpeed *
+            GymBuffs.GetMultiplier(GymBuffStat.SprintSpeed);
     }
 
     public float GetSprintCapacity()
     {
         return (100f + GetStatRank(GymStat.Endurance) * 8f) *
-            GymSessionService.ActiveClass.staminaCapacity;
+            GymSessionService.ActiveClass.staminaCapacity *
+            GymBuffs.GetMultiplier(GymBuffStat.SprintCapacity);
     }
 
     public float GetSprintDrainPerSecond()
     {
         return Mathf.Max(7f, 18f - GetStatRank(GymStat.Endurance) * 0.75f) *
-            GymSessionService.ActiveClass.sprintCost;
+            GymSessionService.ActiveClass.sprintCost *
+            GymBuffs.GetMultiplier(GymBuffStat.SprintDrain);
     }
 
     /// <summary>
@@ -353,7 +366,8 @@ public sealed class GymExperienceService : MonoBehaviour
     /// </summary>
     public float GetExercisePerformance(GymExerciseType exerciseType)
     {
-        return GymSessionService.ActiveClass.Performance(GymClassCatalog.Category(exerciseType));
+        return GymSessionService.ActiveClass.Performance(GymClassCatalog.Category(exerciseType)) *
+            GymBuffs.GetMultiplier(GymBuffStat.ExercisePerformance);
     }
 
     public float GetSprintRecoveryPerSecond()
@@ -363,7 +377,8 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public float GetCardioCapacityMultiplier()
     {
-        return 1f + GetStatRank(GymStat.Endurance) * 0.035f;
+        return (1f + GetStatRank(GymStat.Endurance) * 0.035f) *
+            GymBuffs.GetMultiplier(GymBuffStat.CardioCapacity);
     }
 
     public int GetTechniqueComboCap()
@@ -376,7 +391,8 @@ public sealed class GymExperienceService : MonoBehaviour
         float masteryChallengeScale = MasteryRank > 0 &&
             (MasteryRank - 1) % 4 == 2 ? 1.08f : 1f;
         return baseScale * masteryChallengeScale *
-            (1f + temporaryFatigue * 0.45f);
+            (1f + temporaryFatigue * 0.45f) *
+            GymBuffs.GetMultiplier(GymBuffStat.TechniqueDifficulty);
     }
 
     public static string GetMasteryTitle(int masteryRank)
@@ -504,6 +520,75 @@ public sealed class GymExperienceService : MonoBehaviour
         }
     }
 
+    // ---- protein.com loyalty card ----
+
+    /// <summary>
+    /// Adds stamps to the loyalty card, limited by the card size and the
+    /// per-gym-day cap so the shop rewards playing rather than grinding.
+    /// Returns the stamps actually added.
+    /// </summary>
+    public int AwardLoyaltyStamps(int count, string reason)
+    {
+        if (state == null || count <= 0)
+        {
+            return 0;
+        }
+        if (state.loyaltyStampDay != state.gymDay)
+        {
+            state.loyaltyStampDay = state.gymDay;
+            state.loyaltyStampsToday = 0;
+        }
+        int added = Mathf.Min(count,
+            DailyLoyaltyStampCap - state.loyaltyStampsToday,
+            MaxLoyaltyStamps - state.loyaltyStamps);
+        if (added <= 0)
+        {
+            return 0;
+        }
+        state.loyaltyStamps += added;
+        state.loyaltyStampsToday += added;
+        NoticeRaised?.Invoke("protein.com stamp +" + added + "  (" + state.loyaltyStamps + ")", 2.2f, 1);
+        Debug.Log($"GYMCHAOS_LOYALTY_STAMP +{added} reason={reason} total={state.loyaltyStamps} " +
+            $"today={state.loyaltyStampsToday}", this);
+        MarkProgressDirty();
+        return added;
+    }
+
+    public bool TrySpendLoyaltyStamps(int count)
+    {
+        if (state == null || count <= 0 || state.loyaltyStamps < count)
+        {
+            return false;
+        }
+        state.loyaltyStamps -= count;
+        MarkProgressDirty();
+        return true;
+    }
+
+    /// <summary>The first counter visit each gym day stamps the card once.</summary>
+    public void RegisterShopVisit()
+    {
+        if (state == null || state.loyaltyVisitDay == state.gymDay)
+        {
+            return;
+        }
+        state.loyaltyVisitDay = state.gymDay;
+        AwardLoyaltyStamps(1, "daily shop visit");
+    }
+
+    private void MarkProgressDirty()
+    {
+        ProgressionChanged?.Invoke();
+        if (sessionBacked)
+        {
+            GymSessionService.MarkDirty();
+        }
+        else
+        {
+            nextSaveTime = Time.unscaledTime + 1.5f;
+        }
+    }
+
     public void AllocateSkill(GymStat stat)
     {
         if (state == null || !levelChoiceVisible || state.skillPoints <= 0 ||
@@ -608,6 +693,15 @@ public sealed class GymExperienceService : MonoBehaviour
         string key = $"workout-rep-{Time.frameCount}";
         AwardExperience(reward, result.ToString(), key);
         RegisterDailyGoal(0);
+        if (result != WorkoutResult.Miss && state != null)
+        {
+            state.loyaltyRepCounter++;
+            if (state.loyaltyRepCounter >= RepsPerLoyaltyStamp)
+            {
+                state.loyaltyRepCounter = 0;
+                AwardLoyaltyStamps(1, "10 reps");
+            }
+        }
     }
 
     // ---- daily cardio challenge ----
@@ -837,6 +931,7 @@ public sealed class GymExperienceService : MonoBehaviour
         string label = CardioChallengeLabel;
         AwardExperience(CardioChallengeReward, "cardio challenge", "once:cardio-challenge-" + state.gymDay);
         ShowFeedback("Cardio challenge complete: " + label, 4f, 2);
+        AwardLoyaltyStamps(3, "cardio challenge");
         if (sessionBacked)
         {
             GymSessionService.RequestSave("cardio-challenge");
@@ -882,6 +977,7 @@ public sealed class GymExperienceService : MonoBehaviour
 
         AwardExperience(35, "enemy defeated", "enemy-defeat-" + enemy.Identity + "-" + enemy.name);
         RegisterDailyGoal(2);
+        AwardLoyaltyStamps(1, "enemy defeated");
     }
 
     public void RegisterMirrorBreak(string sourceKey)
@@ -959,6 +1055,7 @@ public sealed class GymExperienceService : MonoBehaviour
 
         AwardExperience(18, "helped visitor", rewardKey, false);
         ChangeReputation(4, "helped " + identity, countDailyGoal);
+        AwardLoyaltyStamps(1, "helped visitor");
     }
 
     public void RegisterSpaceDiscovery(string discoveryKey, string feedback = null)
@@ -1010,7 +1107,8 @@ public sealed class GymExperienceService : MonoBehaviour
     {
         // Technique is more than a wider green slice: a trained player also
         // keeps a bad rep from snowballing into a full session shutdown.
-        float techniqueRelief = 1f + GetStatRank(GymStat.Technique) * 0.08f;
+        float techniqueRelief = (1f + GetStatRank(GymStat.Technique) * 0.08f) /
+            GymBuffs.GetMultiplier(GymBuffStat.FatigueGain);
         if (result == WorkoutResult.Miss)
         {
             temporaryFatigue = Mathf.Clamp01(

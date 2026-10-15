@@ -59,6 +59,9 @@ public sealed class GymHud : MonoBehaviour
     private Text levelLabel;
     private Text statsLabel;
     private Text reputationLabel;
+    private Text buffLabel;
+    private string shownBuffs;
+    private float nextBuffRefresh;
     private RectTransform experienceFill;
     private readonly RectTransform[] goalFills = new RectTransform[4];
     private readonly PersonaShape[] goalShapes = new PersonaShape[4];
@@ -87,6 +90,7 @@ public sealed class GymHud : MonoBehaviour
     private bool shownExhausted;
     private bool shownSprinting;
     private bool visible = true;
+    internal bool IsHiddenForVerification => !visible;
 
     public static bool IsActive => instance != null;
     public static GymHud Active => instance;
@@ -300,7 +304,7 @@ public sealed class GymHud : MonoBehaviour
         }
         bool shouldShow = player != null && GymArenaBootstrap.IsGameplayStarted &&
             !GymStartScreen.IsMenuVisible && !GymPauseMenu.IsVisible &&
-            !GymDialogueDirector.IsDialogueActive &&
+            !GymDialogueDirector.IsDialogueActive && !GymProteinShopUI.IsOpen &&
             (progression == null || !progression.IsLockerMenuOpen);
         if (shouldShow != visible)
         {
@@ -449,13 +453,14 @@ public sealed class GymHud : MonoBehaviour
             statsLabel.text = "STR " + state.strengthRank + "   END " + state.enduranceRank +
                 "   TECH " + state.techniqueRank;
         }
-        int reputation = state.reputation * 1000 + state.masteryRank;
+        int reputation = (state.reputation * 1000 + state.masteryRank) * 100 + state.loyaltyStamps;
         if (reputation != shownReputation)
         {
             shownReputation = reputation;
             reputationLabel.text = "REP " + state.reputation.ToString("+#;-#;0", CultureInfo.InvariantCulture) +
-                "   MASTERY " + state.masteryRank;
+                "   MASTERY " + state.masteryRank + "   STAMPS " + state.loyaltyStamps;
         }
+        RefreshBuffs();
         if (state.gymDay != shownDay)
         {
             shownDay = state.gymDay;
@@ -642,6 +647,34 @@ public sealed class GymHud : MonoBehaviour
                 PersonaMenuStyle.Accent, out goalShapes[i]);
             goalCounts[i] = Label(goals, "Goal Count " + i, body, string.Empty, 18, PersonaMenuStyle.Ink,
                 TextAnchor.MiddleRight, new Vector2(0.78f, top - 0.16f), new Vector2(0.95f, top));
+        }
+
+        RectTransform buffs = Box(parent, "Buff Line", new Vector2(0f, -(levelHeight + gap + goalHeight + 6f)),
+            new Vector2(380f, 24f), true);
+        buffLabel = Label(buffs, "Buffs", body, string.Empty, 18, PersonaMenuStyle.Gold, TextAnchor.MiddleRight,
+            Vector2.zero, Vector2.one);
+    }
+
+    // Active supplements as one quiet line under the goals: name and minutes left.
+    private void RefreshBuffs()
+    {
+        if (Time.unscaledTime < nextBuffRefresh)
+        {
+            return;
+        }
+        nextBuffRefresh = Time.unscaledTime + 0.25f;
+        var buffs = GymBuffs.Active;
+        string text = string.Empty;
+        for (int i = 0; i < buffs.Count; i++)
+        {
+            int seconds = Mathf.CeilToInt(buffs[i].Remaining);
+            text += (i > 0 ? "   " : string.Empty) + buffs[i].product.displayName +
+                (buffs[i].crash ? " CRASH " : " ") + (seconds / 60) + ":" + (seconds % 60).ToString("00");
+        }
+        if (text != shownBuffs)
+        {
+            shownBuffs = text;
+            buffLabel.text = text;
         }
     }
 

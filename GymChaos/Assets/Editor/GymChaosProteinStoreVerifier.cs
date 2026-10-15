@@ -460,7 +460,9 @@ public static class GymChaosProteinStoreVerifier
         Collider south = FindCollider("Protein Store Perimeter South Collision");
         Collider east = FindCollider("Protein Store Perimeter East Collision");
         Collider north = FindCollider("Visitor Road South Wall Collision");
-        Collider pathEnd = FindCollider("Outdoor Boundary - Path South");
+        // The path's south wall is gone (the path opens into the park); the
+        // store entry wall south of the door still marks the path end.
+        Collider pathEnd = FindCollider("Protein Store Entry Fence South Collision");
         if (west == null || south == null || east == null || north == null)
         {
             details = $"walls west={west != null} south={south != null} east={east != null} north={north != null}";

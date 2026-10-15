@@ -262,10 +262,20 @@ public static class GymChaosOverhaulVerifier
         Color cityColor = cityGround.sharedMaterial.GetColor("_BaseColor");
         if (Mathf.Abs(cityColor.r - paving.r) + Mathf.Abs(cityColor.g - paving.g) > 0.01f)
             throw new InvalidOperationException("city ground is not the paving colour");
-        // Paths, grass and props are outside the fences: no colliders.
+        // Paths, grass and props are outside the fences: no colliders,
+        // except benches and lamps in the open park south of the gym path.
         GameObject details = GameObject.Find(GymOutdoorFoliage.DetailsRootName);
-        if (details == null || details.GetComponentsInChildren<Collider>(true).Length != 0)
-            throw new InvalidOperationException("park details missing or collidable");
+        int strayColliders = 0;
+        if (details != null)
+        {
+            foreach (Collider collider in details.GetComponentsInChildren<Collider>(true))
+            {
+                bool parkProp = collider.name == "Park Bench Collision" || collider.name == "Park Lamp Collision";
+                if (!parkProp || !GymParkAccess.Contains(collider.transform.position, -1f)) strayColliders++;
+            }
+        }
+        if (details == null || strayColliders != 0)
+            throw new InvalidOperationException($"park details missing or collidable ({strayColliders})");
         Debug.Log($"GYMCHAOS_CENTRAL_PARK_OK pathCells={GymOutdoorFoliage.PathCellCount} " +
             $"grassBlades={GymOutdoorFoliage.GrassBladeCount} benches={GymOutdoorFoliage.BenchCount} " +
             $"lamps={GymOutdoorFoliage.LampCount} trees={GymOutdoorFoliage.TreeCount} " +

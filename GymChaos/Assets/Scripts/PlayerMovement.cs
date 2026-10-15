@@ -598,7 +598,12 @@ public class PlayerMovement : MonoBehaviour
         {
             ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
             fPressed = ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
-                nearbyExerciseStation != null, callFixerOnF);
+                nearbyExerciseStation != null, callFixerOnF, CanShopNearby);
+        }
+        if (fPressed == ContextAction.Shop)
+        {
+            GymProteinShopUI.Open(this);
+            return;
         }
         if (fPressed == ContextAction.Radio)
         {
@@ -693,7 +698,8 @@ public class PlayerMovement : MonoBehaviour
 
         IsHealthRegenerating = true;
         currentHealth = Mathf.Min(maxHealth,
-            currentHealth + healthRegenPerSecond * Time.deltaTime);
+            currentHealth + healthRegenPerSecond * GymBuffs.GetMultiplier(GymBuffStat.HealthRegen) *
+            Time.deltaTime);
     }
 
     private static bool IsAnyEnemyAttacking()
@@ -767,6 +773,7 @@ public class PlayerMovement : MonoBehaviour
 
         IsDead = true;
         currentHealth = 0f;
+        GymBuffs.Clear();
         planarVelocity = Vector3.zero;
         impactVelocity = Vector3.zero;
         verticalVelocity = 0f;
@@ -2225,24 +2232,24 @@ public class PlayerMovement : MonoBehaviour
     }
 
     public enum ContextKey { E, F }
-    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer }
+    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer, Shop }
 
     // Priority per key, highest first. Talking to a person beats a workout,
     // which beats picking something up; only one action is shown per key.
     // Prompts for different keys are drawn E then F, left to right.
     private static readonly ContextAction[] ContextPriority =
     {
-        ContextAction.Talk, ContextAction.BackRoom, ContextAction.Workout,
+        ContextAction.Talk, ContextAction.Shop, ContextAction.BackRoom, ContextAction.Workout,
         ContextAction.CallFixer, ContextAction.Radio, ContextAction.Drop, ContextAction.Pickup
     };
 
     public static ContextKey GetContextActionKey(ContextAction action) =>
         action == ContextAction.Workout || action == ContextAction.Radio ||
-        action == ContextAction.CallFixer ? ContextKey.F : ContextKey.E;
+        action == ContextAction.CallFixer || action == ContextAction.Shop ? ContextKey.F : ContextKey.E;
 
     /// <summary>The single action shown on (and triggered by) a key.</summary>
     public static ContextAction ResolveContextAction(ContextKey key, bool talk, bool backRoom,
-        bool drop, bool pickup, bool radio, bool workout, bool callFixer = false)
+        bool drop, bool pickup, bool radio, bool workout, bool callFixer = false, bool shop = false)
     {
         for (int i = 0; i < ContextPriority.Length; i++)
         {
@@ -2252,6 +2259,7 @@ public class PlayerMovement : MonoBehaviour
                 action == ContextAction.Workout ? workout :
                 action == ContextAction.Radio ? radio :
                 action == ContextAction.CallFixer ? callFixer :
+                action == ContextAction.Shop ? shop :
                 action == ContextAction.Drop ? drop : pickup;
             if (available && GetContextActionKey(action) == key)
             {
@@ -2260,6 +2268,8 @@ public class PlayerMovement : MonoBehaviour
         }
         return ContextAction.None;
     }
+
+    private bool CanShopNearby => GymProteinShopUI.CanShopAt(this, nearbyTalkTarget);
 
     // The radio sits on the reception counter, so the receptionist's call and
     // the radio share F there; the one the camera faces more gets the key.
@@ -2309,7 +2319,7 @@ public class PlayerMovement : MonoBehaviour
             : null;
         ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
         return ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
-            nearbyExerciseStation != null, callFixerOnF);
+            nearbyExerciseStation != null, callFixerOnF, CanShopNearby);
     }
 
     internal GymRadio NearbyRadioForVerification => nearbyRadio;
@@ -2345,6 +2355,7 @@ public class PlayerMovement : MonoBehaviour
         {
             case ContextAction.Talk: return "TALK TO MEMBER";
             case ContextAction.CallFixer: return "CALL " + GymFixerAgent.DisplayName.ToUpperInvariant();
+            case ContextAction.Shop: return "SHOP SUPPLEMENTS";
             case ContextAction.BackRoom:
                 return string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
                     ? "INTERACT"
@@ -2373,7 +2384,8 @@ public class PlayerMovement : MonoBehaviour
         ContextAction fAction = ResolveContextAction(ContextKey.F,
             nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
             nearbyPickup != null, radioOnF,
-            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF);
+            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF,
+            CanShopNearby);
         bool hasE = eAction != ContextAction.None;
         bool hasF = fAction != ContextAction.None;
         string eMessage = hasE ? GetContextActionMessage(eAction) : string.Empty;

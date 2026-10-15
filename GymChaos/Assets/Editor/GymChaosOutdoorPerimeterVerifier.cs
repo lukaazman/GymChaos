@@ -308,7 +308,13 @@ public static class GymChaosOutdoorPerimeterVerifier
                     break;
                 }
             }
-            colliders += plant.GetComponentsInChildren<Collider>(true).Length;
+            // Only plants in the open park (the player can reach them) are
+            // solid, through their own park collision child.
+            foreach (Collider collider in plant.GetComponentsInChildren<Collider>(true))
+            {
+                if (!collider.name.StartsWith("Park ", StringComparison.Ordinal) ||
+                    !GymParkAccess.Contains(plant.transform.position, -1f)) colliders++;
+            }
             foreach (MeshRenderer renderer in plant.GetComponentsInChildren<MeshRenderer>(true))
             {
                 Material material = renderer.sharedMaterial;
@@ -413,7 +419,10 @@ public static class GymChaosOutdoorPerimeterVerifier
             "Protein Store Entry Fence North Collision",
             "Outdoor Boundary - Path Outer Middle",
             "Outdoor Boundary - Path Outer North",
-            "Outdoor Boundary - Path South",
+            // The path's south end opens into the park; the park walls
+            // close that lawn instead.
+            "Park South Boundary Collision",
+            "Park East Boundary Collision",
             "Visitor Road Corner West Wall Collision",
             "Visitor Road Corner East Wall Collision",
             "Protein Store Perimeter South Collision",

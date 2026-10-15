@@ -394,7 +394,12 @@ public static class GymChaosVisitorVerifier
                         workoutStation.EnemySquatBarTiltError < 0.08f;
 
                     // This visitor smoke schedules short workouts. Validate an active mid-range squat pose here; the dedicated foot-plant verifier samples full depth and return.
-                    if (!workoutPoseValidated && squat != null && squat.CurrentMotion > 0.35f)
+                    // Sample only while the squat itself is running: CurrentMotion
+                    // keeps its last value for a moment after the set ends and the
+                    // rack takes the bar back (seen as barOnTraps=False with an
+                    // Infinity axis error on a loaded run).
+                    if (!workoutPoseValidated && squat != null && squat.IsActive && !squat.IsComplete &&
+                        squat.CurrentMotion > 0.35f)
                     {
                         MixamoScanRetargetAnimator authoredAnimator =
                             workoutFighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);

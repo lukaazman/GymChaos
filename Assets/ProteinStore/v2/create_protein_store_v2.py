@@ -242,14 +242,14 @@ def sign_uv(name, inset=6):
 # Products ---------------------------------------------------------------------
 # kind: (shape, width, depth, height, label tile, solid tile)
 PRODUCTS = {
-    "pouch_choc": ("box", 0.20, 0.10, 0.30, "whey_choc", "s_white"),
-    "pouch_vanilla": ("box", 0.20, 0.10, 0.30, "whey_vanilla", "s_white"),
-    "pouch_straw": ("box", 0.20, 0.10, 0.30, "whey_straw", "s_white"),
-    "pouch_cookie": ("box", 0.20, 0.10, 0.30, "whey_cookie", "s_white"),
-    "pouch_banana": ("box", 0.20, 0.10, 0.30, "whey_banana", "s_white"),
-    "pouch_caramel": ("box", 0.20, 0.10, 0.30, "whey_caramel", "s_white"),
-    "pouch_isolate": ("box", 0.20, 0.10, 0.30, "isolate", "s_black"),
-    "pouch_rebel": ("box", 0.17, 0.08, 0.24, "rebel", "s_navy"),
+    "pouch_choc": ("pouch", 0.20, 0.10, 0.30, "whey_choc", "s_white"),
+    "pouch_vanilla": ("pouch", 0.20, 0.10, 0.30, "whey_vanilla", "s_white"),
+    "pouch_straw": ("pouch", 0.20, 0.10, 0.30, "whey_straw", "s_white"),
+    "pouch_cookie": ("pouch", 0.20, 0.10, 0.30, "whey_cookie", "s_white"),
+    "pouch_banana": ("pouch", 0.20, 0.10, 0.30, "whey_banana", "s_white"),
+    "pouch_caramel": ("pouch", 0.20, 0.10, 0.30, "whey_caramel", "s_white"),
+    "pouch_isolate": ("pouch", 0.20, 0.10, 0.30, "isolate", "s_black"),
+    "pouch_rebel": ("pouch", 0.17, 0.08, 0.24, "rebel", "s_navy"),
     "tub_whey": ("cyl", 0.17, 0.17, 0.26, "tub_whey", "s_beige"),
     "tub_whey_choc": ("cyl", 0.17, 0.17, 0.26, "tub_whey_choc", "s_brown"),
     "tub_creatine": ("cyl", 0.12, 0.12, 0.15, "creatine", "s_yellow"),
@@ -258,24 +258,233 @@ PRODUCTS = {
     "tub_pre_green": ("cyl", 0.13, 0.13, 0.16, "pre_green", "s_black"),
     "tub_pre_pink": ("cyl", 0.13, 0.13, 0.16, "pre_pink", "s_black"),
     "tub_pre_blue": ("cyl", 0.13, 0.13, 0.16, "pre_blue", "s_black"),
-    "barbox_coconut": ("box", 0.24, 0.13, 0.09, "bar_box_coconut", "s_lightblue"),
-    "barbox_choc": ("box", 0.24, 0.13, 0.09, "bar_box_choc", "s_lightblue"),
-    "barbox_peanut": ("box", 0.24, 0.13, 0.09, "bar_box_peanut", "s_lightblue"),
-    "bar_coconut": ("box", 0.12, 0.04, 0.025, "bar_wrap_coconut", "s_coconut"),
-    "bar_choc": ("box", 0.12, 0.04, 0.025, "bar_wrap_choc", "s_brown"),
-    "magnesium": ("box", 0.12, 0.08, 0.15, "magnesium", "s_white"),
+    "bar_coconut": ("bar", 0.12, 0.04, 0.025, "bar_wrap_coconut", "s_white"),
+    "bar_choc": ("bar", 0.12, 0.04, 0.025, "bar_wrap_choc", "s_white"),
+    "bar_peanut": ("bar", 0.12, 0.04, 0.025, "bar_wrap_peanut", "s_white"),
+    "bar_berry": ("bar", 0.12, 0.04, 0.025, "bar_wrap_berry", "s_white"),
+    "magnesium": ("pouch", 0.12, 0.08, 0.15, "magnesium", "s_white"),
     "vit_d3": ("cyl", 0.07, 0.07, 0.11, "vit_d3", "s_white"),
     "omega3": ("cyl", 0.07, 0.07, 0.11, "omega3", "s_white"),
     "zinc": ("cyl", 0.07, 0.07, 0.11, "zinc", "s_white"),
-    "can_lime": ("cyl", 0.066, 0.066, 0.168, "can_lime", "s_silver"),
-    "can_orange": ("cyl", 0.066, 0.066, 0.168, "can_orange", "s_silver"),
-    "can_purple": ("cyl", 0.066, 0.066, 0.168, "can_purple", "s_silver"),
-    "can_red": ("cyl", 0.066, 0.066, 0.168, "can_red", "s_silver"),
-    "rtd_choc": ("cyl", 0.07, 0.07, 0.20, "rtd_choc", "s_white"),
-    "rtd_vanilla": ("cyl", 0.07, 0.07, 0.20, "rtd_vanilla", "s_white"),
-    "pb_jar": ("cyl", 0.10, 0.10, 0.12, "pb_jar", "s_peanut"),
+    "can_lime": ("can", 0.066, 0.066, 0.168, "can_lime", "s_silver"),
+    "can_orange": ("can", 0.066, 0.066, 0.168, "can_orange", "s_silver"),
+    "can_purple": ("can", 0.066, 0.066, 0.168, "can_purple", "s_silver"),
+    "can_red": ("can", 0.066, 0.066, 0.168, "can_red", "s_silver"),
+    "rtd_choc": ("bottle", 0.07, 0.07, 0.20, "rtd_choc", "s_white"),
+    "rtd_vanilla": ("bottle", 0.07, 0.07, 0.20, "rtd_vanilla", "s_white"),
+    "pb_jar": ("jar", 0.10, 0.10, 0.12, "pb_jar", "s_white"),
     "shaker": ("cyl", 0.09, 0.09, 0.22, "shaker", "s_black"),
 }
+
+# Shaped products ------------------------------------------------------------
+# Each returns faces as (verts, uvs) in a local frame: footprint centred on the
+# origin, base at z = 0, label facing -Y. place_product turns and moves them.
+
+def _lerp_uv(rect, fu, fv):
+    u0, v0, u1, v1 = rect
+    fu = min(1.0, max(0.0, fu))
+    fv = min(1.0, max(0.0, fv))
+    return (u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv)
+
+
+def _rounded_ring(width, depth, radius, corner_steps):
+    """Rounded rectangle, counter-clockwise from the front-left; each point
+    carries the side it belongs to: front, right, back, left or corner."""
+    a, b = width / 2 - radius, depth / 2 - radius
+    centres = [(a, -b, -90), (a, b, 0), (-a, b, 90), (-a, -b, 180)]
+    edges = [("front", (-a, -depth / 2), (a, -depth / 2)), ("right", (width / 2, -b), (width / 2, b)),
+             ("back", (a, depth / 2), (-a, depth / 2)), ("left", (-width / 2, b), (-width / 2, -b))]
+    pts = []
+    for (side, p0, p1), (cx, cy, start) in zip(edges, centres):
+        pts.append((p0[0], p0[1], side))
+        pts.append((p1[0], p1[1], side))
+        for k in range(1, corner_steps):
+            ang = math.radians(start + 90 * k / corner_steps)
+            pts.append((cx + radius * math.cos(ang), cy + radius * math.sin(ang), "corner"))
+    return pts, a, b
+
+
+def pouch_faces(w, d, h, label, side, solid, corner_steps=2):
+    """Stand-up pouch: rounded corners and a gusset that is deepest at the
+    bottom and thins to a flat heat seal on top. Front and back carry the
+    label, the two narrow sides their own side art."""
+    label_top = 0.82 * h
+    # Five rings keep the gusset bulge and the flat seal at the lowest count.
+    profile = [(0.0, 1.0, 0.98), (0.45, 0.92, 1.0), (0.82, 0.5, 1.0), (0.92, 0.12, 0.99), (1.0, 0.12, 0.99)]
+    rings = []
+    for t, depth_f, width_f in profile:
+        dz, wz = d * depth_f, w * width_f
+        radius = min(0.014, dz / 2 - 0.001)
+        pts, a, b = _rounded_ring(wz, dz, radius, corner_steps)
+        rings.append((t * h, pts, a, b))
+    flat = _lerp_uv(solid, 0.5, 0.5)
+
+    def uv(point, z, a, b, side_hint):
+        x, y, _ = point
+        if z > label_top + 1e-6:
+            return flat
+        fv = z / label_top
+        if side_hint == "front":
+            return _lerp_uv(label, (x + a) / (2 * a), fv)
+        if side_hint == "back":
+            return _lerp_uv(label, (a - x) / (2 * a), fv)
+        if side_hint == "right":
+            return _lerp_uv(side, (y + b) / (2 * b), fv)
+        if side_hint == "left":
+            return _lerp_uv(side, (b - y) / (2 * b), fv)
+        return flat
+
+    faces = []
+    count = len(rings[0][1])
+    for (z0, p0, a0, b0), (z1, p1, a1, b1) in zip(rings, rings[1:]):
+        for j in range(count):
+            k = (j + 1) % count
+            hint = p0[j][2] if p0[j][2] == p0[k][2] else "corner"
+            if z1 > label_top + 1e-6:
+                # A face never mixes label and plain UVs: that would smear
+                # across the whole atlas.
+                hint = "corner"
+            faces.append((
+                [(p0[j][0], p0[j][1], z0), (p0[k][0], p0[k][1], z0),
+                 (p1[k][0], p1[k][1], z1), (p1[j][0], p1[j][1], z1)],
+                [uv(p0[j], z0, a0, b0, hint), uv(p0[k], z0, a0, b0, hint),
+                 uv(p1[k], z1, a1, b1, hint), uv(p1[j], z1, a1, b1, hint)]))
+    z_bottom, bottom, _, _ = rings[0]
+    z_top, top, _, _ = rings[-1]
+    faces.append(([(p[0], p[1], z_bottom) for p in reversed(bottom)], [flat] * count))
+    faces.append(([(p[0], p[1], z_top) for p in top], [flat] * count))
+    return faces
+
+
+def bar_faces(w, d, h, label, solid, corner_steps=1):
+    """Flow-wrapped bar lying flat: a pillow body with the wrapper art on
+    top and a crimped seal fin at each end."""
+    fin = 0.008
+    body0, body1 = -w / 2 + fin, w / 2 - fin
+    stations = [(-w / 2, 0.98, 0.08), (body0, 1.0, 1.0), (body1, 1.0, 1.0), (w / 2, 0.98, 0.08)]
+    flat = _lerp_uv(solid, 0.5, 0.5)
+    rings = []
+    for x, depth_f, height_f in stations:
+        hz = h * height_f
+        radius = min(0.004, hz / 2 - 0.0002)
+        # Cross-section in YZ through the same ring helper (its X is our Y).
+        pts, _, _ = _rounded_ring(d * depth_f, hz, radius, corner_steps)
+        rings.append([(x, py, h / 2 + pz) for py, pz, _ in pts])
+
+    top_half = d / 2 - min(0.004, h / 2 - 0.0002)
+
+    def uv(p):
+        # The wrapper art sits on the flat top only; the rounded edges and
+        # sides stay plain film.
+        x, y, z = p
+        if z < h - 1e-6 or x < body0 - 1e-6 or x > body1 + 1e-6:
+            return flat
+        return _lerp_uv(label, (x - body0) / (body1 - body0), (y + top_half) / (2 * top_half))
+
+    faces = []
+    count = len(rings[0])
+    for r0, r1 in zip(rings, rings[1:]):
+        for j in range(count):
+            k = (j + 1) % count
+            quad = [r0[j], r0[k], r1[k], r1[j]]
+            uvs = [uv(p) for p in quad]
+            if flat in uvs:
+                uvs = [flat] * 4
+            faces.append((quad, uvs))
+    faces.append((list(reversed(rings[0])), [flat] * count))
+    faces.append((rings[-1], [flat] * count))
+    return faces
+
+
+def lathe_faces(w, h, profile, label, plain, segments=8):
+    """Turned shape from (height fraction, radius fraction, part) rings, part
+    being "label" or a key of `plain` (uv rects). The label wraps the front
+    and back halves; a band only gets the label when both rings are label."""
+    r = w / 2
+    flats = {key: _lerp_uv(rect, 0.5, 0.5) for key, rect in plain.items()}
+    start = math.atan2(-1, 0) + math.pi
+    quarter, half = segments // 4, segments // 2
+    rings = []
+    for t, rf, part in profile:
+        z = h * t
+        ring = [(r * rf * math.cos(start + 2 * math.pi * i / segments),
+                 r * rf * math.sin(start + 2 * math.pi * i / segments), z) for i in range(segments)]
+        rings.append((ring, part, z))
+    label_z = [z for _, part, z in rings if part == "label"]
+    z_lo, z_hi = min(label_z), max(label_z)
+    faces = []
+    for (p0, k0, z0), (p1, k1, z1) in zip(rings, rings[1:]):
+        for i in range(segments):
+            j = (i + 1) % segments
+            quad = [p0[i], p0[j], p1[j], p1[i]]
+            if k0 == "label" and k1 == "label":
+                kk = (i - quarter) % segments
+                kk = kk if kk < half else kk - half
+                ua, ub = kk / half, (kk + 1) / half
+                va, vb = (z0 - z_lo) / (z_hi - z_lo), (z1 - z_lo) / (z_hi - z_lo)
+                uvs = [_lerp_uv(label, ua, va), _lerp_uv(label, ub, va),
+                       _lerp_uv(label, ub, vb), _lerp_uv(label, ua, vb)]
+            else:
+                uvs = [flats[k1 if k1 != "label" else k0]] * 4
+            faces.append((quad, uvs))
+    faces.append((list(reversed(rings[0][0])), [flats[rings[0][1]]] * segments))
+    faces.append((rings[-1][0], [flats[rings[-1][1]]] * segments))
+    return faces
+
+
+def can_faces(w, h, label, metal):
+    """Drinks can: bevelled silver base, printed body, tapered shoulder and
+    a silver lid."""
+    profile = [(0.0, 0.82, "metal"), (0.048, 1.0, "label"), (0.893, 1.0, "label"), (1.0, 0.84, "metal")]
+    return lathe_faces(w, h, profile, label, {"metal": metal})
+
+
+def bottle_faces(w, h, label, body, cap):
+    """Ready-to-drink shake bottle: rounded base, label band, a shoulder
+    that narrows to the neck and a screw cap."""
+    profile = [(0.0, 0.88, "body"), (0.05, 1.0, "label"), (0.62, 1.0, "label"),
+               (0.78, 0.6, "body"), (0.78, 0.68, "cap"), (1.0, 0.68, "cap")]
+    return lathe_faces(w, h, profile, label, {"body": body, "cap": cap})
+
+
+def jar_faces(w, h, label, body, lid):
+    """Wide peanut butter jar: label band on a straight body, a short neck
+    and a lid slightly wider than the jar."""
+    profile = [(0.0, 0.95, "body"), (0.06, 1.0, "label"), (0.74, 1.0, "label"),
+               (0.80, 0.92, "body"), (0.80, 1.02, "lid"), (1.0, 1.02, "lid")]
+    return lathe_faces(w, h, profile, label, {"body": body, "lid": lid})
+
+
+def shaped_faces(kind):
+    """Local faces for the non-box products (the shop exports these same
+    meshes, see export_protein_products.py)."""
+    shape, w, d, h, label, solid = PRODUCTS[kind]
+    if shape == "pouch":
+        return pouch_faces(w, d, h, tile_uv(label), tile_uv(POUCH_SIDES[label]), solid_uv(solid))
+    if shape == "bar":
+        return bar_faces(w, d, h, tile_uv(label), solid_uv(solid))
+    if shape == "can":
+        return can_faces(w, h, tile_uv(label), solid_uv(solid))
+    if shape == "bottle":
+        return bottle_faces(w, h, tile_uv(label), solid_uv(solid), solid_uv("s_white"))
+    if shape == "jar":
+        return jar_faces(w, h, tile_uv(label), solid_uv(solid), solid_uv("s_silver"))
+    raise ValueError(shape)
+
+
+# Gusset side art per pouch label.
+POUCH_SIDES = {"isolate": "isolate_side", "rebel": "rebel_side", "magnesium": "magnesium_side",
+               **{f"whey_{f}": "whey_side" for f in ("choc", "vanilla", "straw", "cookie", "banana", "caramel")}}
+
+FACING_ANGLE = {"-y": 0.0, "+x": math.pi / 2, "+y": math.pi, "-x": -math.pi / 2}
+
+
+def add_faces(builder, faces, mat, origin=(0.0, 0.0, 0.0), angle=0.0):
+    c, s = math.cos(angle), math.sin(angle)
+    ox, oy, oz = origin
+    for verts, uvs in faces:
+        builder.face([(ox + x * c - y * s, oy + x * s + y * c, oz + z) for x, y, z in verts], mat, uvs)
+
 
 product_builders = {}
 
@@ -294,7 +503,9 @@ def place_product(category, kind, x, y, z, facing):
     sx, sy = (w, d) if along_x else (d, w)
     mn = (x - sx / 2, y - sy / 2, z)
     mx = (x + sx / 2, y + sy / 2, z + h)
-    if shape == "box":
+    if shape in ("pouch", "bar", "can", "bottle", "jar"):
+        add_faces(b, shaped_faces(kind), M["products"], (x, y, z), FACING_ANGLE[facing])
+    elif shape == "box":
         back = {"+x": "-x", "-x": "+x", "+y": "-y", "-y": "+y"}[facing]
         # Label on the front and the back face; narrow sides stay plain.
         b.box(mn, mx, M["products"],
@@ -620,7 +831,7 @@ SNACK_ROWS = [["pb_jar"], ["pb_jar"], ["shaker"], ["shaker"], ["pb_jar"]]
 PRE_ROWS = [["tub_pre_green", "tub_pre_pink", "tub_pre_blue"]] * 5
 CREATINE_ROWS = [["tub_creatine"], ["tub_reload", "tub_creatine"], ["pouch_rebel"], ["tub_creatine", "tub_reload"], ["pouch_rebel"]]
 VITAMIN_ROWS = [["magnesium"], ["vit_d3", "omega3", "zinc"], ["magnesium"], ["omega3", "vit_d3"], ["zinc", "vit_d3"]]
-BARBOX_ROWS = [["barbox_coconut", "barbox_choc", "barbox_peanut"]] * 5
+BARBOX_ROWS = [["bar_choc", "bar_coconut", "bar_peanut", "bar_berry"]] * 5
 
 
 def build_contents():
@@ -667,8 +878,8 @@ def build_contents():
     header_sign("B_DRINKS", "COLD DRINKS", (IX1 - 0.015, 0.0), "-x", width=4.0, height=0.35, z=2.3)
 
     # Island gondolas.
-    bars = [["barbox_coconut", "barbox_choc"], ["barbox_peanut", "barbox_coconut"],
-            ["barbox_choc", "barbox_peanut"], ["barbox_coconut"]]
+    bars = [["bar_coconut", "bar_choc"], ["bar_peanut", "bar_berry"],
+            ["bar_choc", "bar_peanut"], ["bar_berry", "bar_coconut"]]
     vit = [["magnesium"], ["vit_d3", "omega3", "zinc"], ["magnesium", "zinc"], ["omega3"]]
     tubs = [["tub_whey"], ["tub_whey_choc"], ["tub_whey"], ["tub_whey_choc"]]
     crea = [["tub_creatine"], ["tub_reload"], ["tub_creatine", "tub_bcaa"], ["tub_reload"]]
@@ -718,7 +929,7 @@ def build_checkout():
     till.box((-7.1, -6.62, 1.05), (-6.96, -6.42, 1.1), M["black"])
     record("fixture", "till:terminal", (-7.1, -6.62, 1.05), (-6.96, -6.42, 1.1))
     till.build()
-    for i, kind in enumerate(["bar_coconut", "bar_choc", "bar_coconut", "bar_choc"]):
+    for i, kind in enumerate(["bar_coconut", "bar_choc", "bar_peanut", "bar_berry"]):
         place_product("Checkout", kind, -6.0 + i * 0.0, -6.36 - i * 0.05, 1.051, "+y")
     # Behind the counter: wall bays with shakers and magnesium.
     for i in range(5):

@@ -29,7 +29,8 @@ public enum GymHeadwear
 }
 
 /// <summary>
-/// Local progression data. It deliberately contains no currency or shop state.
+/// Local progression data. It holds no money; the protein.com counter is paid
+/// with loyalty-card stamps earned by training, capped per gym day.
 /// The level can keep growing after the four stat trees are complete; those
 /// later points become Mastery instead of unlimited combat power.
 /// </summary>
@@ -62,6 +63,13 @@ public sealed class GymProgressionState
     public bool cardioChallengeCompleted;
     public bool[] dailyCompleted = { false, false, false };
 
+    // protein.com loyalty card: stamps earned by playing, spent at the counter.
+    public int loyaltyStamps;
+    public int loyaltyStampDay;
+    public int loyaltyStampsToday;
+    public int loyaltyRepCounter;
+    public int loyaltyVisitDay;
+
     public void Normalize()
     {
         level = Mathf.Max(1, level);
@@ -75,6 +83,9 @@ public sealed class GymProgressionState
         reputationRank = Mathf.Clamp(reputationRank, 0, GymExperienceService.MaxStatRank);
         reputation = Mathf.Clamp(reputation, -100, 100);
         gymDay = Mathf.Max(1, gymDay);
+        loyaltyStamps = Mathf.Clamp(loyaltyStamps, 0, GymExperienceService.MaxLoyaltyStamps);
+        loyaltyStampsToday = Mathf.Max(0, loyaltyStampsToday);
+        loyaltyRepCounter = Mathf.Max(0, loyaltyRepCounter);
 
         if (dailyProgress == null || dailyProgress.Length != 3)
         {

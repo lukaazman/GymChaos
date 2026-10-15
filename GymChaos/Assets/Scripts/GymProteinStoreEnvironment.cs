@@ -93,6 +93,19 @@ public static class GymProteinStoreEnvironment
     public static Transform RuntimeRoot { get; private set; }
     public static string RuntimeAssetPath => AssetPath;
 
+    /// <summary>True inside the store's walls (flat test against the shell footprint).</summary>
+    public static bool IsInsideStore(Vector3 position)
+    {
+        if (!IsBuilt)
+        {
+            return false;
+        }
+        Bounds shell = ShellFootprint;
+        const float wall = 0.25f;
+        return position.x > shell.min.x + wall && position.x < shell.max.x - wall &&
+            position.z > shell.min.z + wall && position.z < shell.max.z - wall;
+    }
+
     /// <summary>The store door's opening in the path's outer wall.</summary>
     public static void GetPathOpening(float pathSouthZ, out float minZ, out float maxZ)
     {
@@ -846,7 +859,7 @@ public static class GymProteinStoreEnvironment
             $"padNorth={(fenceNorth - halfThickness) - ShellFootprint.max.z:F2}");
     }
 
-    private static void CreateAccessFence(
+    internal static void CreateAccessFence(
         Transform parent,
         float floorY,
         float startX,

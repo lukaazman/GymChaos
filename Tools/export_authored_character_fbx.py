@@ -169,6 +169,55 @@ CHARACTERS = {
             },
         },
     },
+    "homeless_guy": {
+        # The park resident. Walking is shared; sleeping, stand_up,
+        # sit_to_stand and sitting are his own. The game plays stand_up and
+        # sit_to_stand backwards for lying down and sitting down.
+        # The rigged homeless guy (armature "rig"); the repository has no
+        # homeless_guy.blend, only this rig and the unrigged homeless_guy.glb.
+        "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/homelessguy_rig.blend",
+        # The original scan, not the remeshed copy: Mesh_MESHED smears the
+        # texture seams into cracks over the jacket, face and hair.
+        "mesh_name": "Mesh_ORIGINAL",
+        # ...but skinned with the remeshed copy's clean, welded weights.
+        "weights_from": "Mesh_MESHED",
+        "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
+        "clip_dirs": {
+            "sleeping": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/homeless_guy",
+            "stand_up": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/homeless_guy",
+            "sit_to_stand": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/homeless_guy",
+            "sitting": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims/homeless_guy",
+        },
+        "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Homeless/homeless_guy_authored.fbx",
+        "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/homeless_guy.png",
+        "clip_names": ("walking", "sleeping", "stand_up", "sit_to_stand", "sitting"),
+        "tpose_arms": True,
+        # Chain the clips on one fixed root (source metres, Mixamo faces -Y):
+        # every standing pose keeps the hips over the root, so walking,
+        # stand_up's end and sit_to_stand's end meet without a slide.
+        # sit_to_stand rises 0.51 m forward; shift it back so it ends over
+        # the root and starts seated 0.48 m behind it. sitting then sits on
+        # that same seat. sleeping lies turned 70 degrees from stand_up's
+        # first frame; turn and shift it onto that frame.
+        # His own walk: the shared Mixamo walk with a tired, stooped upper
+        # body (the lower and upper chest lean forward; head and arms keep
+        # their own orientation, so the eyes stay level). Mixamo faces -Y,
+        # so a positive turn about +X tips a segment forward.
+        "clip_world_rotations": {
+            "walking": {
+                "DEF-spine.002": ((1.0, 0.0, 0.0), 6.0),
+                "DEF-spine.003": ((1.0, 0.0, 0.0), 9.0),
+            },
+        },
+        "clip_root_transforms": {
+            # Walking hips sit 1 cm behind stand_up's last frame; put
+            # them on the same root so standing up flows into the walk.
+            "walking": {"offset": (0.0, -0.01, 0.0)},
+            "sit_to_stand": {"offset": (0.0, 0.51, 0.0)},
+            "sitting": {"offset": (0.0, 0.27, -0.05)},
+            "sleeping": {"yaw": 70.0, "offset": (0.05, -0.025, -0.04)},
+        },
+    },
     "player": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/Player/player_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
@@ -377,6 +426,65 @@ def normalize_export_weights(
     )
 
 
+def transfer_weights(mesh: bpy.types.Object, source_name: str) -> None:
+    """Copy skin weights from another mesh of the same character.
+
+    The homeless guy's original scan is split along its UV seams into 3.6k
+    pieces and its automatic weights are noisy (hands rested on the hips),
+    so its arms pulled spikes of skin out of the body. The remeshed copy in
+    the same blend is welded and skins cleanly; interpolate its weights onto
+    the original surface, which keeps the original texture layout.
+    """
+    source = bpy.data.objects.get(source_name)
+    if source is None or source.type != "MESH":
+        raise RuntimeError(f"weight source {source_name} missing")
+    for group in source.vertex_groups:
+        if mesh.vertex_groups.get(group.name) is None:
+            mesh.vertex_groups.new(name=group.name)
+    modifier = mesh.modifiers.new("Weights From " + source_name, "DATA_TRANSFER")
+    modifier.object = source
+    modifier.use_vert_data = True
+    modifier.data_types_verts = {"VGROUP_WEIGHTS"}
+    modifier.vert_mapping = "POLYINTERP_NEAREST"
+    modifier.layers_vgroup_select_src = "ALL"
+    modifier.layers_vgroup_select_dst = "NAME"
+    modifier.mix_mode = "REPLACE"
+    modifier.mix_factor = 1.0
+    with bpy.context.temp_override(object=mesh, active_object=mesh, selected_objects=[mesh]):
+        bpy.ops.object.modifier_move_to_index(modifier=modifier.name, index=0)
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+    # The scan's thumbs rested on the thighs, so thigh skin there still
+    # follows the thumb a little and bulges out when the hand lifts off the
+    # leg (sitting). Fingers and thighs never bend together: on a vertex
+    # with both, the smaller side goes. Only hand bones count here; the
+    # forearm/jacket overlap is wide and splitting it tears the jacket.
+    group_names = {group.index: group.name for group in mesh.vertex_groups}
+    hand = ("DEF-hand", "DEF-thumb", "DEF-f_", "DEF-palm")
+    hip = ("DEF-thigh", "DEF-pelvis", "DEF-spine")
+    untangled = 0
+    for vertex in mesh.data.vertices:
+        items = [(g.group, g.weight) for g in vertex.groups if g.weight > 1e-6]
+        hand_items = [(i, w) for i, w in items if group_names[i].startswith(hand)]
+        hip_items = [(i, w) for i, w in items if group_names[i].startswith(hip)]
+        if not hand_items or not hip_items:
+            continue
+        hand_sum = sum(w for _, w in hand_items)
+        hip_sum = sum(w for _, w in hip_items)
+        drop = {i for i, _ in (hand_items if hand_sum < hip_sum else hip_items)}
+        kept = [(i, w) for i, w in items if i not in drop]
+        total = sum(w for _, w in kept)
+        for i in drop:
+            mesh.vertex_groups[group_names[i]].remove([vertex.index])
+        for i, w in kept:
+            mesh.vertex_groups[group_names[i]].add([vertex.index], w / total, "REPLACE")
+        untangled += 1
+    print(
+        "GYMCHAOS_AUTHORED_WEIGHTS_TRANSFERRED "
+        f"mesh={mesh.name} source={source_name} vertices={len(mesh.data.vertices)} "
+        f"fingerHipUntangled={untangled}"
+    )
+
+
 def normalize_name(name: str) -> str:
     return (
         name.replace("mixamorig:", "")
@@ -397,7 +505,12 @@ def find_armature() -> bpy.types.Object:
     return max(candidates, key=lambda obj: sum(1 for bone in obj.data.bones if bone.use_deform))
 
 
-def find_mesh(target: bpy.types.Object) -> bpy.types.Object:
+def find_mesh(target: bpy.types.Object, mesh_name: str | None = None) -> bpy.types.Object:
+    if mesh_name is not None:
+        named = bpy.data.objects.get(mesh_name)
+        if named is None or named.type != "MESH":
+            raise RuntimeError(f"Mesh {mesh_name} missing in the authored blend")
+        return named
     candidates = []
     for obj in bpy.data.objects:
         if obj.type != "MESH":
@@ -848,6 +961,7 @@ def retarget_deform_action(
     rest_pose,
     clip_rest_bone_rolls=None,
     clip_world_rotations=None,
+    clip_root_transforms=None,
 ):
     """Retarget source motion directly onto this character's own DEF bones."""
     assign_action_slot(source, source_action)
@@ -878,6 +992,11 @@ def retarget_deform_action(
         bone_name: Quaternion(Vector(axis).normalized(), math.radians(degrees))
         for bone_name, (axis, degrees) in (clip_world_rotations or {}).get(action_name, {}).items()
     }
+    # Whole-clip placement in source world space: a yaw of the entire pose
+    # about the vertical through the source rest hips, then a root offset.
+    root_transform = (clip_root_transforms or {}).get(action_name, {})
+    clip_yaw = Quaternion(Vector((0.0, 0.0, 1.0)), math.radians(root_transform.get("yaw", 0.0)))
+    clip_offset = Vector(root_transform.get("offset", (0.0, 0.0, 0.0)))
 
     pairs = build_deform_map(source, target)
     if len(pairs) < 14:
@@ -944,7 +1063,7 @@ def retarget_deform_action(
             else:
                 source_pose = source_pose_rotation(source, source_pose_bone)
                 source_rest = source_rest_rotation(source, source_bone)
-                delta = source_pose @ source_rest.inverted()
+                delta = clip_yaw @ source_pose @ source_rest.inverted()
                 rest_rotation = target_rest_rotation(target, target_bone)
                 if target_name in rest_corrections:
                     rest_rotation = rest_corrections[target_name] @ rest_rotation
@@ -958,6 +1077,7 @@ def retarget_deform_action(
                 if target_name in root_motion_targets:
                     source_delta_world = source_pose_translation(source, source_pose_bone) - \
                         source_rest_translation(source, source_bone)
+                    source_delta_world = clip_yaw @ source_delta_world + clip_offset
                     source_delta_world *= root_scale
                     target_delta_object = target.matrix_world.to_3x3().inverted() @ source_delta_world
                     local_translation += target_delta_object
@@ -1127,11 +1247,13 @@ def run(character_name: str) -> None:
 
     bpy.ops.wm.open_mainfile(filepath=str(blend))
     authored_target = find_armature()
-    authored_mesh = find_mesh(authored_target)
+    authored_mesh = find_mesh(authored_target, config.get("mesh_name"))
     validate_authored_source(character_name, authored_target, authored_mesh)
     texture_output = config.get("texture_output")
     if texture_output is not None:
         export_authored_base_color(authored_mesh, texture_output)
+    if config.get("weights_from"):
+        transfer_weights(authored_mesh, config["weights_from"])
     keep_only_target_objects(authored_target, authored_mesh)
     target, mesh = build_clean_export_rig(authored_target, authored_mesh)
     extra_meshes = []
@@ -1161,6 +1283,7 @@ def run(character_name: str) -> None:
             action, matched, frames = retarget_deform_action(
                 target, source, source_action, clip_name, rest_pose,
                 config.get("clip_rest_bone_rolls"), config.get("clip_world_rotations"),
+                config.get("clip_root_transforms"),
             )
             actions.append(action)
             report.append(f"{clip_name}:{frames}f/{matched}bones")

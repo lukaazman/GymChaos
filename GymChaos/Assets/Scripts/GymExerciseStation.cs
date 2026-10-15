@@ -482,6 +482,13 @@ public class GymExerciseStation : MonoBehaviour
                 continue;
             }
 
+            // Park and courtyard seating is furniture, not gym equipment.
+            if ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress) &&
+                IsOutdoorFurniture(candidate))
+            {
+                continue;
+            }
+
             Renderer[] renderers = candidate.GetComponentsInChildren<Renderer>(true);
             if (renderers.Length == 0)
             {
@@ -3699,6 +3706,21 @@ public class GymExerciseStation : MonoBehaviour
             case GymExerciseType.LatPulldown: return 2.1f;
             default: return 1.8f;
         }
+    }
+
+    private static bool IsOutdoorFurniture(Transform candidate)
+    {
+        for (Transform current = candidate; current != null; current = current.parent)
+        {
+            string name = current.name;
+            if (name == GymOutdoorFoliage.DetailsRootName || name == "Gym Exterior (Runtime)" ||
+                name.StartsWith("Park ") || name.StartsWith("Courtyard "))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryClassify(string objectName, out GymExerciseType type)

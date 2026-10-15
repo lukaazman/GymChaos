@@ -1718,8 +1718,10 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             player = FindAnyObjectByType<PlayerMovement>();
         }
 
+        // The protein.com store is as closed as the gym: no traffic inside.
         return player != null &&
-            GymOutdoorBuilder.IsPlayerOutsideGym(player.transform.position);
+            GymOutdoorBuilder.IsPlayerOutsideGym(player.transform.position) &&
+            !GymProteinStoreEnvironment.IsInsideStore(player.transform.position);
     }
 
     private void UpdateVehicleAudioAudibility()

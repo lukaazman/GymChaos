@@ -25,6 +25,7 @@ import bpy
 import bmesh
 import numpy as np
 from mathutils import Matrix, Vector, noise
+from mathutils.bvhtree import BVHTree
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SOURCE_DIR = os.path.join(
@@ -59,6 +60,92 @@ def import_glb(name):
 
 def triangle_count(obj):
     return sum(len(p.vertices) - 2 for p in obj.data.polygons)
+
+
+def boundary_edge_count(obj):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    count = sum(1 for e in bm.edges if e.is_boundary)
+    bm.free()
+    return count
+
+
+def weld_and_flatten(obj):
+    """Rebuilds the low-poly facets of a scanned source without holes.
+
+    The sources are faceted shapes stored as ~150k triangles with split
+    vertices. Collapse decimation on that tears whole facets away. Welding
+    first makes the surface one closed piece; a planar dissolve then merges
+    the coplanar triangles back into the original facets, so the general
+    shape stays and no cracks open.
+    """
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    size = max(obj.dimensions)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=size * 0.0015)
+    bmesh.ops.dissolve_limit(
+        bm, angle_limit=math.radians(4.0), use_dissolve_boundaries=False,
+        verts=bm.verts, edges=bm.edges)
+    bmesh.ops.dissolve_degenerate(bm, dist=size * 0.0005, edges=bm.edges)
+    bmesh.ops.triangulate(bm, faces=bm.faces)
+    bm.to_mesh(obj.data)
+    bm.free()
+    for poly in obj.data.polygons:
+        poly.use_smooth = False
+
+
+def source_sampler(obj):
+    """Nearest-surface UV lookup on the untouched source mesh."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bmesh.ops.triangulate(bm, faces=bm.faces)
+    bm.faces.ensure_lookup_table()
+    uv_layer = bm.loops.layers.uv.active
+    tree = BVHTree.FromBMesh(bm)
+
+    def sample(point):
+        location, _normal, index, _distance = tree.find_nearest(point)
+        if index is None:
+            return None
+        face = bm.faces[index]
+        a, b, c = (loop.vert.co for loop in face.loops)
+        weights = barycentric(location, a, b, c)
+        uv = Vector((0.0, 0.0))
+        for weight, loop in zip(weights, face.loops):
+            uv += loop[uv_layer].uv * weight
+        return uv
+
+    return sample, bm
+
+
+def barycentric(p, a, b, c):
+    v0, v1, v2 = b - a, c - a, p - a
+    d00, d01, d11 = v0.dot(v0), v0.dot(v1), v1.dot(v1)
+    d20, d21 = v2.dot(v0), v2.dot(v1)
+    denom = d00 * d11 - d01 * d01
+    if abs(denom) < 1e-12:
+        return (1.0, 0.0, 0.0)
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    return (1.0 - v - w, v, w)
+
+
+def resample_face_uvs(obj, sample):
+    """One source colour per LOD face.
+
+    Merged facets cross UV island seams of the source, so interpolated
+    corner UVs smear bark into leaves. The textures are flat colour
+    regions, so each face takes the UV of the source surface under its
+    centre.
+    """
+    mesh = obj.data
+    uv_layer = mesh.uv_layers.active
+    for poly in mesh.polygons:
+        uv = sample(poly.center)
+        if uv is None:
+            continue
+        for loop_index in poly.loop_indices:
+            uv_layer.data[loop_index].uv = uv
 
 
 def decimate(obj, target):
@@ -148,7 +235,13 @@ def ground_object(obj):
 def export_lod(name):
     reset_scene()
     obj = import_glb(name)
+    sample, source_bm = source_sampler(obj)
+    weld_and_flatten(obj)
     decimate(obj, LOD_TRIANGLES[name])
+    resample_face_uvs(obj, sample)
+    source_bm.free()
+    print(f"FOLIAGE_LOD {name} tris={triangle_count(obj)} "
+          f"boundaryEdges={boundary_edge_count(obj)}")
     source = obj.data.materials[0]
     image = base_image(source)
     material = flat_material(name + "_leaf", downsized_copy(image, name + "_albedo"))

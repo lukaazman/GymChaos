@@ -786,14 +786,8 @@ public static class GymOutdoorBuilder
                 new Vector3(0.5f, BoundaryHeight, innerEndZ - innerStartZ));
         }
 
-        float pathSouthMinX = exteriorWallX;
-        float pathSouthMaxX = outerPathX;
-        CreateBoundary(
-            "Outdoor Boundary - Path South",
-            root.transform,
-            new Vector3((pathSouthMinX + pathSouthMaxX) * 0.5f,
-                floorY + BoundaryHeight * 0.5f, pathSouthZ),
-            new Vector3(pathSouthMaxX - pathSouthMinX, BoundaryHeight, 0.5f));
+        // The path's south end stays open into the park south of the gym
+        // and the store; the park access walls close that lawn instead.
 
         CreateBoundaryVisuals(
             root.transform,
@@ -822,6 +816,14 @@ public static class GymOutdoorBuilder
             courtyardMaxX,
             courtyardMinZ,
             courtyardMaxZ);
+        GymParkAccess.BuildBoundary(
+            root.transform,
+            floorY,
+            exteriorWallX,
+            pathSouthZ,
+            boundaryMaterial,
+            boundaryTrimMaterial,
+            boundaryRibMaterial);
         GymOutdoorFenceFinisher.Finish(root.transform);
         // One continuous exterior ground: the separate surfaces keep their
         // names and colliders but share material, world UVs and flat normals.
@@ -889,6 +891,8 @@ public static class GymOutdoorBuilder
             floorY,
             GymCityDystopiaSurroundings.ProtectedBounds,
             landscape);
+        GymParkAccess.PlaceTent();
+        GymHomelessAgent.Spawn(root.transform);
         IsBuilt = true;
 
         Debug.Log(
@@ -1827,20 +1831,6 @@ public static class GymOutdoorBuilder
                 boundaryRibMaterial,
                 exteriorOnly: true);
         }
-
-        float pathSouthMinX = roomEast + ExteriorWallFaceOffset;
-        float pathSouthMaxX = outerPathX;
-        CreateVisibleBoundary(
-            "Path South Boundary Wall",
-            parent,
-            new Vector3((pathSouthMinX + pathSouthMaxX) * 0.5f, boundaryY, pathSouthZ),
-            new Vector3(pathSouthMaxX - pathSouthMinX, BoundaryHeight, 0.5f),
-            BoundaryHeight,
-            floorY,
-            boundaryMaterial,
-            boundaryTrimMaterial,
-            boundaryRibMaterial,
-            exteriorOnly: true);
     }
 
     private static void CreateVisibleBoundary(
@@ -2116,7 +2106,6 @@ public static class GymOutdoorBuilder
             root, "Path Outer Boundary Wall Middle");
         Renderer pathOuterNorth = GetPrimaryRenderer(
             root, "Path Outer Boundary Wall North");
-        Renderer pathSouth = GetPrimaryRenderer(root, "Path South Boundary Wall");
         Renderer westPocketNorth = GetPrimaryRenderer(
             root, "Bus Bay West Pocket North Wall");
         Renderer eastPocketNorth = GetPrimaryRenderer(
@@ -2151,25 +2140,8 @@ public static class GymOutdoorBuilder
             SegmentEndpoint(parkingNorthExtension, true, false),
             ref junctionCount,
             ref largestJunctionGap);
-        // The store door opening starts at the path's south end, so the
-        // path's south wall continues straight into the store entry wall.
-        Renderer storeEntrySouth = GetPrimaryRenderer(
-            root, "Protein Store Entry Fence South Low Wall");
-        fenceJunctionsPassed &= pathOuterSouth != null
-            ? ValidateFenceJunction(
-                pathSouth,
-                SegmentEndpoint(pathSouth, true, true),
-                pathOuterSouth,
-                SegmentEndpoint(pathOuterSouth, false, false),
-                ref junctionCount,
-                ref largestJunctionGap)
-            : ValidateFenceJunction(
-                pathSouth,
-                SegmentEndpoint(pathSouth, true, true),
-                storeEntrySouth,
-                SegmentEndpoint(storeEntrySouth, true, false),
-                ref junctionCount,
-                ref largestJunctionGap);
+        // The path's south end is open into the park: no wall may stand
+        // across it (the store entry wall and the gym close its sides).
         fenceJunctionsPassed &= ValidateFenceJunction(
             eastPocketNorth,
             SegmentEndpoint(eastPocketNorth, true, true),
@@ -2212,18 +2184,15 @@ public static class GymOutdoorBuilder
             ref junctionCount,
             ref largestJunctionGap);
 
-        bool pathSouthEndsAtOuterPath = pathSouth != null &&
-            // Ends on the outer path wall: at its centre line, or at its face
-            // once the joint pass has closed the corner.
-            pathSouth.bounds.max.x >= outerPathX - SharedFenceWallThickness * 0.5f - 0.001f &&
-            pathSouth.bounds.max.x <= outerPathX + 0.001f &&
-            Mathf.Abs(pathSouth.bounds.center.z - pathSouthZ) <= 0.001f;
+        bool pathSouthOpen = FindRendererRecursive(root.transform, "Path South Boundary Wall") == null &&
+            root.transform.Find("Outdoor Boundary - Path South") == null &&
+            GymParkAccess.IsBuilt;
         bool contractPassed = surfaceObjectCount == surfaceNames.Length &&
             surfaceTopError <= 0.002f &&
             coplanarGroundOverlapPairs == 0 &&
             fenceJunctionsPassed &&
             roadOpeningJunctionsPassed &&
-            pathSouthEndsAtOuterPath;
+            pathSouthOpen;
         Debug.Log(
             $"GYMCHAOS_OUTDOOR_LAYOUT_{(contractPassed ? "OK" : "FAIL")} " +
             $"surfaces={surfaceObjectCount}/{surfaceNames.Length} " +
@@ -2233,7 +2202,7 @@ public static class GymOutdoorBuilder
             $"fenceJunctions={junctionCount} " +
             $"largestJunctionGap={largestJunctionGap:F3} " +
             $"roadOpeningJunctions={(roadOpeningJunctionsPassed ? 2 : 0)}/2 " +
-            $"pathSouthEndsAtOuterPath={(pathSouthEndsAtOuterPath ? 1 : 0)}",
+            $"pathSouthOpenToPark={(pathSouthOpen ? 1 : 0)}",
             root);
         return contractPassed;
     }

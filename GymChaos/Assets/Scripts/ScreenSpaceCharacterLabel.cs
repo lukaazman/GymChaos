@@ -4,6 +4,13 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
 {
     private const float NameRevealDistance = 7.5f;
     private const float NameRevealDistanceSqr = NameRevealDistance * NameRevealDistance;
+    private const float BehindOverlayAlpha = 0.18f;
+
+    /// <summary>
+    /// IMGUI draws above every uGUI canvas, so while the shop overlay is open
+    /// the labels of the characters behind it fade instead of sitting on top.
+    /// </summary>
+    public static float CurrentAlpha => GymProteinShopUI.IsOpen ? BehindOverlayAlpha : 1f;
 
     private SkinnedMeshRenderer bodyRenderer;
     private Camera playerCamera;
@@ -80,6 +87,8 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         // The anchor sits just above the head: the stack grows upward from
         // it (health bar, then name) so the name stays close to the head.
         float stackBottom = Screen.height - screen.y - AnchorGapPixels;
+        Color previousColor = GUI.color;
+        GUI.color = new Color(1f, 1f, 1f, CurrentAlpha);
         if (showHealth)
         {
             DrawHealthBar(
@@ -109,6 +118,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
                 stackBottom - height,
                 width, height), displayName, style);
         }
+        GUI.color = previousColor;
     }
 
     private const float AnchorGapPixels = 1f;
@@ -128,13 +138,14 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
             background.width * Mathf.Clamp01(health01), background.height);
 
         Color previous = GUI.color;
-        GUI.color = Color.black;
+        float alpha = previous.a;
+        GUI.color = new Color(0f, 0f, 0f, alpha);
         GUI.DrawTexture(border, Texture2D.whiteTexture);
-        GUI.color = new Color(0.18f, 0.04f, 0.04f, 1f);
+        GUI.color = new Color(0.18f, 0.04f, 0.04f, alpha);
         GUI.DrawTexture(background, Texture2D.whiteTexture);
         if (fill.width > 0f)
         {
-            GUI.color = fillColor;
+            GUI.color = new Color(fillColor.r, fillColor.g, fillColor.b, fillColor.a * alpha);
             GUI.DrawTexture(fill, Texture2D.whiteTexture);
         }
         GUI.color = previous;
