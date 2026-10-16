@@ -310,6 +310,11 @@ public partial class EnemyFighter : MonoBehaviour
     private const float GokuFlightHeight = 0.15f;
     private const float GokuFlightMinimumDistance = 5.2f;
     private const float GokuSpeedMultiplier = 1.5f;
+    // 2x current: flight 1.5x -> 3x maxSpeed, ground run 1x -> 2x maxSpeed,
+    // punch cooldown halved. Walking (roam) speed is untouched.
+    private const float GokuFlightSpeedFactor = GokuSpeedMultiplier * 2f;
+    private const float GokuRunSpeedFactor = 2f;
+    private const float GokuPunchSpeedFactor = 2f;
     private const float GokuFlightTransitionDuration = 0.42f;
     private const float GokuFlightModelRotation = 0f;
     private GokuFlightState gokuFlightState;
@@ -911,7 +916,9 @@ public partial class EnemyFighter : MonoBehaviour
             chaseStopReason = "attack-range";
             StopForAttack(planarToTarget);
             if (CanStartAutomaticPunch() && !punchInProgress &&
-                Time.time >= lastAttackTime + attackCooldown)
+                Time.time >= lastAttackTime + (IsGoku()
+                    ? attackCooldown / GokuPunchSpeedFactor
+                    : attackCooldown))
             {
                 lastAttackTime = Time.time;
                 Attack(planarToTarget.sqrMagnitude > 0.01f
@@ -932,8 +939,24 @@ public partial class EnemyFighter : MonoBehaviour
             {
                 Vector3 clearDirection = FindClearMovementDirection(moveDirection, distance, false, false);
                 bool directBlocked = clearDirection.sqrMagnitude < 0.001f;
+                // The local probe only looks 1.25 m ahead. If something blocks
+                // the straight line further on, dropping the route as soon as
+                // its hold expires sends the fighter back into the same dead
+                // end (seen: Ronnie looping 4 m short of a fight for 14 s).
+                // Keep routing until the whole line to the target is open.
+                // The long cast is cached for a few physics steps and capped
+                // in length so a room full of chasers stays cheap.
+                if (Time.time >= chaseLineCheckAt)
+                {
+                    chaseLineCheckAt = Time.time + ChaseLineCheckInterval;
+                    chaseLineBlocked = !IsMovementPathClear(
+                        moveDirection,
+                        Mathf.Clamp(distance - GetCurrentAttackRange(), 0f, ChaseLineCheckMaxDistance),
+                        false);
+                }
+                bool lineBlocked = directBlocked || chaseLineBlocked;
                 chaseStopReason = "chasing";
-                if (TryGetGroundChaseWaypoint(directBlocked, out Vector3 chaseWaypoint))
+                if (TryGetGroundChaseWaypoint(lineBlocked, out Vector3 chaseWaypoint))
                 {
                     // Local steering alone cannot get around a machine or a
                     // wall between the fighter and the target. Follow the
@@ -996,6 +1019,10 @@ public partial class EnemyFighter : MonoBehaviour
     private const float GroundChaseRouteRebuildInterval = 0.75f;
     private const float GroundChaseRouteHoldTime = 1.5f;
     private const float GroundChaseRouteFailedRetry = 2f;
+    private const float ChaseLineCheckInterval = 0.2f;
+    private const float ChaseLineCheckMaxDistance = 8f;
+    private float chaseLineCheckAt;
+    private bool chaseLineBlocked;
 
     // Returns the next route waypoint while the direct chase line is blocked
     // (and for a short hold afterwards, so the fighter finishes the detour

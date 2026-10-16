@@ -26,6 +26,8 @@ public static class GymChaosHomelessVerifier
     private const string RequestedKey = "GymChaos.HomelessVerificationRequested";
     private const float TimeScale = 2.5f;
     private const float PenetrationLimit = 0.06f;
+    private const float ClearanceLimit = 0.04f;
+    private const float HoverLimit = 0.06f;
     private const float SeatTolerance = 0.06f;
 
     private enum Stage
@@ -39,6 +41,8 @@ public static class GymChaosHomelessVerifier
         WaitStandFromBench,
         WalkingHome,
         LyingDown,
+        TalkWalk,
+        TalkSit,
         Done
     }
 
@@ -62,6 +66,27 @@ public static class GymChaosHomelessVerifier
     private static float sleepBagGap;
     private static float walkLeanSum;
     private static int walkLeanSamples;
+    // Talking to him: mid-walk he stops in an idle, on the bench he keeps
+    // sitting; his day waits for the conversation to end.
+    private static bool walkTalkDone;
+    private static bool sitTalkDone;
+    private static Vector3 talkStartPosition;
+    private static GymHomelessAgent.HomelessState talkStartState;
+    private static string talkClips = "";
+    // Tent clearance while crawling in/out: body sunk into the bedding,
+    // floor or doormat, poking out through the canvas walls, or inside a
+    // pole or prop.
+    private static float maxSink;
+    private static string worstSink = "none";
+    private static float maxWall;
+    private static float maxHover;
+    private static string worstHover = "none";
+    private static string worstWall = "none";
+    private static int propHits;
+    private static string worstProp = "none";
+    private static Collider[] supportColliders;
+    private static Collider[] solidColliders;
+    private static readonly Dictionary<string, int> hitsByPart = new Dictionary<string, int>();
 
     static GymChaosHomelessVerifier()
     {
@@ -99,6 +124,20 @@ public static class GymChaosHomelessVerifier
             stage = Stage.WaitReady;
             stageStarted = startedAt;
             maxPenetration = 0f;
+            walkTalkDone = false;
+            sitTalkDone = false;
+            talkClips = "";
+            maxSink = 0f;
+            worstSink = "none";
+            maxWall = 0f;
+            maxHover = 0f;
+            worstHover = "none";
+            worstWall = "none";
+            propHits = 0;
+            worstProp = "none";
+            supportColliders = null;
+            solidColliders = null;
+            hitsByPart.Clear();
             worstPenetration = "none";
             sleepOutside = 0f;
             seatError = float.NaN;
@@ -146,6 +185,9 @@ public static class GymChaosHomelessVerifier
                 case Stage.Sleeping:
                     time.SetTimeForVerification(0.95f);
                     if (now - stageStarted < 1.5d) return;
+                    Require(!agent.CanTalk, "talkable while asleep in the tent");
+                    Require(agent.EyeBar != null && agent.EyeBar.GetComponent<Renderer>() != null &&
+                        agent.EyeBar.GetComponent<Renderer>().enabled, "no black bar over his eyes");
                     Require(agent.State == GymHomelessAgent.HomelessState.Sleeping,
                         $"night state {agent.State}");
                     PlayerMovement walker = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
@@ -180,6 +222,8 @@ public static class GymChaosHomelessVerifier
                     break;
                 case Stage.StandingUp:
                     TrackPenetration(agent, "standUp");
+                    TrackClearance(agent, "standUp");
+                    CaptureTentSequence(agent, "02s_up");
                     TrackFacing(agent);
                     if (agent.CurrentClipName == "stand_up" && agent.CurrentClipNormalized > 0.45f)
                         Capture("02_crawling_out", agent, false);
@@ -191,6 +235,14 @@ public static class GymChaosHomelessVerifier
                     else if (now - stageStarted > 30d) throw new TimeoutException("stand_up never ended");
                     break;
                 case Stage.WaitSitting:
+                    if (!walkTalkDone && walkLeanSamples > 15 &&
+                        agent.State == GymHomelessAgent.HomelessState.WalkingToBench &&
+                        agent.CurrentClipName == "walking" && agent.TargetWeight > 0.99f)
+                    {
+                        StartTalk(agent);
+                        Next(Stage.TalkWalk, now);
+                        return;
+                    }
                     if (agent.State == GymHomelessAgent.HomelessState.WalkingToBench &&
                         agent.CurrentClipName == "walking" && agent.TargetWeight > 0.99f)
                     {
@@ -224,7 +276,50 @@ public static class GymChaosHomelessVerifier
                     Require(Mathf.Abs(seatError) <= SeatTolerance,
                         $"seat contact error {seatError:F3} m");
                     Capture("05_sitting_on_bench", agent, false);
+                    if (!sitTalkDone)
+                    {
+                        StartTalk(agent);
+                        // Past his leaving time: he must still stay seated.
+                        time.SetTimeForVerification(agent.LeaveBench01 + 0.01f);
+                        Next(Stage.TalkSit, now);
+                        return;
+                    }
                     time.SetTimeForVerification(agent.LeaveBench01 - 0.004f);
+                    Next(Stage.WaitStandFromBench, now);
+                    break;
+                case Stage.TalkWalk:
+                    Require(agent.IsTalking && GymDialogueDirector.IsDialogueActive, "walking talk ended early");
+                    Require(agent.CurrentClipName.StartsWith("idle", StringComparison.Ordinal),
+                        $"mid-walk talk plays {agent.CurrentClipName}, not an idle");
+                    Require(agent.State == talkStartState, $"cycle moved on during talk ({agent.State})");
+                    Require(Vector3.Distance(agent.transform.position, talkStartPosition) < 0.08f,
+                        "he kept walking during the talk");
+                    if (now - stageStarted < 2.5d) return;
+                    talkClips += $"walk:{agent.CurrentClipName}/{agent.TargetWeight:F2} ";
+                    Capture("11_talk_mid_walk", agent, false);
+                    EndTalk(agent);
+                    Require(!agent.IsTalking, "talk did not end");
+                    Require(agent.CurrentClipName == "walking", $"did not walk on after the talk ({agent.CurrentClipName})");
+                    walkTalkDone = true;
+                    Next(Stage.WaitSitting, now);
+                    break;
+                case Stage.TalkSit:
+                    Require(agent.IsTalking && GymDialogueDirector.IsDialogueActive, "bench talk ended early");
+                    Require(agent.State == GymHomelessAgent.HomelessState.Sitting,
+                        $"left the bench during the talk ({agent.State})");
+                    Require(agent.CurrentClipName == "sitting", $"bench talk plays {agent.CurrentClipName}");
+                    if (now - stageStarted < 2.5d) return;
+                    talkClips += $"sit:{agent.CurrentClipName} ";
+                    Capture("12_talk_on_bench", agent, false);
+                    {
+                        Vector3 bar = agent.EyeBar.transform.position;
+                        Vector3 face = Vector3.ProjectOnPlane(agent.EyeBar.transform.forward, Vector3.up).normalized;
+                        CaptureView("13_eye_bar", bar + face * 1.1f + Vector3.up * 0.1f, bar);
+                    }
+                    EndTalk(agent);
+                    Require(!agent.IsTalking, "bench talk did not end");
+                    sitTalkDone = true;
+                    // His leaving time has passed: he gets up now.
                     Next(Stage.WaitStandFromBench, now);
                     break;
                 case Stage.WaitStandFromBench:
@@ -244,6 +339,8 @@ public static class GymChaosHomelessVerifier
                     break;
                 case Stage.LyingDown:
                     TrackPenetration(agent, "lieDown");
+                    TrackClearance(agent, "lieDown");
+                    CaptureTentSequence(agent, "06s_down");
                     TrackFacing(agent);
                     if (agent.CurrentClipName == "stand_up" && agent.CurrentClipNormalized < 0.5f)
                         Capture("06_crawling_in", agent, false);
@@ -262,6 +359,30 @@ public static class GymChaosHomelessVerifier
                 $" stage={stage} notes={string.Join(" ", notes)}");
             End(1);
         }
+    }
+
+    private static void StartTalk(GymHomelessAgent agent)
+    {
+        PlayerMovement player = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
+        Require(player != null, "no player");
+        Vector3 spot = agent.transform.position + agent.transform.forward * 1.8f;
+        spot.y = player.transform.position.y;
+        CharacterController controller = player.GetComponent<CharacterController>();
+        if (controller != null) controller.enabled = false;
+        player.transform.position = spot;
+        if (controller != null) controller.enabled = true;
+        Physics.SyncTransforms();
+        player.LookAtForVerification(agent.HeadBone.position);
+        talkStartPosition = agent.transform.position;
+        talkStartState = agent.State;
+        Require(GymDialogueDirector.TryStartNearby(player, true), $"could not start talking to him ({agent.State})");
+        Require(GymDialogueDirector.Active.HomelessTarget == agent && agent.IsTalking, "talk did not open");
+    }
+
+    private static void EndTalk(GymHomelessAgent agent)
+    {
+        PlayerMovement player = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
+        GymDialogueDirector.TickActiveInput(player, false, true);
     }
 
     private static void Next(Stage next, double now)
@@ -284,10 +405,23 @@ public static class GymChaosHomelessVerifier
         }
         string history = string.Join(">", agent.StateHistory);
         Require(match == expected.Length, $"cycle order {history}");
+        Require(walkTalkDone && sitTalkDone, $"talk checks missing walk={walkTalkDone} sit={sitTalkDone}");
+        notes.Add($"talk={talkClips}");
+        foreach (KeyValuePair<string, int> pair in hitsByPart) notes.Add($"[{pair.Key}={pair.Value}]");
+        notes.Add($"bedRoot={agent.BedRoot - GymParkAccess.TentCenter:F2} doorRoot={agent.DoorRoot - GymParkAccess.TentCenter:F2}");
+        notes.Add($"sink={maxSink:F3}@{worstSink} wall={maxWall:F3}@{worstWall} propHits={propHits}@{worstProp} " +
+            $"hover={maxHover:F3}@{worstHover}");
         Require(maxPenetration <= PenetrationLimit,
             $"tent canvas penetration {maxPenetration:F3} m at {worstPenetration}");
         // Lying down and getting up he looks into the tent (no turn on the bag).
         Require(worstFacing < -0.97f, $"not facing the tent while lying down/getting up ({worstFacing:F2})");
+        // Crawling in and out (outside the in-bag pose) he never passes
+        // through the bedding, props, poles or canvas walls, and rests on
+        // what is under him instead of hovering over it.
+        Require(maxSink <= ClearanceLimit, $"body sinks {maxSink:F3} m into the tent contents at {worstSink}");
+        Require(propHits == 0, $"body passes through tent props/poles ({propHits} samples, last {worstProp})");
+        Require(maxWall <= ClearanceLimit, $"body pokes {maxWall:F3} m through the tent wall at {worstWall}");
+        Require(maxHover <= HoverLimit, $"body hovers {maxHover:F3} m over the tent floor at {worstHover}");
         Require(agent.MaxHipsStep <= 0.2f, $"pose pop: hips jumped {agent.MaxHipsStep:F3} m in one frame");
         Require(bedTime01 > 0.68f && bedTime01 < 0.95f, $"lay down at {bedTime01:F3} (not dusk)");
         float walkLean = walkLeanSamples > 0 ? walkLeanSum / walkLeanSamples : 0f;
@@ -546,6 +680,149 @@ public static class GymChaosHomelessVerifier
                 worstPenetration = $"{phase}:{agent.CurrentClipNormalized:F2} along={along:F2} y={vertices[i].y - GymParkAccess.FloorY:F2}";
             }
         }
+    }
+
+    private static Collider[] PartColliders(params string[] parts)
+    {
+        List<Collider> colliders = new List<Collider>();
+        foreach (string part in parts)
+        {
+            Transform node = Find(GymParkAccess.Tent.transform, part);
+            if (node == null) continue;
+            foreach (MeshFilter filter in node.GetComponentsInChildren<MeshFilter>(true))
+            {
+                MeshCollider collider = filter.GetComponent<MeshCollider>();
+                if (collider == null)
+                {
+                    collider = filter.gameObject.AddComponent<MeshCollider>();
+                    collider.sharedMesh = filter.sharedMesh;
+                }
+                colliders.Add(collider);
+            }
+        }
+        Physics.SyncTransforms();
+        return colliders.ToArray();
+    }
+
+    private static void TrackClearance(GymHomelessAgent agent, string phase)
+    {
+        if (Time.frameCount % 2 != 0) return;
+        if (supportColliders == null)
+        {
+            supportColliders = PartColliders("Tent_Bedding", "Tent_Floor", "Tent_Props");
+            // Props are in the support columns (sink); poles stand free.
+            solidColliders = PartColliders("Tent_Poles");
+        }
+        MeshCollider[] canvas = CanvasColliders();
+        bool backfaces = Physics.queriesHitBackfaces;
+        Physics.queriesHitBackfaces = true;
+        Vector3 door = GymParkAccess.TentDoorDirection;
+        Vector3 centre = GymParkAccess.TentCenter;
+        float floorY = GymParkAccess.FloorY;
+        string at = $"{phase}:{agent.CurrentClipNormalized:F2}";
+        // Asleep (and while easing into/out of that pose) he lies in the
+        // bag under the blanket; the crawl itself must rest on top.
+        bool inBag = agent.SleepWeight > 0.02f;
+        Vector3[] vertices = agent.BakeWorldVertices();
+        float groundTop = GymParkAccess.FloorY + GymOutdoorFoliage.GroundTopOffset;
+        float lowestGap = float.PositiveInfinity;
+        float runtimeGap = float.PositiveInfinity;
+        string lowestAt = "";
+        string runtimeAt = "";
+        for (int i = 0; i < vertices.Length; i += 17)
+        {
+            Vector3 v = vertices[i];
+            // Sinking: the highest support surface in this column is above
+            // the body point.
+            RaycastHit[] down = Physics.RaycastAll(v + Vector3.up * 1.2f, Vector3.down, 1.6f);
+            float top = float.NegativeInfinity;
+            foreach (RaycastHit hit in down)
+            {
+                if (Array.IndexOf(supportColliders, hit.collider) < 0) continue;
+                // Bedding is soft: his weight may press it down by
+                // GymHomelessAgent.BeddingSquash of its height, no further.
+                float surface = hit.collider.name.StartsWith("Tent_Bedding", StringComparison.Ordinal)
+                    ? hit.point.y - Mathf.Max(0f, hit.point.y - groundTop) * GymHomelessAgent.BeddingSquash
+                    : hit.point.y;
+                if (!inBag && surface > v.y + 0.03f)
+                {
+                    string key = "sink:" + hit.collider.name;
+                    hitsByPart[key] = hitsByPart.TryGetValue(key, out int c) ? c + 1 : 1;
+                }
+                top = Mathf.Max(top, surface);
+            }
+            float sink = top - v.y;
+            float gapHere = v.y - Mathf.Max(top, groundTop);
+            if (gapHere < lowestGap)
+            {
+                lowestGap = gapHere;
+                lowestAt = $"v={v - centre:F2} top={Mathf.Max(top, groundTop) - groundTop:F2} field={agent.SupportHeightAt(v) - groundTop:F2} root={agent.transform.position.y - groundTop:F2}";
+            }
+            if (v.y - agent.SupportHeightAt(v) < runtimeGap)
+            {
+                runtimeGap = v.y - agent.SupportHeightAt(v);
+                runtimeAt = $"rv={v - centre:F2} rtop={Mathf.Max(top, groundTop) - groundTop:F2} rfield={agent.SupportHeightAt(v) - groundTop:F2}";
+            }
+            if (!inBag && sink > maxSink)
+            {
+                maxSink = sink;
+                worstSink = $"{at} y={v.y - floorY:F2} surface={top - floorY:F2} along={Vector3.Dot(v - centre, door):F2}";
+            }
+            // Walls: a ray from the tent's centre line at the same height
+            // must reach the body point without crossing the canvas.
+            float along = Mathf.Clamp(Vector3.Dot(v - centre, door), -1.0f, GymParkAccess.TentDoorDepth);
+            Vector3 anchor = new Vector3(centre.x, Mathf.Clamp(v.y, floorY + 0.15f, floorY + 0.9f), centre.z) + door * along;
+            Vector3 toV = v - anchor;
+            float length = toV.magnitude;
+            if (length > 0.02f)
+            {
+                foreach (RaycastHit hit in Physics.RaycastAll(anchor, toV / length, length))
+                {
+                    if (Array.IndexOf(canvas, hit.collider as MeshCollider) < 0) continue;
+                    float wall = length - hit.distance;
+                    if (wall > maxWall)
+                    {
+                        maxWall = wall;
+                        worstWall = $"{at} y={v.y - floorY:F2} along={Vector3.Dot(v - centre, door):F2} side={Vector3.Dot(v - centre, Vector3.Cross(Vector3.up, door)):F2}";
+                    }
+                }
+            }
+            // Poles and props (lamp, bottles, stove...).
+            foreach (Collider hit in Physics.OverlapSphere(v, 0.012f))
+            {
+                if (Array.IndexOf(solidColliders, hit) < 0) continue;
+                propHits++;
+                string key = "in:" + hit.name;
+                hitsByPart[key] = hitsByPart.TryGetValue(key, out int c) ? c + 1 : 1;
+                worstProp = $"{at} {hit.name} y={v.y - floorY:F2}";
+            }
+        }
+        Physics.queriesHitBackfaces = backfaces;
+        // Resting, not hovering: the lowest point touches what is under it.
+        if (!inBag && lowestGap > maxHover)
+        {
+            maxHover = lowestGap;
+            worstHover = $"{at} sleepW={agent.SleepWeight:F2} runtimeGap={runtimeGap:F3} {runtimeAt} {lowestAt}";
+        }
+    }
+
+    // Side cutaway of the tent (canvas hidden) at fixed stages of the
+    // crawl, so the clearance numbers can be checked by eye.
+    private static void CaptureTentSequence(GymHomelessAgent agent, string prefix)
+    {
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null) return;
+        float n = agent.CurrentClipNormalized;
+        int bucket = Mathf.FloorToInt(n * 8f);
+        if (bucket < 0 || bucket > 7) return;
+        string name = $"{prefix}_{bucket}";
+        if (captured.Contains(name)) return;
+        Renderer[] canvasRenderers = Find(GymParkAccess.Tent.transform, "Tent_Canvas").GetComponentsInChildren<Renderer>();
+        foreach (Renderer r in canvasRenderers) r.enabled = false;
+        Vector3 door = GymParkAccess.TentDoorDirection;
+        Vector3 side = Vector3.Cross(Vector3.up, door);
+        Vector3 focus = GymParkAccess.TentCenter + door * 1.0f + Vector3.up * 0.35f;
+        CaptureView(name, focus + side * 3.4f + Vector3.up * 0.5f, focus);
+        foreach (Renderer r in canvasRenderers) r.enabled = true;
     }
 
     // Forward of the body against the door direction: -1 = facing the tent.

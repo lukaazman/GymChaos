@@ -38,6 +38,8 @@ public sealed class GymHomelessAgent : MonoBehaviour
     }
 
     public const string ObjectName = "Homeless Guy";
+    public const string FirstName = "Hank";
+    public const string DisplayName = "homeless " + FirstName;
     // A slight older man, shorter than the gym's bodybuilders; at this
     // height he lies on the bag and crawls in and out of the 1.3x tent
     // without touching the canvas.
@@ -62,10 +64,12 @@ public sealed class GymHomelessAgent : MonoBehaviour
     private const int ClipStandUp = 2;
     private const int ClipSitToStand = 3;
     private const int ClipSitting = 4;
-    private const int ClipCount = 5;
+    private const int ClipIdleFirst = 5;
+    private const int ClipIdleCount = 3;
+    private const int ClipCount = 8;
     private static readonly string[] ClipStems =
-        { "walking", "sleeping", "stand_up", "sit_to_stand", "sitting" };
-    private static readonly bool[] ClipLoops = { true, true, false, false, true };
+        { "walking", "sleeping", "stand_up", "sit_to_stand", "sitting", "idle1", "idle2", "idle3" };
+    private static readonly bool[] ClipLoops = { true, true, false, false, true, true, true, true };
 
     private Transform model;
     private Animator animator;
@@ -73,7 +77,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
     private AnimationMixerPlayable mixer;
     private readonly AnimationClip[] clips = new AnimationClip[ClipCount];
     private readonly float[] clipTimes = new float[ClipCount];
-    private readonly float[] clipSpeeds = { 1f, 1f, 1f, 1f, 1f };
+    private readonly float[] clipSpeeds = { 1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f };
     private readonly float[] weights = new float[ClipCount];
     private int targetClip = -1;
     private float fadeSeconds = 0.3f;
@@ -107,9 +111,39 @@ public sealed class GymHomelessAgent : MonoBehaviour
     private Vector3 benchRoot;
     private Quaternion benchFacing;
     private float seatLift;
-    private float bedLift;
     private float benchToTentSeconds = 20f;
+
+    // Top surface of the tent's bedding, props and groundsheet on a grid.
+    // Asleep he lies in the bag under the blanket; while getting up and
+    // lying down he rests on whatever is under his body (its lowest point
+    // touches it) instead of following a fixed lift curve, so he never
+    // sinks into the bedding or the clutter. The two blend with the
+    // sleeping pose's weight: he eases out of the bag as he wakes and
+    // settles into it as he falls asleep.
+    private const float SupportCell = 0.025f;
+    private const int SupportCells = 240;
+    private const float SupportFallSpeed = 2.5f;
+    // Share of the bedding's height his weight presses down.
+    public const float BeddingSquash = 0.5f;
+    private float[] supportField;
+    private Vector3 supportOrigin;
+    private float supportLift;
+    private Mesh supportBake;
+    private readonly List<Vector3> supportVertices = new List<Vector3>();
     private int benchIndex = -1;
+
+    // Talking to the player. His day stops until the conversation ends:
+    // stopped mid-walk he stands with one of three idles facing the player;
+    // on the bench he simply keeps sitting.
+    private bool talking;
+    private bool talkingFromWalk;
+    private Transform talkPartner;
+
+    public bool IsTalking => talking;
+    // Only while he walks to or from the bench, or sits on it.
+    public bool CanTalk => IsReady && !talking &&
+        (state == HomelessState.Sitting || state == HomelessState.WalkingToBench ||
+         state == HomelessState.WalkingToTent);
 
     public static GymHomelessAgent Instance { get; private set; }
     public HomelessState State => state;
@@ -130,6 +164,8 @@ public sealed class GymHomelessAgent : MonoBehaviour
     public Transform HeadBone => head;
     public SkinnedMeshRenderer Body => bodyRenderer;
     public float TargetWeight => targetClip >= 0 ? weights[targetClip] : 0f;
+    // Blend weight of the in-bag sleeping pose (1 = fully asleep in the bag).
+    public float SleepWeight => weights[ClipSleeping];
     public float CurrentClipNormalized => targetClip >= 0 ? Normalized(targetClip) : 0f;
     public string CurrentClipName => targetClip >= 0 ? ClipStems[targetClip] : "none";
     // Largest per-frame jump of the hips (pose pops), excluding teleports.
@@ -162,6 +198,10 @@ public sealed class GymHomelessAgent : MonoBehaviour
         if (graph.IsValid())
         {
             graph.Destroy();
+        }
+        if (supportBake != null)
+        {
+            Destroy(supportBake);
         }
     }
 
@@ -197,6 +237,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
             Debug.LogError("GYMCHAOS_HOMELESS_FAIL reason=no-bench-route", this);
             yield break;
         }
+        BuildSupportField();
 
         // Start where the clock says he should be.
         float t01 = TimeOfDay01();
@@ -212,7 +253,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
         Debug.Log(
             $"GYMCHAOS_HOMELESS_READY height={MeasuredHeight:F2} walk={walkSpeed:F2} " +
             $"bench={BenchPosition} bed={bedRoot} door={doorRoot} seatLift={seatLift:F3} " +
-            $"bedLift={bedLift:F3} leave01={ComputeLeave01():F3} state={state} clips={DescribeClips()}",
+            $"supportLift={supportLift:F3} leave01={ComputeLeave01():F3} state={state} clips={DescribeClips()}",
             this);
     }
 
@@ -370,6 +411,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
         model.localPosition -= new Vector3(standHips.x, standing.min.y, standHips.z);
         SnapTo(ClipStandUp, clips[ClipStandUp].length);
         MeasuredHeight = BakeLocalBounds().size.y;
+        CreateEyeBar();
 
         SnapTo(ClipSitToStand, 0f);
         seatedHips = Local(hips.position);
@@ -402,6 +444,86 @@ public sealed class GymHomelessAgent : MonoBehaviour
         }
         SnapTo(ClipSleeping, 0f);
     }
+
+    // Black bar over his eyes, like every other character. Measured on his
+    // own standing scan: eye line below the crown, face front and width at
+    // that height. It is parented to the head bone, so it follows every pose.
+    private void CreateEyeBar()
+    {
+        Mesh baked = new Mesh();
+        bodyRenderer.BakeMesh(baked, false);
+        Vector3[] vertices = baked.vertices;
+        Destroy(baked);
+        Matrix4x4 toWorld = Matrix4x4.TRS(
+            bodyRenderer.transform.position, bodyRenderer.transform.rotation, Vector3.one);
+        Vector3 headLocal = Local(head.position);
+        List<Vector3> skull = new List<Vector3>();
+        float crown = float.MinValue;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            Vector3 v = Local(toWorld.MultiplyPoint3x4(vertices[i]));
+            float dx = v.x - headLocal.x;
+            float dz = v.z - headLocal.z;
+            if (v.y > headLocal.y - 0.05f && dx * dx + dz * dz < 0.16f * 0.16f)
+            {
+                skull.Add(v);
+                crown = Mathf.Max(crown, v.y);
+            }
+        }
+        if (skull.Count < 50)
+        {
+            Debug.LogWarning("Homeless guy: head mesh not found; no eye bar.", this);
+            return;
+        }
+        // His cap and wild hair sit well above the skull: the eyes (behind
+        // his round spiral glasses) are 16 cm under the top of the cap.
+        float eyeY = crown - 0.163f * (MeasuredHeight / GameplayHeight);
+        float front = float.MinValue;
+        float back = float.MaxValue;
+        foreach (Vector3 v in skull)
+        {
+            if (Mathf.Abs(v.y - eyeY) < 0.025f && Mathf.Abs(v.x - headLocal.x) < 0.04f)
+            {
+                front = Mathf.Max(front, v.z);
+                back = Mathf.Min(back, v.z);
+            }
+        }
+        if (front <= back)
+        {
+            return;
+        }
+        float centreZ = (front + back) * 0.5f;
+        float halfWidth = 0f;
+        foreach (Vector3 v in skull)
+        {
+            if (Mathf.Abs(v.y - eyeY) < 0.025f && v.z > centreZ + (front - centreZ) * 0.3f)
+            {
+                halfWidth = Mathf.Max(halfWidth, Mathf.Abs(v.x - headLocal.x));
+            }
+        }
+        Vector3 centreWorld = transform.TransformPoint(new Vector3(headLocal.x, eyeY, centreZ));
+        Quaternion faceRotation = Quaternion.Inverse(head.rotation) * transform.rotation;
+        FaceCensorProfile profile = new FaceCensorProfile(
+            head.InverseTransformPoint(centreWorld),
+            faceRotation.eulerAngles,
+            new Vector2(halfWidth * 2.15f, 0.075f),
+            front - centreZ + 0.012f,
+            70f,
+            Color.black);
+        GameObject bar = new GameObject(ObjectName + " Black Eye Bar");
+        EyeBar = bar.AddComponent<FaceCensorSettings>();
+        EyeBar.Configure(profile, head, 9137, true);
+        if (GetComponent<ScreenSpaceCharacterLabel>() == null)
+        {
+            gameObject.AddComponent<ScreenSpaceCharacterLabel>().ConfigureStandalone(
+                bodyRenderer, DisplayName,
+                GameplayHeight * ScreenSpaceCharacterLabel.NameHeightFactor);
+        }
+        Debug.Log($"GYMCHAOS_HOMELESS_EYE_BAR crown={crown:F3} eyeY={eyeY:F3} head={headLocal:F3} " +
+            $"front={front:F3} back={back:F3} halfWidth={halfWidth:F3}", this);
+    }
+
+    public FaceCensorSettings EyeBar { get; private set; }
 
     // Lowest body point under the seated hips (the buttocks), so the seat
     // height can be matched exactly.
@@ -441,10 +563,15 @@ public sealed class GymHomelessAgent : MonoBehaviour
         Vector3 bagCenter = new Vector3(bag.center.x, groundY, bag.center.z);
         bedRoot = bagCenter - doorFacing * new Vector3(lyingCenter.x, 0f, lyingCenter.z);
         sleepRoot = bagCenter - doorFacing * new Vector3(sleepCenter.x, 0f, sleepCenter.z);
-        bedLift = (bed.min.y + BedLift) - (groundY + lyingLowest);
         sleepLift = (bed.min.y + BedLift) - (groundY + sleepLowest);
+        // Through the door opening between the bottles by the back wall and
+        // the side flap of the porch: halfway from the tent's axis to the
+        // bag's line. GymParkAccess keeps the threshold clear of the cans.
         Vector3 tentCenter = GymParkAccess.TentCenter;
-        doorRoot = new Vector3(tentCenter.x, groundY, tentCenter.z) +
+        Vector3 tentFloor = new Vector3(tentCenter.x, groundY, tentCenter.z);
+        Vector3 across = Vector3.Cross(Vector3.up, door);
+        float lane = Vector3.Dot(bedRoot - tentFloor, across) * 0.5f;
+        doorRoot = tentFloor + across * lane +
             door * (GymParkAccess.TentDoorDepth + StandOutsideDoor);
 
         // Nearest open-park bench by walking distance from the door.
@@ -501,6 +628,13 @@ public sealed class GymHomelessAgent : MonoBehaviour
             return;
         }
         float dt = Mathf.Min(Time.deltaTime, 0.1f);
+        if (talking)
+        {
+            UpdateConversation(dt);
+            AdvanceAnimation(dt);
+            TrackHips();
+            return;
+        }
         float t01 = TimeOfDay01();
         switch (state)
         {
@@ -570,6 +704,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
             case HomelessState.TurningAtTent:
                 if (TurnInPlace(doorFacing, dt))
                 {
+                    supportLift = 0f;
                     Enter(HomelessState.LyingDown);
                     clipTimes[ClipStandUp] = clips[ClipStandUp].length;
                     Play(ClipStandUp, 0.3f, -1f);
@@ -584,7 +719,68 @@ public sealed class GymHomelessAgent : MonoBehaviour
                 break;
         }
         AdvanceAnimation(dt);
+        if (state == HomelessState.StandingUp || state == HomelessState.LyingDown ||
+            (state == HomelessState.Sleeping && weights[ClipSleeping] < 0.999f))
+        {
+            RestOnSupport(dt, false);
+        }
         TrackHips();
+    }
+
+    public bool BeginConversation(Transform partner)
+    {
+        if (!CanTalk)
+        {
+            return false;
+        }
+        talking = true;
+        talkPartner = partner;
+        talkingFromWalk = state != HomelessState.Sitting;
+        if (talkingFromWalk)
+        {
+            int idle = ClipIdleFirst + UnityEngine.Random.Range(0, ClipIdleCount);
+            clipTimes[idle] = 0f;
+            Play(idle, 0.35f, 1f);
+        }
+        Debug.Log($"GYMCHAOS_HOMELESS_TALK_BEGIN state={state} clip={ClipStems[targetClip]}", this);
+        return true;
+    }
+
+    public void EndConversation()
+    {
+        if (!talking)
+        {
+            return;
+        }
+        talking = false;
+        talkPartner = null;
+        if (talkingFromWalk)
+        {
+            // Back to his walk, on the same path.
+            Play(ClipWalking, 0.35f, 1f);
+        }
+        Debug.Log($"GYMCHAOS_HOMELESS_TALK_END state={state}", this);
+    }
+
+    private void UpdateConversation(float dt)
+    {
+        if (!talkingFromWalk)
+        {
+            // Seated: stay on the bench, sitting loop keeps playing.
+            PlaceAtBench(0f);
+            return;
+        }
+        transform.position = new Vector3(transform.position.x, groundY, transform.position.z);
+        if (talkPartner != null)
+        {
+            Vector3 toPartner = talkPartner.position - transform.position;
+            toPartner.y = 0f;
+            if (toPartner.sqrMagnitude > 0.01f)
+            {
+                transform.rotation = Quaternion.RotateTowards(transform.rotation,
+                    Quaternion.LookRotation(toPartner, Vector3.up), TurnSpeed * 0.5f * dt);
+            }
+        }
     }
 
     private void Enter(HomelessState next)
@@ -612,8 +808,13 @@ public sealed class GymHomelessAgent : MonoBehaviour
         {
             SnapTo(ClipSleeping, 0f);
             hasLastHips = false;
+            supportLift = sleepLift;
         }
         PlaceAtBed(0f);
+        if (snap)
+        {
+            RestOnSupport(0f, true);
+        }
     }
 
     private void EnterSitting(bool snap)
@@ -635,19 +836,174 @@ public sealed class GymHomelessAgent : MonoBehaviour
     // reverse when he crawls in).
     public static float TentTravel(float t)
     {
-        return Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.08f, 0.62f, t));
+        return Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.14f, 0.62f, t));
+    }
+
+    // The door opening is narrower than the tent and the bag lies off its
+    // axis. He shuffles sideways onto the door's axis while still low on
+    // the bag, before his feet reach the front panel, and only then crawls
+    // straight out (in reverse when he crawls in).
+    public static float TentShift(float t)
+    {
+        return Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.02f, 0.16f, t));
     }
 
     private void PlaceAtBed(float t)
     {
-        Vector3 root = Vector3.Lerp(bedRoot, doorRoot, TentTravel(t));
-        float lift = bedLift * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.05f, 0.35f, t)));
+        Vector3 door = GymParkAccess.TentDoorDirection;
+        Vector3 across = Vector3.Cross(Vector3.up, door);
+        Vector3 travel = doorRoot - bedRoot;
+        Vector3 root = bedRoot +
+            door * (Vector3.Dot(travel, door) * TentTravel(t)) +
+            across * (Vector3.Dot(travel, across) * TentShift(t));
         // The sleeping pose has its own centre on the bag; follow its blend
         // weight so the crossfade to and from it does not slide the body.
         float sleep = weights[ClipSleeping];
         root = Vector3.Lerp(root, sleepRoot, sleep);
-        lift = Mathf.Lerp(lift, sleepLift, sleep);
-        transform.SetPositionAndRotation(root + Vector3.up * lift, doorFacing);
+        transform.SetPositionAndRotation(root + Vector3.up * supportLift, doorFacing);
+    }
+
+    private void BuildSupportField()
+    {
+        supportField = new float[SupportCells * SupportCells];
+        for (int i = 0; i < supportField.Length; i++)
+        {
+            supportField[i] = groundY;
+        }
+        Vector3 centre = GymParkAccess.TentCenter;
+        float half = SupportCells * SupportCell * 0.5f;
+        supportOrigin = new Vector3(centre.x - half, 0f, centre.z - half);
+        string[] parts = { "Tent_Bedding", "Tent_Props", "Tent_Floor" };
+        for (int p = 0; p < parts.Length; p++)
+        {
+            Transform node = GymParkAccess.FindChild(GymParkAccess.Tent.transform, parts[p]);
+            if (node == null)
+            {
+                continue;
+            }
+            // Bag, blanket, mat and clothes give under his weight; the
+            // props (cardboard, cans, bottles, backpack) do not.
+            float squash = parts[p] == "Tent_Bedding" ? BeddingSquash : 0f;
+            foreach (MeshFilter filter in node.GetComponentsInChildren<MeshFilter>(true))
+            {
+                Mesh mesh = filter.sharedMesh;
+                if (mesh == null)
+                {
+                    continue;
+                }
+                if (!mesh.isReadable)
+                {
+                    Debug.LogWarning($"Homeless guy: tent mesh {filter.name} is not readable; he cannot rest on it.", this);
+                    continue;
+                }
+                StampMesh(mesh, filter.transform.localToWorldMatrix, squash);
+            }
+        }
+    }
+
+    private void StampMesh(Mesh mesh, Matrix4x4 toWorld, float squash)
+    {
+        Vector3[] vertices = mesh.vertices;
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            vertices[i] = toWorld.MultiplyPoint3x4(vertices[i]);
+        }
+        int[] triangles = mesh.triangles;
+        for (int t = 0; t + 2 < triangles.Length; t += 3)
+        {
+            Vector3 a = vertices[triangles[t]];
+            Vector3 b = vertices[triangles[t + 1]];
+            Vector3 c = vertices[triangles[t + 2]];
+            float edge = Mathf.Max((b - a).magnitude, Mathf.Max((c - b).magnitude, (a - c).magnitude));
+            int steps = Mathf.Clamp(Mathf.CeilToInt(edge / (SupportCell * 0.7f)), 1, 96);
+            for (int i = 0; i <= steps; i++)
+            {
+                for (int j = 0; j <= steps - i; j++)
+                {
+                    Vector3 point = a + (b - a) * ((float)i / steps) + (c - a) * ((float)j / steps);
+                    int x = Mathf.FloorToInt((point.x - supportOrigin.x) / SupportCell);
+                    int z = Mathf.FloorToInt((point.z - supportOrigin.z) / SupportCell);
+                    if (x < 0 || z < 0 || x >= SupportCells || z >= SupportCells)
+                    {
+                        continue;
+                    }
+                    int index = z * SupportCells + x;
+                    float top = point.y - Mathf.Max(0f, point.y - groundY) * squash;
+                    if (top > supportField[index])
+                    {
+                        supportField[index] = top;
+                    }
+                }
+            }
+        }
+    }
+
+    public float SupportHeightAt(Vector3 point)
+    {
+        if (supportField == null)
+        {
+            return groundY;
+        }
+        // Lowest of the 2x2 cells around the point: a cell that only clips
+        // the side of the bag must not hold a body that is beside the bag.
+        float fx = (point.x - supportOrigin.x) / SupportCell - 0.5f;
+        float fz = (point.z - supportOrigin.z) / SupportCell - 0.5f;
+        int x0 = Mathf.FloorToInt(fx);
+        int z0 = Mathf.FloorToInt(fz);
+        float lowest = float.PositiveInfinity;
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++)
+            {
+                int x = x0 + dx;
+                int z = z0 + dz;
+                float height = x < 0 || z < 0 || x >= SupportCells || z >= SupportCells
+                    ? groundY
+                    : supportField[z * SupportCells + x];
+                lowest = Mathf.Min(lowest, height);
+            }
+        }
+        return lowest;
+    }
+
+    // Moves him up or down so the lowest point of the current pose rests on
+    // the surface under it. He rises at once (never sinks into the bedding;
+    // the sleeping-pose blend already eases him out of the bag) and settles
+    // at a limited speed, so a knee sliding off the bag does not drop him.
+    private void RestOnSupport(float dt, bool snap)
+    {
+        if (supportField == null || bodyRenderer == null)
+        {
+            return;
+        }
+        if (supportBake == null)
+        {
+            supportBake = new Mesh();
+        }
+        bodyRenderer.BakeMesh(supportBake, false);
+        supportBake.GetVertices(supportVertices);
+        Matrix4x4 toWorld = Matrix4x4.TRS(
+            bodyRenderer.transform.position, bodyRenderer.transform.rotation, Vector3.one);
+        float need = float.NegativeInfinity;
+        for (int i = 0; i < supportVertices.Count; i += 5)
+        {
+            Vector3 v = toWorld.MultiplyPoint3x4(supportVertices[i]);
+            float gap = SupportHeightAt(v) - v.y;
+            if (gap > need)
+            {
+                need = gap;
+            }
+        }
+        if (float.IsNegativeInfinity(need))
+        {
+            return;
+        }
+        float target = Mathf.Lerp(supportLift + need, sleepLift, weights[ClipSleeping]);
+        float next = snap
+            ? target
+            : Mathf.Max(target, supportLift - SupportFallSpeed * dt);
+        transform.position += Vector3.up * (next - supportLift);
+        supportLift = next;
     }
 
     // sit_to_stand time 0 = seated, 1 = standing in front of the bench.

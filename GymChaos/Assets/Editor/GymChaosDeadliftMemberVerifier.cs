@@ -33,6 +33,11 @@ public static class GymChaosDeadliftMemberVerifier
     private const float HandGapLimit = 0.02f;
     private const float PlatePenetrationLimit = 0.004f;
     private const float BodyPenetrationLimit = 0.004f;
+    // Share of palm skin more than 6 mm inside the shaft.
+    private const float HandPenetrationLimit = 0.02f;
+    // Fingers hooked round the bar, not straight (degrees between the
+    // proximal and distal phalanx).
+    private const float MinimumFingerCurl = 30f;
     private const float SoleLimit = 0.035f;
     private const float MinimumPauseSeconds = 0.45f;
 
@@ -51,6 +56,13 @@ public static class GymChaosDeadliftMemberVerifier
     private static float worstPlate;
     private static float worstTilt;
     private static float worstBody;
+    private static float worstHand;
+    private static float worstTip;
+    private static float worstCurl = 180f;
+    private static string worstCurlAt = "none";
+    private static int curlSamples;
+    private static int straightSamples;
+    private static string worstHandBone = "none";
     private static int frames;
     private static HashSet<string> captured = new HashSet<string>();
     private static readonly StringBuilder summary = new StringBuilder();
@@ -99,6 +111,9 @@ public static class GymChaosDeadliftMemberVerifier
     {
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
+            // GYMCHAOS_DEADLIFT_NO_HOOK=1 measures the old authored grip.
+            SquatWorkoutController.HookGripDisabledForVerification =
+                System.Environment.GetEnvironmentVariable("GYMCHAOS_DEADLIFT_NO_HOOK") == "1";
             started = EditorApplication.timeSinceStartup;
             phase = 0;
             cancelSubject = null;
@@ -415,6 +430,11 @@ public static class GymChaosDeadliftMemberVerifier
         worstPlate = 0f;
         worstTilt = 0f;
         worstBody = 0f;
+        worstHand = 0f;
+        worstTip = 0f;
+        worstCurl = 180f;
+        curlSamples = 0;
+        straightSamples = 0;
         frames = 0;
         captured = new HashSet<string>();
         phase = 2;
@@ -467,6 +487,15 @@ public static class GymChaosDeadliftMemberVerifier
                     Debug.Log($"GYMCHAOS_DEADLIFT_MEMBER_BODY_WORST enemy={fighter.Identity} depth={body:0.000} " +
                         $"blocker={blocker} segment={segment} phase={controller.DeadliftPhase:0.000} rise={rise:0.000}");
                 worstBody = Mathf.Max(worstBody, body);
+                float hand = controller.MeasureDeadliftHandPenetration(out float tipGap);
+                if (hand > worstHand) worstHandBone = $"{controller.DeadliftHandBlocker}@{controller.DeadliftHandDeepDepth:0.000}";
+                worstHand = Mathf.Max(worstHand, hand);
+                worstTip = Mathf.Max(worstTip, tipGap);
+                if (controller.DeadliftMinFingerCurl < worstCurl)
+                    worstCurlAt = $"{controller.DeadliftStraightestFinger}@{segment}:{controller.DeadliftPhase:0.00}";
+                worstCurl = Mathf.Min(worstCurl, controller.DeadliftMinFingerCurl);
+                curlSamples++;
+                if (controller.DeadliftMinFingerCurl < MinimumFingerCurl) straightSamples++;
             }
         }
 
@@ -517,10 +546,17 @@ public static class GymChaosDeadliftMemberVerifier
         if (worstPlate > PlatePenetrationLimit) failures.Add($"{id}:plates_into_mats {worstPlate:0.000}");
         if (worstTilt > 0.5f) failures.Add($"{id}:bar_tilted {worstTilt:0.0}");
         if (worstBody > BodyPenetrationLimit) failures.Add($"{id}:bar_through_body {worstBody:0.000}");
+        // Overhand hook grip: the shaft rests in the hand, the fingers curl
+        // round it (tips on the shaft), nothing runs through the palm.
+        if (worstHand > HandPenetrationLimit) failures.Add($"{id}:bar_through_hand share={worstHand:0.000} bone={worstHandBone}");
+        float straightShare = curlSamples > 0 ? (float)straightSamples / curlSamples : 0f;
+        if (!controller.UsesRigidFistGrip && straightShare > 0.1f)
+            failures.Add($"{id}:fingers_straight share={straightShare:0.00} min={worstCurl:0} at={worstCurlAt}");
         foreach (string view in new[] { "floor", "pull", "pause", "lower" })
             if (!captured.Contains(view)) failures.Add($"{id}:not_sampled_{view}");
         string line = $"{id} start={controller.DeadliftStartPhase:0.000} rise={maxRise:0.000} pause={longestPause:0.00} " +
             $"grip={worstGrip:0.000} plate={worstPlate:0.000} tilt={worstTilt:0.0} body={worstBody:0.000} " +
+            $"hand={worstHand:0.000} tip={worstTip:0.000} curl={worstCurl:0} " +
             $"step={controller.DeadliftStanceStepBack:0.000} lift={controller.DeadliftGroundLift:0.000}";
         Debug.Log("GYMCHAOS_DEADLIFT_MEMBER_SET " + line);
         summary.Append(line).Append(" | ");

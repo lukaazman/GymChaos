@@ -286,6 +286,7 @@ public static class GymParkAccess
         }
         floorBounds = RendererBounds(floor);
         TentDoorDepth = Mathf.Abs(Vector3.Dot(floorBounds.extents, AbsAxis(TentDoorDirection)));
+        ClearDoorway(props);
 
         // Solid canvas (the door stays open), rocks and props.
         AddMeshCollider(canvas);
@@ -459,7 +460,36 @@ public static class GymParkAccess
         return new Vector3(Mathf.Abs(direction.x), Mathf.Abs(direction.y), Mathf.Abs(direction.z));
     }
 
-    private static Transform FindChild(Transform node, string name)
+    // The authored cans stand on the door threshold, right where the
+    // homeless guy crawls in and out. Slide them sideways off his lane.
+    private const float DoorwayClearHalfWidth = 0.45f;
+
+    private static void ClearDoorway(Transform props)
+    {
+        Vector3 side = Vector3.Cross(Vector3.up, TentDoorDirection);
+        foreach (Renderer part in props.GetComponentsInChildren<Renderer>(true))
+        {
+            Material material = part.sharedMaterial;
+            // Material "can" (runtime copies may append " (Instance)").
+            string materialName = material != null ? material.name.Replace(" (Instance)", string.Empty) : string.Empty;
+            if (!string.Equals(materialName, "can", System.StringComparison.OrdinalIgnoreCase) ||
+                part.GetComponentsInChildren<Renderer>(true).Length != 1)
+            {
+                continue;
+            }
+            Bounds bounds = part.bounds;
+            float centre = Vector3.Dot(bounds.center - TentCenter, side);
+            float halfWidth = Mathf.Abs(Vector3.Dot(bounds.extents, AbsAxis(side)));
+            float nearEdge = Mathf.Abs(centre) - halfWidth;
+            if (nearEdge < DoorwayClearHalfWidth)
+            {
+                float away = centre < 0f ? -1f : 1f;
+                part.transform.position += side * (away * (DoorwayClearHalfWidth - nearEdge));
+            }
+        }
+    }
+
+    internal static Transform FindChild(Transform node, string name)
     {
         if (node == null)
         {

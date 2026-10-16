@@ -13,6 +13,8 @@ public sealed class GymDialogueDirector : MonoBehaviour
     private static GymDialogueDirector instance;
     private PlayerMovement player;
     private EnemyFighter target;
+    // The park's homeless guy is not a fighter; he has his own branch.
+    private GymHomelessAgent homeless;
     private DialogueDefinition definition;
     private GymDialogueCamera dialogueCamera;
     private GymDialogueUI dialogueUi;
@@ -24,7 +26,9 @@ public sealed class GymDialogueDirector : MonoBehaviour
     private int lastStepFrame = -1;
 
     public static GymDialogueDirector Active => instance;
-    public static bool IsDialogueActive => instance != null && instance.target != null;
+    public static bool IsDialogueActive =>
+        instance != null && (instance.target != null || instance.homeless != null);
+    public GymHomelessAgent HomelessTarget => homeless;
     public EnemyFighter Target => target;
     public DialogueNode CurrentNode => definition != null && currentNodeIndex >= 0 &&
         currentNodeIndex < definition.nodes.Count ? definition.nodes[currentNodeIndex] : null;
@@ -57,7 +61,13 @@ public sealed class GymDialogueDirector : MonoBehaviour
         EnemyFighter nearby = instance.FindNearbyTalkTarget(targetPlayer);
         if (nearby == null)
         {
-            return false;
+            GymHomelessAgent resident = instance.FindNearbyHomeless(targetPlayer);
+            if (resident == null)
+            {
+                return false;
+            }
+            instance.OpenHomeless(targetPlayer, resident);
+            return IsDialogueActive;
         }
 
         instance.Open(targetPlayer, nearby);
@@ -72,9 +82,15 @@ public sealed class GymDialogueDirector : MonoBehaviour
             return;
         }
 
-        if (instance.target.IsDead)
+        if (instance.target != null && instance.target.IsDead)
         {
             instance.Close("target-dead");
+            return;
+        }
+
+        if (IsPlayerInFight(targetPlayer))
+        {
+            instance.Close("fight");
             return;
         }
 
@@ -131,9 +147,47 @@ public sealed class GymDialogueDirector : MonoBehaviour
         return FindNearbyTalkTarget(targetPlayer, targetPlayer.transform.position);
     }
 
+    /// <summary>
+    /// True while anyone is fighting the player: an enemy the player angered,
+    /// or police/Ronnie pursuing the player. Nobody chats in the middle of a
+    /// fight, so talk prompts and dialogue are off until it ends.
+    /// </summary>
+    public static bool IsPlayerInFight(PlayerMovement targetPlayer)
+    {
+        if (targetPlayer == null || targetPlayer.IsDead)
+        {
+            return false;
+        }
+
+        var fighters = EnemyFighter.RegisteredFighters;
+        for (int i = 0; i < fighters.Count; i++)
+        {
+            EnemyFighter fighter = fighters[i];
+            if (fighter == null || !fighter.isActiveAndEnabled || fighter.IsDead)
+            {
+                continue;
+            }
+            // Non-police aggression is always aimed at the player.
+            if (fighter.IsAggressive && !fighter.IsPolice)
+            {
+                return true;
+            }
+            if (fighter.IsPolice && fighter.CurrentTarget == targetPlayer.transform)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private EnemyFighter FindNearbyTalkTarget(
         PlayerMovement targetPlayer, Vector3 position)
     {
+        if (IsPlayerInFight(targetPlayer))
+        {
+            return null;
+        }
+
         var fighters = EnemyFighter.RegisteredFighters;
         EnemyFighter closest = null;
         float bestDistance = float.PositiveInfinity;
@@ -263,6 +317,106 @@ public sealed class GymDialogueDirector : MonoBehaviour
         return fighter.transform.position + Vector3.up * DialogueTargetHeight;
     }
 
+    private string SpeakerKey => target != null ? target.Identity.ToString()
+        : homeless != null ? "HomelessGuy" : "none";
+
+    /// <summary>
+    /// The homeless guy when the player may talk to him: in range, in view,
+    /// sitting on his bench or walking (not asleep, not getting up), and not
+    /// during a fight.
+    /// </summary>
+    public GymHomelessAgent FindNearbyHomeless(PlayerMovement targetPlayer)
+    {
+        GymHomelessAgent resident = GymHomelessAgent.Instance;
+        if (targetPlayer == null || resident == null || !resident.CanTalk ||
+            IsPlayerInFight(targetPlayer))
+        {
+            return null;
+        }
+        Vector3 offset = resident.transform.position - targetPlayer.transform.position;
+        offset.y = 0f;
+        if (offset.sqrMagnitude > TalkTargetRange * TalkTargetRange)
+        {
+            return null;
+        }
+        Vector3 origin = targetPlayer.playerCamera != null
+            ? targetPlayer.playerCamera.transform.position
+            : targetPlayer.transform.position + Vector3.up * DialogueTargetHeight;
+        Vector3 toHead = resident.HeadBone.position - origin;
+        float distance = toHead.magnitude;
+        if (distance > 0.001f)
+        {
+            RaycastHit[] hits = Physics.RaycastAll(origin, toHead / distance, distance,
+                ~0, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hits.Length; i++)
+            {
+                Transform hit = hits[i].collider != null ? hits[i].collider.transform : null;
+                if (hit == null || hit.IsChildOf(targetPlayer.transform) ||
+                    hit.IsChildOf(resident.transform))
+                {
+                    continue;
+                }
+                // Something solid (a tree, a wall) between them.
+                if (hits[i].distance < distance - 0.25f)
+                {
+                    return null;
+                }
+            }
+        }
+        return resident;
+    }
+
+    private void OpenHomeless(PlayerMovement targetPlayer, GymHomelessAgent resident)
+    {
+        player = targetPlayer;
+        definition = BuildHomelessDefinition(resident);
+        currentNodeIndex = 0;
+        startedAt = Time.unscaledTime;
+        if (!resident.BeginConversation(player.transform))
+        {
+            definition = null;
+            currentNodeIndex = -1;
+            return;
+        }
+        homeless = resident;
+        if (!dialogueCamera.Begin(player, resident.transform))
+        {
+            resident.EndConversation();
+            homeless = null;
+            definition = null;
+            currentNodeIndex = -1;
+            return;
+        }
+        Debug.Log($"GYMCHAOS_DIALOGUE_OPEN speaker=HomelessGuy state={resident.State}", this);
+    }
+
+    private static DialogueDefinition BuildHomelessDefinition(GymHomelessAgent resident)
+    {
+        string name = GymHomelessAgent.DisplayName;
+        DialogueDefinition result = new DialogueDefinition { id = "HomelessGuy", displayName = name };
+        bool sitting = resident.State == GymHomelessAgent.HomelessState.Sitting;
+        result.nodes.Add(new DialogueNode(name,
+            sitting
+                ? "Bench is taken, kid. Grass is free if you want to sit. What do you need?"
+                : "Easy, I'm walking here. Slow old legs. Something on your mind?")
+            .AddChoice("You need anything?", 1, 3)
+            .AddChoice("What's your story?", 2, 1)
+            .AddChoice("Move along, old man.", 3, -3));
+        result.nodes.Add(new DialogueNode(name,
+            "Hot coffee, dry socks, a quiet night. The gym lights keep me up. Kind of you to ask, though. Most people look straight through me.")
+            .AddChoice("I'll keep an eye out for you.", -1, 2)
+            .AddChoice("Take care.", -1, 0));
+        result.nodes.Add(new DialogueNode(name,
+            "Used to train in there, back before the mirrors and the music. Squatted twice my weight once. Then the knees went, then the job, then the flat. Now I keep the park company.")
+            .AddChoice("That's rough. Hang in there.", -1, 1)
+            .AddChoice("Come back and train sometime.", -1, 2));
+        result.nodes.Add(new DialogueNode(name,
+            "Park's public. Same as your manners, apparently. Go on, then.")
+            .AddChoice("Whatever.", -1, -1)
+            .AddChoice("...Sorry. Long day.", -1, 1));
+        return result;
+    }
+
     private void Open(PlayerMovement targetPlayer, EnemyFighter fighter)
     {
         player = targetPlayer;
@@ -291,11 +445,18 @@ public sealed class GymDialogueDirector : MonoBehaviour
             return;
         }
 
-        EnemyFighter closedTarget = target;
         dialogueCamera.End();
-        closedTarget.SetDialogueLocked(false);
-        Debug.Log($"GYMCHAOS_DIALOGUE_CLOSED speaker={closedTarget.Identity} reason={reason}", this);
+        if (target != null)
+        {
+            target.SetDialogueLocked(false);
+        }
+        if (homeless != null)
+        {
+            homeless.EndConversation();
+        }
+        Debug.Log($"GYMCHAOS_DIALOGUE_CLOSED speaker={SpeakerKey} reason={reason}", this);
         target = null;
+        homeless = null;
         definition = null;
         currentNodeIndex = -1;
     }
@@ -348,15 +509,15 @@ public sealed class GymDialogueDirector : MonoBehaviour
 
         DialogueChoice choice = node.choices[choiceIndex];
         GymExperienceService progression = GymExperienceService.Active;
-        string sourceKey = target.Identity + "-node-" + currentNodeIndex;
+        string sourceKey = SpeakerKey + "-node-" + currentNodeIndex;
         progression?.RegisterDialogueChoice(choice.reputationDelta, sourceKey);
-        if (choice.reputationDelta > 0 &&
+        if (choice.reputationDelta > 0 && target != null &&
             target.GetComponent<GymVisitorAgent>() != null)
         {
             progression?.RegisterVisitorHelp(target.Identity, false);
         }
         Debug.Log(
-            $"GYMCHAOS_DIALOGUE_CHOICE speaker={target.Identity} index={choiceIndex} " +
+            $"GYMCHAOS_DIALOGUE_CHOICE speaker={SpeakerKey} index={choiceIndex} " +
             $"rep={choice.reputationDelta}",
             this);
 
@@ -629,6 +790,10 @@ public sealed class GymDialogueDirector : MonoBehaviour
         if (target != null)
         {
             target.SetDialogueLocked(false);
+        }
+        if (homeless != null)
+        {
+            homeless.EndConversation();
         }
         if (instance == this)
         {

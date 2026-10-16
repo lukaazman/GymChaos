@@ -1040,23 +1040,38 @@ public sealed partial class SquatWorkoutController : MonoBehaviour
         Vector3 handUp = handUpOverride ??
             (torsoUp + GetBarBackDirection() * GripWristBackTilt).normalized;
         float leftSign = Vector3.Dot(leftUpperArm.position - barCenter, axis) < 0f ? -1f : 1f;
+        // Deadlift (hands hanging): every member holds the bar in a real
+        // overhand hook. The shaft sits in the crease where the fingers
+        // leave the palm, on the palm side (towards the body), and the
+        // fingers curl under and around it. Authored hollows only fit rigs
+        // whose clip already curls the fingers; straight-fingered rigs (Jay
+        // Cutler, Arnold) had the bar running through the palm.
+        bool hookGrip = handUpOverride.HasValue && !UsesRigidFistGrip && !HookGripDisabledForVerification;
+        Vector3 leftHollow = hookGrip ? HookHollowLocal(true, handUp) : leftGripHollowLocal;
+        Vector3 rightHollow = hookGrip ? HookHollowLocal(false, handUp) : rightGripHollowLocal;
         SolveHandOnBar(leftUpperArm, leftForearm, leftHand,
             barCenter + axis * (leftSign * gripHalfWidth), axis * leftSign, handUp,
-            leftGripHollowLocal, leftKnuckleAxisLocal, leftHandLengthLocal);
+            leftHollow, leftKnuckleAxisLocal, leftHandLengthLocal);
         SolveHandOnBar(rightUpperArm, rightForearm, rightHand,
             barCenter - axis * (leftSign * gripHalfWidth), -axis * leftSign, handUp,
-            rightGripHollowLocal, rightKnuckleAxisLocal, rightHandLengthLocal);
-        if (wrapFingers)
+            rightHollow, rightKnuckleAxisLocal, rightHandLengthLocal);
+        if (wrapFingers || hookGrip)
         {
-            float wrapRadius = CurrentBarShaftRadius + FingerHalfThickness;
-            WrapFingerAroundBar(leftIndexTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(leftMiddleTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(leftRingTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(leftPinkyTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightIndexTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightMiddleTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightRingTip, barCenter, axis, wrapRadius);
-            WrapFingerAroundBar(rightPinkyTip, barCenter, axis, wrapRadius);
+            float wrapRadius = CurrentBarShaftRadius + (hookGrip ? HookFingerHalfThickness : FingerHalfThickness);
+            WrapFingerAroundBar(leftIndexTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(leftMiddleTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(leftRingTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(leftPinkyTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(rightIndexTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(rightMiddleTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(rightRingTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            WrapFingerAroundBar(rightPinkyTip, barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            if (hookGrip)
+            {
+                // The thumb closes round the shaft from the other side.
+                WrapFingerAroundBar(FindThumbTip(leftHand, ref leftThumbTip), barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+                WrapFingerAroundBar(FindThumbTip(rightHand, ref rightThumbTip), barCenter, axis, wrapRadius, hookGrip ? HookMinFingerFlex : 0f);
+            }
         }
     }
 
@@ -1109,7 +1124,7 @@ public sealed partial class SquatWorkoutController : MonoBehaviour
     public bool UsesRigidFistGrip { get; private set; }
 
     private static void WrapFingerAroundBar(
-        Transform tip, Vector3 barCenter, Vector3 barAxis, float wrapRadius)
+        Transform tip, Vector3 barCenter, Vector3 barAxis, float wrapRadius, float minFlex = 0f)
     {
         if (tip == null || tip.parent == null || tip.parent.parent == null)
         {
@@ -1124,16 +1139,38 @@ public sealed partial class SquatWorkoutController : MonoBehaviour
                 : tip.position + (tip.position - tip.parent.position) * 0.8f;
             float bestAngle = 0f;
             float bestScore = float.PositiveInfinity;
-            for (float angle = -100f; angle <= 100.1f; angle += 2.5f)
+            // Second pass only when nothing fits: let the phalanx touch the
+            // shaft at a slant rather than leave the finger straight.
+            for (int pass = 0; pass < 2 && bestScore > 0.012f; pass++)
             {
-                Vector3 rotated = pivot + Quaternion.AngleAxis(angle, barAxis) * (end - pivot);
-                Vector3 offset = rotated - barCenter;
-                float distance = (offset - barAxis * Vector3.Dot(offset, barAxis)).magnitude;
-                float score = Mathf.Abs(distance - wrapRadius) + Mathf.Abs(angle) * 0.00004f;
-                if (score < bestScore)
+                for (float angle = -100f; angle <= 100.1f; angle += 2.5f)
                 {
-                    bestScore = score;
-                    bestAngle = angle;
+                    Vector3 rotated = pivot + Quaternion.AngleAxis(angle, barAxis) * (end - pivot);
+                    // Hook grip: the middle and last phalanx bend at least
+                    // minFlex from the one before, so no finger runs straight.
+                    if (j > 0 && minFlex > 0f &&
+                        Vector3.Angle(pivot - joint.parent.position, rotated - pivot) < minFlex)
+                    {
+                        continue;
+                    }
+                    // A phalanx lies on the shaft, never across it: reject a
+                    // solution whose middle cuts into the bar.
+                    Vector3 middle = (pivot + rotated) * 0.5f - barCenter;
+                    if (pass == 0 &&
+                        (middle - barAxis * Vector3.Dot(middle, barAxis)).magnitude < wrapRadius * 0.85f)
+                    {
+                        continue;
+                    }
+                    Vector3 offset = rotated - barCenter;
+                    float distance = (offset - barAxis * Vector3.Dot(offset, barAxis)).magnitude;
+                    // Never end inside the shaft.
+                    float score = Mathf.Abs(distance - wrapRadius) + Mathf.Abs(angle) * 0.00004f +
+                        Mathf.Max(0f, wrapRadius - distance) * 4f;
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        bestAngle = angle;
+                    }
                 }
             }
             joint.rotation = Quaternion.AngleAxis(bestAngle, barAxis) * joint.rotation;
@@ -1332,6 +1369,121 @@ public sealed partial class SquatWorkoutController : MonoBehaviour
         knuckleAxisLocal = hand.InverseTransformDirection(across).normalized;
         lengthLocal = hand.InverseTransformDirection(knuckleCentre - hand.position).normalized;
         return across.sqrMagnitude > 1e-6f && lengthLocal.sqrMagnitude > 0.5f;
+    }
+
+    // Hook grip on the heavy members' scanned hands: palm skin in front of
+    // the knuckle joints and the finger's half thickness around its bones.
+    private const float PalmHalfThickness = 0.032f;
+    internal const float HookFingerHalfThickness = 0.02f;
+    private const float HookMinFingerFlex = 40f;
+
+    // Bar position for a hook grip, in hand space: one bar radius plus the
+    // palm's half thickness from the finger roots, on the palm side (the
+    // side facing the lifter), slightly towards the fingers.
+    private Transform leftThumbTip;
+    private Transform rightThumbTip;
+
+    // Deepest "thumb" bone under the hand (Rigify DEF-thumb.03.L / Mixamo
+    // ...HandThumb3), found once.
+    private static Transform FindThumbTip(Transform hand, ref Transform cached)
+    {
+        if (cached != null && cached.IsChildOf(hand))
+        {
+            return cached;
+        }
+        cached = null;
+        if (hand == null)
+        {
+            return null;
+        }
+        int bestDepth = -1;
+        foreach (Transform bone in hand.GetComponentsInChildren<Transform>(true))
+        {
+            if (bone.name.IndexOf("thumb", System.StringComparison.OrdinalIgnoreCase) < 0 ||
+                bone.name.IndexOf("end", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                continue;
+            }
+            int depth = 0;
+            for (Transform t = bone; t != null && t != hand; t = t.parent) depth++;
+            if (depth > bestDepth)
+            {
+                bestDepth = depth;
+                cached = bone;
+            }
+        }
+        return cached;
+    }
+
+    // Verification only: the old authored-hollow grip, for a baseline.
+    internal static bool HookGripDisabledForVerification;
+
+    private EnemyFighter hookPalmOwner;
+    private float leftHookPalmSign;
+    private float rightHookPalmSign;
+
+    private Vector3 HookHollowLocal(bool left, Vector3 handUp)
+    {
+        Transform hand = left ? leftHand : rightHand;
+        Transform[] tips = left
+            ? new[] { leftIndexTip, leftMiddleTip, leftRingTip, leftPinkyTip }
+            : new[] { rightIndexTip, rightMiddleTip, rightRingTip, rightPinkyTip };
+        Vector3 knuckleAxisLocal = left ? leftKnuckleAxisLocal : rightKnuckleAxisLocal;
+        Vector3 lengthLocal = left ? leftHandLengthLocal : rightHandLengthLocal;
+        Vector3 fallback = left ? leftGripHollowLocal : rightGripHollowLocal;
+        if (hand == null || leftUpperArm == null || rightUpperArm == null)
+        {
+            return fallback;
+        }
+        Vector3 roots = Vector3.zero;
+        int count = 0;
+        for (int i = 0; i < tips.Length; i++)
+        {
+            if (tips[i] != null && tips[i].parent != null && tips[i].parent.parent != null)
+            {
+                roots += tips[i].parent.parent.position;
+                count++;
+            }
+        }
+        if (count == 0)
+        {
+            return fallback;
+        }
+        Vector3 axis = GetBarAxis();
+        Vector3 shoulder = left ? leftUpperArm.position : rightUpperArm.position;
+        Vector3 middle = (leftUpperArm.position + rightUpperArm.position) * 0.5f;
+        Vector3 outward = Vector3.Dot(shoulder - middle, axis) < 0f ? -axis : axis;
+        Vector3 rootsLocal = hand.InverseTransformPoint(roots / count);
+        Vector3 palmLocal = Vector3.Cross(lengthLocal, knuckleAxisLocal).normalized;
+        // The palm side is a property of the hand: decide it once (palm
+        // towards the lifter with the arm hanging) so the bar never jumps
+        // to the other side of the hand when the solve direction changes.
+        if (hookPalmOwner != owner)
+        {
+            hookPalmOwner = owner;
+            leftHookPalmSign = 0f;
+            rightHookPalmSign = 0f;
+        }
+        float sign = left ? leftHookPalmSign : rightHookPalmSign;
+        if (sign == 0f)
+        {
+            Quaternion hanging = HandRotationOnBar(outward, Vector3.down, knuckleAxisLocal, lengthLocal);
+            sign = Vector3.Dot(hanging * palmLocal, GetBarBackDirection()) < 0f ? -1f : 1f;
+            if (left) leftHookPalmSign = sign; else rightHookPalmSign = sign;
+        }
+        palmLocal *= sign;
+        float scale = Mathf.Max(0.0001f, hand.lossyScale.x);
+        float offset = (CurrentBarShaftRadius + PalmHalfThickness) / scale;
+        return rootsLocal + palmLocal * offset + lengthLocal * (0.012f / scale);
+    }
+
+    private static Quaternion HandRotationOnBar(
+        Vector3 outward, Vector3 handUp, Vector3 knuckleAxisLocal, Vector3 lengthLocal)
+    {
+        Quaternion localFrame = Quaternion.LookRotation(lengthLocal, knuckleAxisLocal);
+        Quaternion worldFrame = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(handUp, outward), outward);
+        return worldFrame * Quaternion.Inverse(localFrame);
     }
 
     private static void SolveHandOnBar(

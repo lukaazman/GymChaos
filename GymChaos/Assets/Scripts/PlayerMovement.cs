@@ -129,6 +129,8 @@ public class PlayerMovement : MonoBehaviour
     private GymRadio nearbyRadio;
     private PickupItem nearbyPickup;
     private EnemyFighter nearbyTalkTarget;
+    private bool nearbyHomelessTalk;
+    private bool HasTalkTarget => nearbyTalkTarget != null || nearbyHomelessTalk;
     private GymBackRoomInteractable nearbyBackRoomInteractable;
     private float lastDamageTime = float.NegativeInfinity;
     private float nextCombatThreatScanTime;
@@ -579,6 +581,8 @@ public class PlayerMovement : MonoBehaviour
             nearbyTalkTarget = GymDialogueDirector.Active != null
                 ? GymDialogueDirector.Active.FindNearbyTalkTarget(this)
                 : null;
+            nearbyHomelessTalk = nearbyTalkTarget == null && GymDialogueDirector.Active != null &&
+                GymDialogueDirector.Active.FindNearbyHomeless(this) != null;
             nearbyBackRoomInteractable = GymExperienceService.Active != null
                 ? GymExperienceService.Active.FindNearbyInteractable(transform.position, 3.1f)
                 : null;
@@ -2353,7 +2357,7 @@ public class PlayerMovement : MonoBehaviour
     {
         switch (action)
         {
-            case ContextAction.Talk: return "TALK TO MEMBER";
+            case ContextAction.Talk: return nearbyHomelessTalk && nearbyTalkTarget == null ? "TALK" : "TALK TO MEMBER";
             case ContextAction.CallFixer: return "CALL " + GymFixerAgent.DisplayName.ToUpperInvariant();
             case ContextAction.Shop: return "SHOP SUPPLEMENTS";
             case ContextAction.BackRoom:
@@ -2377,12 +2381,12 @@ public class PlayerMovement : MonoBehaviour
         }
 
         ContextAction eAction = ResolveContextAction(ContextKey.E,
-            nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
+            HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null,
             nearbyPickup != null, nearbyRadio != null,
             nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer);
         ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
         ContextAction fAction = ResolveContextAction(ContextKey.F,
-            nearbyTalkTarget != null, nearbyBackRoomInteractable != null, heldItem != null,
+            HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null,
             nearbyPickup != null, radioOnF,
             nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF,
             CanShopNearby);

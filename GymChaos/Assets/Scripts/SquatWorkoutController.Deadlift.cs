@@ -54,6 +54,10 @@ public sealed partial class SquatWorkoutController
     public float DeadliftStanceStepBack { get; private set; }
     public string DeadliftSegment { get; private set; } = string.Empty;
     public Vector3 DeadliftBarTarget { get; private set; }
+    // Where the bar sits in each hand while deadlifting (see HookHollowLocal).
+    private Vector3 DeadliftHollowLeft => UsesRigidFistGrip || HookGripDisabledForVerification ? leftGripHollowLocal : HookHollowLocal(true, Vector3.down);
+    private Vector3 DeadliftHollowRight => UsesRigidFistGrip || HookGripDisabledForVerification ? rightGripHollowLocal : HookHollowLocal(false, Vector3.down);
+
     public float DeadliftLeftGripError { get; private set; } = float.PositiveInfinity;
     public float DeadliftRightGripError { get; private set; } = float.PositiveInfinity;
     public float DeadliftRepSeconds => DeadliftFloorSeconds + PullSeconds + PauseSeconds + LowerSeconds;
@@ -147,8 +151,8 @@ public sealed partial class SquatWorkoutController
 
         Debug.Log(
             $"GYMCHAOS_DEADLIFT_MEMBER_GRIP_CALIBRATED enemy={owner.Identity} " +
-            $"hollowL={Vector3.Distance(leftHand.position, leftHand.TransformPoint(leftGripHollowLocal)):0.000} " +
-            $"hollowR={Vector3.Distance(rightHand.position, rightHand.TransformPoint(rightGripHollowLocal)):0.000} " +
+            $"hollowL={Vector3.Distance(leftHand.position, leftHand.TransformPoint(DeadliftHollowLeft)):0.000} " +
+            $"hollowR={Vector3.Distance(rightHand.position, rightHand.TransformPoint(DeadliftHollowRight)):0.000} " +
             $"clearL={LeftGripClearance:0.000} clearR={RightGripClearance:0.000} wrap={wrapFingers} " +
             $"armL={Vector3.Distance(leftUpperArm.position, leftForearm.position) + Vector3.Distance(leftForearm.position, leftHand.position):0.000} " +
             $"armR={Vector3.Distance(rightUpperArm.position, rightForearm.position) + Vector3.Distance(rightForearm.position, rightHand.position):0.000}",
@@ -299,8 +303,8 @@ public sealed partial class SquatWorkoutController
 
     private Vector3 GetGripMid()
     {
-        return (leftHand.TransformPoint(leftGripHollowLocal) +
-            rightHand.TransformPoint(rightGripHollowLocal)) * 0.5f;
+        return (leftHand.TransformPoint(DeadliftHollowLeft) +
+            rightHand.TransformPoint(DeadliftHollowRight)) * 0.5f;
     }
 
     private void UpdateDeadlift()
@@ -409,8 +413,8 @@ public sealed partial class SquatWorkoutController
         // hand path; then the bar rides where the shorter arm actually
         // reaches (never below its settled pose) and the grip is solved once
         // more. The other hand reached further, so it still makes it.
-        Vector3 leftResidual = leftHand.TransformPoint(leftGripHollowLocal) - bar;
-        Vector3 rightResidual = rightHand.TransformPoint(rightGripHollowLocal) - bar;
+        Vector3 leftResidual = leftHand.TransformPoint(DeadliftHollowLeft) - bar;
+        Vector3 rightResidual = rightHand.TransformPoint(DeadliftHollowRight) - bar;
         leftResidual -= axis * Vector3.Dot(leftResidual, axis);
         rightResidual -= axis * Vector3.Dot(rightResidual, axis);
         bool leftShort = leftResidual.sqrMagnitude >= rightResidual.sqrMagnitude;
@@ -434,8 +438,8 @@ public sealed partial class SquatWorkoutController
             SolveDeadliftGrip(bar);
         }
 
-        DeadliftLeftGripError = DistanceToLine(leftHand.TransformPoint(leftGripHollowLocal), bar, axis);
-        DeadliftRightGripError = DistanceToLine(rightHand.TransformPoint(rightGripHollowLocal), bar, axis);
+        DeadliftLeftGripError = DistanceToLine(leftHand.TransformPoint(DeadliftHollowLeft), bar, axis);
+        DeadliftRightGripError = DistanceToLine(rightHand.TransformPoint(DeadliftHollowRight), bar, axis);
 
         if (!deadliftMetricsLogged && DeadliftSegment == "pause")
         {
@@ -447,7 +451,7 @@ public sealed partial class SquatWorkoutController
                 $"halfWidth={gripHalfWidth:0.000} wrap={wrapFingers} rigidFist={UsesRigidFistGrip} " +
                 $"ownerFwd={owner.transform.forward} facing={station.DeadliftEnemyFacing} pos={owner.transform.position} bar={bar} axis={axis} shL={leftUpperArm.position} shR={rightUpperArm.position} " +
                 $"wristL={leftHand.position} wristR={rightHand.position} " +
-                $"hollowL={leftHand.TransformPoint(leftGripHollowLocal)} hollowR={rightHand.TransformPoint(rightGripHollowLocal)} " +
+                $"hollowL={leftHand.TransformPoint(DeadliftHollowLeft)} hollowR={rightHand.TransformPoint(DeadliftHollowRight)} " +
                 $"scaleL={leftHand.lossyScale} chainL={leftForearm.IsChildOf(leftUpperArm)}/{leftHand.IsChildOf(leftForearm)}",
                 this);
         }
@@ -464,6 +468,99 @@ public sealed partial class SquatWorkoutController
     /// Deepest the bar shaft currently cuts into the lifter's legs or torso
     /// between the hands (0 when it clears them).
     /// </summary>
+    // Hook grip check: how much of the hand skin the shaft cuts into, and how
+    // far the fingertips are from lying on the shaft (curled round it, not
+    // straight). Goku's rigid fist is exempt.
+    public string DeadliftHandBlocker { get; private set; } = "none";
+    public float DeadliftHandDeepDepth { get; private set; }
+    // Smallest proximal-to-distal phalanx angle over the eight fingers.
+    public float DeadliftMinFingerCurl { get; private set; } = 180f;
+    public string DeadliftStraightestFinger { get; private set; } = "none";
+
+    public float MeasureDeadliftHandPenetration(out float fingertipGap)
+    {
+        fingertipGap = 0f;
+        if (!IsDeadliftActive || station.DeadliftBar == null || UsesRigidFistGrip)
+        {
+            return 0f;
+        }
+        Vector3 bar = station.DeadliftBar.position;
+        Vector3 axis = station.DeadliftBarAxis;
+        float shaft = station.DeadliftShaftRadius;
+        float depth = 0f;
+        float minCurl = 180f;
+        int handSamples = 0;
+        int handInside = 0;
+        deadliftClearanceMesh ??= new Mesh { name = "Deadlift body clearance" };
+        foreach (SkinnedMeshRenderer skin in owner.GetComponentsInChildren<SkinnedMeshRenderer>())
+        {
+            if (skin == null || !skin.enabled || skin.sharedMesh == null)
+            {
+                continue;
+            }
+            Vector3[] vertices = GymSkinSampler.BakeWorld(skin, deadliftClearanceMesh);
+            int[] dominant = GymSkinSampler.GetDominantBones(skin.sharedMesh);
+            Transform[] bones = skin.bones;
+            for (int i = 0; i < vertices.Length && i < dominant.Length; i++)
+            {
+                int bone = dominant[i];
+                Transform t = bone >= 0 && bone < bones.Length ? bones[bone] : null;
+                // The palm (hand and metacarpal bones), not the fingers: a
+                // bar through the palm is the visible fault; curled fingers
+                // only graze the shaft inside the closed fist.
+                if (t == null || (t != leftHand && t != rightHand &&
+                    t.name.IndexOf("palm", System.StringComparison.OrdinalIgnoreCase) < 0) ||
+                    (!GymSkinSampler.IsInChain(t, leftHand) && !GymSkinSampler.IsInChain(t, rightHand)))
+                {
+                    continue;
+                }
+                Vector3 offset = vertices[i] - bar;
+                float distance = (offset - axis * Vector3.Dot(offset, axis)).magnitude;
+                handSamples++;
+                if (shaft - distance > 0.006f)
+                {
+                    handInside++;
+                }
+                if (shaft - distance > depth)
+                {
+                    depth = shaft - distance;
+                    DeadliftHandBlocker = t != null ? t.name : "none";
+                }
+            }
+        }
+        Transform[] tips =
+        {
+            leftIndexTip, leftMiddleTip, leftRingTip, leftPinkyTip,
+            rightIndexTip, rightMiddleTip, rightRingTip, rightPinkyTip
+        };
+        for (int i = 0; i < tips.Length; i++)
+        {
+            Transform tip = tips[i];
+            if (tip == null || tip.parent == null)
+            {
+                continue;
+            }
+            Vector3 end = tip.position + (tip.position - tip.parent.position) * 0.8f;
+            Vector3 offset = end - bar;
+            float distance = (offset - axis * Vector3.Dot(offset, axis)).magnitude;
+            fingertipGap = Mathf.Max(fingertipGap, distance - (shaft + HookFingerHalfThickness));
+            if (tip.parent.parent != null)
+            {
+                // Curl: proximal phalanx against the distal one.
+                float curl = Vector3.Angle(tip.parent.position - tip.parent.parent.position, end - tip.position);
+                if (curl < minCurl)
+                {
+                    minCurl = curl;
+                    DeadliftStraightestFinger = tip.name;
+                }
+            }
+        }
+        DeadliftMinFingerCurl = minCurl;
+        DeadliftHandDeepDepth = depth;
+        // Share of the hand skin more than 6 mm inside the shaft.
+        return handSamples > 0 ? (float)handInside / handSamples : 0f;
+    }
+
     public float MeasureDeadliftBodyPenetration(out string blocker)
     {
         blocker = "none";

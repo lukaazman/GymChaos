@@ -1601,9 +1601,14 @@ public partial class EnemyFighter
     }
     private float GetChaseSpeed()
     {
-        return IsGoku() && gokuFlightState != GokuFlightState.Grounded
-            ? maxSpeed * GokuSpeedMultiplier
-            : maxSpeed;
+        if (!IsGoku())
+        {
+            return maxSpeed;
+        }
+
+        return gokuFlightState != GokuFlightState.Grounded
+            ? maxSpeed * GokuFlightSpeedFactor
+            : maxSpeed * GokuRunSpeedFactor;
     }
     private float GetDetectionRange()
     {

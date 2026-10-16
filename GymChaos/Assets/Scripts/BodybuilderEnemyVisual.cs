@@ -1990,22 +1990,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
     {
         FaceCensorProfile markerProfile = importedProfile ?? GetFaceCensorProfile(
             identity, vertices, bounds, rigProfile, visualRoot, head);
-        if (identity == BodybuilderIdentity.Manwithsuit1)
-        {
-            Vector3 profileForwardLocal =
-                Quaternion.Euler(markerProfile.LocalEulerAngles) * Vector3.forward;
-            Vector3 profileDepthWorld = head.TransformDirection(profileForwardLocal)
-                * markerProfile.FaceDepth;
-            markerProfile.LocalPosition += new Vector3(
-                0f, -bodyRenderer.bounds.size.y * 0.025f, 0f) +
-                head.InverseTransformVector(profileDepthWorld);
-            markerProfile.FaceDepth = 0f;
-        }
-
-        GameObject markerAnchor = new GameObject(identity + " Death Eye Marker Anchor");
+        // Neutral NPC wears the same black eye bar as every fighter.
+        GameObject markerAnchor = new GameObject(identity + " Black Eye Bar");
         FaceCensorSettings censor = markerAnchor.AddComponent<FaceCensorSettings>();
         censor.Configure(
-            markerProfile, head, identity.GetHashCode() + 31, false);
+            markerProfile, head, identity.GetHashCode() + 31, true);
 
         EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
         if (fighter != null && fighter.IsDead)

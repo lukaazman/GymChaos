@@ -661,8 +661,8 @@ public partial class EnemyFighter
                 else if (playerTarget != null && currentTarget == playerTarget.transform)
                 {
                     playerTarget.ReceiveEnemyPunch(
-                        EnemyPunchDamage,
-                        IsGoku() ? ConstrainPlayerImpact(impact) : impact,
+                        GetPlayerPunchDamage(),
+                        IsGoku() ? ConstrainPlayerImpact(GetGokuPlayerImpact(direction)) : impact,
                         this);
                 }
             }
@@ -712,6 +712,22 @@ public partial class EnemyFighter
         }
         return false;
     }
+    // Goku hits like a Saiyan: three times the damage of a gym member and a
+    // knockback that throws the player back with a short hop.
+    public const float GokuPunchDamageMultiplier = 3f;
+    public const float GokuKnockbackMultiplier = 1.8f;
+    private const float GokuKnockbackLift = 2.4f;
+
+    internal float GetPlayerPunchDamage()
+    {
+        return IsGoku() ? EnemyPunchDamage * GokuPunchDamageMultiplier : EnemyPunchDamage;
+    }
+
+    internal Vector3 GetGokuPlayerImpact(Vector3 direction)
+    {
+        return direction * (attackImpulse * GokuKnockbackMultiplier) + Vector3.up * GokuKnockbackLift;
+    }
+
     private Vector3 ConstrainPlayerImpact(Vector3 impact)
     {
         CharacterController controller = playerTarget != null

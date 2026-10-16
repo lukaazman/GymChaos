@@ -59,6 +59,12 @@ public static class GymChaosGokuFlightVerifier
     private static float flightRootHigh;
     private static int flightRootSamples;
     private static int attackStartsBefore;
+    private static int auraSamples;
+    private static int auraHidden;
+    private static int auraTrailing;
+    private static int auraFastSamples;
+    private static int auraMisaligned;
+    private static string auraDetails = "none";
 
     static GymChaosGokuFlightVerifier()
     {
@@ -116,6 +122,12 @@ public static class GymChaosGokuFlightVerifier
         flightRootHigh = float.NegativeInfinity;
         flightRootSamples = 0;
         attackStartsBefore = 0;
+        auraSamples = 0;
+        auraHidden = 0;
+        auraTrailing = 0;
+        auraFastSamples = 0;
+        auraMisaligned = 0;
+        auraDetails = "none";
         maxVerticalExtent = 0f;
         tailFirstSamples = 0;
         lastDetails = "none";
@@ -314,6 +326,7 @@ public static class GymChaosGokuFlightVerifier
                 {
                     SampleFlightRoot();
                     Sample();
+                    SampleAura();
                     flyingSamples++;
                     if (flyingSamples >= 60)
                     {
@@ -463,6 +476,22 @@ public static class GymChaosGokuFlightVerifier
                             $"GYMCHAOS_GOKU_GROUNDED_HEIGHT_FAIL stage=punch {details}");
                     }
                     Debug.Log($"GYMCHAOS_GOKU_LANDED_PUNCH_OK {details}");
+                    // Saiyan punch: 3x a member's damage, much stronger knockback.
+                    EnemyFighter member = null;
+                    foreach (EnemyFighter f in UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None))
+                    {
+                        if (f != null && f != goku && !f.IsPolice) { member = f; break; }
+                    }
+                    float gokuDamage = goku.GetPlayerPunchDamage();
+                    float memberDamage = member != null ? member.GetPlayerPunchDamage() : 5f;
+                    Vector3 gokuImpact = goku.GetGokuPlayerImpact(Vector3.forward);
+                    float horizontalPush = new Vector2(gokuImpact.x, gokuImpact.z).magnitude;
+                    string punch = $"damage={gokuDamage:F1} memberDamage={memberDamage:F1} push={horizontalPush:F1} lift={gokuImpact.y:F1}";
+                    if (Mathf.Abs(gokuDamage - memberDamage * 3f) > 0.01f || horizontalPush < 9f * 1.5f || gokuImpact.y < 2f)
+                    {
+                        throw new InvalidOperationException($"GYMCHAOS_GOKU_PUNCH_POWER_FAIL {punch}");
+                    }
+                    Debug.Log($"GYMCHAOS_GOKU_PUNCH_POWER_OK {punch}");
                     SetUpGroundChase();
                     stage = 6;
                     stageStarted = EditorApplication.timeSinceStartup;
@@ -766,7 +795,67 @@ public static class GymChaosGokuFlightVerifier
             throw new InvalidOperationException($"GYMCHAOS_GOKU_FLIGHT_HEIGHT_FAIL {summary}");
         }
         Debug.Log($"GYMCHAOS_GOKU_FLIGHT_HEIGHT_OK {summary}");
+        EvaluateAura();
         stage = 2;
+    }
+
+    // Super Saiyan aura: visible for the whole flight, drawn by the flame
+    // sheets (the old enlarged skinned body copy is gone), and its flames
+    // stream back behind him while he flies fast.
+    private static void SampleAura()
+    {
+        GokuAura aura = goku.GetComponent<GokuAura>();
+        auraSamples++;
+        if (aura == null || !aura.IsShowing || aura.CurrentBlend < 0.99f)
+        {
+            auraHidden++;
+            auraDetails = $"aura={(aura != null)} showing={(aura != null && aura.IsShowing)} " +
+                $"blend={(aura != null ? aura.CurrentBlend : 0f):F2}";
+            return;
+        }
+        Vector3 velocity = aura.SmoothedVelocity;
+        if (velocity.magnitude < 2f)
+        {
+            return;
+        }
+        auraFastSamples++;
+        float trailing = Vector3.Dot(aura.FlameDirection, -velocity.normalized);
+        if (trailing > 0.6f)
+        {
+            auraTrailing++;
+        }
+        Renderer bodyRenderer = FindBodyRenderer();
+        Bounds bodyBounds = bodyRenderer != null ? BakeWorldBounds((SkinnedMeshRenderer)bodyRenderer) : default;
+        // The flame sheath wraps the flying body: its head-feet line lies
+        // along the body's long (horizontal) extent, not upright.
+        Vector3 axis = aura.HeadPoint - aura.FeetPoint;
+        if (axis.magnitude < 1.2f || Mathf.Abs(axis.normalized.y) > 0.6f)
+        {
+            auraMisaligned++;
+        }
+        auraDetails = $"flame={aura.FlameDirection:F2} velocity={velocity:F2} trailing={trailing:F2} " +
+            $"head={aura.HeadPoint:F2} feet={aura.FeetPoint:F2} body={bodyBounds.center:F2}/{bodyBounds.size:F2} " +
+            $"visible={(bodyRenderer != null ? bodyRenderer.name : "none")} bones={aura.BoneNames}";
+    }
+
+    private static void EvaluateAura()
+    {
+        int skinnedCopies = 0;
+        foreach (SkinnedMeshRenderer renderer in goku.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (renderer.name.IndexOf("Aura", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                skinnedCopies++;
+            }
+        }
+        string summary = $"samples={auraSamples} hidden={auraHidden} fast={auraFastSamples} " +
+            $"trailing={auraTrailing} misaligned={auraMisaligned} skinnedCopies={skinnedCopies} last=[{auraDetails}]";
+        if (auraHidden > 0 || skinnedCopies > 0 || auraFastSamples < 10 ||
+            auraTrailing < auraFastSamples * 0.8f || auraMisaligned > auraSamples / 5)
+        {
+            throw new InvalidOperationException($"GYMCHAOS_GOKU_AURA_FAIL {summary}");
+        }
+        Debug.Log($"GYMCHAOS_GOKU_AURA_OK {summary}");
     }
 
     private static void AimPlayerCameraAtGoku()
