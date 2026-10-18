@@ -173,6 +173,12 @@ public sealed class GymStartScreen : MonoBehaviour
                     }
                 },
                 StartGameplay);
+            if (GymSessionService.OpenLoadListOnNextMenu)
+            {
+                // Back from a death: go straight to the save list.
+                GymSessionService.OpenLoadListOnNextMenu = false;
+                sessionMenu.OpenLoadList();
+            }
         }
 
         if (EventSystem.current != null && playButton != null)

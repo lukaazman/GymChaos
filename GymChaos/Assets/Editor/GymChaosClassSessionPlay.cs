@@ -78,8 +78,9 @@ public static class GymChaosClassSessionPlay
             started = EditorApplication.timeSinceStartup;
             resumeAt = started;
             capture = SystemInfo.graphicsDeviceType != UnityEngine.Rendering.GraphicsDeviceType.Null;
-            routine = SessionState.GetString(ScenarioKey, string.Empty) == "classes"
-                ? ClassScenario() : RuntimeScenario();
+            string scenario = SessionState.GetString(ScenarioKey, string.Empty);
+            routine = scenario == "classes" ? ClassScenario()
+                : scenario == "death" ? DeathScenario() : RuntimeScenario();
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
         EditorApplication.update -= Tick;
@@ -739,6 +740,37 @@ public static class GymChaosClassSessionPlay
     }
 
     // ---- G4: per-class appearance, stats and exercise integration ----
+
+    // Player death: YOU DIED, then the reloaded menu opens on the save list;
+    // picking a save respawns the player alive in that character.
+    private static IEnumerator<float> DeathScenario()
+    {
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        foreach (float wait in StartNewCharacter("bodybuilding")) yield return wait;
+        foreach (float wait in SaveNow()) yield return wait;
+        string slotId = GymSessionService.Active.slotId;
+        Player.ReceiveEnemyPunch(100000f, Vector3.zero, null);
+        yield return Step;
+        Require(Player.IsDead, "Lethal damage did not kill the player");
+        Require(!GymStartScreen.IsMenuVisible, "Menu opened before the death screen was shown");
+        foreach (float wait in Until(() => GymStartScreen.IsMenuVisible && Menu != null &&
+            Menu.Current == GymSessionMenu.State.SaveList, 30d, "the save list after death")) yield return wait;
+        Require(!GymSessionService.HasActive, "The dead character is still active at the save list");
+        Require(!GymArenaBootstrap.IsGameplayStarted, "Gameplay runs behind the death save list");
+        Debug.Log($"GYMCHAOS_DEATH_LOAD_LIST_OK saves={Menu.ValidSaveCount}");
+        yield return 0.5f;
+        Menu.SelectSave(slotId);
+        yield return Step;
+        Require(Menu.Current == GymSessionMenu.State.SavePreview, "Selecting the save after death did not preview it");
+        Menu.ConfirmLoad();
+        foreach (float wait in Until(() => GymArenaBootstrap.IsGameplayStarted, 30d, "the respawned session"))
+            yield return wait;
+        yield return 1f;
+        Require(GymSessionService.Active != null && GymSessionService.Active.slotId == slotId,
+            "Respawn did not continue the chosen save");
+        Require(Player != null && !Player.IsDead && Player.CurrentHealth > 0f, "Player is not alive after respawn");
+        Debug.Log($"GYMCHAOS_DEATH_RESPAWN_OK slot={slotId} health={Player.CurrentHealth:F0}");
+    }
 
     private static IEnumerator<float> ClassScenario()
     {

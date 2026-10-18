@@ -943,6 +943,7 @@ public class GymArenaBootstrap : MonoBehaviour
         fighter.Configure(
             BodybuilderIdentity.Manwithsuit1, player, 1f, false,
             passive: true, countAsOpponent: false);
+        fighter.SetFixerHome(body.constraints);
         BodybuilderEnemyVisual.BuildNeutralNpc(npc, BodybuilderIdentity.Manwithsuit1);
 
         ReceptionDeathScreen.Create(npc.transform, fighter, floorY);
@@ -1011,7 +1012,7 @@ public class GymArenaBootstrap : MonoBehaviour
         BodybuilderEnemyVisual.Build(worker, BodybuilderIdentity.Mark);
         EnemyFighter fighter = worker.AddComponent<EnemyFighter>();
         fighter.Configure(
-            BodybuilderIdentity.Mark, player, 18f, false,
+            BodybuilderIdentity.Mark, player, 1f, false,
             passive: true, countAsOpponent: false);
         // Configure establishes the normal grounded fighter constraints.
         // Re-apply the shop anchor afterward so contact impulses cannot move
@@ -1020,6 +1021,7 @@ public class GymArenaBootstrap : MonoBehaviour
         body.constraints |= RigidbodyConstraints.FreezePositionX |
             RigidbodyConstraints.FreezePositionZ |
             RigidbodyConstraints.FreezeRotationY;
+        fighter.SetFixerHome(body.constraints);
         GymLooseItemSpawner.IgnoreDeadliftStationForEnemy(fighter);
 
         Debug.Log(

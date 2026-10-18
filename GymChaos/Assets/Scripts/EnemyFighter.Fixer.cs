@@ -19,6 +19,27 @@ public partial class EnemyFighter
     public bool IsSettledCorpse => isDead && deathPoseFrozen;
     public bool IsReturningToPoliceCar => policeReturnTarget != null;
 
+    private bool fixerHomeSet;
+    private Vector3 fixerHomePosition;
+    private Quaternion fixerHomeRotation;
+    private RigidbodyConstraints fixerHomeConstraints;
+
+    public bool HasFixerHome => fixerHomeSet;
+    public Vector3 FixerHomePosition => fixerHomePosition;
+    public Quaternion FixerHomeRotation => fixerHomeRotation;
+
+    /// <summary>
+    /// Staff with a fixed post (Mark at the counter, the reception suit):
+    /// Larry revives them there with their post's body constraints.
+    /// </summary>
+    public void SetFixerHome(RigidbodyConstraints constraints)
+    {
+        fixerHomeSet = true;
+        fixerHomePosition = transform.position;
+        fixerHomeRotation = transform.rotation;
+        fixerHomeConstraints = constraints;
+    }
+
     public bool ReviveByFixer(Vector3 standPosition, Quaternion facing)
     {
         if (!isDead)
@@ -48,6 +69,10 @@ public partial class EnemyFighter
         // Configure resets health, aggression, targets, roaming and the
         // floor-locked body exactly like a fresh spawn of this person.
         Configure(identity, playerTarget, maxHealth, isPolice, isPassive, countsAsOpponent);
+        if (fixerHomeSet && body != null)
+        {
+            body.constraints |= fixerHomeConstraints;
+        }
         externalBodyAnimator?.SetDowned(false);
         SetAnimatedMovement(false);
         FaceCensorSettings censor = GetComponentInChildren<FaceCensorSettings>(true);

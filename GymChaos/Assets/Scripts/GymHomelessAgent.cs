@@ -153,6 +153,103 @@ public sealed class GymHomelessAgent : MonoBehaviour
         state == HomelessState.SittingDown || state == HomelessState.Sitting ||
         state == HomelessState.StandingFromBench;
     public bool IsReady { get; private set; }
+    public bool IsDead { get; private set; }
+    /// <summary>Hank's corpse while he lies dead (Instance is null then), for Larry.</summary>
+    public static GymHomelessAgent Fallen { get; private set; }
+    public float DiedAt { get; private set; }
+
+    /// <summary>
+    /// Larry's revive: back at his tent or bench as on a fresh start, with
+    /// live eyes.
+    /// </summary>
+    public bool ReviveByFixer()
+    {
+        if (!IsDead)
+        {
+            return false;
+        }
+        Rigidbody body = GetComponent<Rigidbody>();
+        if (body != null)
+        {
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+            body.isKinematic = true;
+            body.useGravity = false;
+        }
+        transform.rotation = Quaternion.Euler(0f, transform.eulerAngles.y, 0f);
+        IsDead = false;
+        if (Fallen == this)
+        {
+            Fallen = null;
+        }
+        Instance = this;
+        EyeBar?.SetDead(false);
+        if (graph.IsValid())
+        {
+            graph.Play();
+        }
+        if (IsBenchTime(TimeOfDay01()))
+        {
+            EnterSitting(true);
+        }
+        else
+        {
+            EnterSleeping(true);
+        }
+        Physics.SyncTransforms();
+        Debug.Log($"GYMCHAOS_FIXER_REVIVED identity=Hank position={transform.position}", this);
+        return true;
+    }
+
+    /// <summary>
+    /// One punch drops Hank, like the reception suit: the pose freezes and
+    /// the body capsule falls over under physics. No event follows; he simply
+    /// leaves the world (talk, dealer and bench lookups see no Instance).
+    /// </summary>
+    public void KnockOut(Vector3 impulse, Vector3 point)
+    {
+        if (IsDead || !IsReady)
+        {
+            return;
+        }
+        IsDead = true;
+        Fallen = this;
+        DiedAt = Time.time;
+        talking = false;
+        if (capsule != null)
+        {
+            capsule.enabled = true;
+        }
+        if (Instance == this)
+        {
+            Instance = null;
+        }
+        if (graph.IsValid())
+        {
+            graph.Stop();
+        }
+        // Same red X eyes over the bar as every other dead character.
+        EyeBar?.SetDead(true);
+        Rigidbody body = GetComponent<Rigidbody>();
+        if (body == null || capsule == null)
+        {
+            return;
+        }
+        // Lift the capsule off the floor so its lower cap starts above the
+        // ground and gravity, not depenetration, drives the topple.
+        transform.position += Vector3.up * 0.04f;
+        body.isKinematic = false;
+        body.useGravity = true;
+        body.mass = 70f;
+        body.linearDamping = 0.6f;
+        body.angularDamping = 1.4f;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        body.AddForceAtPosition(impulse, point, ForceMode.Impulse);
+    }
     public readonly List<string> StateHistory = new List<string>();
     public float MeasuredHeight { get; private set; }
     public Vector3 BenchPosition { get; private set; }
@@ -628,7 +725,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
 
     private void Update()
     {
-        if (!IsReady)
+        if (!IsReady || IsDead)
         {
             return;
         }

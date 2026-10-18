@@ -71,7 +71,7 @@ public partial class EnemyFighter : MonoBehaviour
     [SerializeField] private float moveForce = 26f;
     [SerializeField] private float maxSpeed = 4.8f;
     [SerializeField] private float detectionRange = 7.5f;
-    [SerializeField] private float attackRange = 1.9f;
+    [SerializeField] private float attackRange = 1.55f;
     [SerializeField] private float attackImpulse = 9f;
     [SerializeField] private float attackCooldown = 1.05f;
     [SerializeField] private float lightStunDuration = 0.3f;
@@ -292,6 +292,7 @@ public partial class EnemyFighter : MonoBehaviour
     private readonly Collider[] punchContactHits = new Collider[48];
     private const float EnemyPunchDamage = 5f;
     private const float PunchHandContactRadius = 0.42f;
+    private const float PoliceRangedAttackRange = 5.7f;
     private enum GokuFlightState
     {
         Grounded,

@@ -273,6 +273,19 @@ public sealed class GymSessionService : MonoBehaviour
     }
 
     /// <summary>Drops the session and reloads the scene back to the boot menu.</summary>
+    /// <summary>Set by a player death: the reloaded menu opens straight on the save list.</summary>
+    public static bool OpenLoadListOnNextMenu { get; set; }
+
+    /// <summary>
+    /// After the player dies: reload the scene into the Load Game list so a
+    /// save can be picked to continue from. The dead state is never saved.
+    /// </summary>
+    public static void ReturnToLoadList()
+    {
+        OpenLoadListOnNextMenu = true;
+        ReturnToMenu();
+    }
+
     public static void ReturnToMenu()
     {
         if (returningToMenu) return;

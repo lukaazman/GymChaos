@@ -113,6 +113,8 @@ public sealed class FaceCensorSettings : MonoBehaviour
         return Mathf.Abs(value) > 0.0001f ? 1f / value : 1f;
     }
 
+    public bool HasDeathMarkers => deathMarkers != null;
+
     public void SetDead(bool dead)
     {
         if (!dead)

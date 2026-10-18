@@ -6,7 +6,9 @@ public enum FixerIssueKind
 {
     Panel,
     Item,
-    Corpse
+    Corpse,
+    // Hank is not an EnemyFighter: his corpse is its own kind.
+    Resident
 }
 
 /// <summary>One thing Jolly Dog will repair: a broken pane, a displaced prop or a corpse.</summary>
@@ -17,10 +19,12 @@ public sealed class FixerIssue
     public GlassShatterPanel Panel;
     public PickupItem Item;
     public EnemyFighter Fighter;
+    public GymHomelessAgent Resident;
     public float SinceDay;
 
     public bool Exists => Kind == FixerIssueKind.Panel ? Panel != null
         : Kind == FixerIssueKind.Item ? Item != null
+        : Kind == FixerIssueKind.Resident ? Resident != null
         : Fighter != null;
 
     public Vector3 Position
@@ -33,6 +37,8 @@ public sealed class FixerIssue
                     return Panel != null ? Panel.transform.position : Vector3.zero;
                 case FixerIssueKind.Item:
                     return Item != null ? Item.transform.position : Vector3.zero;
+                case FixerIssueKind.Resident:
+                    return Resident != null ? Resident.transform.position : Vector3.zero;
                 default:
                     return Fighter != null ? Fighter.VisitorPhysicsPosition : Vector3.zero;
             }
@@ -278,6 +284,18 @@ public sealed class GymFixerDirector : MonoBehaviour
     }
 #endif
 
+    /// <summary>Verifier hook: scan and fix every current issue at once, no Larry walk.</summary>
+    internal int FixAllForVerification()
+    {
+        ScanNowForVerification();
+        List<FixerIssue> issues = new List<FixerIssue>(currentIssues);
+        for (int i = 0; i < issues.Count; i++)
+        {
+            ApplyFix(issues[i], null);
+        }
+        return issues.Count;
+    }
+
     public void ScanNowForVerification()
     {
         if (!baselineCaptured)
@@ -326,6 +344,17 @@ public sealed class GymFixerDirector : MonoBehaviour
             }
         }
 
+        GymHomelessAgent fallen = GymHomelessAgent.Fallen;
+        if (fallen != null && fallen.IsDead && !revivingResident)
+        {
+            Rigidbody fallenBody = fallen.GetComponent<Rigidbody>();
+            if (fallenBody == null || fallenBody.IsSleeping() || Time.time - fallen.DiedAt > 3.5f ||
+                fallenBody.linearVelocity.sqrMagnitude < 0.05f)
+            {
+                AddIssue("resident:hank", FixerIssueKind.Resident, now, resident: fallen);
+            }
+        }
+
         // Anything repaired by other means stops counting toward a visit.
         if (issueSince.Count != seenThisScan.Count)
         {
@@ -349,7 +378,8 @@ public sealed class GymFixerDirector : MonoBehaviour
 
     private void AddIssue(
         string key, FixerIssueKind kind, float now,
-        GlassShatterPanel panel = null, PickupItem item = null, EnemyFighter fighter = null)
+        GlassShatterPanel panel = null, PickupItem item = null, EnemyFighter fighter = null,
+        GymHomelessAgent resident = null)
     {
         if (!issueSince.TryGetValue(key, out float since))
         {
@@ -366,6 +396,7 @@ public sealed class GymFixerDirector : MonoBehaviour
             Panel = panel,
             Item = item,
             Fighter = fighter,
+            Resident = resident,
             SinceDay = since
         });
     }
@@ -574,6 +605,8 @@ public sealed class GymFixerDirector : MonoBehaviour
                 return baselines.TryGetValue(issue.Item, out ItemBaseline baseline) &&
                     !issue.Item.IsHeld && !baseline.restoring &&
                     IsAwayFromHome(baseline, 0.05f, 3f);
+            case FixerIssueKind.Resident:
+                return issue.Resident.IsDead;
             default:
                 return issue.Fighter.IsDead;
         }
@@ -596,6 +629,9 @@ public sealed class GymFixerDirector : MonoBehaviour
                 break;
             case FixerIssueKind.Item:
                 StartCoroutine(GlideItemHome(baselines[issue.Item]));
+                break;
+            case FixerIssueKind.Resident:
+                StartCoroutine(ReviveResident(issue.Resident));
                 break;
             default:
                 StartCoroutine(ReviveCorpse(issue.Fighter, fixer));
@@ -677,6 +713,38 @@ public sealed class GymFixerDirector : MonoBehaviour
             $"error={Vector3.Distance(itemTransform.position, baseline.HomePosition):F3}", this);
     }
 
+    private bool revivingResident;
+
+    private IEnumerator ReviveResident(GymHomelessAgent resident)
+    {
+        revivingResident = true;
+        GymFixerMagicEffect.Burst(resident.transform.position + Vector3.up * 0.4f, 0.7f, 60);
+        List<Renderer> hidden = new List<Renderer>();
+        foreach (Renderer renderer in resident.GetComponentsInChildren<Renderer>())
+        {
+            if (renderer.enabled)
+            {
+                renderer.enabled = false;
+                hidden.Add(renderer);
+            }
+        }
+        yield return new WaitForSeconds(0.45f);
+        revivingResident = false;
+        if (resident == null)
+        {
+            yield break;
+        }
+        resident.ReviveByFixer();
+        for (int i = 0; i < hidden.Count; i++)
+        {
+            if (hidden[i] != null)
+            {
+                hidden[i].enabled = true;
+            }
+        }
+        GymFixerMagicEffect.Burst(resident.transform.position + Vector3.up * 1.1f, 0.7f, 60);
+    }
+
     private IEnumerator ReviveCorpse(EnemyFighter fighter, GymFixerAgent fixer)
     {
         Vector3 corpse = fighter.VisitorPhysicsPosition;
@@ -702,6 +770,20 @@ public sealed class GymFixerDirector : MonoBehaviour
         GymVisitorDirector visitors = GymVisitorDirector.Instance;
         bool visitor = visitors != null && visitors.IsScheduledVisitor(fighter);
         Vector3 stand = corpse;
+        if (fighter.HasFixerHome)
+        {
+            // Shop and desk staff go back to their post, not where they fell.
+            fighter.ReviveByFixer(fighter.FixerHomePosition, fighter.FixerHomeRotation);
+            for (int i = 0; i < hidden.Count; i++)
+            {
+                if (hidden[i] != null)
+                {
+                    hidden[i].enabled = true;
+                }
+            }
+            GymFixerMagicEffect.Burst(fighter.FixerHomePosition + Vector3.up * 1.1f, 0.7f, 60);
+            yield break;
+        }
         if (visitor && GymOutdoorBuilder.IsPlayerOutsideGym(corpse) && GymDoorway.Instance != null)
         {
             // Members resume their visit inside, just past the door.

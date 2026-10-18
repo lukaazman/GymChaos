@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -33,23 +33,24 @@ public static class PlayerTopShell
         internal bool MaskLoaded;
     }
 
-    // Loose cloth: smoothed until no muscle or tank-top relief is left, so
-    // it hangs off the chest, shoulders and back like a boxy tee.
+    // Loose cloth: smoothed past the muscle relief but draped over a short
+    // radius, so it follows shoulder and hip width and only hints the build.
     public static readonly Style Oversized = new Style
     {
         Name = ShellObjectName, MaskResource = "Player/Outfits/oversized_shell",
-        SmoothIterations = 12, Lambda = 0.6f, EdgeOverhang = 0.009f,
-        DrapeSmoothing = 260f, DrapeRadius = 0.05f
+        SmoothIterations = 12, Lambda = 0.6f, EdgeOverhang = 0.007f,
+        DrapeSmoothing = 150f, DrapeRadius = 0.034f
     };
     // Compression knit: a few mm off the skin, smoothed just enough to hide
     // the sculpted tank-top neckline and hem ridges in the scan.
     public static readonly Style Onyx = new Style
     {
         Name = OnyxObjectName, MaskResource = "Player/Outfits/onyx_shell",
-        SmoothIterations = 24, Lambda = 0.5f, EdgeOverhang = 0.005f,
-        // Light fairing: removes centimetre ridges (the tank top's sculpted
-        // neckline) and keeps the larger muscle shapes.
-        DrapeSmoothing = 30f
+        SmoothIterations = 36, Lambda = 0.5f, EdgeOverhang = 0.004f,
+        // Fairing strong enough to erase the tank top's sculpted straps,
+        // hem and neckline ridges and the sharp muscle lines, so the top is
+        // one seamless knit; broad chest and shoulder shapes stay.
+        DrapeSmoothing = 75f
     };
 
     public const string ShellObjectName = "Oversized Top Shell";
@@ -195,6 +196,19 @@ public static class PlayerTopShell
         {
             if (materials[0].HasProperty("_BaseMap")) materials[0].SetTexture("_BaseMap", texture);
             if (materials[0].HasProperty("_MainTex")) materials[0].SetTexture("_MainTex", texture);
+        }
+        // Cloth is matte: the body's skin smoothness read as plastic on the
+        // knit and cotton.
+        for (int m = 0; m < materials.Length; m++)
+        {
+            Material material = materials[m];
+            if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", 0.06f);
+            if (material.HasProperty("_Glossiness")) material.SetFloat("_Glossiness", 0.06f);
+            if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", 0f);
+            if (material.HasProperty("_SpecularHighlights")) material.SetFloat("_SpecularHighlights", 0f);
+            if (material.HasProperty("_EnvironmentReflections")) material.SetFloat("_EnvironmentReflections", 0f);
+            material.EnableKeyword("_SPECULARHIGHLIGHTS_OFF");
+            material.EnableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
         }
         if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", null);
         if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", null);
@@ -554,6 +568,12 @@ public static class PlayerTopShell
         {
             SmoothBoundary(pos, delta, boundaryNeighbours, boundary, 0.5f);
             SmoothBoundary(pos, delta, boundaryNeighbours, boundary, -0.53f);
+        }
+        // Taubin keeps the scan's millimetre zig-zag; a few plain passes
+        // iron it into a clean hem line (shrink is under a millimetre).
+        for (int iteration = 0; iteration < 40; iteration++)
+        {
+            SmoothBoundary(pos, delta, boundaryNeighbours, boundary, 0.5f);
         }
         // The scan's zig-zag cut leaves folded slivers just inside the edge:
         // relax the first few rings (edge held) into an even strip.

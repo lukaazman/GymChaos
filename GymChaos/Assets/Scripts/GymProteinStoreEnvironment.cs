@@ -781,17 +781,73 @@ public static class GymProteinStoreEnvironment
                 continue;
             }
 
-            Bounds meshBounds = filter.sharedMesh.bounds;
-            if (meshBounds.size.sqrMagnitude < 0.0001f)
+            // The counter is one L-shaped piece: its bounds box covered the
+            // floor behind it (Mark's side) as an invisible platform at
+            // counter height. Use its exact static mesh instead.
+            if (name.StartsWith("Solid_Counter", StringComparison.Ordinal))
             {
+                MeshCollider exact = filter.gameObject.AddComponent<MeshCollider>();
+                exact.sharedMesh = filter.sharedMesh;
                 continue;
             }
-
-            BoxCollider collider = filter.gameObject.AddComponent<BoxCollider>();
-            collider.center = meshBounds.center;
-            collider.size = meshBounds.size;
-            collider.isTrigger = false;
+            // Other solids: one box per connected part.
+            List<Bounds> parts = MeshPartBounds(filter.sharedMesh);
+            for (int part = 0; part < parts.Count; part++)
+            {
+                Bounds partBounds = parts[part];
+                if (partBounds.size.sqrMagnitude < 0.0001f)
+                {
+                    continue;
+                }
+                BoxCollider collider = filter.gameObject.AddComponent<BoxCollider>();
+                collider.center = partBounds.center;
+                collider.size = partBounds.size;
+                collider.isTrigger = false;
+            }
         }
+    }
+
+    private static List<Bounds> MeshPartBounds(Mesh mesh)
+    {
+        Vector3[] vertices = mesh.vertices;
+        int[] triangles = mesh.triangles;
+        int[] parent = new int[vertices.Length];
+        for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int Find(int i)
+        {
+            while (parent[i] != i) i = parent[i] = parent[parent[i]];
+            return i;
+        }
+        void Union(int a, int b) { parent[Find(a)] = Find(b); }
+        // Weld split vertices (UV/normal seams) by position first.
+        Dictionary<Vector3Int, int> welded = new Dictionary<Vector3Int, int>();
+        for (int i = 0; i < vertices.Length; i++)
+        {
+            Vector3Int key = Vector3Int.RoundToInt(vertices[i] * 1000f);
+            if (welded.TryGetValue(key, out int first)) Union(i, first);
+            else welded[key] = i;
+        }
+        for (int t = 0; t + 2 < triangles.Length; t += 3)
+        {
+            Union(triangles[t], triangles[t + 1]);
+            Union(triangles[t], triangles[t + 2]);
+        }
+        Dictionary<int, Bounds> byRoot = new Dictionary<int, Bounds>();
+        for (int t = 0; t < triangles.Length; t++)
+        {
+            int v = triangles[t];
+            int root = Find(v);
+            if (byRoot.TryGetValue(root, out Bounds bounds))
+            {
+                bounds.Encapsulate(vertices[v]);
+                byRoot[root] = bounds;
+            }
+            else
+            {
+                byRoot[root] = new Bounds(vertices[v], Vector3.zero);
+            }
+        }
+        return new List<Bounds>(byRoot.Values);
     }
 
     public static void RemoveLegacyEntryDecorations()

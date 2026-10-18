@@ -185,6 +185,10 @@ public partial class PlayerMovement : MonoBehaviour
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
     public float SprintEnergy => sprintEnergy;
     public bool IsDead { get; private set; }
+    // Seconds the YOU DIED screen holds before the Load Game list opens.
+    public const float DeathToLoadListSeconds = 3f;
+    private float diedAtUnscaled;
+    private bool deathReturnRequested;
     public bool IsCinematicLocked => cinematicLock;
     public bool CursorCaptured => IsCursorCaptured;
     public Vector3 StandingCameraLocalPosition => cameraBaseLocalPosition;
@@ -497,6 +501,7 @@ public partial class PlayerMovement : MonoBehaviour
     }
     private void Update()
     {
+        TickDeathReturn();
         if (playerCamera == null)
         {
             return;
@@ -839,6 +844,8 @@ public partial class PlayerMovement : MonoBehaviour
         }
 
         IsDead = true;
+        diedAtUnscaled = Time.unscaledTime;
+        deathReturnRequested = false;
         currentHealth = 0f;
         GymBuffs.Clear();
         planarVelocity = Vector3.zero;
@@ -1107,7 +1114,7 @@ public partial class PlayerMovement : MonoBehaviour
         Vector3 aimPoint = origin + playerCamera.transform.forward * punchRange +
                            playerCamera.transform.up * PlayerPunchAimLift;
         Vector3 direction = (aimPoint - origin).normalized;
-        if (!Physics.SphereCast(origin, punchRadius, direction, out RaycastHit hit, punchRange, ~0, QueryTriggerInteraction.Collide))
+        if (!TryResolvePunchHit(origin, ref direction, out RaycastHit hit))
         {
             return;
         }
@@ -1118,6 +1125,14 @@ public partial class PlayerMovement : MonoBehaviour
             : 1f;
         Vector3 impulse = direction * punchForce * strengthForce +
             Vector3.up * (1.2f * strengthForce);
+
+        GymHomelessAgent hank = hit.collider.GetComponentInParent<GymHomelessAgent>();
+        if (hank != null && !hank.IsDead)
+        {
+            GymAudio.Play(GymSoundEffect.PunchFeedback, hit.point, 1f);
+            hank.KnockOut(impulse * 1.6f, hit.point);
+            return;
+        }
 
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
         if (!IsTightEnemySurface(enemy, hit.collider))
@@ -1498,6 +1513,86 @@ public partial class PlayerMovement : MonoBehaviour
     {
         return itemType == WeightType.Plate || itemType == WeightType.Plate5 ||
                itemType == WeightType.Plate10 || itemType == WeightType.Plate20;
+    }
+
+    private readonly RaycastHit[] punchCastHits = new RaycastHit[24];
+    private const float PunchAssistRadius = 0.55f;
+    private const float PunchAssistMaxAngle = 28f;
+
+    // A single SphereCast stopped at the first collider, so loose props,
+    // nametag triggers or the enemy's disabled root capsule swallowed many
+    // punches that visibly connected. Collect every hit along the aim line
+    // instead and take the nearest valid body; when the thin cast misses,
+    // retry with a wider sphere and accept a body only inside a small aim
+    // cone, so punches land without longer arms or retimed animation.
+    private bool TryResolvePunchHit(Vector3 origin, ref Vector3 direction, out RaycastHit best)
+    {
+        if (FindPunchHit(origin, direction, punchRadius, punchRange, false, out best))
+        {
+            return true;
+        }
+        if (FindPunchHit(origin, direction, PunchAssistRadius, punchRange + 0.2f, true, out best))
+        {
+            Vector3 toTarget = best.point - origin;
+            if (toTarget.sqrMagnitude > 0.0001f &&
+                Vector3.Angle(direction, toTarget) <= PunchAssistMaxAngle)
+            {
+                direction = toTarget.normalized;
+                return true;
+            }
+        }
+        // Fall back to the first solid surface so props and glass still react.
+        return Physics.SphereCast(origin, punchRadius, direction, out best, punchRange,
+            ~0, QueryTriggerInteraction.Ignore) && !IsOwnCollider(best.collider);
+    }
+
+    private bool FindPunchHit(Vector3 origin, Vector3 direction, float radius, float range,
+        bool bodiesOnly, out RaycastHit best)
+    {
+        best = default;
+        int count = Physics.SphereCastNonAlloc(origin, radius, direction, punchCastHits, range,
+            ~0, QueryTriggerInteraction.Collide);
+        float bestDistance = float.MaxValue;
+        bool found = false;
+        for (int i = 0; i < count; i++)
+        {
+            RaycastHit candidate = punchCastHits[i];
+            Collider collider = candidate.collider;
+            if (collider == null || IsOwnCollider(collider) || candidate.distance <= 0f)
+            {
+                continue;
+            }
+            bool body = IsPunchBody(collider);
+            if (!body && (bodiesOnly || collider.isTrigger))
+            {
+                continue;
+            }
+            // Bodies win ties against props a few centimetres in front of them.
+            float distance = candidate.distance - (body ? 0.25f : 0f);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = candidate;
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    private static bool IsPunchBody(Collider collider)
+    {
+        GymHomelessAgent hank = collider.GetComponentInParent<GymHomelessAgent>();
+        if (hank != null)
+        {
+            return !hank.IsDead && !collider.isTrigger;
+        }
+        EnemyFighter enemy = collider.GetComponentInParent<EnemyFighter>();
+        return enemy != null && !enemy.IsDead && IsTightEnemySurface(enemy, collider);
+    }
+
+    private bool IsOwnCollider(Collider collider)
+    {
+        return collider.transform == transform || collider.transform.IsChildOf(transform);
     }
 
     private static bool IsTightEnemySurface(EnemyFighter enemy, Collider hitCollider)
@@ -2797,6 +2892,32 @@ public partial class PlayerMovement : MonoBehaviour
         deathStyle.normal.textColor = Color.white;
         GUI.color = Color.white;
         GUI.Label(new Rect(0f, Screen.height * 0.38f, Screen.width, 100f), "YOU DIED", deathStyle);
+
+        if (!GymSessionService.SessionMode || !GymSessionService.HasActive)
+        {
+            return;
+        }
+        GUIStyle hintStyle = new GUIStyle(deathStyle)
+        {
+            fontSize = Mathf.Max(18, Screen.height / 40),
+            fontStyle = FontStyle.Normal
+        };
+        hintStyle.normal.textColor = new Color(1f, 1f, 1f, 0.7f);
+        GUI.Label(new Rect(0f, Screen.height * 0.38f + 96f, Screen.width, 40f),
+            "Choose a save to continue", hintStyle);
+    }
+
+    // From Update, not OnGUI: the menu must open even when no GUI repaint runs.
+    private void TickDeathReturn()
+    {
+        if (!IsDead || deathReturnRequested || !GymSessionService.SessionMode ||
+            !GymSessionService.HasActive ||
+            Time.unscaledTime - diedAtUnscaled < DeathToLoadListSeconds)
+        {
+            return;
+        }
+        deathReturnRequested = true;
+        GymSessionService.ReturnToLoadList();
     }
 
     private void DrawActiveExerciseHud()

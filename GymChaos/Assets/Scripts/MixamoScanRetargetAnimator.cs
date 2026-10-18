@@ -792,13 +792,33 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     {
         leftHand = rig != null ? rig.LeftHand : null;
         rightHand = rig != null ? rig.RightHand : null;
-        if (attackTime < 0f || punchContactSent || punchClip == null ||
-            attackTime / PunchDuration < 0.54f)
+        if (attackTime < 0f || punchContactSent || punchClip == null)
         {
             return false;
         }
-        punchContactSent = true;
+        // Test the hand every frame across the extension instead of on one
+        // sampled frame: a single frame at low frame rate or a target that
+        // stepped a few centimetres missed most visibly connecting punches.
+        float normalized = attackTime / PunchDuration;
+        if (normalized < PunchContactWindowStart)
+        {
+            return false;
+        }
+        if (normalized > PunchContactWindowEnd)
+        {
+            punchContactSent = true;
+            return false;
+        }
         return true;
+    }
+
+    public const float PunchContactWindowStart = 0.42f;
+    public const float PunchContactWindowEnd = 0.74f;
+
+    /// <summary>Ends the contact window after a landed hit (one hit per punch).</summary>
+    public void MarkPunchContactLanded()
+    {
+        punchContactSent = true;
     }
 
     public void SetDowned(bool isDowned)

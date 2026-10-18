@@ -634,6 +634,7 @@ public partial class EnemyFighter
             bool rightHit = IsPunchHandTouchingTarget(rightHand, currentTarget);
             if (leftHit || rightHit)
             {
+                externalBodyAnimator.MarkPunchContactLanded();
                 Vector3 feedbackPosition = currentTarget != null
                     ? currentTarget.position
                     : transform.position;
@@ -908,6 +909,10 @@ public partial class EnemyFighter
         body.useGravity = true;
         body.linearDamping = 0.25f;
         body.angularDamping = 0.18f;
+        // The spin-out is fast; discrete steps let thin limb colliders pass
+        // through the floor slab before contact resolves.
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        corpseBones = null;
         // Keep the broad root capsule disabled. The skeleton-following
         // compound colliders also provide corpse floor contact without
         // replacing the body with a large cylinder.
@@ -933,6 +938,7 @@ public partial class EnemyFighter
         {
             return;
         }
+        KeepCorpseAboveGround();
 
         float elapsed = Time.time - deathStartedTime;
         bool settled = elapsed > 1.1f && body.linearVelocity.sqrMagnitude < 0.12f &&
@@ -946,8 +952,94 @@ public partial class EnemyFighter
         body.angularVelocity = Vector3.zero;
         body.linearDamping = 2.4f;
         body.angularDamping = 2f;
+        KeepCorpseAboveGround();
         body.Sleep();
         deathPoseFrozen = true;
+    }
+
+    private Transform[] corpseBones;
+    private readonly RaycastHit[] corpseGroundHits = new RaycastHit[12];
+    // Skin sits a few centimetres outside the bones; keep that much clearance.
+    private const float CorpseSkinClearance = 0.07f;
+
+    // The downed clip poses the skeleton freely while the compound colliders
+    // only approximate it, so legs or the lower torso could rest below the
+    // floor. Lift the whole body by the deepest bone penetration; the tumble
+    // itself stays physics-driven.
+    private void KeepCorpseAboveGround()
+    {
+        if (body == null)
+        {
+            return;
+        }
+        if (corpseBones == null)
+        {
+            HashSet<Transform> bones = new HashSet<Transform>();
+            SkinnedMeshRenderer[] skins = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            for (int i = 0; i < skins.Length; i++)
+            {
+                Transform[] skinBones = skins[i].bones;
+                for (int b = 0; b < skinBones.Length; b++)
+                {
+                    if (skinBones[b] != null)
+                    {
+                        bones.Add(skinBones[b]);
+                    }
+                }
+            }
+            corpseBones = new Transform[bones.Count];
+            bones.CopyTo(corpseBones);
+        }
+        if (corpseBones.Length == 0)
+        {
+            return;
+        }
+
+        float lowest = float.MaxValue;
+        Vector3 lowestPoint = transform.position;
+        for (int i = 0; i < corpseBones.Length; i++)
+        {
+            Transform bone = corpseBones[i];
+            if (bone != null && bone.position.y < lowest)
+            {
+                lowest = bone.position.y;
+                lowestPoint = bone.position;
+            }
+        }
+
+        // Start just above the lowest bone so a table or bench beside the corpse
+        // is not mistaken for its floor.
+        Vector3 probe = new Vector3(lowestPoint.x, lowest + 0.9f, lowestPoint.z);
+        int count = Physics.RaycastNonAlloc(probe, Vector3.down, corpseGroundHits, 4f,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        float ground = float.MinValue;
+        for (int i = 0; i < count; i++)
+        {
+            Transform hitTransform = corpseGroundHits[i].transform;
+            if (hitTransform == null || hitTransform == transform || hitTransform.IsChildOf(transform) ||
+                corpseGroundHits[i].rigidbody != null)
+            {
+                continue;
+            }
+            ground = Mathf.Max(ground, corpseGroundHits[i].point.y);
+        }
+        if (ground == float.MinValue)
+        {
+            return;
+        }
+
+        float penetration = ground + CorpseSkinClearance - lowest;
+        if (penetration > 0.005f)
+        {
+            body.position += Vector3.up * penetration;
+            transform.position = body.position;
+            Vector3 velocity = body.linearVelocity;
+            if (velocity.y < 0f)
+            {
+                velocity.y = 0f;
+                body.linearVelocity = velocity;
+            }
+        }
     }
     private void ApplyCorpseImpact(Vector3 impulse)
     {
@@ -977,7 +1069,8 @@ public partial class EnemyFighter
     }
     private float GetCurrentAttackRange()
     {
-        return policeRangedMode ? attackRange * 3f : attackRange;
+        // Ranged police keep their original 5.7 m gun range; only melee closed in.
+        return policeRangedMode ? PoliceRangedAttackRange : attackRange;
     }
     private void RestoreGokuGroundPhysicsForDeath()
     {

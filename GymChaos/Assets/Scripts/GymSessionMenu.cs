@@ -106,6 +106,19 @@ public sealed class GymSessionMenu : MonoBehaviour
         Show(State.SessionChoice);
     }
 
+    /// <summary>Opens directly on the save list (after a player death); the
+    /// session choice when no valid save exists.</summary>
+    public void OpenLoadList()
+    {
+        if (state != State.Closed)
+        {
+            return;
+        }
+        RefreshSaves();
+        listPageIndex = 0;
+        Show(saves.Count > 0 ? State.SaveList : State.SessionChoice);
+    }
+
     // ---- actions (buttons and verifiers call the same entry points) ----
 
     public void ChooseNewGame()

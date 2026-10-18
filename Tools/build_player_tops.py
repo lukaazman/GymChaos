@@ -69,13 +69,19 @@ COLLAR_SLOPE = 0.17
 ONYX_HEM = 0.512
 TORSO_HALF_WIDTH = 0.135
 OVERSIZED_SLEEVE_END = 0.285
-ONYX_SLEEVE_END = 0.245
+# Onyx: short cap sleeve that ends below the deltoid, most of the biceps bare.
+ONYX_SLEEVE_END = 0.192
 PAINT_MARGIN = 0.01
 ONYX_MARGIN = 0.006
-ONYX_INFLATE = 0.0035
+ONYX_INFLATE = 0.0045
 ONYX_INFLATE_EDGE = 0.001
 # Mask A: edge distance, 128 = on the edge, +-127 = +-EDGE_RANGE.
 EDGE_RANGE = 0.03
+# Oversized crew neck sits higher and closer to the neck than the base cut.
+OVERSIZED_NECK_RADIUS = 0.064
+OVERSIZED_COLLAR_Z = 0.797
+ONYX_NECK_RADIUS = 0.068
+ONYX_COLLAR_Z = 0.792
 
 
 def rasterize(uv, size):
@@ -248,25 +254,32 @@ def main():
     noise = cv2.GaussianBlur(np.random.default_rng(7).normal(0, 1, lum.shape).astype(np.float32), (0, 0), 1.2)
     weave = 1 + 0.035 * noise / max(noise.std(), 1e-6)
 
-    def edge_field(hem, sleeve_end):
+    def edge_field(hem, sleeve_end, neck_radius=NECK_RADIUS, collar=COLLAR_Z):
         # Signed distance (rest units) to the garment's open edges: hem,
         # sleeve ends and a round crew neck. Paint, shell coverage and the
         # shell's cut line (PlayerTopShell.ClipAtEdges) all come from it,
         # so edges are smooth curves and line up with each other.
         r = np.hypot(x, y - NECK_CENTER_Y)
-        collar_z = COLLAR_Z + (y - NECK_CENTER_Y) * COLLAR_SLOPE
-        neck = np.maximum(r - NECK_RADIUS, collar_z - z)
+        collar_z = collar + (y - NECK_CENTER_Y) * COLLAR_SLOPE
+        # Round the cylinder/plane corner (2 cm) so the collar rolls into
+        # the shoulders as one smooth curve instead of a sharp lip.
+        a, b = r - neck_radius, collar_z - z
+        k = 0.02
+        h = np.clip(0.5 + 0.5 * (b - a) / k, 0, 1)
+        neck = b * h + a * (1 - h) + k * h * (1 - h)
         field = np.minimum(np.minimum(z - hem, sleeve_end - ax), neck)
         return np.where(z > 0.845, -1.0, field)
 
-    over_edge = edge_field(OVERSIZED_HEM, OVERSIZED_SLEEVE_END)
-    onyx_edge = edge_field(ONYX_HEM, ONYX_SLEEVE_END)
+    over_edge = edge_field(OVERSIZED_HEM, OVERSIZED_SLEEVE_END, OVERSIZED_NECK_RADIUS, OVERSIZED_COLLAR_Z)
+    onyx_edge = edge_field(ONYX_HEM, ONYX_SLEEVE_END, ONYX_NECK_RADIUS, ONYX_COLLAR_Z)
     # Shell coverage reaches past the edge so the cut has both sides; paint
     # stops a margin inside it (the shell's edge strip is drawn plain).
     grown = valid & (over_edge > -0.012)
     # The body under a shell keeps the scan's own texture, so the shell's
     # texture can be painted right across its cut edge: no plain edge strip.
-    over = valid & (over_edge >= -0.01)
+    # Paint past the shell's coverage (-0.012) so no shell triangle touches an
+    # unpainted texel: the plain-colour band strip left a ragged light hem.
+    over = valid & (over_edge >= -0.02)
     onyx_grown = valid & (onyx_edge > -0.012)
     onyx = valid & (onyx_edge >= -0.01)
 
@@ -311,11 +324,31 @@ def main():
     # Folds are a function of the rest position, so they run on across the
     # atlas seams: soft vertical drapes on the torso, rings on the sleeves.
     folds = 1 + 0.035 * np.sin(x * 140 + 2.5 * np.sin(z * 31)) + 0.025 * np.sin((x - y) * 90 - z * 17)         + 0.03 * np.where(ax > 0.15, np.sin(ax * 260), 0)
-    drape = folds * (1 + (weave - 1) * 0.35)
+    # Matte cotton jersey: fine vertical knit wales plus a low-frequency
+    # heather mottle; no flat, plastic-looking fill.
+    rng = np.random.default_rng(11)
+    heather = cv2.GaussianBlur(rng.normal(0, 1, lum.shape).astype(np.float32), (0, 0), 3.0)
+    heather /= max(heather.std(), 1e-6)
+    wales = np.sin(x * 2600 + 0.6 * np.sin(z * 900)) * 0.5 + 0.5
+    jersey = 1 + 0.018 * heather + 0.022 * (wales - 0.5) + 0.03 * (weave - 1)
+    # Seams: shoulder line from neck to sleeve head, side seams, set-in
+    # sleeve ring; a faint darker stitch line each.
+    shoulder = polyline_distance(ax, z, [(OVERSIZED_NECK_RADIUS, 0.79), (0.15, 0.765)])
+    side = np.where(np.abs(ny) < 0.18, 0.0, 1.0) + (ax > 0.15)
+    armhole = np.abs(ax - 0.155)
+    seam = np.maximum.reduce([
+        smoothstep(0.0022, 0.0006, shoulder) * (z > 0.74),
+        smoothstep(0.0022, 0.0006, armhole) * (z > 0.62),
+        (side == 0) * (ax > 0.09) * (ax < 0.15) * (z < 0.74) * 0.6,
+    ])
+    folds = 1 + (folds - 1) * 0.7
+    drape = folds * jersey * (1 - 0.1 * seam)
     drape *= 1 - 0.08 * smoothstep(0.56, 0.5, z)
     # Hemmed edges: a slightly darker 8 mm turn-up along every open edge.
     hem_band = over & (over_edge < 0.008)
-    drape = np.where(hem_band, drape * 0.86, drape)
+    # Soft falloff, not a hard 0.86 step: the step traced the mesh's ragged
+    # cut as a darker zig-zag strip.
+    drape = drape * (1 - 0.06 * smoothstep(0.012, 0.0, over_edge) * hem_band)
     # Atlas gutters next to painted texels take the shirt colour too, so
     # mipmaps and bilinear filtering never pull in the old texels (grey
     # specks on light shirts).
@@ -384,8 +417,10 @@ def main():
         Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / f'onyx_{name}.png')
 
     # ---------------------------------------------------------- shell
-    inflate = 0.010 + 0.014 * smoothstep(0.74, 0.52, z)
-    sleeve_inflate = 0.016 + 0.016 * smoothstep(0.15, 0.27, ax)
+    # Relaxed, not balloon: the cloth follows shoulder and hip width and
+    # stands off the waist and sleeves only a little.
+    inflate = 0.007 + 0.006 * smoothstep(0.74, 0.52, z)
+    sleeve_inflate = 0.010 + 0.006 * smoothstep(0.15, 0.27, ax)
     inflate = np.where(ax > 0.12, np.maximum(inflate * (1 - smoothstep(0.12, 0.16, ax)),
                                              sleeve_inflate * smoothstep(0.11, 0.15, ax)), inflate)
     # Keep the collar close to the neck.
