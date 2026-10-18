@@ -656,10 +656,15 @@ public sealed class GymProductInspectView
         model.GetComponentInChildren<MeshFilter>() != null;
     public string ModelId => modelId;
 
-    public GymProductInspectView()
+    public GymProductInspectView() : this(StageOrigin, "Product Inspect Stage")
     {
-        stage = new GameObject("Product Inspect Stage");
-        stage.transform.position = StageOrigin;
+    }
+
+    /// <summary>Each overlay gets its own stage so the models never share a view.</summary>
+    public GymProductInspectView(Vector3 origin, string stageName)
+    {
+        stage = new GameObject(stageName);
+        stage.transform.position = origin;
         stage.layer = PreviewLayer;
         texture = new RenderTexture(1024, 1024, 24, RenderTextureFormat.ARGB32) { name = "Product Inspect RT" };
 

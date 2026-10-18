@@ -399,7 +399,14 @@ public static class GymChaosProteinStoreVerifier
 
     // v2 store: every product category on the shelves, six glass-door
     // fridges, category headers, the storefront letters, the counter and the
-    // six runtime ceiling lights.
+    // runtime ceiling lights.
+    // Coffered ceiling: bulkhead with downlights, T-bar field, aisle light
+    // lines (create_protein_store_v2.py build_ceiling); no counter pendants.
+    private static readonly string[] RequiredCeilingParts =
+    {
+        "Ceiling_Bulkhead", "Ceiling_Downlights", "Ceiling_Grid", "Ceiling_Lights"
+    };
+
     private static bool ValidateStoreModel(Transform root)
     {
         energyDrinkCount = 0;
@@ -409,6 +416,8 @@ public static class GymChaosProteinStoreVerifier
         HashSet<string> signs = new HashSet<string>();
         bool letters = false;
         bool counter = false;
+        HashSet<string> ceilingParts = new HashSet<string>();
+        bool pendants = false;
         Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
         for (int index = 0; index < renderers.Length; index++)
         {
@@ -418,6 +427,9 @@ public static class GymChaosProteinStoreVerifier
             if (name.StartsWith("Fridge_") && name.EndsWith("_Glass") &&
                 IsTransparent(renderer.sharedMaterial)) fridgeGlass++;
             if (name.StartsWith("Products_")) groups.Add(name);
+            foreach (string part in RequiredCeilingParts)
+                if (name.StartsWith(part)) ceilingParts.Add(part);
+            pendants |= name.StartsWith("Ceiling_Pendant");
             if (name.StartsWith("Sign_")) signs.Add(name.ToUpperInvariant());
             letters |= name == "Sign_Letters";
             counter |= name.StartsWith("Solid_Counter");
@@ -438,11 +450,17 @@ public static class GymChaosProteinStoreVerifier
             foreach (string sign in signs) found |= sign.Contains(header);
             if (!found) missing.Add("Sign:" + header);
         }
+        foreach (string part in RequiredCeilingParts)
+            if (!ceilingParts.Contains(part)) missing.Add(part);
+        if (pendants) missing.Add("NoPendants");
+        // Raised building for the coffered ceiling.
+        if (GymProteinStoreEnvironment.StoreBounds.size.y < 5.8f) missing.Add("RaisedShell");
         energyDrinkCount = fridgeGlass;
         bool ok = missing.Count == 0 && fridgeGlass >= 6 && letters && counter &&
             coldDrinkCount >= 100 &&
             GymProteinStoreEnvironment.TransparentFridgePanelCount >= 6 &&
-            GymProteinStoreEnvironment.RuntimeInteriorLightCount == 6;
+            GymProteinStoreEnvironment.RuntimeInteriorLightCount ==
+                GymProteinStoreEnvironment.InteriorLightCount;
         Debug.Log(
             $"GYMCHAOS_PROTEIN_STORE_MODEL_{(ok ? "OK" : "FAIL")} groups={groups.Count} " +
             $"fridgeGlass={fridgeGlass} drinks~{coldDrinkCount} letters={letters} counter={counter} " +

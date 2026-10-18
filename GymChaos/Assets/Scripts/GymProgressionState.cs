@@ -18,6 +18,13 @@ public enum GymShirtColor
     Gold
 }
 
+public enum GymTopStyle
+{
+    TankTop,
+    Oversized,
+    Onyx
+}
+
 public enum GymHeadwear
 {
     None,
@@ -52,6 +59,8 @@ public sealed class GymProgressionState
     public int gymDay = 1;
     public bool lockerPrepCompleted;
     public string shirt = nameof(GymShirtColor.Black);
+    // Garment cut; the shirt colour above tints whichever top is worn.
+    public string top = nameof(GymTopStyle.TankTop);
     public string headwear = nameof(GymHeadwear.None);
 
     public int[] dailyProgress = { 0, 0, 0 };
@@ -69,6 +78,9 @@ public sealed class GymProgressionState
     public int loyaltyStampsToday;
     public int loyaltyRepCounter;
     public int loyaltyVisitDay;
+
+    // Homeless Hank sells his gear once the friendly talk ends in a yes.
+    public bool hankDealerUnlocked;
 
     public void Normalize()
     {
@@ -104,6 +116,10 @@ public sealed class GymProgressionState
         {
             shirt = parsedShirt.ToString();
         }
+
+        top = Enum.TryParse(top, true, out GymTopStyle parsedTop)
+            ? parsedTop.ToString()
+            : nameof(GymTopStyle.TankTop);
 
         if (string.Equals(headwear, "Visor", StringComparison.OrdinalIgnoreCase))
             headwear = nameof(GymHeadwear.BucketHat);

@@ -276,6 +276,7 @@ public class GymArenaBootstrap : MonoBehaviour
         GymAudio.CreateForScene();
         radio = GymRadio.CreateForScene();
         GymExerciseStation.CreateForScene();
+        GymShadowProxy.DisableSmallCasters();
         GymExperienceService.CreateForScene(targetPlayer);
         GymDialogueDirector.CreateForScene(targetPlayer);
 

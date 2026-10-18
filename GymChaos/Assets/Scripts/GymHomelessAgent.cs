@@ -147,6 +147,11 @@ public sealed class GymHomelessAgent : MonoBehaviour
 
     public static GymHomelessAgent Instance { get; private set; }
     public HomelessState State => state;
+    public int BenchIndex => benchIndex;
+    // On (or turning onto, or rising from) his bench: its middle place is his.
+    public bool OccupiesBench => state == HomelessState.TurningAtBench ||
+        state == HomelessState.SittingDown || state == HomelessState.Sitting ||
+        state == HomelessState.StandingFromBench;
     public bool IsReady { get; private set; }
     public readonly List<string> StateHistory = new List<string>();
     public float MeasuredHeight { get; private set; }
@@ -816,6 +821,17 @@ public sealed class GymHomelessAgent : MonoBehaviour
             RestOnSupport(0f, true);
         }
     }
+
+#if UNITY_EDITOR
+    /// <summary>Verifier hook: on his bench now (the clock must say bench time).</summary>
+    internal void SitOnBenchForVerification()
+    {
+        if (IsReady && !talking)
+        {
+            EnterSitting(true);
+        }
+    }
+#endif
 
     private void EnterSitting(bool snap)
     {

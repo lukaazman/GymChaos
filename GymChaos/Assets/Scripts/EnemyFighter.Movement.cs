@@ -377,8 +377,11 @@ public partial class EnemyFighter
         int nodeCount = width * height;
         int goalIndex = nodeCount;
 
-        bool[] navigable = new bool[nodeCount];
-        int navigablePointCount = 0;
+        // Node clearance is a capsule overlap each; a 48 x 48 grid tested up
+        // front cost up to 2304 physics queries per route (frame spikes).
+        // Nodes are tested lazily when the search first touches them, which
+        // gives the same route.
+        sbyte[] navigableState = new sbyte[nodeCount];
         Vector3[] points = new Vector3[nodeCount];
         for (int z = 0; z < height; z++)
         {
@@ -389,20 +392,29 @@ public partial class EnemyFighter
                     Mathf.Min(minX + x * cellSize, maxX),
                     floorBounds.max.y,
                     Mathf.Min(minZ + z * cellSize, maxZ));
-                navigable[index] = IsNavigationPointClear(points[index]);
-                if (navigable[index])
-                {
-                    navigablePointCount++;
-                }
             }
         }
+        bool IsNodeNavigable(int index)
+        {
+            if (navigableState[index] == 0)
+            {
+                navigableState[index] = IsNavigationPointClear(points[index]) ? (sbyte)1 : (sbyte)2;
+            }
+            return navigableState[index] == 1;
+        }
+        int CountNavigable()
+        {
+            int total = 0;
+            for (int i = 0; i < nodeCount; i++) if (IsNodeNavigable(i)) total++;
+            return total;
+        }
 
-        int startIndex = FindClosestNavigableNode(points, navigable, start);
+        int startIndex = FindClosestNavigableNode(points, IsNodeNavigable, start);
         if (startIndex < 0)
         {
             if (identity == BodybuilderIdentity.Goku)
             {
-                Debug.LogWarning($"GYMCHAOS_ROAM_ROUTE_FAILED stage=no_start navigable={navigablePointCount}/{nodeCount} start={start} goal={goal}", this);
+                Debug.LogWarning($"GYMCHAOS_ROAM_ROUTE_FAILED stage=no_start navigable={CountNavigable()}/{nodeCount} start={start} goal={goal}", this);
             }
             return false;
         }
@@ -485,7 +497,7 @@ public partial class EnemyFighter
                 }
 
                 int next = nextZ * width + nextX;
-                if (!navigable[next] || closed[next] ||
+                if (closed[next] || !IsNodeNavigable(next) ||
                     !IsNavigationSegmentClear(currentPoint, points[next], false))
                 {
                     continue;
@@ -523,7 +535,7 @@ public partial class EnemyFighter
             {
                 if (identity == BodybuilderIdentity.Goku && !allowNearGoalRoute)
                 {
-                    Debug.LogWarning($"GYMCHAOS_ROAM_ROUTE_FAILED stage=no_goal navigable={navigablePointCount}/{nodeCount} explored={exploredNodeCount} start={start} goal={goal} blocker={lastVisitorRouteBlocker}", this);
+                    Debug.LogWarning($"GYMCHAOS_ROAM_ROUTE_FAILED stage=no_goal navigable={CountNavigable()}/{nodeCount} explored={exploredNodeCount} start={start} goal={goal} blocker={lastVisitorRouteBlocker}", this);
                 }
                 return false;
             }
@@ -868,8 +880,8 @@ public partial class EnemyFighter
         // Stations are authoritative for the exercise assets. Their helper
         // object is placed at the authored machine center, even when the
         // imported model's child names are inconsistent.
-        GymExerciseStation[] stations =
-            FindObjectsByType<GymExerciseStation>(FindObjectsSortMode.None);
+        RefreshStaticRoamInterests();
+        GymExerciseStation[] stations = cachedRoamStations;
         for (int i = 0; i < stations.Length; i++)
         {
             GymExerciseStation station = stations[i];
@@ -921,31 +933,22 @@ public partial class EnemyFighter
 
         // Cover meaningful imported/static objects that are not exercise
         // stations, such as the generated reception desk and lockers.
-        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
-        for (int i = 0; i < renderers.Length; i++)
+        for (int i = 0; i < cachedRoamObjectRoots.Count; i++)
         {
-            Renderer renderer = renderers[i];
-            if (renderer == null || !renderer.enabled ||
-                renderer is ParticleSystemRenderer ||
-                renderer.GetComponentInParent<PlayerMovement>() != null ||
-                renderer.GetComponentInParent<EnemyFighter>() != null ||
-                GymLooseItemSpawner.IsDeadliftStationObject(renderer.transform))
-            {
-                continue;
-            }
-
-            Transform root = FindPurposefulRoamRoot(renderer.transform);
+            Transform root = cachedRoamObjectRoots[i];
             if (root == null || roamInterestRoots.Contains(root))
             {
                 continue;
             }
-
-            if (!TryGetRoamInterestBounds(root, out Bounds bounds) ||
+            // Roots can move between refreshes (dragged props, a carried
+            // item): re-check the owner and read the bounds now.
+            if (root.GetComponentInParent<EnemyFighter>() != null ||
+                root.GetComponentInParent<PlayerMovement>() != null ||
+                !TryGetRoamInterestBounds(root, out Bounds bounds) ||
                 bounds.size.x > 9.5f || bounds.size.z > 9.5f)
             {
                 continue;
             }
-
             AddRoamInterest(
                 root, bounds, bounds.center, false, 1.15f, root.name);
         }
@@ -992,6 +995,73 @@ public partial class EnemyFighter
             collectedPlayerInterest = true;
         }
     }
+    // Stations and static furniture roots are the same for every character.
+    // Scanning every renderer for them on each roam choice (per character)
+    // cost tens of ms in one physics step, so they are gathered once for all
+    // characters and refreshed every few seconds.
+    private const float StaticRoamInterestSeconds = 4f;
+    private static float staticRoamInterestTime = float.NegativeInfinity;
+    private static GymExerciseStation[] cachedRoamStations = new GymExerciseStation[0];
+    private static readonly List<Transform> cachedRoamObjectRoots = new List<Transform>();
+    private static readonly List<Bounds> cachedRoamObjectBounds = new List<Bounds>();
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStaticRoamInterests()
+    {
+        staticRoamInterestTime = float.NegativeInfinity;
+        cachedRoamStations = new GymExerciseStation[0];
+        cachedRoamObjectRoots.Clear();
+        cachedRoamObjectBounds.Clear();
+    }
+
+    private static void RefreshStaticRoamInterests()
+    {
+        bool stale = Time.time - staticRoamInterestTime >= StaticRoamInterestSeconds ||
+            Time.time < staticRoamInterestTime;
+        for (int i = 0; !stale && i < cachedRoamStations.Length; i++)
+        {
+            stale = cachedRoamStations[i] == null;
+        }
+        if (!stale) return;
+        staticRoamInterestTime = Time.time;
+        cachedRoamStations = FindObjectsByType<GymExerciseStation>(FindObjectsSortMode.None);
+        HashSet<Transform> taken = new HashSet<Transform>();
+        for (int i = 0; i < cachedRoamStations.Length; i++)
+        {
+            Transform parent = cachedRoamStations[i] != null ? cachedRoamStations[i].transform.parent : null;
+            if (parent != null) taken.Add(parent);
+        }
+        cachedRoamObjectRoots.Clear();
+        cachedRoamObjectBounds.Clear();
+        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled ||
+                renderer is ParticleSystemRenderer ||
+                renderer.GetComponentInParent<PlayerMovement>() != null ||
+                renderer.GetComponentInParent<EnemyFighter>() != null ||
+                GymLooseItemSpawner.IsDeadliftStationObject(renderer.transform))
+            {
+                continue;
+            }
+
+            Transform root = FindPurposefulRoamRoot(renderer.transform);
+            if (root == null || !taken.Add(root))
+            {
+                continue;
+            }
+
+            if (!TryGetRoamInterestBounds(root, out Bounds bounds) ||
+                bounds.size.x > 9.5f || bounds.size.z > 9.5f)
+            {
+                continue;
+            }
+            cachedRoamObjectRoots.Add(root);
+            cachedRoamObjectBounds.Add(bounds);
+        }
+    }
+
     private bool TryFindPurposefulRoamPoint(
         Bounds floorBounds, float margin, float minimumDistance,
         out Vector3 point, out string label, out RoamInterest selectedInterest)

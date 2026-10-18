@@ -170,7 +170,7 @@ public static class GymChaosToiletRepConsoleVerifier
             throw new InvalidOperationException("Reputation did not change");
         foreach (string text in notices)
         {
-            if (text.IndexOf("REP", StringComparison.Ordinal) >= 0)
+            if (text.IndexOf("KARMA", StringComparison.Ordinal) >= 0)
                 throw new InvalidOperationException("Reputation still raised a notice: " + text);
         }
         bool leveled = service.State != null && service.State.level != levelBefore;

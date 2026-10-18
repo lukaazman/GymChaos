@@ -3,28 +3,29 @@ using UnityEngine;
 
 public partial class EnemyFighter
 {
+    /// <summary>Closest navigable node (lowest index on ties), testing nodes
+    /// nearest-first so only a few clearance queries run.</summary>
     private int FindClosestNavigableNode(
-        Vector3[] points, bool[] navigable, Vector3 position)
+        Vector3[] points, System.Func<int, bool> isNavigable, Vector3 position)
     {
-        int closest = -1;
-        float closestDistance = float.PositiveInfinity;
-        for (int i = 0; i < points.Length; i++)
+        int count = points.Length;
+        float[] distances = new float[count];
+        int[] order = new int[count];
+        for (int i = 0; i < count; i++)
         {
-            if (!navigable[i])
-            {
-                continue;
-            }
-
-            float distance = Vector3.ProjectOnPlane(
-                points[i] - position, Vector3.up).sqrMagnitude;
-            if (distance < closestDistance)
-            {
-                closestDistance = distance;
-                closest = i;
-            }
+            distances[i] = Vector3.ProjectOnPlane(points[i] - position, Vector3.up).sqrMagnitude;
+            order[i] = i;
         }
-
-        return closest;
+        System.Array.Sort(order, (a, b) =>
+        {
+            int byDistance = distances[a].CompareTo(distances[b]);
+            return byDistance != 0 ? byDistance : a.CompareTo(b);
+        });
+        for (int k = 0; k < count; k++)
+        {
+            if (isNavigable(order[k])) return order[k];
+        }
+        return -1;
     }
     private void RefreshDeadliftNavigationStations()
     {
@@ -178,11 +179,11 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (isPolice && hit.GetComponentInParent<GymPoliceDirector>() != null)
+            if (isPolice && GetRouteHitOwners(hit).Police)
             {
                 continue;
             }
-            EnemyFighter blockedFighter = hit.GetComponentInParent<EnemyFighter>();
+            EnemyFighter blockedFighter = GetRouteHitOwners(hit).Fighter;
             if (blockedFighter != null && blockedFighter == visitorCrowdPass)
             {
                 continue;
@@ -192,7 +193,7 @@ public partial class EnemyFighter
                 SetRouteBlocker(hit, blockedFighter.IdentityName);
                 return false;
             }
-            PlayerMovement blockedPlayer = hit.GetComponentInParent<PlayerMovement>();
+            PlayerMovement blockedPlayer = GetRouteHitOwners(hit).Player;
             if (blockedPlayer != null)
             {
                 SetRouteBlocker(hit, "Player");
@@ -241,8 +242,8 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (hit.GetComponentInParent<EnemyFighter>() != null ||
-                hit.GetComponentInParent<PlayerMovement>() != null)
+            if (GetRouteHitOwners(hit).Fighter != null ||
+                GetRouteHitOwners(hit).Player != null)
             {
                 continue;
             }
@@ -289,8 +290,8 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (hit.GetComponentInParent<EnemyFighter>() != null ||
-                hit.GetComponentInParent<PlayerMovement>() != null ||
+            if (GetRouteHitOwners(hit).Fighter != null ||
+                GetRouteHitOwners(hit).Player != null ||
                 HasRoomFloorInHierarchy(hit.transform) ||
                 IsWalkableFloorSurface(hit))
             {
@@ -336,11 +337,11 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (hit.GetComponentInParent<EnemyFighter>() != null)
+            if (GetRouteHitOwners(hit).Fighter != null)
             {
                 return false;
             }
-            if (hit.GetComponentInParent<PlayerMovement>() != null)
+            if (GetRouteHitOwners(hit).Player != null)
             {
                 return false;
             }
@@ -446,8 +447,8 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (hit.GetComponentInParent<EnemyFighter>() != null ||
-                hit.GetComponentInParent<PlayerMovement>() != null)
+            if (GetRouteHitOwners(hit).Fighter != null ||
+                GetRouteHitOwners(hit).Player != null)
             {
                 continue;
             }

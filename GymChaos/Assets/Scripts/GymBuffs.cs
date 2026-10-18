@@ -14,6 +14,14 @@ public static class GymBuffs
     public const float MaxBoost = 1.35f;
     public const float MaxReduction = 0.6f;
     public const float MaxHealthRegen = 2f;
+    // Hank's gear lifts the caps: much stronger, and much worse.
+    public const float GearMaxBoost = 1.8f;
+    public const float GearMaxReduction = 0.4f;
+    public const float GearMaxHealthRegen = 2.5f;
+    public const float MaxHealthTollCap = 0.5f;
+
+    /// <summary>Share of max health lost to gear for the rest of the session.</summary>
+    public static float MaxHealthToll01 { get; private set; }
 
     public sealed class ActiveBuff
     {
@@ -37,9 +45,52 @@ public static class GymBuffs
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    private static void ResetStatics() => active.Clear();
+    private static void ResetStatics()
+    {
+        active.Clear();
+        MaxHealthToll01 = 0f;
+    }
 
-    public static void Clear() => active.Clear();
+    public static void Clear()
+    {
+        active.Clear();
+        MaxHealthToll01 = 0f;
+    }
+
+    /// <summary>True while any gear effect (or its crash) runs.</summary>
+    public static bool IsGearActive
+    {
+        get
+        {
+            Prune();
+            for (int i = 0; i < active.Count; i++)
+            {
+                if (active[i].product.gear)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>Health per second the running gear costs.</summary>
+    public static float HealthDrainPerSecond
+    {
+        get
+        {
+            Prune();
+            float drain = 0f;
+            for (int i = 0; i < active.Count; i++)
+            {
+                if (!active[i].crash)
+                {
+                    drain += active[i].product.healthDrainPerSecond;
+                }
+            }
+            return drain;
+        }
+    }
 
     public static int ActiveProductCount
     {
@@ -80,9 +131,21 @@ public static class GymBuffs
         {
             return false;
         }
+        if (product.maxHealthToll > 0f)
+        {
+            MaxHealthToll01 = Mathf.Min(MaxHealthTollCap, MaxHealthToll01 + product.maxHealthToll);
+        }
         if (product.instantHeal > 0f && player != null)
         {
             player.RestoreHealth(product.instantHeal);
+        }
+        if (product.instantHarm > 0f && player != null)
+        {
+            player.ApplySideEffectDamage(product.instantHarm);
+        }
+        if (player != null)
+        {
+            player.EnforceHealthCeiling();
         }
         if (product.durationSeconds > 0f && product.modifiers != null && product.modifiers.Length > 0)
         {
@@ -107,7 +170,8 @@ public static class GymBuffs
                 });
             }
         }
-        Debug.Log($"GYMCHAOS_BUFF_APPLIED product={product.id} active={ActiveProductCount}");
+        Debug.Log($"GYMCHAOS_BUFF_APPLIED product={product.id} active={ActiveProductCount} " +
+            $"gear={product.gear} toll={MaxHealthToll01:F2}");
         return true;
     }
 
@@ -126,8 +190,11 @@ public static class GymBuffs
                 }
             }
         }
-        float max = stat == GymBuffStat.HealthRegen ? MaxHealthRegen : MaxBoost;
-        return Mathf.Clamp(multiplier, MaxReduction, max);
+        bool gear = IsGearActive;
+        float max = stat == GymBuffStat.HealthRegen
+            ? (gear ? GearMaxHealthRegen : MaxHealthRegen)
+            : (gear ? GearMaxBoost : MaxBoost);
+        return Mathf.Clamp(multiplier, gear ? GearMaxReduction : MaxReduction, max);
     }
 
     /// <summary>Verifier hook: ends every effect as if its time ran out.</summary>

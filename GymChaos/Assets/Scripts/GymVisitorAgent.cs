@@ -712,7 +712,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			RestoreDoorwayWallCollisions();
 			RestoreVisitorPlayerBoundaryCollisions();
 			EndWorkoutStationRelease();
-			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 			doorway = door;
 			hasDoorwayClearPoint = false;
 			HoldDoorOpenRequest();
@@ -770,11 +770,41 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		lockerVisitWaypointIndex = 0;
 		lockerVisitReturning = true;
 		travelTarget = lockerVisitWaypoints[0];
-		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		state = VisitorState.ApproachingLockerRoom;
 		fighter.StopVisitorMovement();
 		Debug.Log((object)($"GYMCHAOS_VISITOR_LOCKER_EXIT_REQUESTED enemy={fighter.Identity} " + $"points={lockerVisitWaypoints.Length} target={travelTarget}"), (UnityEngine.Object)(object)this);
 		return true;
+	}
+
+	// A bag hand-off that became due after the route was planned (a pickup
+	// request, or a bag reserved mid-walk) moves the last stop to the bench.
+	private void RetargetLockerVisitToBagBench()
+	{
+		if (lockerVisitReturning || lockerVisitWaypoints == null || lockerVisitWaypoints.Length == 0 ||
+			!GymBackRoomBuilder.TryGetBagHandoffPoint(fighter.Identity, out Vector3 handoff))
+		{
+			return;
+		}
+		int last = lockerVisitWaypoints.Length - 1;
+		handoff.y = fighter.transform.position.y;
+		if ((lockerVisitWaypoints[last] - handoff).sqrMagnitude < 0.09f)
+		{
+			return;
+		}
+		// Same door points, then the aisle entry and the bench spot.
+		if (!GymBackRoomBuilder.TryGetLockerVisitRoute(handoff, out Vector3[] route, out var _) || route == null)
+		{
+			return;
+		}
+		for (int i = 0; i < route.Length; i++)
+		{
+			route[i].y = fighter.transform.position.y;
+		}
+		lockerVisitWaypoints = route;
+		lockerVisitWaypointIndex = Mathf.Min(lockerVisitWaypointIndex, route.Length - 1);
+		lockerVisitTarget = route[route.Length - 1];
+		travelTarget = route[lockerVisitWaypointIndex];
 	}
 
 	public bool BeginLockerRoomVisit(Vector3 destination, float dwellSeconds = 2.8f, string label = "locker room")
@@ -793,9 +823,17 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		{
 			return false;
 		}
+		// Bag owners walk to their bench so the bag is dropped or collected
+		// right there, not out of thin air.
+		GymBackRoomBuilder.RequestLockerVisitBag(fighter.Identity);
+		if (GymBackRoomBuilder.TryGetBagHandoffPoint(fighter.Identity, out Vector3 bagHandoffPoint))
+		{
+			destination = bagHandoffPoint;
+		}
 		if (!GymBackRoomBuilder.TryGetLockerVisitRoute(destination, out lockerVisitWaypoints, out var _))
 		{
 			GymBackRoomBuilder.ReleaseLockerSlot(fighter.Identity);
+			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 			return false;
 		}
 		lockerVisitWaypointIndex = 0;
@@ -813,7 +851,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		lockerVisitReturning = false;
 		state = VisitorState.ApproachingLockerRoom;
 		fighter.StopVisitorMovement();
-		GymBackRoomBuilder.ShowBenchBagsForVisitor(fighter.Identity);
 		Debug.Log((object)($"GYMCHAOS_VISITOR_LOCKER_REQUESTED enemy={fighter.Identity} " + $"target={lockerVisitTarget} routePoints={lockerVisitWaypoints.Length} " + $"dwell={dwellSeconds:F1}"), (UnityEngine.Object)(object)this);
 		lockerVisitDwellUntil = 0f;
 		return true;
@@ -833,7 +870,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		doorwayExitPriorityLogIssued = false;
 		doorwayExitClearanceReleased = false;
 		ReleaseDoorwayEntrySlot();
-		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		doorway = door;
 		hasDoorwayClearPoint = false;
 		HoldDoorOpenRequest();
@@ -873,7 +910,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		if (fighter != null)
 		{
 			GymBackRoomBuilder.ReleaseLockerSlot(fighter.Identity);
-			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		}
 	}
 
@@ -1387,6 +1424,8 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			return true;
 		}
 		case VisitorState.ApproachingLockerRoom:
+			GymBackRoomBuilder.TickBagOwner(fighter.Identity, fighter.transform.position);
+			RetargetLockerVisitToBagBench();
 			if (lockerVisitWaypoints == null || lockerVisitWaypointIndex >= lockerVisitWaypoints.Length)
 			{
 				if (lockerVisitReturning)
@@ -1434,6 +1473,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			return true;
 		case VisitorState.LockerRoomVisit:
 			fighter.StopVisitorMovement();
+			GymBackRoomBuilder.TickBagOwner(fighter.Identity, fighter.transform.position);
 			if (Time.time >= lockerVisitDwellUntil)
 			{
 				lockerVisitDwellUntil = 0f;
@@ -1749,7 +1789,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		if ((UnityEngine.Object)(object)fighter != (UnityEngine.Object)null)
 		{
 			GymBackRoomBuilder.ReleaseLockerSlot(fighter.Identity);
-			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		}
 		storeVisitActive = false;
 		storeVisitReturning = false;
@@ -1833,7 +1873,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		if ((UnityEngine.Object)(object)fighter != (UnityEngine.Object)null)
 		{
 			GymBackRoomBuilder.ReleaseLockerSlot(fighter.Identity);
-			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+			GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		}
 		ReleaseDoorwayExitSlot();
 		ReleaseDoorwayEntrySlot();

@@ -622,8 +622,8 @@ public partial class EnemyFighter
             Collider hit = roamOverlapHits[i];
             if (hit == null || hit.transform == transform ||
                 hit.transform.IsChildOf(transform) ||
-                hit.GetComponentInParent<EnemyFighter>() != null ||
-                hit.GetComponentInParent<PlayerMovement>() != null ||
+                GetRouteHitOwners(hit).Fighter != null ||
+                GetRouteHitOwners(hit).Player != null ||
                 HasRoomFloorInHierarchy(hit.transform) ||
                 IsWalkableFloorSurface(hit) ||
                 hit.name == "Outdoor Boundary - Path Outer" ||
@@ -883,15 +883,14 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (isPolice && hit.GetComponentInParent<GymPoliceDirector>() != null)
+            RouteHitOwners owners = GetRouteHitOwners(hit);
+            if (isPolice && owners.Police)
             {
                 continue;
             }
-            EnemyFighter blockedFighter = hit.GetComponentInParent<EnemyFighter>();
+            EnemyFighter blockedFighter = owners.Fighter;
             if (ignoreDynamicBlockers &&
-                (blockedFighter != null ||
-                 hit.GetComponentInParent<PlayerMovement>() != null ||
-                 hit.GetComponentInParent<GymVisitorVehicle>() != null))
+                (blockedFighter != null || owners.Player != null || owners.Vehicle))
             {
                 continue;
             }
@@ -904,7 +903,7 @@ public partial class EnemyFighter
                 SetRouteBlocker(hit, blockedFighter.IdentityName);
                 return false;
             }
-            PlayerMovement blockedPlayer = hit.GetComponentInParent<PlayerMovement>();
+            PlayerMovement blockedPlayer = owners.Player;
             if (blockedPlayer != null)
             {
                 // A visitor already touching the stationary reception player
@@ -943,7 +942,7 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (hit.GetComponentInParent<GymDoorway>() != null)
+            if (owners.Doorway)
             {
                 continue;
             }
@@ -961,6 +960,69 @@ public partial class EnemyFighter
 
         return true;
     }
+    // Route probes classify every capsule-cast hit on every physics step.
+    // The owning fighter/player/vehicle of a collider only changes when it is
+    // re-parented (a picked-up item), so the GetComponentInParent results are
+    // cached per collider and refreshed when its parent changes or an owner
+    // was destroyed.
+    private struct RouteHitOwners
+    {
+        public Transform Parent;
+        public Transform Root;
+        public int Depth;
+        public EnemyFighter Fighter;
+        public PlayerMovement Player;
+        public bool Police;
+        public bool Vehicle;
+        public bool Doorway;
+        public bool HadFighter;
+        public bool HadPlayer;
+    }
+
+    private static readonly Dictionary<Collider, RouteHitOwners> routeHitOwners =
+        new Dictionary<Collider, RouteHitOwners>();
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetRouteHitOwners() => routeHitOwners.Clear();
+
+    private static RouteHitOwners GetRouteHitOwners(Collider hit)
+    {
+        // Parent, root and depth together catch any re-parenting of the
+        // collider or one of its ancestors (picked-up items, moved props).
+        Transform parent = hit.transform.parent;
+        Transform root = hit.transform.root;
+        int depth = 0;
+        for (Transform t = parent; t != null; t = t.parent) depth++;
+        if (routeHitOwners.TryGetValue(hit, out RouteHitOwners cached) &&
+            cached.Parent == parent && cached.Root == root && cached.Depth == depth &&
+            (!cached.HadFighter || cached.Fighter != null) &&
+            (!cached.HadPlayer || cached.Player != null))
+        {
+            return cached;
+        }
+        if (routeHitOwners.Count > 4096)
+        {
+            // Destroyed colliders (cars and visitors come and go) stay as
+            // keys otherwise.
+            routeHitOwners.Clear();
+        }
+        RouteHitOwners owners = new RouteHitOwners
+        {
+            Parent = parent,
+            Root = root,
+            Depth = depth,
+            Fighter = hit.GetComponentInParent<EnemyFighter>(),
+            Player = hit.GetComponentInParent<PlayerMovement>(),
+            Police = hit.GetComponentInParent<GymPoliceDirector>() != null,
+            Vehicle = hit.GetComponentInParent<GymVisitorVehicle>() != null,
+            Doorway = hit.GetComponentInParent<GymDoorway>() != null
+        };
+        owners.HadFighter = owners.Fighter != null;
+        owners.HadPlayer = owners.Player != null;
+        routeHitOwners[hit] = owners;
+        return owners;
+    }
+
     private bool IsExteriorBoundaryBehindVisitor(
         Collider hit, Vector3 origin, Vector3 direction)
     {

@@ -23,10 +23,15 @@ public static class GymProteinStoreEnvironment
     private const float ModuleDepth = 23.4f;
     private const float ModuleWidth = 20.1f;
     private const float ModuleWall = 0.25f;
-    private const float ModuleWallHeight = 4.4f;
-    private const float ModuleHeight = 5.08f;
+    // Raised 0.8 m for the coffered ceiling (create_protein_store_v2.py WALL_H).
+    private const float ModuleWallHeight = 5.2f;
+    private const float ModuleHeight = 5.88f;
+    // Below the line lights, so the ceiling shows no hot spots.
+    private const float InteriorLightHeight = 3.6f;
     private const float DoorLocalZ = -2.76f;
     private const float DoorWidth = 2.6f;
+    // create_protein_store_v2.py DOOR_H: the transom starts here.
+    private const float DoorOpeningHeight = 2.7f;
     // Opening in the gym path's outer wall, starting at the path's south end.
     public const float PathOpeningWidth = 2.8f;
     // Gap between the building and the site's low walls.
@@ -46,11 +51,15 @@ public static class GymProteinStoreEnvironment
     };
     private static readonly UnityEngine.Object[] visitSpotOwners =
         new UnityEngine.Object[VisitSpotLocal.Length];
+    // An even 4 x 2 grid over the whole floor, reaching the far corners.
+    // Exactly 8: the forward renderer lights each object (the floor and
+    // walls are single meshes) with at most 8 additional lights.
     private static readonly Vector2[] InteriorLightLocal =
     {
-        new Vector2(-7.5f, -4.5f), new Vector2(-7.5f, 4.5f), new Vector2(0f, -4.5f),
-        new Vector2(0f, 4.5f), new Vector2(7.5f, -4.5f), new Vector2(7.5f, 4.5f)
+        new Vector2(-8.4f, -5f), new Vector2(-2.8f, -5f), new Vector2(2.8f, -5f), new Vector2(8.4f, -5f),
+        new Vector2(-8.4f, 5f), new Vector2(-2.8f, 5f), new Vector2(2.8f, 5f), new Vector2(8.4f, 5f)
     };
+    public static int InteriorLightCount => InteriorLightLocal.Length;
     private const float StoreDoorClearance = 1.25f;
     private const float ParkingBypassOffset = 7.247f;
 
@@ -501,6 +510,7 @@ public static class GymProteinStoreEnvironment
 
         RuntimeRoot = storeRoot.transform;
         CreateStoreCollisionShell(storeRoot.transform, center, floorY, entranceZ);
+        CreateAutomaticDoor(parent, floorY, entranceZ);
         int measuredJunctions;
         float measuredLargestGap;
         bool measuredRouteClear;
@@ -593,6 +603,15 @@ public static class GymProteinStoreEnvironment
             // Only the shell casts shadows: it keeps the sun out of the shop
             // without paying for thousands of small product casters.
             string name = renderer.name;
+            // The GLB's parked door leaves are replaced by the runtime
+            // automatic door (CreateAutomaticDoor).
+            if (name.StartsWith("Door_Leaves", StringComparison.Ordinal) ||
+                (renderer.transform.parent != null &&
+                 renderer.transform.parent.name.StartsWith("Door_Leaves", StringComparison.Ordinal)))
+            {
+                renderer.enabled = false;
+                continue;
+            }
             bool shell = name.StartsWith("Roof", StringComparison.Ordinal) ||
                 name.StartsWith("Solid_Walls", StringComparison.Ordinal) ||
                 name.StartsWith("Solid_Storefront", StringComparison.Ordinal);
@@ -672,12 +691,12 @@ public static class GymProteinStoreEnvironment
                 "Protein Store Interior Light " + (index + 1));
             lightObject.transform.SetParent(loaded.transform, true);
             lightObject.transform.position =
-                LocalToWorld(center, InteriorLightLocal[index]) + Vector3.up * 3.6f;
+                LocalToWorld(center, InteriorLightLocal[index]) + Vector3.up * InteriorLightHeight;
             Light light = lightObject.AddComponent<Light>();
             light.type = LightType.Point;
             light.color = new Color(1f, 0.97f, 0.9f);
-            light.intensity = 35f;
-            light.range = 8.5f;
+            light.intensity = 24f;
+            light.range = 11.5f;
             light.shadows = LightShadows.None;
         }
         RuntimeInteriorLightCount = InteriorLightLocal.Length;
@@ -1015,6 +1034,110 @@ public static class GymProteinStoreEnvironment
         }
 
         return box;
+    }
+
+    public const string AutoDoorName = "Protein Store Entrance";
+    public static GymAutoDoor AutoDoor { get; private set; }
+
+    /// <summary>
+    /// Sliding glass door in the storefront opening, matching the black
+    /// storefront frame: two leaves part sideways behind the fixed glass when
+    /// someone comes near, with a frosted dot band, a header track and a
+    /// motion sensor over the opening. No colliders (see GymAutoDoor).
+    /// </summary>
+    private static void CreateAutomaticDoor(Transform parent, float floorY, float entranceZ)
+    {
+        const float leafHeight = DoorOpeningHeight - 0.1f;
+        // Each leaf parks fully behind the fixed glass beside the opening.
+        const float travel = DoorWidth * 0.5f + 0.04f;
+        float innerX = FacadeX + ModuleWall + 0.04f;
+        Material frame = CreateMaterial("Store door black frame", new Color(0.035f, 0.035f, 0.04f), 0.6f, 0.55f);
+        Material glass = CreateMaterial("Store door glass", new Color(0.8f, 0.9f, 0.93f, 0.13f), 0f, 0.96f);
+        MakeTransparent(glass);
+        Material frost = CreateMaterial("Store door frosted dots", new Color(0.95f, 0.96f, 0.97f, 0.75f), 0f, 0.3f);
+        MakeTransparent(frost);
+        Material sensor = CreateMaterial("Store door sensor", new Color(0.06f, 0.06f, 0.07f), 0.2f, 0.7f);
+        Material led = CreateMaterial("Store door sensor LED", new Color(0.9f, 0.1f, 0.05f), 0f, 0.8f);
+        led.EnableKeyword("_EMISSION");
+        led.SetColor("_EmissionColor", new Color(2.2f, 0.25f, 0.1f));
+
+        GameObject root = new GameObject("Protein Store Automatic Door");
+        root.transform.SetParent(parent, false);
+        root.transform.position = new Vector3(innerX, floorY, entranceZ);
+        // Slide offsets are local: keep the door frame axis-aligned in world.
+        root.transform.rotation = Quaternion.identity;
+        AutoDoor = root.AddComponent<GymAutoDoor>();
+        AutoDoor.Configure(AutoDoorName, GymAutoDoor.DoorKind.Slide,
+            new Vector3(FacadeX + ModuleWall * 0.5f, floorY + 1f, entranceZ), Vector3.left,
+            DoorWidth, 0.5f, 0.85f);
+
+        // Header track across the opening and the parking pockets.
+        GameObject header = CreateVisualBox("Store Door Header Track", root.transform,
+            new Vector3(innerX + 0.02f, floorY + DoorOpeningHeight - 0.05f, entranceZ),
+            new Vector3(0.1f, 0.12f, DoorWidth * 2f + 0.1f), frame);
+        header.GetComponent<Renderer>().shadowCastingMode = ShadowCastingMode.Off;
+        CreateVisualBox("Store Door Floor Guide", root.transform,
+            new Vector3(innerX, floorY + 0.01f, entranceZ), new Vector3(0.08f, 0.02f, DoorWidth * 2f), frame);
+        // Motion sensor over the opening, outside face of the transom.
+        CreateVisualBox("Store Door Motion Sensor", root.transform,
+            new Vector3(FacadeX - 0.05f, floorY + DoorOpeningHeight + 0.14f, entranceZ),
+            new Vector3(0.1f, 0.07f, 0.34f), sensor);
+        CreateVisualBox("Store Door Sensor LED", root.transform,
+            new Vector3(FacadeX - 0.101f, floorY + DoorOpeningHeight + 0.14f, entranceZ + 0.12f),
+            new Vector3(0.004f, 0.02f, 0.02f), led);
+
+        for (int side = 0; side < 2; side++)
+        {
+            float direction = side == 0 ? -1f : 1f;
+            GameObject leaf = new GameObject(side == 0 ? "Store Door Leaf South" : "Store Door Leaf North");
+            leaf.transform.SetParent(root.transform, false);
+            // Each leaf covers half the opening plus a small overlap.
+            float leafWidth = DoorWidth * 0.5f + 0.04f;
+            float leafCenterZ = entranceZ + direction * (DoorWidth * 0.25f - 0.02f);
+            leaf.transform.position = new Vector3(innerX, floorY, leafCenterZ);
+            BuildSlidingLeaf(leaf.transform, leafWidth, leafHeight, direction, frame, glass, frost);
+            AutoDoor.AddSlideLeaf(leaf.transform, new Vector3(0f, 0f, direction * travel));
+        }
+    }
+
+    private static void BuildSlidingLeaf(Transform leaf, float width, float height, float outerSide,
+        Material frame, Material glass, Material frost)
+    {
+        const float rail = 0.06f;
+        const float depth = 0.045f;
+        void Part(string name, float y, float z, Vector3 size, Material material)
+        {
+            GameObject part = CreateVisualBox(name, leaf, leaf.TransformPoint(new Vector3(0f, y, z)), size, material);
+            Renderer renderer = part.GetComponent<Renderer>();
+            if (material != frame) renderer.shadowCastingMode = ShadowCastingMode.Off;
+        }
+
+        float half = width * 0.5f;
+        Part("Leaf Outer Stile", height * 0.5f, outerSide * (half - rail * 0.5f), new Vector3(depth, height, rail), frame);
+        Part("Leaf Meeting Stile", height * 0.5f, -outerSide * (half - rail * 0.5f), new Vector3(depth, height, rail), frame);
+        Part("Leaf Top Rail", height - rail * 0.5f, 0f, new Vector3(depth, rail, width), frame);
+        Part("Leaf Bottom Rail", 0.06f, 0f, new Vector3(depth, 0.12f, width), frame);
+        Part("Leaf Glass", (height + 0.06f) * 0.5f, 0f,
+            new Vector3(0.012f, height - 0.18f, width - rail * 2f), glass);
+        // Frosted manifestation dots at eye level, like the reference door.
+        int dots = Mathf.Max(3, Mathf.RoundToInt((width - rail * 2f) / 0.13f));
+        for (int i = 0; i < dots; i++)
+        {
+            float z = -half + rail + (i + 0.5f) * (width - rail * 2f) / dots;
+            Part("Leaf Frost Dot", 1.12f, z, new Vector3(0.016f, 0.07f, 0.07f), frost);
+        }
+        Part("Leaf Frost Band", 1.36f, 0f, new Vector3(0.016f, 0.012f, width - rail * 2f), frost);
+    }
+
+    private static void MakeTransparent(Material material)
+    {
+        material.SetFloat("_Surface", 1f);
+        material.SetFloat("_Blend", 0f);
+        material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
+        material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
+        material.SetFloat("_ZWrite", 0f);
+        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.renderQueue = (int)RenderQueue.Transparent;
     }
 
     private static Material CreateMaterial(

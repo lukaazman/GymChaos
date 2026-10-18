@@ -60,6 +60,12 @@ public sealed class GymTimeOfDay : MonoBehaviour
     public event Action<int> DayChanged;
 
     public float Time01 => time01;
+
+    /// <summary>
+    /// Game-clock speed multiplier (2 while the player rests on a park
+    /// bench). Only the day clock speeds up, not physics or animation.
+    /// </summary>
+    public static float ClockScale { get; set; } = 1f;
     public int CurrentDay => currentDay;
     public float SimulatedDayLengthSeconds => simulatedDayLengthSeconds;
     private static readonly int ChromeDaylightId =
@@ -158,6 +164,7 @@ public sealed class GymTimeOfDay : MonoBehaviour
 
     private void Awake()
     {
+        ClockScale = 1f;
         if (Instance != null && Instance != this)
         {
             Destroy(this);
@@ -223,7 +230,7 @@ public sealed class GymTimeOfDay : MonoBehaviour
             return;
         }
 
-        Advance(Time.deltaTime);
+        Advance(Time.deltaTime * ClockScale);
         ApplyVisuals();
     }
 

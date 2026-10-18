@@ -1067,10 +1067,11 @@ public static class GymChaosVisitorVerifier
                 $"deskDoorDistance={deskDoorDistance:0.00}m.");
         }
 
-        if (!doorway.HasStaticPanelPose)
+        if (doorway.AutoDoor == null || doorway.AutoDoor.LeafCount != 2 ||
+            doorway.DoorPanel == null || doorway.DoorPanel.GetComponentInChildren<Collider>() != null)
         {
             throw new InvalidOperationException(
-                "Visitor door black inner panel changed its authored position or rotation.");
+                "Visitor door has no automatic two-leaf glass door, or a leaf carries a collider.");
         }
 
         const float visitorDoorWidth = 3.25f;
@@ -1096,7 +1097,7 @@ public static class GymChaosVisitorVerifier
 
         Debug.Log(
             $"GYMCHAOS_DOOR_RECEPTION_OK deskDistance={deskDoorDistance:0.00}m " +
-            $"door={doorway.InteriorPoint} staticPanel={doorway.HasStaticPanelPose} " +
+            $"door={doorway.InteriorPoint} autoDoorLeaves={doorway.AutoDoor.LeafCount} " +
             "stripeInterrupted=True");
     }
 

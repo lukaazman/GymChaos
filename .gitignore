@@ -30,3 +30,8 @@ AGENTS.md
 
 # Parallel regression mirror projects (Tools/Invoke-UnityRegression.ps1)
 /.lanes/
+
+# Blender backups, Python caches
+*.blend1
+__pycache__/
+*.pyc

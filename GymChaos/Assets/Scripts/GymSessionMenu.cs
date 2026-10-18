@@ -647,8 +647,8 @@ public sealed class GymSessionMenu : MonoBehaviour
             "LEVEL " + progression.level + "     XP " + progression.experience + " / " +
                 GymExperienceService.GetExperienceToNextLevel(progression.level) + "\n" +
             "STR " + progression.strengthRank + "   END " + progression.enduranceRank +
-                "   TECH " + progression.techniqueRank + "   REP RANK " + progression.reputationRank + "\n" +
-            "REPUTATION " + progression.reputation.ToString("+#;-#;0", CultureInfo.InvariantCulture) +
+                "   TECH " + progression.techniqueRank + "   KARMA RANK " + progression.reputationRank + "\n" +
+            "KARMA " + progression.reputation.ToString("+#;-#;0", CultureInfo.InvariantCulture) +
                 "     MASTERY " + progression.masteryRank + "\n" +
             "GYM DAY " + progression.gymDay + "     OUTFIT " + progression.shirt.ToUpperInvariant() + "\n" +
             "PLAYTIME " + FormatPlaytime(save.playSeconds) + "\n" +

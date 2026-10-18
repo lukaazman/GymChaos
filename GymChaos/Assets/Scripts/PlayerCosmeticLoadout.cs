@@ -17,6 +17,10 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     }
 
     private GymShirtColor currentShirt = GymShirtColor.Black;
+    private GymTopStyle currentTop = GymTopStyle.TankTop;
+    private SkinnedMeshRenderer shellRenderer;
+    private SkinnedMeshRenderer shellBody;
+    private bool shellPending;
     private GymHeadwear currentHeadwear = GymHeadwear.None;
     private bool initialized;
     private PlayerMovement player;
@@ -28,6 +32,12 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     private int headwearRequestVersion;
 
     public GymShirtColor CurrentShirt => currentShirt;
+    public GymTopStyle CurrentTop => currentTop;
+    public Texture CurrentTexture => currentTexture;
+    /// <summary>Cloth shell of the worn top (Oversized or Onyx), null for the tank top.</summary>
+    public bool IsTopShellPending => shellPending;
+    public SkinnedMeshRenderer TopShellRenderer =>
+        shellRenderer != null && shellRenderer.gameObject.activeInHierarchy ? shellRenderer : null;
     public GymHeadwear CurrentHeadwear => currentHeadwear;
     public Color CurrentShirtMaterialColor => GetShirtColor(currentShirt);
     public Color RenderedShirtColor => visualReady ? GetShirtColor(currentShirt) : Color.clear;
@@ -75,12 +85,14 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
 
         GymShirtColor nextShirt = currentShirt;
         GymHeadwear nextHeadwear = currentHeadwear;
-        Enum.TryParse(state.shirt, true, out nextShirt);
-        Enum.TryParse(state.headwear, true, out nextHeadwear);
+        if (!Enum.TryParse(state.shirt, true, out nextShirt)) nextShirt = GymShirtColor.Black;
+        if (!Enum.TryParse(state.headwear, true, out nextHeadwear)) nextHeadwear = GymHeadwear.None;
+        if (!Enum.TryParse(state.top, true, out GymTopStyle nextTop)) nextTop = GymTopStyle.TankTop;
         bool headwearChanged = !hasAppliedState || nextHeadwear != currentHeadwear;
         bool changed = !hasAppliedState || nextShirt != currentShirt ||
-            nextHeadwear != currentHeadwear;
+            nextHeadwear != currentHeadwear || nextTop != currentTop;
         currentShirt = nextShirt;
+        currentTop = nextTop;
         currentHeadwear = nextHeadwear;
         hasAppliedState = true;
 
@@ -99,8 +111,27 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         }
     }
 
+    private PlayerTopShell.Style CurrentShellStyle =>
+        currentTop == GymTopStyle.Oversized ? PlayerTopShell.Oversized : PlayerTopShell.Onyx;
+
+    private SkinnedMeshRenderer AttachShell(SkinnedMeshRenderer body)
+    {
+        bool oversized = currentTop == GymTopStyle.Oversized;
+        return PlayerTopShell.Attach(body, CurrentShellStyle, currentTexture,
+            oversized ? GetShirtColor(currentShirt) * 0.85f : new Color(0.03f, 0.03f, 0.034f));
+    }
+
     private void LateUpdate()
     {
+        if (shellPending && shellBody != null && currentTop != GymTopStyle.TankTop)
+        {
+            shellRenderer = AttachShell(shellBody);
+            if (shellRenderer != null || PlayerTopShell.IsSettled(shellBody.sharedMesh, CurrentShellStyle))
+            {
+                shellPending = false;
+                RequestMirrorRefresh();
+            }
+        }
         bool headwearNeedsVisual = currentHeadwear != GymHeadwear.None &&
             !headwearLoading && !HasVisibleHeadwearRenderer(headwearRoot);
         if (initialized && (!visualReady || headwearNeedsVisual) && !headwearLoading)
@@ -130,21 +161,27 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         }
 
         currentTexture = ScanTextureMips.Limit(Resources.Load<Texture2D>(
-            currentShirt == GymShirtColor.Black
-                ? "Characters/Textures/player_authored"
-                : "Player/Outfits/shirt_" +
-                    currentShirt.ToString().ToLowerInvariant()));
+            GetOutfitTexturePath(currentTop, currentShirt)));
         if (currentTexture == null)
         {
             visualReady = false;
             return;
         }
 
+        // Oversized and Onyx are separate cloth shells: only the shell wears
+        // the new texture. The body keeps the scan's own skin and tank top
+        // underneath, so skin seen under a sleeve stays skin.
+        Texture bodyTexture = currentTop == GymTopStyle.TankTop
+            ? currentTexture
+            : ScanTextureMips.Limit(Resources.Load<Texture2D>(UnderShellBodyTexture));
+        if (bodyTexture == null) bodyTexture = currentTexture;
+        SkinnedMeshRenderer body = null;
         for (int i = 0; i < renderers.Length; i++)
         {
             SkinnedMeshRenderer renderer = renderers[i];
             if (renderer == null ||
-                renderer.gameObject.layer == PlanarGymMirror.FirstPersonPlayerLayer)
+                renderer.gameObject.layer == PlanarGymMirror.FirstPersonPlayerLayer ||
+                PlayerTopShell.IsShellObject(renderer.name))
             {
                 // Shirt cosmetics belong to the mirror body. The first-person
                 // arm clone owns a stable skin material and must never inherit
@@ -153,6 +190,10 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             }
 
             renderer.sharedMesh = ScanUvInset.Apply(renderer.sharedMesh, currentTexture);
+            if (body == null || renderer.sharedMesh.vertexCount > body.sharedMesh.vertexCount)
+            {
+                body = renderer;
+            }
             Material[] materials = renderer.sharedMaterials;
             for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
             {
@@ -164,13 +205,33 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
 
                 if (material.HasProperty("_BaseMap"))
                 {
-                    material.SetTexture("_BaseMap", currentTexture);
+                    material.SetTexture("_BaseMap", bodyTexture);
                 }
                 if (material.HasProperty("_MainTex"))
                 {
-                    material.SetTexture("_MainTex", currentTexture);
+                    material.SetTexture("_MainTex", bodyTexture);
                 }
             }
+        }
+
+        // Oversized and Onyx are skinned cloth shells over the shirt area;
+        // the hem band takes the cloth colour as the texture shows it.
+        // Shells build on a worker thread; until ready the visual stays
+        // "not ready" and LateUpdate attaches it once the mesh exists.
+        shellBody = body;
+        shellPending = false;
+        if (currentTop != GymTopStyle.TankTop && body != null)
+        {
+            shellRenderer = AttachShell(body);
+            shellPending = shellRenderer == null &&
+                !PlayerTopShell.IsSettled(body.sharedMesh, CurrentShellStyle);
+        }
+        else if (body != null)
+        {
+            PlayerTopShell.Detach(body);
+            shellRenderer = null;
+            // Ready for the next locker change without a wait.
+            PlayerTopShell.Prewarm(body.sharedMesh);
         }
 
         Transform head = rig.RuntimeHead;
@@ -464,6 +525,38 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                 return "BodyBuilders/wearables/jolly_cap.glb";
             default:
                 return string.Empty;
+        }
+    }
+
+    /// <summary>Texture for a top in a colour: the tank top keeps the scan's
+    /// own black and the recoloured shirt_* textures.</summary>
+    // Scan texture with the tank-top straps beside the neck painted over in
+    // skin (build_player_tops.py), worn by the body under a cloth shell.
+    public const string UnderShellBodyTexture = "Player/Outfits/under_shell_body";
+
+    public static string GetOutfitTexturePath(GymTopStyle top, GymShirtColor color)
+    {
+        string colour = color.ToString().ToLowerInvariant();
+        switch (top)
+        {
+            case GymTopStyle.Oversized:
+                return "Player/Outfits/oversized_" + colour;
+            case GymTopStyle.Onyx:
+                return "Player/Outfits/onyx_" + colour;
+            default:
+                return color == GymShirtColor.Black
+                    ? "Characters/Textures/player_authored"
+                    : "Player/Outfits/shirt_" + colour;
+        }
+    }
+
+    public static string GetTopDisplayName(GymTopStyle top)
+    {
+        switch (top)
+        {
+            case GymTopStyle.Oversized: return "OVERSIZED";
+            case GymTopStyle.Onyx: return "ONYX";
+            default: return "TANK TOP";
         }
     }
 

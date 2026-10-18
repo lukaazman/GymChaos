@@ -8,7 +8,7 @@ using UnityEngine.InputSystem;
 #endif
 
 [RequireComponent(typeof(CharacterController))]
-public class PlayerMovement : MonoBehaviour
+public partial class PlayerMovement : MonoBehaviour
 {
     [Header("References")]
     public Camera playerCamera;
@@ -266,6 +266,10 @@ public class PlayerMovement : MonoBehaviour
     public void RestoreSessionState(
         bool useSpawn, Vector3 spawn, float facingDegrees, float health, float stamina)
     {
+        if (IsSeatedOnBench)
+        {
+            StandUpFromBench();
+        }
         if (useSpawn)
         {
             bool controllerWasEnabled = characterController != null && characterController.enabled;
@@ -372,6 +376,7 @@ public class PlayerMovement : MonoBehaviour
 
     private void OnDisable()
     {
+        ResetSeatClockOnDisable();
         // The start screen disables the player; its menu clicks must never
         // lock the pointer.
         cursorCaptureAllowedThisFrame = false;
@@ -561,6 +566,12 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (IsSeatedOnBench)
+        {
+            HandleSeated();
+            return;
+        }
+
         if (pullUpMountTransitionActive)
         {
             HandlePullUpMountTransition();
@@ -586,7 +597,12 @@ public class PlayerMovement : MonoBehaviour
             nearbyBackRoomInteractable = GymExperienceService.Active != null
                 ? GymExperienceService.Active.FindNearbyInteractable(transform.position, 3.1f)
                 : null;
+            nearbyBenchIndex = heldItem == null ? FindNearbyParkBench() : -1;
             nextPickupPromptScanTime = Time.unscaledTime + 0.12f;
+        }
+        if (ReadInteractPressed() && PrefersSitOverTalk() && SitOnBench(nearbyBenchIndex))
+        {
+            return;
         }
         if (GymDialogueDirector.TryStartNearby(this, ReadInteractPressed()))
         {
@@ -602,7 +618,13 @@ public class PlayerMovement : MonoBehaviour
         {
             ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
             fPressed = ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
-                nearbyExerciseStation != null, callFixerOnF, CanShopNearby);
+                nearbyExerciseStation != null, callFixerOnF, CanShopNearby,
+                dealer: CanDealNearby);
+        }
+        if (fPressed == ContextAction.Dealer)
+        {
+            GymDealerShopUI.Open(this);
+            return;
         }
         if (fPressed == ContextAction.Shop)
         {
@@ -658,6 +680,10 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (IsSeatedOnBench)
+        {
+            StandUpFromBench();
+        }
         currentHealth = Mathf.Clamp(currentHealth - damage, 0f, maxHealth);
         lastDamageTime = Time.time;
         ReceiveImpact(impulse);
@@ -674,7 +700,7 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        currentHealth = Mathf.Min(maxHealth, currentHealth + amount);
+        currentHealth = Mathf.Min(HealthCeiling, currentHealth + amount);
     }
 
     public void RestorePerfectRepHealth()
@@ -682,10 +708,43 @@ public class PlayerMovement : MonoBehaviour
         RestoreHealth(perfectRepHeal);
     }
 
+    /// <summary>Max health after the gear toll (the bar cannot refill past it).</summary>
+    public float HealthCeiling => maxHealth * (1f - GymBuffs.MaxHealthToll01);
+
+    /// <summary>Drops health that sits above the gear-lowered ceiling.</summary>
+    public void EnforceHealthCeiling()
+    {
+        currentHealth = Mathf.Min(currentHealth, HealthCeiling);
+    }
+
+    /// <summary>Gear side effects: health loss that never kills on its own.</summary>
+    public void ApplySideEffectDamage(float amount)
+    {
+        if (IsDead || amount <= 0f)
+        {
+            return;
+        }
+        currentHealth = Mathf.Max(Mathf.Min(1f, currentHealth), currentHealth - amount);
+    }
+
     private void TickHealthRegeneration()
     {
         IsHealthRegenerating = false;
-        if (IsDead || currentHealth >= maxHealth)
+        if (IsDead)
+        {
+            return;
+        }
+        float drain = GymBuffs.HealthDrainPerSecond;
+        if (drain > 0f)
+        {
+            ApplySideEffectDamage(drain * Time.deltaTime);
+        }
+        float ceiling = HealthCeiling;
+        if (currentHealth > ceiling)
+        {
+            currentHealth = ceiling;
+        }
+        if (currentHealth >= ceiling)
         {
             return;
         }
@@ -701,7 +760,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         IsHealthRegenerating = true;
-        currentHealth = Mathf.Min(maxHealth,
+        currentHealth = Mathf.Min(ceiling,
             currentHealth + healthRegenPerSecond * GymBuffs.GetMultiplier(GymBuffStat.HealthRegen) *
             Time.deltaTime);
     }
@@ -773,6 +832,10 @@ public class PlayerMovement : MonoBehaviour
         if (IsDead)
         {
             return;
+        }
+        if (IsSeatedOnBench)
+        {
+            StandUpFromBench();
         }
 
         IsDead = true;
@@ -2236,24 +2299,27 @@ public class PlayerMovement : MonoBehaviour
     }
 
     public enum ContextKey { E, F }
-    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer, Shop }
+    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer, Shop, Sit, StandUp, Dealer }
 
     // Priority per key, highest first. Talking to a person beats a workout,
     // which beats picking something up; only one action is shown per key.
     // Prompts for different keys are drawn E then F, left to right.
     private static readonly ContextAction[] ContextPriority =
     {
-        ContextAction.Talk, ContextAction.Shop, ContextAction.BackRoom, ContextAction.Workout,
+        ContextAction.StandUp, ContextAction.Talk, ContextAction.Sit, ContextAction.Shop,
+        ContextAction.Dealer, ContextAction.BackRoom, ContextAction.Workout,
         ContextAction.CallFixer, ContextAction.Radio, ContextAction.Drop, ContextAction.Pickup
     };
 
     public static ContextKey GetContextActionKey(ContextAction action) =>
         action == ContextAction.Workout || action == ContextAction.Radio ||
-        action == ContextAction.CallFixer || action == ContextAction.Shop ? ContextKey.F : ContextKey.E;
+        action == ContextAction.CallFixer || action == ContextAction.Shop ||
+        action == ContextAction.Dealer ? ContextKey.F : ContextKey.E;
 
     /// <summary>The single action shown on (and triggered by) a key.</summary>
     public static ContextAction ResolveContextAction(ContextKey key, bool talk, bool backRoom,
-        bool drop, bool pickup, bool radio, bool workout, bool callFixer = false, bool shop = false)
+        bool drop, bool pickup, bool radio, bool workout, bool callFixer = false, bool shop = false,
+        bool sit = false, bool standUp = false, bool dealer = false)
     {
         for (int i = 0; i < ContextPriority.Length; i++)
         {
@@ -2264,6 +2330,9 @@ public class PlayerMovement : MonoBehaviour
                 action == ContextAction.Radio ? radio :
                 action == ContextAction.CallFixer ? callFixer :
                 action == ContextAction.Shop ? shop :
+                action == ContextAction.Sit ? sit :
+                action == ContextAction.StandUp ? standUp :
+                action == ContextAction.Dealer ? dealer :
                 action == ContextAction.Drop ? drop : pickup;
             if (available && GetContextActionKey(action) == key)
             {
@@ -2274,6 +2343,7 @@ public class PlayerMovement : MonoBehaviour
     }
 
     private bool CanShopNearby => GymProteinShopUI.CanShopAt(this, nearbyTalkTarget);
+    private bool CanDealNearby => nearbyTalkTarget == null && GymDealerShopUI.CanDealWith(this);
 
     // The radio sits on the reception counter, so the receptionist's call and
     // the radio share F there; the one the camera faces more gets the key.
@@ -2323,7 +2393,7 @@ public class PlayerMovement : MonoBehaviour
             : null;
         ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
         return ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
-            nearbyExerciseStation != null, callFixerOnF, CanShopNearby);
+            nearbyExerciseStation != null, callFixerOnF, CanShopNearby, dealer: CanDealNearby);
     }
 
     internal GymRadio NearbyRadioForVerification => nearbyRadio;
@@ -2360,6 +2430,9 @@ public class PlayerMovement : MonoBehaviour
             case ContextAction.Talk: return nearbyHomelessTalk && nearbyTalkTarget == null ? "TALK" : "TALK TO MEMBER";
             case ContextAction.CallFixer: return "CALL " + GymFixerAgent.DisplayName.ToUpperInvariant();
             case ContextAction.Shop: return "SHOP SUPPLEMENTS";
+            case ContextAction.Dealer: return "BUY FROM " + GymHomelessAgent.FirstName.ToUpperInvariant();
+            case ContextAction.Sit: return "SIT DOWN";
+            case ContextAction.StandUp: return "STAND UP";
             case ContextAction.BackRoom:
                 return string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
                     ? "INTERACT"
@@ -2380,16 +2453,28 @@ public class PlayerMovement : MonoBehaviour
             return;
         }
 
-        ContextAction eAction = ResolveContextAction(ContextKey.E,
-            HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null,
-            nearbyPickup != null, nearbyRadio != null,
-            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer);
-        ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
-        ContextAction fAction = ResolveContextAction(ContextKey.F,
-            HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null,
-            nearbyPickup != null, radioOnF,
-            nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF,
-            CanShopNearby);
+        ContextAction eAction;
+        ContextAction fAction;
+        if (IsSeatedOnBench)
+        {
+            eAction = ContextAction.StandUp;
+            fAction = CanDealNearby ? ContextAction.Dealer : ContextAction.None;
+        }
+        else
+        {
+            bool sitPreferred = PrefersSitOverTalk();
+            eAction = ResolveContextAction(ContextKey.E,
+                HasTalkTarget && !sitPreferred, nearbyBackRoomInteractable != null, heldItem != null,
+                nearbyPickup != null, nearbyRadio != null,
+                nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer,
+                sit: sitPreferred);
+            ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
+            fAction = ResolveContextAction(ContextKey.F,
+                HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null,
+                nearbyPickup != null, radioOnF,
+                nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF,
+                CanShopNearby, dealer: CanDealNearby);
+        }
         bool hasE = eAction != ContextAction.None;
         bool hasF = fAction != ContextAction.None;
         string eMessage = hasE ? GetContextActionMessage(eAction) : string.Empty;

@@ -707,12 +707,23 @@ public static class GymBackRoomBuilder
         Vector3 roomSideOfDoor = new Vector3(
             roomCenter.x, floorY, northWallZ - 1.25f);
         destination.y = floorY;
-        route = new[]
+        // A bench hand-off spot sits in the aisle between the benches: come
+        // in along the aisle from its open end so the line from the door
+        // never cuts across a bench (walking out uses the same points).
+        if (IsBagHandoffSpot(destination, out Vector3 aisleEntry))
         {
-            gymSideOfDoor,
-            roomSideOfDoor,
-            destination
-        };
+            aisleEntry.y = floorY;
+            route = new[] { gymSideOfDoor, roomSideOfDoor, aisleEntry, destination };
+        }
+        else
+        {
+            route = new[]
+            {
+                gymSideOfDoor,
+                roomSideOfDoor,
+                destination
+            };
+        }
         visitorRotation = lockerVisitRotation;
         Debug.Log(
             $"GYMCHAOS_LOCKER_ROUTE_OK points={route.Length} " +
@@ -720,78 +731,261 @@ public static class GymBackRoomBuilder
         return true;
     }
 
-    public static void ShowBenchBagsForVisitor(BodybuilderIdentity identity)
-    {
-        if (!activeBagVisitors.Add(identity)) return;
-        if (Random.value > 0.15f) return;
-        for (int bench = 0; bench < 2; bench++)
-        {
-            if (visibleBagCounts[bench] != 0) continue;
-            bagOwnerBench.Add(identity, bench);
-            visibleBagCounts[bench] = 1;
-            visibleBagStartIndices[bench] = Random.Range(0, 2);
-            RefreshBenchBagVisibility(bench);
-            break;
-        }
-        RefreshBenchBagVisibility(0);
-        RefreshBenchBagVisibility(1);
-        Debug.Log($"GYMCHAOS_LOCKER_BAGS_VISIBLE identity={identity} left={visibleBagCounts[0]} right={visibleBagCounts[1]} owners={activeBagVisitors.Count}");
-    }
-
     // Members leave their gym bag on a locker-room bench (one per bench, so
-    // at most two) and collect it before they go home.
+    // at most two) and collect it before they go home. A bench is reserved
+    // first; the bag only appears once its owner stands next to the bench
+    // and only disappears when the owner is back there to pick it up.
     public const int MaxMemberBags = 2;
+    public const float BagHandoffRadius = 1.6f;
+    private const float BagHandoffStandOff = 1.0f;
+    private const float BagAisleEntryOffset = 2.1f;
+    internal static bool ForceLockerVisitBagForVerification;
+    private static readonly System.Collections.Generic.HashSet<BodybuilderIdentity> bagRolledVisitors =
+        new System.Collections.Generic.HashSet<BodybuilderIdentity>();
+    private static readonly System.Collections.Generic.HashSet<BodybuilderIdentity> bagPickupRequests =
+        new System.Collections.Generic.HashSet<BodybuilderIdentity>();
+    // Bags brought along for a single locker visit (taken again at its end).
+    private static readonly System.Collections.Generic.HashSet<BodybuilderIdentity> transientBagOwners =
+        new System.Collections.Generic.HashSet<BodybuilderIdentity>();
 
-    public static bool TryPlaceMemberBag(BodybuilderIdentity identity)
+    public static bool TryReserveMemberBag(BodybuilderIdentity identity)
     {
         if (bagOwnerBench.ContainsKey(identity))
         {
+            bagPickupRequests.Remove(identity);
+            transientBagOwners.Remove(identity);
             return true;
         }
-        if (bagOwnerBench.Count >= MaxMemberBags)
+        int bench = FindFreeBagBench();
+        if (bench < 0)
         {
             return false;
         }
+        bagOwnerBench.Add(identity, bench);
+        Debug.Log(
+            $"GYMCHAOS_LOCKER_MEMBER_BAG_RESERVED identity={identity} bench={bench} " +
+            $"bags={bagOwnerBench.Count}");
+        return true;
+    }
+
+    /// <summary>
+    /// A locker visit sometimes brings a bag along: reserve a bench for it
+    /// (dropped on arrival, taken again when the visit ends).
+    /// </summary>
+    public static void RequestLockerVisitBag(BodybuilderIdentity identity)
+    {
+        if (bagOwnerBench.ContainsKey(identity) ||
+            (!ForceLockerVisitBagForVerification && Random.value > 0.15f)) return;
+        if (TryReserveMemberBag(identity))
+        {
+            transientBagOwners.Add(identity);
+        }
+    }
+
+    // Verification: this visit brings a bag that leaves with the visitor.
+    internal static bool ReserveVisitBagForVerification(BodybuilderIdentity identity)
+    {
+        if (!TryReserveMemberBag(identity)) return false;
+        transientBagOwners.Add(identity);
+        return true;
+    }
+
+    private static int FindFreeBagBench()
+    {
+        if (bagOwnerBench.Count >= MaxMemberBags) return -1;
         for (int bench = 0; bench < visibleBagCounts.Length; bench++)
         {
-            if (visibleBagCounts[bench] != 0) continue;
+            if (!bagOwnerBench.ContainsValue(bench)) return bench;
+        }
+        return -1;
+    }
+
+    /// <summary>Owner's bag is on the bench now (dropped, not yet taken).</summary>
+    public static bool HasMemberBag(BodybuilderIdentity identity) =>
+        activeBagVisitors.Contains(identity) && bagOwnerBench.ContainsKey(identity);
+
+    /// <summary>A bench is reserved or holds this owner's bag.</summary>
+    public static bool HasBagReservation(BodybuilderIdentity identity) =>
+        bagOwnerBench.ContainsKey(identity);
+
+    public static int MemberBagCount => bagOwnerBench.Count;
+
+    public static void RequestBagPickup(BodybuilderIdentity identity)
+    {
+        if (!bagOwnerBench.ContainsKey(identity)) return;
+        if (!activeBagVisitors.Contains(identity))
+        {
+            // Never dropped: nothing to collect.
+            CancelBagReservation(identity);
+            return;
+        }
+        bagPickupRequests.Add(identity);
+    }
+
+    /// <summary>
+    /// Where the owner stands to drop or collect the bag, when a hand-off is
+    /// still due (bag not yet dropped, or a pickup was requested).
+    /// </summary>
+    public static bool TryGetBagHandoffPoint(BodybuilderIdentity identity, out Vector3 point)
+    {
+        point = default;
+        if (!bagOwnerBench.TryGetValue(identity, out int bench)) return false;
+        bool dropDue = !activeBagVisitors.Contains(identity);
+        bool pickupDue = bagPickupRequests.Contains(identity);
+        if (!dropDue && !pickupDue) return false;
+        Vector3 benchCenter = GetBenchCenter(roomCenter, roomFloorY, bench);
+        // Stand on the aisle side of the bench, between the two benches.
+        float towardAisle = Mathf.Sign(roomCenter.z - benchCenter.z);
+        point = benchCenter + new Vector3(0f, 0f, towardAisle * BagHandoffStandOff);
+        return true;
+    }
+
+    private static bool IsBagHandoffSpot(Vector3 point, out Vector3 aisleEntry)
+    {
+        for (int bench = 0; bench < 2; bench++)
+        {
+            Vector3 benchCenter = GetBenchCenter(roomCenter, roomFloorY, bench);
+            float towardAisle = Mathf.Sign(roomCenter.z - benchCenter.z);
+            Vector3 spot = benchCenter + new Vector3(0f, 0f, towardAisle * BagHandoffStandOff);
+            if (Vector2.Distance(new Vector2(point.x, point.z), new Vector2(spot.x, spot.z)) < 0.3f)
+            {
+                // The aisle's open end, towards the room centre and the door.
+                aisleEntry = spot + new Vector3(Mathf.Sign(roomCenter.x - benchCenter.x) * BagAisleEntryOffset, 0f, 0f);
+                return true;
+            }
+        }
+        aisleEntry = default;
+        return false;
+    }
+
+    public static float DistanceToOwnBench(BodybuilderIdentity identity, Vector3 position)
+    {
+        if (!bagOwnerBench.TryGetValue(identity, out int bench)) return float.PositiveInfinity;
+        Vector3 benchCenter = GetBenchCenter(roomCenter, roomFloorY, bench);
+        if (Mathf.Abs(position.y - benchCenter.y) > 1.5f) return float.PositiveInfinity;
+        return Vector2.Distance(
+            new Vector2(position.x, position.z), new Vector2(benchCenter.x, benchCenter.z));
+    }
+
+    /// <summary>
+    /// Drops or collects the owner's bag when the owner is at the bench.
+    /// Returns true when a hand-off happened this call.
+    /// </summary>
+    public static bool TickBagOwner(BodybuilderIdentity identity, Vector3 ownerPosition)
+    {
+        if (!bagOwnerBench.TryGetValue(identity, out int bench)) return false;
+        float distance = DistanceToOwnBench(identity, ownerPosition);
+        if (distance > BagHandoffRadius) return false;
+        if (!activeBagVisitors.Contains(identity))
+        {
+            if (bagPickupRequests.Contains(identity)) return false;
             activeBagVisitors.Add(identity);
-            bagOwnerBench.Add(identity, bench);
             visibleBagCounts[bench] = 1;
             visibleBagStartIndices[bench] = Random.Range(0, 2);
             RefreshBenchBagVisibility(0);
             RefreshBenchBagVisibility(1);
             Debug.Log(
                 $"GYMCHAOS_LOCKER_MEMBER_BAG_PLACED identity={identity} bench={bench} " +
-                $"bags={bagOwnerBench.Count}");
+                $"ownerDistance={distance:F2} bags={bagOwnerBench.Count}");
+            return true;
+        }
+        if (bagPickupRequests.Contains(identity))
+        {
+            RemoveBag(identity, bench);
+            Debug.Log(
+                $"GYMCHAOS_LOCKER_MEMBER_BAG_TAKEN identity={identity} bench={bench} " +
+                $"ownerDistance={distance:F2}");
             return true;
         }
         return false;
     }
 
-    public static bool HasMemberBag(BodybuilderIdentity identity) =>
-        bagOwnerBench.ContainsKey(identity);
-
-    public static int MemberBagCount => bagOwnerBench.Count;
-
-    public static void HideBenchBagsForVisitor(BodybuilderIdentity identity)
+    private static void CancelBagReservation(BodybuilderIdentity identity)
     {
-        if (!activeBagVisitors.Remove(identity))
-        {
-            return;
-        }
-
-        if (bagOwnerBench.TryGetValue(identity, out int bench))
+        if (bagOwnerBench.TryGetValue(identity, out int bench) &&
+            !activeBagVisitors.Contains(identity))
         {
             bagOwnerBench.Remove(identity);
-            visibleBagCounts[bench] = 0;
-            RefreshBenchBagVisibility(bench);
-            Debug.Log($"GYMCHAOS_LOCKER_MEMBER_BAG_TAKEN identity={identity} bench={bench}");
+            bagPickupRequests.Remove(identity);
+            transientBagOwners.Remove(identity);
+            Debug.Log($"GYMCHAOS_LOCKER_MEMBER_BAG_RESERVATION_CANCELLED identity={identity} bench={bench}");
         }
-        // Other owners' bags stay; the visibility gate needs a refresh once
-        // the last owner is gone.
+    }
+
+    private static void RemoveBag(BodybuilderIdentity identity, int bench)
+    {
+        bagOwnerBench.Remove(identity);
+        activeBagVisitors.Remove(identity);
+        bagPickupRequests.Remove(identity);
+        transientBagOwners.Remove(identity);
+        visibleBagCounts[bench] = 0;
         RefreshBenchBagVisibility(0);
         RefreshBenchBagVisibility(1);
+    }
+
+    /// <summary>
+    /// The owner leaves the locker room (or the gym). An undropped bag is
+    /// simply not brought; a single-visit bag is taken along, but only while
+    /// the owner is still at the bench. A member's bag that is still on the
+    /// bench waits for its owner's pickup walk.
+    /// </summary>
+    public static void HideBenchBagsForVisitor(BodybuilderIdentity identity, Vector3 ownerPosition)
+    {
+        if (!bagOwnerBench.ContainsKey(identity)) return;
+        if (!activeBagVisitors.Contains(identity))
+        {
+            CancelBagReservation(identity);
+            return;
+        }
+        if (transientBagOwners.Contains(identity))
+        {
+            bagPickupRequests.Add(identity);
+        }
+        TickBagOwner(identity, ownerPosition);
+    }
+
+    /// <summary>
+    /// Removes an absent owner's bag (or reservation) when the player is not
+    /// inside the locker room to see it go.
+    /// </summary>
+    public static bool ClearBagOutOfSight(BodybuilderIdentity identity, Vector3 playerPosition)
+    {
+        if (!bagOwnerBench.TryGetValue(identity, out int bench)) return false;
+        if (activeBagVisitors.Contains(identity) && TryGetRoomBounds(out Bounds room))
+        {
+            room.Expand(new Vector3(1f, 2f, 1f));
+            if (room.Contains(playerPosition)) return false;
+        }
+        RemoveBag(identity, bench);
+        Debug.Log($"GYMCHAOS_LOCKER_MEMBER_BAG_CLEARED identity={identity} bench={bench} reason=owner_gone");
+        return true;
+    }
+
+    // Verification/debug path: shows a bag at once, without an owner walk.
+    public static void ShowBenchBagsForVisitor(BodybuilderIdentity identity)
+    {
+        // One roll per visit: asking again must not reroll the owner.
+        if (bagOwnerBench.ContainsKey(identity) || !bagRolledVisitors.Add(identity)) return;
+        if (Random.value > 0.15f) return;
+        int bench = FindFreeBagBench();
+        if (bench < 0) return;
+        bagOwnerBench.Add(identity, bench);
+        transientBagOwners.Add(identity);
+        activeBagVisitors.Add(identity);
+        visibleBagCounts[bench] = 1;
+        visibleBagStartIndices[bench] = Random.Range(0, 2);
+        RefreshBenchBagVisibility(0);
+        RefreshBenchBagVisibility(1);
+        Debug.Log($"GYMCHAOS_LOCKER_BAGS_VISIBLE identity={identity} left={visibleBagCounts[0]} right={visibleBagCounts[1]} owners={activeBagVisitors.Count}");
+    }
+
+    // Verification/debug path: removes the owner's bag at once.
+    public static void HideBenchBagsForVisitor(BodybuilderIdentity identity)
+    {
+        bagRolledVisitors.Remove(identity);
+        if (!bagOwnerBench.TryGetValue(identity, out int bench)) return;
+        RemoveBag(identity, bench);
+        Debug.Log($"GYMCHAOS_LOCKER_MEMBER_BAG_TAKEN identity={identity} bench={bench} ownerDistance=forced");
     }
 
     public static void HideBenchBags()
@@ -805,6 +999,9 @@ public static class GymBackRoomBuilder
         }
         activeBagVisitors.Clear();
         bagOwnerBench.Clear();
+        bagPickupRequests.Clear();
+        transientBagOwners.Clear();
+        bagRolledVisitors.Clear();
         if (hadVisibleBags) Debug.Log("GYMCHAOS_LOCKER_BAGS_HIDDEN");
     }
 

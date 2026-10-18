@@ -32,7 +32,7 @@ public sealed partial class GymVisitorAgent
 		}
 		storeReturnRoomTarget = door.InteriorPoint + inward.normalized * 3.6f;
 		storeReturnRoomTarget.y = ((Component)fighter).transform.position.y;
-		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		BeginExit(door);
 		if (state != VisitorState.ExitingDoor)
 		{

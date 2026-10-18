@@ -190,7 +190,10 @@ CHARACTERS = {
         },
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Homeless/homeless_guy_authored.fbx",
         "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/homeless_guy.png",
-        "clip_names": ("walking", "sleeping", "stand_up", "sit_to_stand", "sitting"),
+        # idle1-3 (shared Mixamo idles) play while the player talks to him
+        # mid-walk; the conversation pauses his day.
+        "clip_names": ("walking", "sleeping", "stand_up", "sit_to_stand", "sitting",
+                       "idle1", "idle2", "idle3"),
         "tpose_arms": True,
         # Chain the clips on one fixed root (source metres, Mixamo faces -Y):
         # every standing pose keeps the hips over the root, so walking,

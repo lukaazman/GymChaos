@@ -2149,6 +2149,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 size = new Vector2(height * 0.165f, height * 0.038f);
                 coverage = 72f;
                 break;
+            case BodybuilderIdentity.Davie:
+                // Taller band: it sits forward of his brow, so a plain
+                // height left the eyes showing from above.
+                size = new Vector2(height * 0.132f, height * 0.04f);
+                coverage = 70f;
+                break;
             default:
                 size = new Vector2(height * 0.128f, height * 0.029f);
                 coverage = 69f;
@@ -2340,10 +2346,16 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 return -0.037f;
             case BodybuilderIdentity.Goku:
                 return -0.038f;
+            case BodybuilderIdentity.Davie:
+                // Pushed out past his brow, so lifted to keep the eyes
+                // covered from the taller player's view.
+                return 0.012f;
             default:
                 return 0f;
         }
     }
+
+    private const float DaviePush = 0.04f;
 
     // World metres pushed out along the face direction.
     private static float GetEyeBarPush(BodybuilderIdentity identity)
@@ -2352,6 +2364,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         if (identity == BodybuilderIdentity.Goku)
         {
             return 0.035f;
+        }
+        // Davie's brow and nose bridge poked through the shell as gaps.
+        if (identity == BodybuilderIdentity.Davie)
+        {
+            return DaviePush;
         }
         return identity == BodybuilderIdentity.Arnold ||
             identity == BodybuilderIdentity.JayCutler

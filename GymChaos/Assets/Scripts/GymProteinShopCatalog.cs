@@ -64,6 +64,18 @@ public sealed class GymProteinProduct
     public GymBuffModifier[] crashModifiers;
     public float crashSeconds;
     public GymProteinVariant[] variants;
+
+    // Hank's gear (performance enhancing drugs) only: stronger than any
+    // supplement, with health costs on top.
+    public bool gear;
+    // Health lost per second while the effect runs (never below 1 HP).
+    public float healthDrainPerSecond;
+    // Share of max health lost for the rest of the session, per dose.
+    public float maxHealthToll;
+    // Health lost on taking it (the jab, the stomach).
+    public float instantHarm;
+    // Reputation lost per purchase: people talk.
+    public int reputationCost;
 }
 
 /// <summary>

@@ -7,6 +7,8 @@ public sealed class DialogueChoice
     public string text;
     public int nextNodeIndex = -1;
     public int reputationDelta;
+    // Optional effect of picking this choice (not serialized).
+    [NonSerialized] public Action onChosen;
 
     public DialogueChoice(string choiceText, int nextNode, int reputationChange)
     {
@@ -29,9 +31,9 @@ public sealed class DialogueNode
         text = nodeText;
     }
 
-    public DialogueNode AddChoice(string choiceText, int nextNode, int reputationChange)
+    public DialogueNode AddChoice(string choiceText, int nextNode, int reputationChange, Action onChosen = null)
     {
-        choices.Add(new DialogueChoice(choiceText, nextNode, reputationChange));
+        choices.Add(new DialogueChoice(choiceText, nextNode, reputationChange) { onChosen = onChosen });
         return this;
     }
 }

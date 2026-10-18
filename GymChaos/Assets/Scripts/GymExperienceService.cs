@@ -33,6 +33,10 @@ public sealed class GymExperienceService : MonoBehaviour
         GymShirtColor.Black, GymShirtColor.White, GymShirtColor.Red,
         GymShirtColor.Blue, GymShirtColor.Gold
     };
+    private static readonly GymTopStyle[] LockerTopOptions =
+    {
+        GymTopStyle.TankTop, GymTopStyle.Oversized, GymTopStyle.Onyx
+    };
     private static readonly GymHeadwear[] LockerHeadwearOptions =
     {
         GymHeadwear.None, GymHeadwear.Cap, GymHeadwear.Beanie,
@@ -83,7 +87,7 @@ public sealed class GymExperienceService : MonoBehaviour
     public PlayerMovement Player => player;
     public bool IsSkillChoiceVisible => levelChoiceVisible;
     public bool IsLockerMenuOpen => lockerMenuOpen;
-    public bool IsBlockingPlayerInput => lockerMenuOpen || GymProteinShopUI.IsOpen ||
+    public bool IsBlockingPlayerInput => lockerMenuOpen || GymProteinShopUI.IsOpen || GymDealerShopUI.IsOpen ||
         (levelChoiceVisible && !EnemyFighter.IsFightActive && !GymDialogueDirector.IsDialogueActive);
     public int Level => state != null ? state.level : 1;
     public int Experience => state != null ? state.experience : 0;
@@ -552,6 +556,30 @@ public sealed class GymExperienceService : MonoBehaviour
             $"today={state.loyaltyStampsToday}", this);
         MarkProgressDirty();
         return added;
+    }
+
+    public bool IsHankDealerUnlocked => state != null && state.hankDealerUnlocked;
+
+    public void UnlockHankDealer()
+    {
+        if (state == null || state.hankDealerUnlocked)
+        {
+            return;
+        }
+        state.hankDealerUnlocked = true;
+        NoticeRaised?.Invoke(GymHomelessAgent.FirstName + " will sell you his stash  (F)", 3f, 1);
+        Debug.Log("GYMCHAOS_HANK_DEALER_UNLOCKED", this);
+        MarkProgressDirty();
+    }
+
+    /// <summary>Gear deals cost standing, without the dialogue XP.</summary>
+    public void RegisterShadyPurchase(int reputationCost)
+    {
+        if (state == null || reputationCost <= 0)
+        {
+            return;
+        }
+        ChangeReputation(-reputationCost, "shady deal", false);
     }
 
     public bool TrySpendLoyaltyStamps(int count)
@@ -1137,6 +1165,8 @@ public sealed class GymExperienceService : MonoBehaviour
         return Level >= requiredLevel;
     }
 
+    public bool IsCosmeticUnlocked(GymTopStyle top) => Level >= GetTopUnlockLevel(top);
+
     public bool IsCosmeticUnlocked(GymHeadwear headwear)
     {
         if (headwear == GymHeadwear.BucketHat)
@@ -1158,6 +1188,20 @@ public sealed class GymExperienceService : MonoBehaviour
         }
 
         state.shirt = shirt.ToString();
+        EnsureCosmetics();
+        cosmetics?.ApplyFromState(state);
+        SaveNow();
+    }
+
+    public void EquipTop(GymTopStyle top)
+    {
+        if (state == null || !IsCosmeticUnlocked(top))
+        {
+            ShowFeedback("That top unlocks at a higher level.", 2f);
+            return;
+        }
+
+        state.top = top.ToString();
         EnsureCosmetics();
         cosmetics?.ApplyFromState(state);
         SaveNow();
@@ -1455,7 +1499,7 @@ public sealed class GymExperienceService : MonoBehaviour
                     : "TECH IMPACT   TIMING CONTROL +1";
             }
             case GymStat.Reputation:
-                return "REP IMPACT   SOCIAL EFFECT +12%";
+                return "KARMA IMPACT   SOCIAL EFFECT +12%";
             default:
                 return "STAT IMPACT   +1";
         }
@@ -1552,7 +1596,7 @@ public sealed class GymExperienceService : MonoBehaviour
             progressHudBodyStyle);
         DrawProgressHudText(
             new Rect(x + 14f, y + 69f, width - 28f, 18f),
-            $"REP {state.reputation:+#;-#;0}  MASTERY {state.masteryRank}",
+            $"KARMA {state.reputation:+#;-#;0}  MASTERY {state.masteryRank}",
             progressHudBodyStyle);
 
         if (hasImpact)
@@ -1712,6 +1756,17 @@ public sealed class GymExperienceService : MonoBehaviour
     public static System.Collections.Generic.IReadOnlyList<GymShirtColor> LockerShirts => LockerShirtOptions;
     public static System.Collections.Generic.IReadOnlyList<GymHeadwear> LockerHeadwear => LockerHeadwearOptions;
 
+    public static System.Collections.Generic.IReadOnlyList<GymTopStyle> LockerTops => LockerTopOptions;
+
+    public bool IsTopWorn(GymTopStyle top) =>
+        state != null && string.Equals(state.top, top.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    public string GetLockerTopLabel(GymTopStyle top)
+    {
+        string name = PlayerCosmeticLoadout.GetTopDisplayName(top);
+        return IsCosmeticUnlocked(top) ? name : name + "  L" + GetTopUnlockLevel(top);
+    }
+
     public bool IsShirtWorn(GymShirtColor shirt) =>
         state != null && string.Equals(state.shirt, shirt.ToString(), StringComparison.OrdinalIgnoreCase);
 
@@ -1737,7 +1792,10 @@ public sealed class GymExperienceService : MonoBehaviour
         : string.Empty;
 
     public string LockerWearingLine => state == null ? string.Empty :
-        "WEARING   " + state.shirt.ToUpperInvariant() + "   " +
+        "WEARING   " + state.shirt.ToUpperInvariant() + " " +
+        (Enum.TryParse(state.top, true, out GymTopStyle wornTop)
+            ? PlayerCosmeticLoadout.GetTopDisplayName(wornTop)
+            : state.top.ToUpperInvariant()) + "   " +
         (cosmetics != null
             ? PlayerCosmeticLoadout.GetHeadwearDisplayName(cosmetics.CurrentHeadwear)
             : state.headwear).ToUpperInvariant();
@@ -1755,6 +1813,11 @@ public sealed class GymExperienceService : MonoBehaviour
     {
         return shirt == GymShirtColor.Black ? 1 :
             shirt == GymShirtColor.White ? 2 : shirt == GymShirtColor.Red ? 4 : 6;
+    }
+
+    private static int GetTopUnlockLevel(GymTopStyle top)
+    {
+        return top == GymTopStyle.Oversized ? 3 : top == GymTopStyle.Onyx ? 5 : 1;
     }
 
     private static int GetHeadwearUnlockLevel(GymHeadwear headwear)

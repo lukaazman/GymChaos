@@ -2656,6 +2656,7 @@ public static class GymOutdoorBuilder
 [DefaultExecutionOrder(100)]
 public sealed class GymExteriorOnlyVisual : MonoBehaviour
 {
+    private const float GlassDoorViewRadius = 16f;
     private static PlayerMovement sharedPlayer;
     private static int sharedVisibilityFrame = -1;
     private static bool sharedOutsideVisibility;
@@ -2689,8 +2690,15 @@ public sealed class GymExteriorOnlyVisual : MonoBehaviour
             sharedPlayer = Object.FindAnyObjectByType<PlayerMovement>();
         }
 
+        Vector3 playerPosition = sharedPlayer != null ? sharedPlayer.transform.position : Vector3.zero;
+        // The gym entrance is clear glass: near it, the path walls outside are
+        // in view through the door and must not pop in on the threshold.
+        GymDoorway doorway = GymDoorway.Instance;
         sharedOutsideVisibility = sharedPlayer != null &&
-            GymOutdoorBuilder.IsPlayerOutsideGym(sharedPlayer.transform.position);
+            (GymOutdoorBuilder.IsPlayerOutsideGym(playerPosition) ||
+             (doorway != null && Vector3.ProjectOnPlane(
+                 doorway.DoorCenter - playerPosition, Vector3.up).sqrMagnitude <
+                 GlassDoorViewRadius * GlassDoorViewRadius));
         return sharedOutsideVisibility;
     }
 

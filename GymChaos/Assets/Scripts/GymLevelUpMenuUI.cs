@@ -20,7 +20,7 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
         GymStat.Strength, GymStat.Endurance, GymStat.Technique, GymStat.Reputation
     };
 
-    private static readonly string[] StatNames = { "STRENGTH", "ENDURANCE", "TECHNIQUE", "REPUTATION" };
+    private static readonly string[] StatNames = { "STRENGTH", "ENDURANCE", "TECHNIQUE", "KARMA" };
 
     private static readonly string[] StatBlurbs =
     {

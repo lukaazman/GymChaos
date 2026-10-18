@@ -2,94 +2,58 @@ using UnityEngine;
 
 /// <summary>
 /// Runtime doorway used by the visitor system. The opening is built by
-/// GymInteriorBuilder; this component only owns the shared passage points and
-/// keeps the visual door panel in its authored doorway position while a visitor
-/// is using the passage. The gameplay passage is intentionally non-solid for
-/// visitors; the black inner panel is a static visual wall, not a swinging or
-/// sliding door leaf.
+/// GymInteriorBuilder; this component owns the shared passage points and the
+/// automatic glass double door in the opening. The leaves carry no colliders,
+/// so the passage stays clear for visitors, police and the player; the door
+/// opens for anyone near or heading for it and closes once the opening is
+/// clear.
 /// </summary>
 [DefaultExecutionOrder(-50)]
 public sealed class GymDoorway : MonoBehaviour
 {
+    public const string AutoDoorName = "Gym Entrance";
+
     public static GymDoorway Instance { get; private set; }
 
     private Transform doorPanel;
-    private Vector3 closedLocalPosition;
-    private Vector3 openLocalPosition;
-    private Quaternion closedLocalRotation;
-    private Quaternion openLocalRotation;
-    private Collider panelCollider;
-    private float openBlend;
-    private int openRequests;
+    private GymAutoDoor autoDoor;
 
     public Vector3 InteriorPoint { get; private set; }
     public Vector3 ExteriorPoint { get; private set; }
     public Vector3 DoorCenter { get; private set; }
-    public bool IsOpen => openBlend >= 0.96f;
+    public bool IsOpen => autoDoor == null || autoDoor.IsFullyOpen;
+    /// <summary>Root of the door leaves (no colliders; route grids ignore it).</summary>
     public Transform DoorPanel => doorPanel;
-    public bool HasStaticPanelPose => doorPanel == null ||
-        (Vector3.Distance(doorPanel.localPosition, closedLocalPosition) < 0.0001f &&
-         Quaternion.Angle(doorPanel.localRotation, closedLocalRotation) < 0.01f);
-
-    public static GymDoorway Create(
-        Transform parent,
-        Vector3 doorCenter,
-        Vector3 interiorPoint,
-        Vector3 exteriorPoint,
-        Transform panel)
-    {
-        GameObject doorwayObject = new GameObject("Gym Visitor Doorway");
-        doorwayObject.transform.SetParent(parent, true);
-        doorwayObject.transform.position = doorCenter;
-        GymDoorway doorway = doorwayObject.AddComponent<GymDoorway>();
-        doorway.Configure(doorCenter, interiorPoint, exteriorPoint, panel);
-        return doorway;
-    }
+    public GymAutoDoor AutoDoor => autoDoor;
 
     public void Configure(
         Vector3 doorCenter,
         Vector3 interiorPoint,
         Vector3 exteriorPoint,
-        Transform panel)
+        Transform leavesRoot,
+        GymAutoDoor door)
     {
         DoorCenter = doorCenter;
         InteriorPoint = interiorPoint;
         ExteriorPoint = exteriorPoint;
-        doorPanel = panel;
-        openRequests = 0;
-
-        if (doorPanel != null)
-        {
-            closedLocalPosition = doorPanel.localPosition;
-            closedLocalRotation = doorPanel.localRotation;
-            // Keep the black inner wall/panel exactly where the builder placed
-            // it. Visitors ignore the doorway trigger/collider in their route
-            // probe, so the panel can remain visually present without ever
-            // rotating or changing its initial position.
-            openLocalPosition = closedLocalPosition;
-            openLocalRotation = closedLocalRotation;
-            panelCollider = doorPanel.GetComponent<Collider>();
-            if (panelCollider == null)
-            {
-                panelCollider = doorPanel.gameObject.AddComponent<BoxCollider>();
-            }
-            openBlend = 0f;
-            ApplyPanelPose();
-        }
+        doorPanel = leavesRoot;
+        autoDoor = door;
 
         Debug.Log(
-            $"GYMCHAOS_DOOR_OK interior={InteriorPoint} exterior={ExteriorPoint} open={IsOpen}",
+            $"GYMCHAOS_DOOR_OK interior={InteriorPoint} exterior={ExteriorPoint} " +
+            $"autoDoor={(autoDoor != null ? autoDoor.LeafCount : 0)}",
             this);
     }
 
+    // Visitors, police and the fixer used to hold the passage "open" for
+    // their whole door route (and some held it for minutes). The automatic
+    // door senses all of them directly, so these calls no longer drive it.
     public void RequestOpen()
     {
-        openRequests++;
     }
 
     public void ReleaseOpen()
     {
-        openRequests = Mathf.Max(0, openRequests - 1);
     }
 
     private void Awake()
@@ -108,31 +72,6 @@ public sealed class GymDoorway : MonoBehaviour
         if (Instance == this)
         {
             Instance = null;
-        }
-    }
-
-    private void Update()
-    {
-        float target = openRequests > 0 ? 1f : 0f;
-        openBlend = Mathf.MoveTowards(openBlend, target, Time.deltaTime * 5f);
-        ApplyPanelPose();
-    }
-
-    private void ApplyPanelPose()
-    {
-        if (doorPanel == null)
-        {
-            return;
-        }
-
-        doorPanel.localPosition = closedLocalPosition;
-        doorPanel.localRotation = closedLocalRotation;
-        if (panelCollider != null)
-        {
-            // The panel is a visual inner wall. Its collision would make the
-            // static visual contradict the visitor passage, so leave it
-            // non-solid for the whole runtime.
-            panelCollider.enabled = false;
         }
     }
 }

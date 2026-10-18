@@ -1936,6 +1936,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         rigidbody.isKinematic = true;
         rigidbody.useGravity = false;
         rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        // The car scans are ~145k triangles: cast shadows from clustered copies.
+        GymShadowProxy.Apply(visual);
     }
 
     private static bool TryGetOrientedLocalBounds(

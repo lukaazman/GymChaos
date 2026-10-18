@@ -10,7 +10,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     /// IMGUI draws above every uGUI canvas, so while the shop overlay is open
     /// the labels of the characters behind it fade instead of sitting on top.
     /// </summary>
-    public static float CurrentAlpha => GymProteinShopUI.IsOpen ? BehindOverlayAlpha : 1f;
+    public static float CurrentAlpha => GymProteinShopUI.IsOpen || GymDealerShopUI.IsOpen ? BehindOverlayAlpha : 1f;
 
     private SkinnedMeshRenderer bodyRenderer;
     private Camera playerCamera;
@@ -43,8 +43,10 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
 
     private void OnGUI()
     {
+        bool menuNametag = GymStartScreen.IsMenuVisible && IsReceptionist;
         if (bodyRenderer == null || !bodyRenderer.enabled ||
-            GymStartScreen.IsMenuVisible || GymDialogueDirector.IsDialogueActive ||
+            (GymStartScreen.IsMenuVisible && !(menuNametag && GymStartScreen.ShowsReceptionistNametag)) ||
+            GymDialogueDirector.IsDialogueActive ||
             GymPauseMenu.IsVisible)
         {
             return;
@@ -82,7 +84,8 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
             NameRevealDistanceSqr;
         GymDialogueDirector director = GymDialogueDirector.Active;
         bool isDialogueTarget = !standalone && director != null && director.Target == fighter;
-        bool showName = nearby || (!standalone && fighter.IsAggressive) || isDialogueTarget;
+        bool showName = nearby || menuNametag || (!standalone && fighter.IsAggressive) ||
+            isDialogueTarget;
         bool showHealth = !standalone && fighter.HasTakenDamage;
         // The anchor sits just above the head: the stack grows upward from
         // it (health bar, then name) so the name stays close to the head.
@@ -120,6 +123,22 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         }
         GUI.color = previousColor;
     }
+
+    private bool IsReceptionist
+    {
+        get
+        {
+            if (fighter == null && !standalone)
+            {
+                fighter = GetComponentInParent<EnemyFighter>();
+            }
+            return !standalone && fighter != null &&
+                fighter.Identity == BodybuilderIdentity.Manwithsuit1;
+        }
+    }
+
+    /// <summary>Verifier hook: whether OnGUI would draw this name now.</summary>
+    public bool WouldShowNameInMenu => IsReceptionist && GymStartScreen.ShowsReceptionistNametag;
 
     private const float AnchorGapPixels = 1f;
     private const float HealthBarHeight = 9f;

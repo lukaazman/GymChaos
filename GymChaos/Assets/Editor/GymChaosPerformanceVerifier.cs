@@ -34,6 +34,8 @@ public static class GymChaosPerformanceVerifier
     }
 
     private static readonly List<float> frameMs = new List<float>(SampleFrames);
+    // The game's own frame cost (PlayerLoop marker), without Editor stalls.
+    private static readonly List<float> gameMs = new List<float>(SampleFrames);
     private static Scenario[] scenarios;
     private static int scenarioIndex;
     private static double phaseStarted;
@@ -74,7 +76,30 @@ public static class GymChaosPerformanceVerifier
         "GymChaos.Late.EnemyMeshHitboxRig",
         "GymChaos.Late.PlayerHandRig",
         "Camera.Render",
-        "Gfx.WaitForPresentOnGfxThread"
+        "Gfx.WaitForPresentOnGfxThread",
+        // Editor-only work between player frames (batch/editor runs): a hitch
+        // here is the Editor, not the game.
+        "EditorLoop",
+        "PostLateUpdate.FinishFrameRendering",
+        "Update.DirectorUpdate",
+        "PreLateUpdate.DirectorUpdateAnimationBegin",
+        "PreLateUpdate.DirectorUpdateAnimationEnd",
+        "Physics.Simulate",
+        "Loading.AwakeFromLoad",
+        "Loading.ReadObject",
+        "Shader.Parse",
+        "Mesh.UploadMeshData",
+        "Texture.AwakeFromLoad",
+        "Update.ScriptRunDelayedTasks",
+        "Update.ScriptRunDelayedDynamicFrameRate",
+        "PostLateUpdate.UpdateAllRenderers",
+        "PostLateUpdate.UpdateAllSkinnedMeshes",
+        "PreUpdate.AIUpdatePostScript",
+        "Initialization.PlayerUpdateTime",
+        "TimeUpdate.WaitForLastPresentationAndUpdateTime",
+        "Gfx.WaitForGfxCommandsFromMainThread",
+        "Gfx.WaitForRenderThread",
+        "Gfx.PresentFrame"
     };
     // Render counters averaged per frame (raw counts, not time).
     private static readonly string[] Counters =
@@ -188,6 +213,7 @@ public static class GymChaosPerformanceVerifier
                 if (now - phaseStarted < SettleSeconds) return;
                 sampling = true;
                 frameMs.Clear();
+                gameMs.Clear();
                 StartRecorders();
                 fixedStepsAtStart = fixedSteps;
                 allocatedAtStart = GC.GetAllocatedBytesForCurrentThread();
@@ -197,9 +223,14 @@ public static class GymChaosPerformanceVerifier
 
             float frame = Time.unscaledDeltaTime * 1000f;
             frameMs.Add(frame);
+            int playerLoop = Array.IndexOf(Markers, "PlayerLoop");
+            if (recorders[playerLoop].Valid) gameMs.Add(recorders[playerLoop].LastValue / 1e6f);
             for (int i = 0; i < recorders.Length; i++)
                 if (recorders[i].Valid) markerSums[i] += recorders[i].LastValue / 1e6;
-            if (frame > SpikeMs) LogSpike(frame);
+            // Recorder LastValue is the previous frame: report a hitch one
+            // tick later, when the recorders hold that frame's samples.
+            if (pendingSpike > 0f) LogSpike(pendingSpike);
+            pendingSpike = frame > SpikeMs ? frame : 0f;
             for (int i = 0; i < counterRecorders.Length; i++)
                 if (counterRecorders[i].Valid) counterSums[i] += counterRecorders[i].LastValue;
             if (frameMs.Count < SampleFrames) return;
@@ -224,6 +255,7 @@ public static class GymChaosPerformanceVerifier
     }
 
     private const float SpikeMs = 45f;
+    private static float pendingSpike;
 
     // Names the markers that took the time in a hitch frame. LastValue is
     // the previous frame's sample, which is the frame whose delta just ended.
@@ -308,6 +340,17 @@ public static class GymChaosPerformanceVerifier
             "gcKBPerFrame={6:F1} gcCollections={7}",
             name, avg, p50, p95, p99, max, kbPerFrame, collections);
         Debug.Log("GYMCHAOS_PERF " + line);
+        if (gameMs.Count > 0)
+        {
+            List<float> game = new List<float>(gameMs);
+            game.Sort();
+            float gameSum = 0f;
+            for (int i = 0; i < game.Count; i++) gameSum += game[i];
+            Debug.Log(string.Format(CultureInfo.InvariantCulture,
+                "GYMCHAOS_PERF_GAME scenario={0} avgMs={1:F2} p95Ms={2:F2} p99Ms={3:F2} maxMs={4:F2}",
+                name, gameSum / game.Count, game[(int)(game.Count * 0.95f)],
+                game[(int)(game.Count * 0.99f)], game[game.Count - 1]));
+        }
         StringBuilder split = new StringBuilder();
         for (int i = 0; i < recorders.Length; i++)
         {

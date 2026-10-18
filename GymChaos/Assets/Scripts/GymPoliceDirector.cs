@@ -409,6 +409,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
         FitCarVisual(root);
         GymVehicleWheelSpinner.Attach(root, () => policeCarMoving);
         AddCarCollider(root);
+        GymShadowProxy.Apply(root);
         policeCarRouteBoundsClear = true;
         policeCarStopWithinRoadEnvelope = false;
         policeCarRouteOverlapCount = 0;

@@ -1015,6 +1015,29 @@ public bool BeginDepartureForVerification(
         record.observedWorkoutVersion = record.agent.CompletedWorkoutVersion;
     }
 
+    // A bag whose owner left without the pickup walk (closing time, combat,
+    // death) is tidied away, but only while the player is out of the locker
+    // room, so no bag ever vanishes in view.
+    private void SweepLeftBehindBags()
+    {
+        for (int i = 0; i < records.Count; i++)
+        {
+            VisitorRecord record = records[i];
+            if (record == null || record.fighter == null ||
+                !GymBackRoomBuilder.HasBagReservation(record.fighter.Identity))
+            {
+                continue;
+            }
+            bool present = record.active && record.fighter.isActiveAndEnabled && !record.fighter.IsDead &&
+                !record.suspendedForCombat;
+            if (!present)
+            {
+                GymBackRoomBuilder.ClearBagOutOfSight(record.fighter.Identity,
+                    player != null ? player.transform.position : Vector3.positiveInfinity);
+            }
+        }
+    }
+
     private void TryLeaveMemberBag(VisitorRecord record)
     {
         record.bagPickupStarted = false;
@@ -1022,7 +1045,13 @@ public bool BeginDepartureForVerification(
         {
             return;
         }
-        GymBackRoomBuilder.TryPlaceMemberBag(record.fighter.Identity);
+        // The bag appears only once the member reaches the locker bench, so
+        // the arrival visit goes there first.
+        if (GymBackRoomBuilder.TryReserveMemberBag(record.fighter.Identity))
+        {
+            record.lockerVisitScheduled = true;
+            record.storeVisitScheduled = false;
+        }
     }
 
     private void Update()
@@ -1035,6 +1064,11 @@ public bool BeginDepartureForVerification(
         if (lastDay != timeOfDay.CurrentDay)
         {
             HandleDayChanged(timeOfDay.CurrentDay);
+        }
+
+        if (Time.frameCount % 30 == 0)
+        {
+            SweepLeftBehindBags();
         }
 
         float now = timeOfDay.Time01;
@@ -1267,6 +1301,7 @@ public bool BeginDepartureForVerification(
                 {
                     record.bagPickupStarted = true;
                     record.lockerVisitScheduled = true;
+                    GymBackRoomBuilder.RequestBagPickup(record.fighter.Identity);
                     Debug.Log(
                         $"GYMCHAOS_LOCKER_MEMBER_BAG_PICKUP enemy={record.fighter.Identity}", this);
                     continue;

@@ -30,6 +30,10 @@ public static class GymChaosLockerVisitVerifier
     private static bool layoutCaptureAttempted;
     private static bool layoutCaptureAvailable;
     private static bool verificationFailed;
+    private static bool bagWasVisible;
+    private static float lastBagDistance = float.PositiveInfinity;
+    private static bool bagPlacedNearObserved;
+    private static bool bagTakenNearObserved;
 
     static GymChaosLockerVisitVerifier()
     {
@@ -70,6 +74,10 @@ public static class GymChaosLockerVisitVerifier
         layoutCaptureAttempted = false;
         layoutCaptureAvailable = false;
         verificationFailed = false;
+        bagWasVisible = false;
+        lastBagDistance = float.PositiveInfinity;
+        bagPlacedNearObserved = false;
+        bagTakenNearObserved = false;
         SessionState.SetBool(RequestedKey, true);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -177,13 +185,24 @@ public static class GymChaosLockerVisitVerifier
             // Keep the authored bags visible for the direct capture so the
             // image evidence covers both the bench support and the runtime
             // bag placement contract, not only the empty room shell.
-            GymBackRoomBuilder.ShowBenchBagsForVisitor(fighter.Identity);
+            // A stand-in owner: the visiting member's own bag must arrive
+            // with the member, not with the capture.
+            GymBackRoomBuilder.ShowBenchBagsForVisitor(BodybuilderIdentity.Davie);
             layoutCaptureAvailable = CaptureLockerLayoutEvidence();
         }
 
         if (!requested && elapsed > 3d)
         {
+            // The visitor brings a bag: it must appear at the bench on
+            // arrival and leave with the visitor, both only up close.
+            GymBackRoomBuilder.ForceLockerVisitBagForVerification = true;
             requested = director.BeginLockerVisitForVerification(out fighter);
+            if (requested && !GymBackRoomBuilder.ReserveVisitBagForVerification(fighter.Identity))
+            {
+                // Both benches held by other members: free one for the test.
+                GymBackRoomBuilder.HideBenchBags();
+                GymBackRoomBuilder.ReserveVisitBagForVerification(fighter.Identity);
+            }
             if (requested)
             {
                 agent = fighter.GetComponent<GymVisitorAgent>();
@@ -202,6 +221,32 @@ public static class GymChaosLockerVisitVerifier
         {
             return;
         }
+
+        bool bagVisible = GymBackRoomBuilder.HasMemberBag(fighter.Identity);
+        float bagDistance = GymBackRoomBuilder.DistanceToOwnBench(
+            fighter.Identity, fighter.transform.position);
+        if (!bagWasVisible && bagVisible)
+        {
+            if (bagDistance > GymBackRoomBuilder.BagHandoffRadius + 0.05f)
+            {
+                Fail($"bag_appeared_far distance={bagDistance:F2}");
+                return;
+            }
+            bagPlacedNearObserved = true;
+        }
+        else if (bagWasVisible && !bagVisible)
+        {
+            // Movement per frame is small; the frame before removal holds
+            // the owner's distance at pickup time.
+            if (lastBagDistance > GymBackRoomBuilder.BagHandoffRadius + 0.3f)
+            {
+                Fail($"bag_vanished_far distance={lastBagDistance:F2}");
+                return;
+            }
+            bagTakenNearObserved = true;
+        }
+        bagWasVisible = bagVisible;
+        lastBagDistance = bagDistance;
 
         int leftBags = GymBackRoomBuilder.GetVisibleBagCountForBench(0);
         int rightBags = GymBackRoomBuilder.GetVisibleBagCountForBench(1);
@@ -230,6 +275,12 @@ public static class GymChaosLockerVisitVerifier
             !GymBackRoomBuilder.IsBagVisitor(fighter.Identity) &&
             GymBackRoomBuilder.VisibleBenchBagCount <= GymBackRoomBuilder.MemberBagCount)
         {
+            if (!bagPlacedNearObserved || !bagTakenNearObserved)
+            {
+                Fail($"bag_handoff_not_observed placed={bagPlacedNearObserved} " +
+                    $"taken={bagTakenNearObserved}");
+                return;
+            }
             if (!slotObserved || !capacityObserved || !cohortValidated ||
                 !layoutValidated || !GymBackRoomBuilder.HasAuthoredLockerProps)
             {
@@ -242,6 +293,16 @@ public static class GymChaosLockerVisitVerifier
                 return;
             }
 
+            if (GymBackRoomBuilder.MemberBagCount >= GymBackRoomBuilder.MaxMemberBags)
+            {
+                GymBackRoomBuilder.HideBenchBags();
+            }
+            if (!VerifyBagHandoffContract(out string handoffDetails))
+            {
+                Fail("bag_handoff_contract_failed " + handoffDetails);
+                return;
+            }
+            Debug.Log("GYMCHAOS_LOCKER_BAG_HANDOFF_CONTRACT_OK " + handoffDetails);
             if (!VerifyBagCountVariations(out string bagVariants))
             {
                 Fail("bag_variants_failed " + bagVariants);
@@ -256,7 +317,8 @@ public static class GymChaosLockerVisitVerifier
                 $"capacity={GymBackRoomBuilder.LockerSlotCapacity} " +
                 $"cohort={cohortValidated} layout={layoutValidated} " +
                 $"slotObserved={slotObserved} layoutCapture={layoutCaptureAvailable} " +
-                $"bagsHidden=True bagVariants={bagVariants}");
+                $"bagsHidden=True bagVariants={bagVariants} " +
+                $"bagPlacedNear={bagPlacedNearObserved} bagTakenNear={bagTakenNearObserved}");
             EditorApplication.isPlaying = false;
             return;
         }
@@ -528,6 +590,65 @@ public static class GymChaosLockerVisitVerifier
         finally
         {
             UnityEngine.Object.DestroyImmediate(image);
+        }
+    }
+
+    private static bool VerifyBagHandoffContract(out string details)
+    {
+        // The receptionist never visits the locker room: a safe test owner
+        // that leaves real members' bags alone.
+        const BodybuilderIdentity owner = BodybuilderIdentity.Manwithsuit1;
+        details = "";
+        try
+        {
+            if (!GymBackRoomBuilder.TryReserveMemberBag(owner) ||
+                !GymBackRoomBuilder.TryGetBagHandoffPoint(owner, out Vector3 handoff))
+            {
+                details = "reserve_failed";
+                return false;
+            }
+            int baseline = GymBackRoomBuilder.VisibleBenchBagCount;
+            Vector3 far = handoff + new Vector3(0f, 0f, 6f);
+            GymBackRoomBuilder.TickBagOwner(owner, far);
+            bool hiddenWhileFar = !GymBackRoomBuilder.HasMemberBag(owner) &&
+                GymBackRoomBuilder.VisibleBenchBagCount == baseline;
+            GymBackRoomBuilder.TickBagOwner(owner, handoff);
+            bool droppedNear = GymBackRoomBuilder.HasMemberBag(owner) &&
+                GymBackRoomBuilder.VisibleBenchBagCount == baseline + 1;
+            // Leaving without a pickup walk keeps a member bag on the bench.
+            GymBackRoomBuilder.HideBenchBagsForVisitor(owner, far);
+            bool stayedAfterLeaving = GymBackRoomBuilder.HasMemberBag(owner);
+            GymBackRoomBuilder.RequestBagPickup(owner);
+            GymBackRoomBuilder.TickBagOwner(owner, far);
+            bool keptWhileFar = GymBackRoomBuilder.HasMemberBag(owner);
+            bool pickupPoint = GymBackRoomBuilder.TryGetBagHandoffPoint(owner, out _);
+            GymBackRoomBuilder.TickBagOwner(owner, handoff);
+            bool takenNear = !GymBackRoomBuilder.HasBagReservation(owner) &&
+                GymBackRoomBuilder.VisibleBenchBagCount == baseline;
+            // A reservation that was never dropped vanishes with nothing shown.
+            GymBackRoomBuilder.TryReserveMemberBag(owner);
+            GymBackRoomBuilder.HideBenchBagsForVisitor(owner, far);
+            bool cancelled = !GymBackRoomBuilder.HasBagReservation(owner) &&
+                GymBackRoomBuilder.VisibleBenchBagCount == baseline;
+            // Owner gone for good: the bag waits while the player is in the
+            // locker room and is tidied away once they are out of it.
+            GymBackRoomBuilder.TryReserveMemberBag(owner);
+            GymBackRoomBuilder.TickBagOwner(owner, handoff);
+            GymBackRoomBuilder.TryGetRoomBounds(out Bounds room);
+            bool keptInView = !GymBackRoomBuilder.ClearBagOutOfSight(owner, room.center) &&
+                GymBackRoomBuilder.HasMemberBag(owner);
+            bool clearedOutOfView = GymBackRoomBuilder.ClearBagOutOfSight(owner, room.center + new Vector3(0f, 0f, 60f)) &&
+                !GymBackRoomBuilder.HasBagReservation(owner);
+            details = $"keptInView={keptInView} clearedOutOfView={clearedOutOfView} " +
+                $"hiddenWhileFar={hiddenWhileFar} droppedNear={droppedNear} " +
+                $"stayedAfterLeaving={stayedAfterLeaving} keptWhileFar={keptWhileFar} " +
+                $"pickupPoint={pickupPoint} takenNear={takenNear} cancelled={cancelled}";
+            return hiddenWhileFar && droppedNear && stayedAfterLeaving && keptWhileFar &&
+                pickupPoint && takenNear && cancelled && keptInView && clearedOutOfView;
+        }
+        finally
+        {
+            GymBackRoomBuilder.HideBenchBagsForVisitor(owner);
         }
     }
 

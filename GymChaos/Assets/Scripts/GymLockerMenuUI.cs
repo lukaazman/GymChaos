@@ -8,14 +8,14 @@ using UnityEngine.InputSystem;
 /// <summary>
 /// Locker outfit selector in the menu and HUD style: an upright ink-rimmed
 /// plate with a red title tag, Bebas labels and Persona buttons for every
-/// shirt and headwear option. The worn item keeps the selected plate, locked
+/// top, shirt colour and headwear option. The worn item keeps the selected plate, locked
 /// items are dimmed and show their unlock rank. Equip rules stay in
 /// <see cref="GymExperienceService"/>; this only presents and forwards clicks.
 /// </summary>
 public sealed class GymLockerMenuUI : MonoBehaviour
 {
     private const float PanelWidth = 640f;
-    private const float PanelHeight = 660f;
+    private const float PanelHeight = 776f;
     private const float Padding = 34f;
     private const float ButtonHeight = 56f;
     private const float ButtonGap = 22f;
@@ -31,6 +31,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
     private Text rankLabel;
     private Text wearingLabel;
     private Text challengeLabel;
+    private Button[] topButtons;
     private Button[] shirtButtons;
     private Button[] headwearButtons;
     private Button doneButton;
@@ -39,6 +40,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
 
     public static GymLockerMenuUI Active => instance;
     public bool IsShowingForVerification => shown;
+    public Button[] TopButtonsForVerification => topButtons;
     public Button[] ShirtButtonsForVerification => shirtButtons;
     public Button[] HeadwearButtonsForVerification => headwearButtons;
     public Button DoneButtonForVerification => doneButton;
@@ -96,33 +98,45 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             PersonaMenuStyle.Muted, TextAnchor.MiddleLeft);
 
         float buttonWidth = (PanelWidth - Padding * 2f - ButtonGap * (Columns - 1) - 24f) / Columns;
-        PersonaMenuStyle.CreateLayoutLabel(panel, "Shirt Section", body, "SHIRT",
+        PersonaMenuStyle.CreateLayoutLabel(panel, "Top Section", body, "TOP",
             new Vector2(Padding, 100f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+        topButtons = new Button[GymExperienceService.LockerTops.Count];
+        for (int i = 0; i < topButtons.Length; i++)
+        {
+            GymTopStyle top = GymExperienceService.LockerTops[i];
+            topButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Top " + top, body, string.Empty,
+                Cell(i, 142f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                () => { service?.EquipTop(top); Refresh(); });
+        }
+
+        // The colour tints whichever top is worn.
+        PersonaMenuStyle.CreateLayoutLabel(panel, "Shirt Section", body, "COLOR",
+            new Vector2(Padding, 216f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
         shirtButtons = new Button[GymExperienceService.LockerShirts.Count];
         for (int i = 0; i < shirtButtons.Length; i++)
         {
             GymShirtColor shirt = GymExperienceService.LockerShirts[i];
             shirtButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Shirt " + shirt, body, string.Empty,
-                Cell(i, 142f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                Cell(i, 258f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipShirt(shirt); Refresh(); });
         }
 
         PersonaMenuStyle.CreateLayoutLabel(panel, "Headwear Section", body, "HEADWEAR",
-            new Vector2(Padding, 296f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+            new Vector2(Padding, 412f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
         headwearButtons = new Button[GymExperienceService.LockerHeadwear.Count];
         for (int i = 0; i < headwearButtons.Length; i++)
         {
             GymHeadwear item = GymExperienceService.LockerHeadwear[i];
             headwearButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Headwear " + item, body, string.Empty,
-                Cell(i, 338f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                Cell(i, 454f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipHeadwear(item); Refresh(); });
         }
 
         wearingLabel = PersonaMenuStyle.CreateLayoutLabel(panel, "Wearing", body, string.Empty,
-            new Vector2(Padding, 494f), new Vector2(PanelWidth - Padding * 2f, 30f), 28,
+            new Vector2(Padding, 610f), new Vector2(PanelWidth - Padding * 2f, 30f), 28,
             PersonaMenuStyle.Ink, TextAnchor.MiddleLeft);
         challengeLabel = PersonaMenuStyle.CreateLayoutLabel(panel, "Mastery Challenge", body, string.Empty,
-            new Vector2(Padding, 528f), new Vector2(PanelWidth - Padding * 2f, 30f), 24,
+            new Vector2(Padding, 644f), new Vector2(PanelWidth - Padding * 2f, 30f), 24,
             PersonaMenuStyle.Muted, TextAnchor.MiddleLeft);
         doneButton = PersonaMenuStyle.CreateLayoutButton(panel, "Done", body, "DONE   ESC",
             new Vector2(PanelWidth - Padding - 230f, PanelHeight - Padding - 58f), new Vector2(210f, 58f), 34,
@@ -178,10 +192,10 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             Refresh();
             if (EventSystem.current != null)
             {
-                Button focus = shirtButtons.Length > 0 ? shirtButtons[0] : doneButton;
-                for (int i = 0; i < shirtButtons.Length; i++)
+                Button focus = topButtons.Length > 0 ? topButtons[0] : doneButton;
+                for (int i = 0; i < topButtons.Length; i++)
                 {
-                    if (service.IsShirtWorn(GymExperienceService.LockerShirts[i])) focus = shirtButtons[i];
+                    if (service.IsTopWorn(GymExperienceService.LockerTops[i])) focus = topButtons[i];
                 }
                 EventSystem.current.SetSelectedGameObject(focus.gameObject);
             }
@@ -202,6 +216,12 @@ public sealed class GymLockerMenuUI : MonoBehaviour
         rankLabel.text = service.LockerRankLine;
         wearingLabel.text = service.LockerWearingLine;
         challengeLabel.text = service.MasteryChallengeLabel.ToUpperInvariant();
+        for (int i = 0; i < topButtons.Length; i++)
+        {
+            GymTopStyle top = GymExperienceService.LockerTops[i];
+            Configure(topButtons[i], service.GetLockerTopLabel(top),
+                service.IsCosmeticUnlocked(top), service.IsTopWorn(top));
+        }
         for (int i = 0; i < shirtButtons.Length; i++)
         {
             GymShirtColor shirt = GymExperienceService.LockerShirts[i];

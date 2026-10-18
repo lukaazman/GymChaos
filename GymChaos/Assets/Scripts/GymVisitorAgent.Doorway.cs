@@ -520,7 +520,7 @@ public sealed partial class GymVisitorAgent
 			RestoreVisitorPlayerBoundaryCollisions();
 		}
 		RestoreDoorwayWallCollisions();
-		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity);
+		GymBackRoomBuilder.HideBenchBagsForVisitor(fighter.Identity, fighter.transform.position);
 		doorway = door;
 		hasDoorwayClearPoint = false;
 		if (returnToVehicle)

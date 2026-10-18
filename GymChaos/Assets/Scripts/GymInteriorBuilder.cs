@@ -76,7 +76,7 @@ public static class GymInteriorBuilder
         GameObject root = new GameObject(RootName);
         Material floor = GymSurfaceMaterialFactory.CreateGymFloor("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f), new Vector2(width, depth));
         Material wall = CreateMaterial("Warm concrete walls", new Color(0.36f, 0.39f, 0.41f), 0f, 0.25f);
-        Material ceiling = CreateMaterial("Ceiling", new Color(0.12f, 0.14f, 0.16f), 0.05f, 0.24f);
+        Material ceiling = CreateMaterial("Ceiling", new Color(0.07f, 0.075f, 0.08f), 0.3f, 0.24f);
         Material accent = CreateMaterial("Gym accent", new Color(0.78f, 0.13f, 0.07f), 0.05f, 0.45f);
         Material trim = CreateMaterial("Dark trim", new Color(0.025f, 0.03f, 0.035f), 0.4f, 0.68f);
         Material mirror = CreateMaterial("Mirror", new Color(0.62f, 0.7f, 0.74f), 1f, 1f);
@@ -101,7 +101,7 @@ public static class GymInteriorBuilder
             root.transform, center, width, depth, 0.18f, 0.18f, trim,
             visitorDoorZ, visitorDoorWidth);
         CreateMirrors(root.transform, center, width, depth, mirror, trim, player != null ? player.playerCamera : null);
-        CreateCeilingGrid(root.transform, center, width, depth, height, trim);
+        GymIndustrialCeiling.Build(root.transform, center, width, depth, height, lightMaterial);
         CreateLighting(root.transform, center, width, depth, height, lightMaterial);
         CreateRoomDetails(root.transform, center, width, depth, height, accent, trim, wall);
         GymBackRoomBuilder.Build(root.transform, center, width, depth, height, player);
@@ -315,48 +315,139 @@ public static class GymInteriorBuilder
         doorwayObject.transform.position = doorCenter;
         GymDoorway doorway = doorwayObject.AddComponent<GymDoorway>();
 
-        // Keep the panel's closed pose as the baseline; GymDoorway immediately
-        // animates it to its open pose and keeps the passage unobstructed.
-        GameObject panel = CreateBox(
-            "Visitor Door Panel",
-            doorwayObject.transform,
-            doorCenter,
-            new Vector3(0.12f, doorHeight, doorWidth),
-            frame,
-            false);
-        // Keep the panel rendered from both sides of the doorway. It has no
-        // collision (GymDoorway disables its BoxCollider), so the player can
-        // still cross the passage, while the wall/landing is already visible
-        // through the frame before the player steps outside instead of
-        // popping in after the outside-state test changes.
-        panel.transform.localRotation = Quaternion.identity;
-        panel.transform.localPosition = Vector3.zero;
+        // Satin aluminium frame and clear glass, like a commercial gym
+        // entrance: two double-acting glass leaves under a glazed transom,
+        // overhead closers on the inside and a green exit sign above.
+        Material aluminium = CreateMaterial(
+            "Door satin aluminium", new Color(0.56f, 0.58f, 0.6f), 0.85f, 0.52f);
+        Material darkSeal = CreateMaterial(
+            "Door rubber seal", new Color(0.03f, 0.03f, 0.035f), 0f, 0.3f);
+        Material doorGlass = CreateTransparentMaterial(
+            "Door clear glass", new Color(0.78f, 0.88f, 0.92f, 0.14f), 0.96f);
 
-        CreateBox(
-            "Visitor Door Frame Left",
-            doorwayObject.transform,
-            new Vector3(wallX + 0.08f, center.y + doorHeight * 0.5f, doorZ - doorWidth * 0.5f),
-            new Vector3(0.22f, doorHeight + 0.18f, 0.18f),
-            accent,
-            false);
-        CreateBox(
-            "Visitor Door Frame Right",
-            doorwayObject.transform,
-            new Vector3(wallX + 0.08f, center.y + doorHeight * 0.5f, doorZ + doorWidth * 0.5f),
-            new Vector3(0.22f, doorHeight + 0.18f, 0.18f),
-            accent,
-            false);
-        CreateBox(
-            "Visitor Door Frame Top",
-            doorwayObject.transform,
-            new Vector3(wallX + 0.08f, center.y + doorHeight + 0.08f, doorZ),
-            new Vector3(0.22f, 0.18f, doorWidth + 0.18f),
-            accent,
-            false);
+        const float frameWidth = 0.1f;
+        const float leafHeight = 2.62f;
+        const float transomBar = 0.1f;
+        float floorY = center.y;
+        float jambMinZ = doorZ - doorWidth * 0.5f;
+        float jambMaxZ = doorZ + doorWidth * 0.5f;
+
+        CreateBox("Visitor Door Frame Left", doorwayObject.transform,
+            new Vector3(wallX, floorY + doorHeight * 0.5f, jambMinZ + frameWidth * 0.5f),
+            new Vector3(0.36f, doorHeight, frameWidth), aluminium, false);
+        CreateBox("Visitor Door Frame Right", doorwayObject.transform,
+            new Vector3(wallX, floorY + doorHeight * 0.5f, jambMaxZ - frameWidth * 0.5f),
+            new Vector3(0.36f, doorHeight, frameWidth), aluminium, false);
+        CreateBox("Visitor Door Frame Top", doorwayObject.transform,
+            new Vector3(wallX, floorY + doorHeight - frameWidth * 0.5f, doorZ),
+            new Vector3(0.36f, frameWidth, doorWidth), aluminium, false);
+        CreateBox("Visitor Door Transom Bar", doorwayObject.transform,
+            new Vector3(wallX, floorY + leafHeight + transomBar * 0.5f + 0.01f, doorZ),
+            new Vector3(0.2f, transomBar, doorWidth - frameWidth * 2f), aluminium, false);
+        GameObject transomGlass = CreateBox("Visitor Door Transom Glass", doorwayObject.transform,
+            new Vector3(wallX, floorY + (leafHeight + transomBar + doorHeight - frameWidth) * 0.5f, doorZ),
+            new Vector3(0.02f, doorHeight - frameWidth - leafHeight - transomBar,
+                doorWidth - frameWidth * 2f), doorGlass, false);
+        DisableShadows(transomGlass);
+        CreateBox("Visitor Door Threshold", doorwayObject.transform,
+            new Vector3(wallX, floorY + 0.006f, doorZ),
+            new Vector3(0.36f, 0.012f, doorWidth - frameWidth * 2f), aluminium, false);
+
+        GameObject leavesRoot = new GameObject("Visitor Door Leaves");
+        leavesRoot.transform.SetParent(doorwayObject.transform, false);
+        leavesRoot.transform.position = new Vector3(wallX, floorY, doorZ);
+        GymAutoDoor autoDoor = doorwayObject.AddComponent<GymAutoDoor>();
+        autoDoor.Configure(GymDoorway.AutoDoorName, GymAutoDoor.DoorKind.Swing,
+            new Vector3(wallX, floorY + 1f, doorZ), Vector3.right, doorWidth, 0.62f, 0.95f);
+
+        float leafWidth = (doorWidth - frameWidth * 2f) * 0.5f - 0.008f;
+        for (int side = 0; side < 2; side++)
+        {
+            // +1: hinge on the south jamb, leaf runs north; -1: the reverse.
+            float direction = side == 0 ? 1f : -1f;
+            float hingeZ = side == 0 ? jambMinZ + frameWidth : jambMaxZ - frameWidth;
+            GameObject pivot = new GameObject(side == 0 ? "Visitor Door Leaf South" : "Visitor Door Leaf North");
+            pivot.transform.SetParent(leavesRoot.transform, false);
+            pivot.transform.position = new Vector3(wallX, floorY, hingeZ);
+            BuildDoorLeaf(pivot.transform, direction, leafWidth, leafHeight,
+                aluminium, darkSeal, doorGlass);
+            autoDoor.AddSwingLeaf(pivot.transform, direction, 86f);
+
+            // Overhead closer on the gym side, on the transom bar by the hinge.
+            CreateBox("Visitor Door Closer", doorwayObject.transform,
+                new Vector3(wallX - 0.16f, floorY + leafHeight + 0.06f,
+                    hingeZ + direction * 0.42f),
+                new Vector3(0.09f, 0.08f, 0.5f), aluminium, false);
+        }
+
+        // Green running-man exit sign on the gym side above the door.
+        Material exitGreen = CreateMaterial("Exit sign green", new Color(0.02f, 0.55f, 0.2f), 0f, 0.6f);
+        SetEmission(exitGreen, new Color(0.05f, 1.6f, 0.5f));
+        Material exitWhite = CreateMaterial("Exit sign white", Color.white, 0f, 0.6f);
+        SetEmission(exitWhite, new Color(1.6f, 1.6f, 1.6f));
+        float signY = floorY + doorHeight + 0.32f;
+        float signX = wallX - 0.2f;
+        DisableShadows(CreateBox("Visitor Door Exit Sign", doorwayObject.transform,
+            new Vector3(signX, signY, doorZ), new Vector3(0.06f, 0.3f, 0.72f), exitGreen, false));
+        DisableShadows(CreateBox("Visitor Door Exit Sign Door", doorwayObject.transform,
+            new Vector3(signX - 0.032f, signY, doorZ + 0.2f), new Vector3(0.004f, 0.2f, 0.12f), exitWhite, false));
+        DisableShadows(CreateBox("Visitor Door Exit Sign Arrow", doorwayObject.transform,
+            new Vector3(signX - 0.032f, signY, doorZ - 0.14f), new Vector3(0.004f, 0.05f, 0.26f), exitWhite, false));
+        DisableShadows(CreateBox("Visitor Door Exit Sign Arrow Head", doorwayObject.transform,
+            new Vector3(signX - 0.032f, signY, doorZ - 0.26f), new Vector3(0.004f, 0.14f, 0.05f), exitWhite, false));
+        CreateBox("Visitor Door Exit Sign Bracket", doorwayObject.transform,
+            new Vector3(wallX - 0.17f, signY + 0.2f, doorZ), new Vector3(0.04f, 0.1f, 0.3f), aluminium, false);
 
         Vector3 interiorPoint = new Vector3(wallX - 1.45f, center.y, doorZ);
         Vector3 exteriorPoint = new Vector3(wallX + 3.25f, center.y, doorZ);
-        doorway.Configure(doorCenter, interiorPoint, exteriorPoint, panel.transform);
+        doorway.Configure(doorCenter, interiorPoint, exteriorPoint, leavesRoot.transform, autoDoor);
+    }
+
+    /// <summary>One glass leaf under a hinge pivot; it runs along local +z * direction.</summary>
+    private static void BuildDoorLeaf(Transform pivot, float direction, float width, float height,
+        Material aluminium, Material seal, Material glass)
+    {
+        const float stile = 0.075f;
+        const float depth = 0.055f;
+        const float bottomRail = 0.2f;
+        const float topRail = 0.09f;
+        void Part(string name, float y, float z, Vector3 size, Material material, bool shadows = true)
+        {
+            GameObject part = CreateBox(name, pivot, pivot.TransformPoint(new Vector3(0f, y, z * direction)),
+                size, material, false);
+            part.transform.localRotation = Quaternion.identity;
+            if (!shadows) DisableShadows(part);
+        }
+
+        Part("Leaf Hinge Stile", height * 0.5f, stile * 0.5f, new Vector3(depth, height, stile), aluminium);
+        Part("Leaf Lock Stile", height * 0.5f, width - stile * 0.5f, new Vector3(depth, height, stile), aluminium);
+        Part("Leaf Top Rail", height - topRail * 0.5f, width * 0.5f, new Vector3(depth, topRail, width), aluminium);
+        Part("Leaf Kick Rail", bottomRail * 0.5f, width * 0.5f, new Vector3(depth, bottomRail, width), aluminium);
+        Part("Leaf Meeting Seal", height * 0.5f, width + 0.002f, new Vector3(0.03f, height - 0.04f, 0.012f), seal, false);
+        Part("Leaf Glass", (bottomRail + height - topRail) * 0.5f, width * 0.5f,
+            new Vector3(0.016f, height - bottomRail - topRail, width - stile * 2f), glass, false);
+        // Pull handles on both faces near the meeting edge.
+        float handleZ = width - stile - 0.07f;
+        for (int face = -1; face <= 1; face += 2)
+        {
+            Part("Leaf Pull Handle", 1.08f, handleZ, new Vector3(0.025f, 0.5f, 0.025f), aluminium, false);
+            Transform handle = pivot.GetChild(pivot.childCount - 1);
+            handle.localPosition += new Vector3(face * 0.075f, 0f, 0f);
+            Part("Leaf Handle Standoff", 1.25f, handleZ, new Vector3(0.05f, 0.02f, 0.02f), aluminium, false);
+            pivot.GetChild(pivot.childCount - 1).localPosition += new Vector3(face * 0.045f, 0f, 0f);
+            Part("Leaf Handle Standoff", 0.91f, handleZ, new Vector3(0.05f, 0.02f, 0.02f), aluminium, false);
+            pivot.GetChild(pivot.childCount - 1).localPosition += new Vector3(face * 0.045f, 0f, 0f);
+        }
+        // Closer arm, fixed to the top rail on the gym side.
+        Part("Leaf Closer Arm", height - 0.02f, 0.38f, new Vector3(0.03f, 0.025f, 0.34f), aluminium, false);
+        pivot.GetChild(pivot.childCount - 1).localPosition += new Vector3(-0.09f, 0f, 0f);
+    }
+
+    private static void DisableShadows(GameObject target)
+    {
+        Renderer renderer = target != null ? target.GetComponent<Renderer>() : null;
+        if (renderer == null) return;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
     }
 
     private static void CreateSouthWallWithBackRoomDoor(
@@ -678,19 +769,6 @@ public static class GymInteriorBuilder
         probe.resolution = 128;
     }
 
-    private static void CreateCeilingGrid(Transform parent, Vector3 center, float width, float depth, float height, Material material)
-    {
-        for (float x = -width * 0.5f + 4f; x < width * 0.5f; x += 6f)
-        {
-            CreateBox("Ceiling beam", parent, center + new Vector3(x, height - 0.28f, 0f), new Vector3(0.16f, 0.24f, depth - 0.5f), material, false);
-        }
-
-        for (float z = -depth * 0.5f + 4f; z < depth * 0.5f; z += 6f)
-        {
-            CreateBox("Ceiling beam", parent, center + new Vector3(0f, height - 0.3f, z), new Vector3(width - 0.5f, 0.2f, 0.16f), material, false);
-        }
-    }
-
     private static void CreateLighting(Transform parent, Vector3 center, float width, float depth, float height, Material lightMaterial)
     {
         Light[] existingLights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
@@ -742,8 +820,8 @@ public static class GymInteriorBuilder
             {
                 float px = Mathf.Lerp(-width * 0.42f, width * 0.42f, xCount == 1 ? 0.5f : (float)x / (xCount - 1));
                 float pz = Mathf.Lerp(-depth * 0.4f, depth * 0.4f, zCount == 1 ? 0.5f : (float)z / (zCount - 1));
-                Vector3 position = center + new Vector3(px, height - 0.38f, pz);
-                CreateBox("LED panel", parent, position, new Vector3(2.8f, 0.08f, 0.65f), lightMaterial, false);
+                // The hex LED grid is the visible fixture; the lights hang in it.
+                Vector3 position = center + new Vector3(px, GymIndustrialCeiling.LightHeight(height), pz);
 
                 GameObject lightObject = new GameObject("LED area light");
                 lightObject.transform.SetParent(parent, false);
@@ -752,7 +830,7 @@ public static class GymInteriorBuilder
                 Light light = lightObject.AddComponent<Light>();
                 light.type = LightType.Spot;
                 light.color = new Color(0.86f, 0.92f, 1f);
-                light.intensity = 620f;
+                light.intensity = 440f;
                 light.range = 13f;
                 light.spotAngle = 105f;
                 light.innerSpotAngle = 70f;

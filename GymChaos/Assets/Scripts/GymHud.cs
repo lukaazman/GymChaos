@@ -304,7 +304,7 @@ public sealed class GymHud : MonoBehaviour
         }
         bool shouldShow = player != null && GymArenaBootstrap.IsGameplayStarted &&
             !GymStartScreen.IsMenuVisible && !GymPauseMenu.IsVisible &&
-            !GymDialogueDirector.IsDialogueActive && !GymProteinShopUI.IsOpen &&
+            !GymDialogueDirector.IsDialogueActive && !GymProteinShopUI.IsOpen && !GymDealerShopUI.IsOpen &&
             (progression == null || !progression.IsLockerMenuOpen);
         if (shouldShow != visible)
         {
@@ -457,7 +457,7 @@ public sealed class GymHud : MonoBehaviour
         if (reputation != shownReputation)
         {
             shownReputation = reputation;
-            reputationLabel.text = "REP " + state.reputation.ToString("+#;-#;0", CultureInfo.InvariantCulture) +
+            reputationLabel.text = "KARMA " + state.reputation.ToString("+#;-#;0", CultureInfo.InvariantCulture) +
                 "   MASTERY " + state.masteryRank + "   STAMPS " + state.loyaltyStamps;
         }
         RefreshBuffs();
@@ -627,7 +627,7 @@ public sealed class GymHud : MonoBehaviour
             PersonaMenuStyle.Gold, out _);
         statsLabel = Label(plate, "Stats", body, string.Empty, 22, PersonaMenuStyle.Ink, TextAnchor.MiddleLeft,
             new Vector2(0.05f, 0.27f), new Vector2(0.97f, 0.52f));
-        reputationLabel = Label(plate, "Reputation", body, string.Empty, 22, PersonaMenuStyle.Muted,
+        reputationLabel = Label(plate, "Karma", body, string.Empty, 22, PersonaMenuStyle.Muted,
             TextAnchor.MiddleLeft, new Vector2(0.05f, 0.04f), new Vector2(0.97f, 0.28f));
 
         // Stacked with a fixed gap: the two plates can never overlap.

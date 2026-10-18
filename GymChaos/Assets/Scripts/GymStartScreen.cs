@@ -32,6 +32,13 @@ public sealed class GymStartScreen : MonoBehaviour
         instance != null && !instance.closing && instance.canvasGroup != null &&
         instance.canvasGroup.blocksRaycasts;
 
+    /// <summary>
+    /// The receptionist stands in the open right side of the boot view, so
+    /// his nametag shows there too; settings and the slot menu cover it.
+    /// </summary>
+    public static bool ShowsReceptionistNametag =>
+        IsMenuVisible && instance.playButton != null && instance.playButton.interactable;
+
     public static GymStartScreen CreateForScene(GymArenaBootstrap targetBootstrap, PlayerMovement targetPlayer)
     {
         if (instance != null)

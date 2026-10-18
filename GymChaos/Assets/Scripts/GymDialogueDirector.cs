@@ -390,6 +390,9 @@ public sealed class GymDialogueDirector : MonoBehaviour
         Debug.Log($"GYMCHAOS_DIALOGUE_OPEN speaker=HomelessGuy state={resident.State}", this);
     }
 
+    private const int HomelessOfferNode = 4;
+    private const int HomelessDealNode = 5;
+
     private static DialogueDefinition BuildHomelessDefinition(GymHomelessAgent resident)
     {
         string name = GymHomelessAgent.DisplayName;
@@ -402,9 +405,10 @@ public sealed class GymDialogueDirector : MonoBehaviour
             .AddChoice("You need anything?", 1, 3)
             .AddChoice("What's your story?", 2, 1)
             .AddChoice("Move along, old man.", 3, -3));
+        bool dealer = GymExperienceService.Active != null && GymExperienceService.Active.IsHankDealerUnlocked;
         result.nodes.Add(new DialogueNode(name,
             "Hot coffee, dry socks, a quiet night. The gym lights keep me up. Kind of you to ask, though. Most people look straight through me.")
-            .AddChoice("I'll keep an eye out for you.", -1, 2)
+            .AddChoice("I'll keep an eye out for you.", HomelessOfferNode, 2)
             .AddChoice("Take care.", -1, 0));
         result.nodes.Add(new DialogueNode(name,
             "Used to train in there, back before the mirrors and the music. Squatted twice my weight once. Then the knees went, then the job, then the flat. Now I keep the park company.")
@@ -414,6 +418,19 @@ public sealed class GymDialogueDirector : MonoBehaviour
             "Park's public. Same as your manners, apparently. Go on, then.")
             .AddChoice("Whatever.", -1, -1)
             .AddChoice("...Sorry. Long day.", -1, 1));
+        // End of the friendly path: Hank trusts you enough to offer his stash.
+        result.nodes.Add(dealer
+            ? new DialogueNode(name,
+                "You're good people. Stash is where it always is. Press F when you want something, and keep it quiet.")
+                .AddChoice("Will do.", -1, 0)
+            : new DialogueNode(name,
+                "You're alright, kid. Listen... I don't just collect bottles. I've got the stuff the shop won't sell you. The real stuff. Makes you a monster in there. Costs you out here. Interested?")
+                .AddChoice("Yeah. Show me what you've got.", HomelessDealNode, 0,
+                    () => GymExperienceService.Active?.UnlockHankDealer())
+                .AddChoice("No thanks, I'm clean.", -1, 1));
+        result.nodes.Add(new DialogueNode(name,
+            "Smart and stupid at the same time. I like it. Find me on the bench or the path and press F. Don't ask what's in it, and don't tell the big guy at the desk.")
+            .AddChoice("Deal.", -1, 0));
         return result;
     }
 
@@ -521,6 +538,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
             $"rep={choice.reputationDelta}",
             this);
 
+        choice.onChosen?.Invoke();
         if (choice.nextNodeIndex < 0 || choice.nextNodeIndex >= definition.nodes.Count)
         {
             Close("choice-complete");

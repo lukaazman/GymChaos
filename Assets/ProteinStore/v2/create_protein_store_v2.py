@@ -40,9 +40,12 @@ SIGN_ATLAS = LAYOUT["signs_size"]
 DEPTH = 23.4          # X, storefront to back wall
 WIDTH = 20.1          # Y
 WALL = 0.25
-WALL_H = 4.4
-CEILING = 4.0
-PARAPET = 5.0
+WALL_H = 5.2
+# Raised centre field of the ceiling; a lower bulkhead runs round the walls.
+CEILING = 4.8
+SOFFIT = 4.05
+SOFFIT_W = 1.1
+PARAPET = 5.8
 X0, X1 = -DEPTH / 2, DEPTH / 2
 Y0, Y1 = -WIDTH / 2, WIDTH / 2
 IX0, IX1 = X0 + WALL, X1 - WALL
@@ -108,6 +111,8 @@ def make_materials():
     M["metal"] = material("PS_Metal", (170, 172, 176), 0.35, 0.8)
     M["mat"] = material("PS_Entrance_Mat", (40, 40, 42), 0.95)
     M["roof"] = material("PS_Roof", (70, 72, 76), 0.9)
+    M["tbar"] = material("PS_Ceiling_Tbar", (196, 198, 200), 0.5, 0.4)
+    M["downlight"] = material("PS_Downlight", (255, 252, 244), 0.3, emission=(255, 244, 222), strength=4.0)
     M["letters"] = material("PS_Sign_Letters", (255, 204, 0), 0.4, emission=(255, 204, 0), strength=1.5)
     M["screen"] = material("PS_Screen", (30, 60, 90), 0.2, emission=(70, 130, 190), strength=0.8)
     M["products"] = material("PS_Products", (255, 255, 255), 0.55, image=TEX / "products_atlas.png")
@@ -782,14 +787,91 @@ def build_shell():
         record("sign", "accent:" + label, mn, mx)
     acc.build()
 
-    # Ceiling light panels.
+    build_ceiling()
+
+
+# Store aisles (Blender y) the linear lights run over: between the counter
+# and the first gondola row, between the rows, and before the north wall.
+AISLE_Y = (-5.3, -1.4, 2.7, 6.95)
+LINE_X0, LINE_X1 = -9.6, 9.6
+LINE_SEG = 2.4
+LINE_Z = CEILING - 0.32
+
+
+def build_ceiling():
+    """Raised centre field with a T-bar tile grid, a lower bulkhead round the
+    walls with recessed downlights washing the wall shelving and suspended
+    linear LED lines over the aisles."""
+    # Bulkhead ring: soffit underside plus the vertical fascia facing in.
+    bulk = Builder("Ceiling_Bulkhead")
+    inner = (IX0 + SOFFIT_W, IY0 + SOFFIT_W, IX1 - SOFFIT_W, IY1 - SOFFIT_W)
+    rings = {
+        "S": ((IX0, IY0, SOFFIT), (IX1, inner[1], CEILING)),
+        "N": ((IX0, inner[3], SOFFIT), (IX1, IY1, CEILING)),
+        "W": ((IX0, inner[1], SOFFIT), (inner[0], inner[3], CEILING)),
+        "E": ((inner[2], inner[1], SOFFIT), (IX1, inner[3], CEILING)),
+    }
+    for label, (mn, mx) in rings.items():
+        bulk.box(mn, mx, M["ceiling"])
+        record("shell", "bulkhead:" + label, mn, mx)
+    # Shadow-gap reveal: a thin dark line where the fascia meets the field.
+    for (mn, mx) in (((inner[0], inner[1] - 0.03, CEILING - 0.03), (inner[2], inner[1], CEILING)),
+                     ((inner[0], inner[3], CEILING - 0.03), (inner[2], inner[3] + 0.03, CEILING)),
+                     ((inner[0] - 0.03, inner[1], CEILING - 0.03), (inner[0], inner[3], CEILING)),
+                     ((inner[2], inner[1], CEILING - 0.03), (inner[2] + 0.03, inner[3], CEILING))):
+        bulk.box(mn, mx, M["black"])
+    bulk.build()
+
+    # Recessed downlights along the bulkhead, every 1.5 m, over the wall bays.
+    down = Builder("Ceiling_Downlights")
+    trims = Builder("Ceiling_Downlight_Trims")
+
+    def can(x, y):
+        trims.cylinder((x, y, SOFFIT - 0.012), 0.11, 0.012, M["metal"], segments=12)
+        down.cylinder((x, y, SOFFIT - 0.016), 0.085, 0.006, M["downlight"], segments=12)
+
+    mid = SOFFIT_W * 0.5
+    x = IX0 + 1.4
+    while x < IX1 - 0.8:
+        can(x, IY0 + mid)
+        can(x, IY1 - mid)
+        x += 1.5
+    y = inner[1] + 0.9
+    while y < inner[3] - 0.5:
+        can(IX1 - mid, y)
+        y += 1.5
+    down.build()
+    trims.build()
+
+    # Raised field: plain ceiling plane plus a 1.2 x 0.6 m T-bar grid.
+    grid = Builder("Ceiling_Grid")
+    gx = inner[0]
+    while gx <= inner[2] + 1e-3:
+        grid.box((gx - 0.012, inner[1], CEILING - 0.025), (gx + 0.012, inner[3], CEILING), M["tbar"])
+        gx += 1.2
+    gy = inner[1]
+    while gy <= inner[3] + 1e-3:
+        grid.box((inner[0], gy - 0.012, CEILING - 0.025), (inner[2], gy + 0.012, CEILING), M["tbar"])
+        gy += 0.6
+    grid.build()
+
+    # Suspended linear LED lines over the aisles, in 2.4 m fixtures with a
+    # small gap between them, each on two thin cables.
     lights = Builder("Ceiling_Lights")
-    for i in range(7):
-        for j in range(6):
-            cx = -9.0 + 3.0 * i
-            cy = -7.5 + 3.0 * j
-            lights.box((cx - 0.6, cy - 0.3, CEILING - 0.02), (cx + 0.6, cy + 0.3, CEILING), M["light"])
+    housings = Builder("Ceiling_Light_Housings")
+    for ay in AISLE_Y:
+        x0 = LINE_X0
+        while x0 + LINE_SEG <= LINE_X1 + 1e-3:
+            x1 = x0 + LINE_SEG - 0.06
+            housings.box((x0, ay - 0.07, LINE_Z), (x1, ay + 0.07, LINE_Z + 0.07), M["black"])
+            lights.box((x0 + 0.02, ay - 0.05, LINE_Z - 0.006), (x1 - 0.02, ay + 0.05, LINE_Z), M["light"])
+            record("fixture", f"line:{ay:.1f}:{x0:.1f}", (x0, ay - 0.07, LINE_Z - 0.006), (x1, ay + 0.07, LINE_Z + 0.07))
+            for cx in (x0 + 0.3, x1 - 0.3):
+                housings.box((cx - 0.004, ay - 0.004, LINE_Z + 0.07), (cx + 0.004, ay + 0.004, CEILING), M["metal"])
+            x0 += LINE_SEG
     lights.build()
+    housings.build()
+
 
 
 def build_sign_letters():
@@ -810,7 +892,7 @@ def build_sign_letters():
     obj.data.materials.append(M["letters"])
     # Text is built in XY; stand it up facing -X on the fascia.
     obj.rotation_euler = (math.radians(90), 0, math.radians(-90))
-    obj.location = (X0 - 0.041, 1.4, 3.97)
+    obj.location = (X0 - 0.041, 1.4, (3.5 + WALL_H) / 2 + 0.02)
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     mn = [min(v.co[i] for v in obj.data.vertices) for i in range(3)]
     mx = [max(v.co[i] for v in obj.data.vertices) for i in range(3)]
@@ -1012,7 +1094,7 @@ def render(out_dir):
             l.energy = 900
             l.size = 3.0
             lo = bpy.data.objects.new(f"Area{i}{j}", l)
-            lo.location = (-8 + i * 5.5, -6 + j * 6, CEILING - 0.1)
+            lo.location = (-8 + i * 5.5, -6 + j * 6, LINE_Z - 0.1)
             scene.collection.objects.link(lo)
     cam = bpy.data.cameras.new("Cam")
     co = bpy.data.objects.new("Cam", cam)
@@ -1025,7 +1107,7 @@ def render(out_dir):
         "aisle": ((9.6, -1.6, 1.7), (-2, 7.5, 1.0), 65),
         "top": ((0, 0, 30), (0, 0, 0), 55),
     }
-    roof_objs = [o for o in bpy.data.objects if o.name in ("Roof", "Ceiling", "Ceiling_Lights")]
+    roof_objs = [o for o in bpy.data.objects if o.name == "Roof" or o.name.startswith("Ceiling")]
     for name, (eye, look, fov) in views.items():
         for o in roof_objs:
             o.hide_render = name == "top"
