@@ -65,15 +65,26 @@ public partial class EnemyFighter
         // frame and leave the fighter in a visual idle state.
         if (isAggressive)
         {
+            LeaveVehicleForCombat();
             if (source != null)
             {
                 playerTarget = source;
                 currentTarget = source.transform;
                 currentFighterTarget = null;
+                RecordGrudge(null);
             }
             return;
         }
 
+        // Attacked in a car seat, on Goku's cloud or while walking back to
+        // the police car: drop that and fight.
+        LeaveVehicleForCombat();
+        if (policeReturnTarget != null)
+        {
+            policeReturnTarget = null;
+            policeReturnArrived = null;
+            forcedPoliceTarget = null;
+        }
         if (visitorAgent != null)
         {
             visitorAgent.CancelForCombat();
@@ -82,6 +93,7 @@ public partial class EnemyFighter
         if (source != null)
         {
             playerTarget = source;
+            RecordGrudge(null);
         }
         else if (playerTarget == null)
         {
@@ -117,6 +129,7 @@ public partial class EnemyFighter
     public void ResetAggressionForVerification()
     {
         isAggressive = false;
+        ClearGrudges();
         currentTarget = null;
         currentFighterTarget = null;
         punchInProgress = false;
@@ -236,6 +249,52 @@ public partial class EnemyFighter
     }
 #endif
 
+    private static Transform mainFloorReturnPoint;
+
+    private bool TickReturnToMainFloor()
+    {
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return false;
+        }
+        Vector3 center = new Vector3(floorBounds.center.x, body.position.y, floorBounds.center.z);
+        if (GymOutdoorBuilder.IsPlayerOutsideGym(body.position) && GymDoorway.Instance != null)
+        {
+            if (mainFloorReturnPoint == null)
+            {
+                mainFloorReturnPoint = new GameObject("Main Floor Return Point").transform;
+            }
+            mainFloorReturnPoint.position = center;
+            Transform previous = currentTarget;
+            currentTarget = mainFloorReturnPoint;
+            bool routed = TickAuthoredPolicePursuit();
+            currentTarget = previous;
+            if (routed)
+            {
+                SetAnimatedMovementFromVelocity(GetChaseSpeed() * 0.6f);
+                return true;
+            }
+        }
+        Vector3 goal = GymBackRoomBuilder.TryGetLockerChaseWaypoint(body.position, center, out Vector3 doorPoint)
+            ? doorPoint : center;
+        Vector3 toGoal = Vector3.ProjectOnPlane(goal - body.position, Vector3.up);
+        if (toGoal.sqrMagnitude < 0.0025f)
+        {
+            return false;
+        }
+        chaseIgnoresRoomBounds = true;
+        Vector3 direction = FindClearMovementDirection(toGoal.normalized, toGoal.magnitude, true, false);
+        chaseIgnoresRoomBounds = false;
+        if (direction.sqrMagnitude < 0.001f)
+        {
+            direction = toGoal.normalized;
+        }
+        float speed = GetChaseSpeed() * 0.6f;
+        ApplyChaseVelocity(direction, speed);
+        SetAnimatedMovementFromVelocity(speed);
+        return true;
+    }
+
     private void TickRoaming()
     {
         using var profileScope = TickRoamingMarker.Auto();
@@ -246,6 +305,15 @@ public partial class EnemyFighter
         {
             StopMovingPhysicsImmediately();
             SetAnimatedMovement(false);
+            return;
+        }
+
+        // Off the main floor with nobody to chase (Ronnie or an officer whose
+        // target just died in the locker room or outside): walk back in
+        // through the doors. Roaming would clamp the body onto the floor,
+        // which looked like a teleport through the wall.
+        if (body != null && !IsOnMainFloor(body.position) && TickReturnToMainFloor())
+        {
             return;
         }
 
@@ -483,6 +551,18 @@ public partial class EnemyFighter
                 transform.rotation, lookRotation, 12f * Time.fixedDeltaTime);
         }
     }
+    private float celebrationStartedAt;
+    /// <summary>Time of the killing blow (corpse hits after it earn nothing).</summary>
+    public float DiedAt { get; private set; } = -1f;
+    public bool DiedThisFrame => isDead && Time.time - DiedAt < 0.0001f;
+    public float CelebrationSeconds => celebratingPlayerKill ? Time.time - celebrationStartedAt : 0f;
+
+    public void EndPlayerKillCelebration()
+    {
+        celebratingPlayerKill = false;
+        externalBodyAnimator?.EndCelebration();
+    }
+
     public void CelebratePlayerKill()
     {
         if (isDead)
@@ -491,6 +571,7 @@ public partial class EnemyFighter
         }
 
         celebratingPlayerKill = true;
+        celebrationStartedAt = Time.time;
         punchInProgress = false;
         currentTarget = null;
         currentFighterTarget = null;
@@ -649,15 +730,10 @@ public partial class EnemyFighter
                 Vector3 impact = direction * attackImpulse + Vector3.up * 1.1f;
                 if (currentFighterTarget != null)
                 {
-                    if (isPolice)
-                    {
-                        currentFighterTarget.TakeMeleeHit(
-                            impact, EnemyPunchDamage, lightStunDuration, this);
-                    }
-                    else
-                    {
-                        currentFighterTarget.ReceivePoliceImpact(impact);
-                    }
+                    // Police punch fight participants; anyone else only ever
+                    // targets a fighter that hurt it (its grudge list).
+                    currentFighterTarget.TakeMeleeHit(
+                        impact, EnemyPunchDamage, lightStunDuration, this);
                 }
                 else if (playerTarget != null && currentTarget == playerTarget.transform)
                 {
@@ -833,8 +909,30 @@ public partial class EnemyFighter
 
         // Damage is the only gameplay event that turns a normal enemy from
         // neutral to hostile. Seeing the player, being nearby, or witnessing
-        // another NPC move never starts a fight.
-        BecomeAggressive();
+        // another NPC move never starts a fight. The attacker (player or
+        // fighter) goes on the grudge list the fighter picks targets from.
+        EnemyFighter attackerFighter = damageSource != null
+            ? damageSource.GetComponentInParent<EnemyFighter>()
+            : null;
+        if (attackerFighter == this)
+        {
+            attackerFighter = null;
+        }
+        // Police and Ronnie already go after every aggressive fighter; a hit
+        // from one must not turn them on the player.
+        if (!(isPolice && attackerFighter != null))
+        {
+            if (dialogueLocked && !isPassive)
+            {
+                SetDialogueLocked(false);
+            }
+            RecordGrudge(attackerFighter);
+            BecomeAggressive();
+            if (!isPolice && isAggressive)
+            {
+                RefreshGrudgeTarget();
+            }
+        }
 
         if (applyStun)
         {
@@ -890,6 +988,8 @@ public partial class EnemyFighter
 
         isDead = true;
         health = 0f;
+        DiedAt = Time.time;
+        VehicleBodyAnimator?.SetNimbusStance(null);
         if (identity == BodybuilderIdentity.Ronnie)
         {
             GymPoliceDirector.NotifyRonnieKilled(this, lastDamageSource);

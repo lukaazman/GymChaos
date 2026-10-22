@@ -29,7 +29,9 @@ public enum GymSoundEffect
     VehicleDriving,
     FixerFloor,
     FixerGlitter,
-    ToiletSeat
+    ToiletSeat,
+    CarDoorOpen,
+    CarDoorClose
 }
 
 public sealed class GymAudio : MonoBehaviour
@@ -90,7 +92,10 @@ public sealed class GymAudio : MonoBehaviour
             { GymSoundEffect.FixerFloor, new ClipDefinition("floor_start_end.wav", AudioType.WAV) },
             { GymSoundEffect.FixerGlitter, new ClipDefinition("glitter.mp3", AudioType.MPEG) },
             // User-provided: every lift and drop of the bathroom toilet seat.
-            { GymSoundEffect.ToiletSeat, new ClipDefinition("toilet_seat_drop.wav", AudioType.WAV) }
+            { GymSoundEffect.ToiletSeat, new ClipDefinition("toilet_seat_drop.wav", AudioType.WAV) },
+            // Tools/generate_sfx.py: a car's driver door unlatching and shutting.
+            { GymSoundEffect.CarDoorOpen, new ClipDefinition("car_door_open.wav", AudioType.WAV) },
+            { GymSoundEffect.CarDoorClose, new ClipDefinition("car_door_close.wav", AudioType.WAV) }
         };
 
     // Interface and first-person cues: played flat (2D) from one pooled

@@ -182,6 +182,30 @@ def level_up():
 # ui_confirm (also used for clicks and back/exit), jump, land and car_driving are
 # user-provided recordings from Assets/BodyBuilders/sound/sfx; do not
 # regenerate them here.
+def car_door_open():
+    # Driver door: latch release click, then a short hinge swing whoosh.
+    rng = np.random.default_rng(20261021)
+    t = t_axis(0.42)
+    noise = rng.standard_normal(len(t))
+    click = highpass(noise, 2200.0) * np.exp(-t * 260.0)
+    pop = tone(t, 900.0 - 500.0 * t) * envelope(t, 0.001, 90.0) * 0.35
+    swing_t = np.maximum(0.0, t - 0.06)
+    swing = lowpass(highpass(noise, 300.0), 1400.0) * envelope(swing_t, 0.08, 9.0) * 0.4
+    swing *= (t > 0.06)
+    return click * 0.9 + pop + swing
+
+
+def car_door_close():
+    # Driver door shutting: heavy body thunk, latch catch and a dull rattle.
+    rng = np.random.default_rng(20261022)
+    t = t_axis(0.5)
+    noise = rng.standard_normal(len(t))
+    thunk = tone(t, 62.0 + 70.0 * np.exp(-t * 40.0)) * envelope(t, 0.002, 14.0)
+    body = lowpass(noise, 520.0) * envelope(t, 0.003, 20.0) * 0.9
+    latch = highpass(noise, 2600.0) * np.exp(-np.maximum(0.0, t - 0.012) * 220.0) * (t > 0.012) * 0.5
+    return thunk * 1.2 + body + latch
+
+
 SOUNDS = {
     "ui_hover.wav": (ui_hover, 0.55),
     "ui_error.wav": (ui_error, 0.6),
@@ -189,12 +213,18 @@ SOUNDS = {
     "item_drop.wav": (item_drop, 0.6),
     "action_confirm.wav": (action_confirm, 0.7),
     "level_up.wav": (level_up, 0.7),
+    "car_door_open.wav": (car_door_open, 0.6),
+    "car_door_close.wav": (car_door_close, 0.75),
 }
 
 
 def main():
+    # Optional file names limit the run (python Tools/generate_sfx.py car_door_open.wav).
+    import sys
+    wanted = set(sys.argv[1:])
     for name, (builder, peak) in SOUNDS.items():
-        write(name, builder(), peak)
+        if not wanted or name in wanted:
+            write(name, builder(), peak)
 
 
 if __name__ == "__main__":

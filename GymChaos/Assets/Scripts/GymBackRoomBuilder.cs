@@ -684,6 +684,71 @@ public static class GymBackRoomBuilder
         out Vector3[] route,
         out Quaternion visitorRotation)
     {
+        return TryGetLockerVisitRoute(destination, false, out route, out visitorRotation);
+    }
+
+    // The door is 2.8 m wide but both directions used its centre line, so a
+    // member walking in and one walking out met head-on in the frame and
+    // pushed against each other forever. Each direction keeps to its own
+    // right-hand lane; two bodybuilders pass side by side.
+    public const float LockerDoorLaneOffset = 0.68f;
+
+    /// <summary>Points 1.25 m either side of the locker door on its centre line.</summary>
+    public static bool TryGetLockerDoorPoints(out Vector3 gymSide, out Vector3 roomSide)
+    {
+        gymSide = roomSide = default;
+        if (!TryGetRoomBounds(out _))
+        {
+            return false;
+        }
+        float northWallZ = roomCenter.z + BackDepth * 0.5f;
+        gymSide = new Vector3(roomCenter.x, roomFloorY, northWallZ + 1.25f);
+        roomSide = new Vector3(roomCenter.x, roomFloorY, northWallZ - 1.25f);
+        return true;
+    }
+
+    /// <summary>
+    /// Next point for a chase between the locker room and the gym: the near
+    /// side of the door, then the far side. False when both ends are on the
+    /// same side of the door.
+    /// </summary>
+    public static bool TryGetLockerChaseWaypoint(Vector3 from, Vector3 to, out Vector3 waypoint)
+    {
+        waypoint = to;
+        if (!TryGetLockerDoorPoints(out Vector3 gymSide, out Vector3 roomSide))
+        {
+            return false;
+        }
+        bool fromInside = IsInsideRoom(from);
+        if (fromInside == IsInsideRoom(to))
+        {
+            return false;
+        }
+        Vector3 near = fromInside ? roomSide : gymSide;
+        Vector3 far = fromInside ? gymSide : roomSide;
+        float doorZ = (gymSide.z + roomSide.z) * 0.5f;
+        bool inDoorBand = Mathf.Abs(from.z - doorZ) < 1.3f &&
+            Mathf.Abs(from.x - gymSide.x) < DoorWidth * 0.5f;
+        bool nearReached = Vector3.ProjectOnPlane(near - from, Vector3.up).magnitude < 0.6f;
+        waypoint = inDoorBand || nearReached ? far : near;
+        waypoint.y = from.y;
+        return true;
+    }
+    // Verifier baseline: the old shared centre line.
+#if UNITY_EDITOR
+    internal static bool LockerDoorLanesDisabledForVerification;
+#else
+    private const bool LockerDoorLanesDisabledForVerification = false;
+#endif
+
+    /// <summary>Locker door route; <paramref name="exiting"/> picks the outbound lane
+    /// (the caller walks the returned points in reverse order).</summary>
+    public static bool TryGetLockerVisitRoute(
+        Vector3 destination,
+        bool exiting,
+        out Vector3[] route,
+        out Quaternion visitorRotation)
+    {
         route = null;
         visitorRotation = lockerVisitRotation;
         if (!roomBoundsReady)
@@ -702,10 +767,13 @@ public static class GymBackRoomBuilder
 
         float northWallZ = roomCenter.z + BackDepth * 0.5f;
         float floorY = roomFloorY;
+        // Walking in faces -z (right hand -x); walking out faces +z.
+        float lane = LockerDoorLanesDisabledForVerification ? 0f : LockerDoorLaneOffset;
+        float laneX = roomCenter.x + (exiting ? lane : -lane);
         Vector3 gymSideOfDoor = new Vector3(
-            roomCenter.x, floorY, northWallZ + 1.25f);
+            laneX, floorY, northWallZ + 1.25f);
         Vector3 roomSideOfDoor = new Vector3(
-            roomCenter.x, floorY, northWallZ - 1.25f);
+            laneX, floorY, northWallZ - 1.25f);
         destination.y = floorY;
         // A bench hand-off spot sits in the aisle between the benches: come
         // in along the aisle from its open end so the line from the door

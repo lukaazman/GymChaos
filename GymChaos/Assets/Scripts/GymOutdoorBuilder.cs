@@ -105,7 +105,10 @@ public static class GymOutdoorBuilder
     public static float ParkingBayStep { get; private set; }
     public static float ParkingBayStartX { get; private set; }
     public static float ParkingStallCenterOffset { get; private set; }
-    public static float ParkingVehicleTargetLength => 4.0f * VehicleScale;
+    // Cars (not the bus) are drawn larger than the layout scale so seated
+    // drivers fit inside the cabin; the bays and lanes still leave side room.
+    public const float CarSizeBoost = 1.12f;
+    public static float ParkingVehicleTargetLength => 4.0f * VehicleScale * CarSizeBoost;
 
     public static float VehicleRoadWidthForVerification => VehicleRoadWidth;
     public static float VehicleLaneOffsetForVerification => VehicleLaneOffset;

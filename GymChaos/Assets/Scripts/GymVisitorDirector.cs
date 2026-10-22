@@ -210,6 +210,14 @@ public sealed class GymVisitorDirector : MonoBehaviour
     public void PauseVisitorScheduleForVerification()
     {
         enabled = false;
+    }
+
+    // Verification only: no timed arrivals; forced arrivals and the rest of
+    // the visit lifecycle keep running.
+    private bool scheduledArrivalsHeldForVerification;
+    public void HoldScheduledArrivalsForVerification()
+    {
+        scheduledArrivalsHeldForVerification = true;
     }    public float MaximumReturnCooldownForVerification => maximumReturnCooldownSeconds;
 
     public bool PrepareProteinStoreVisitForVerification()
@@ -605,6 +613,72 @@ public bool BeginDepartureForVerification(
             return true;
         }
         return false;
+    }
+
+    /// <summary>Starts a fresh car arrival for one visitor (cabin/driver verification).</summary>
+    public bool BeginVehicleArrivalForVerification(BodybuilderIdentity identity,
+        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
+    {
+        fighter = null;
+        vehicle = null;
+        VisitorRecord record = FindRecord(identity);
+        if (record == null || record.fighter == null || record.agent == null || doorway == null)
+        {
+            return false;
+        }
+        if (record.active && record.vehicle != null && (record.vehicle.IsDriving || record.walkingToVehicle))
+        {
+            return false;
+        }
+        record.agent.ResetForEntryVerification();
+        record.vehicle?.ReleaseDriver();
+        record.fighter.gameObject.SetActive(false);
+        if (record.vehicle != null) record.vehicle.gameObject.SetActive(false);
+        record.active = false;
+        record.visitsToday = 0;
+        record.workoutsToday = 0;
+        record.visitInProgress = false;
+        record.workoutInProgress = false;
+        record.destinationChoiceMade = false;
+        record.lockerVisitScheduled = false;
+        record.storeVisitScheduled = false;
+        record.destinationVisitInProgress = false;
+        record.waitingForVehicle = false;
+        record.walkingToVehicle = false;
+        record.vehicleDepartureStarted = false;
+        record.suspendedForCombat = false;
+        record.nextEligibleRealtime = 0f;
+        if (!ActivateScheduled(record, true)) return false;
+        fighter = record.fighter;
+        vehicle = record.vehicle;
+        return true;
+    }
+
+    /// <summary>Sends one visitor (already arrived) out to its parked car.</summary>
+    public bool BeginIdentityDepartureForVerification(BodybuilderIdentity identity,
+        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
+    {
+        fighter = null;
+        vehicle = null;
+        if (doorway == null) return false;
+        VisitorRecord record = FindRecord(identity);
+        if (record == null || record.fighter == null || record.agent == null) return false;
+        departureDrainMode = true;
+        EnsureVehicle(record, true);
+        record.fighter.gameObject.SetActive(true);
+        record.agent.MarkInitialInside();
+        PrepareVerificationDeparturePose(record);
+        record.active = true;
+        record.suspendedForCombat = false;
+        record.visitInProgress = false;
+        record.workoutInProgress = false;
+        record.waitingForVehicle = false;
+        record.walkingToVehicle = false;
+        record.vehicleDepartureStarted = false;
+        fighter = record.fighter;
+        vehicle = record.vehicle;
+        record.agent.BeginExit(doorway);
+        return true;
     }
 
     public bool BeginCbumDepartureForVerification(
@@ -1103,6 +1177,9 @@ public bool BeginDepartureForVerification(
                 {
                     record.agent.CancelForCombat();
                 }
+                // A driver still in (or climbing out of) its car stands down
+                // where it is; the car itself stays parked.
+                record.vehicle?.ReleaseDriver();
                 record.visitInProgress = false;
                 record.workoutInProgress = false;
                 record.active = false;
@@ -1431,7 +1508,8 @@ public bool BeginDepartureForVerification(
         {
             return false;
         }
-        if (!forced && Time.unscaledTime < record.nextEligibleRealtime)
+        if (!forced && (scheduledArrivalsHeldForVerification ||
+            Time.unscaledTime < record.nextEligibleRealtime))
         {
             return false;
         }
@@ -1454,7 +1532,7 @@ public bool BeginDepartureForVerification(
             record.fighter.gameObject.SetActive(true);
             record.vehicle.MountRider(record.fighter);
         }
-        else
+        else if (!record.vehicle.TrySeatArrivingDriver(record.fighter))
         {
             record.fighter.gameObject.SetActive(false);
         }
@@ -1466,10 +1544,27 @@ public bool BeginDepartureForVerification(
     private void CompleteVehicleArrival(VisitorRecord record, bool forced)
     {
         if (record == null || record.fighter == null || record.agent == null) return;
+        // A seated driver climbs out of the parked car and walks to its
+        // aisle end first; the walk to the gym starts from where it stands.
+        if (record.vehicle != null && record.vehicle.HasSeatedDriver &&
+            record.vehicle.BeginDriverExit(() => BeginVisitorEntryAfterArrival(
+                record, forced, record.fighter != null ? record.fighter.transform.position : (Vector3?)null)))
+        {
+            return;
+        }
+        BeginVisitorEntryAfterArrival(record, forced, null);
+    }
+
+    private void BeginVisitorEntryAfterArrival(
+        VisitorRecord record, bool forced, Vector3? standingPoint)
+    {
+        if (record == null || record.fighter == null || record.agent == null) return;
+        record.vehicle?.ClearPendingDriver();
+        if (record.suspendedForCombat || record.fighter.IsDead) return;
         bool stagedOutside = record.vehicle != null;
-        Vector3 outside = record.vehicle != null
+        Vector3 outside = standingPoint ?? (record.vehicle != null
             ? record.vehicle.PassengerPoint
-            : ChooseVisitorArrivalStage(record, out stagedOutside);
+            : ChooseVisitorArrivalStage(record, out stagedOutside));
         Vector3 approach = Vector3.ProjectOnPlane(
             doorway.ExteriorPoint - outside, Vector3.up);
         if (approach.sqrMagnitude < 0.01f)
@@ -1487,7 +1582,7 @@ public bool BeginDepartureForVerification(
                 record.vehicle.DismountRider(outside, rotation);
             record.agent.BeginEntryFromVehicle(
                 doorway, ChooseRoomTarget(record.fighter.Identity),
-                record.vehicle.PassengerPoint, record.vehicle.AislePassengerPoint,
+                outside, record.vehicle.AislePassengerPoint,
                 record.vehicle);
             if (record.vehicle.IsBus)
             {
@@ -1580,7 +1675,8 @@ public bool BeginDepartureForVerification(
         if (!record.walkingToVehicle)
         {
             if (record.agent.BeginVehicleApproach(
-                record.vehicle.PassengerPoint, record.vehicle.BoardingReachDistance))
+                record.vehicle.BoardingPointFor(record.fighter),
+                record.vehicle.BoardingReachFor(record.fighter)))
             {
                 record.walkingToVehicle = true;
             }
@@ -1599,6 +1695,13 @@ public bool BeginDepartureForVerification(
             record.agent.ReleaseVehicleApproachReservation();
             if (record.vehicle.IsCloud)
                 record.vehicle.MountRider(record.fighter);
+            else if (record.vehicle.CanBoardSeatedDriver(record.fighter) &&
+                record.vehicle.BeginDriverBoarding(record.fighter,
+                    () => record.vehicle.DriveOut(() => CompleteVehicleDeparture(record))))
+            {
+                // The car leaves once the driver is in and the door is shut.
+                return;
+            }
             else
             {
                 if (record.vehicle.IsBus)
@@ -1646,6 +1749,7 @@ public bool BeginDepartureForVerification(
         if (record.vehicle != null && record.vehicle.IsCloud)
             record.vehicle.DismountRider(record.fighter.transform.position,
                 record.fighter.transform.rotation);
+        record.vehicle?.ReleaseDriver();
         record.deactivationDeferredLogged = false;
         record.active = false;
         record.visitInProgress = false;

@@ -20,6 +20,8 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     private EnemyFighter fighter;
     // Name-only label for a character that is not an EnemyFighter.
     private bool standalone;
+    /// <summary>Standalone characters (Hank) show a bar at this fraction; below 0 hides it.</summary>
+    public float StandaloneHealthFraction { get; set; } = -1f;
 
     public void Configure(
         SkinnedMeshRenderer targetRenderer, string label, float offset)
@@ -86,7 +88,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         bool isDialogueTarget = !standalone && director != null && director.Target == fighter;
         bool showName = nearby || menuNametag || (!standalone && fighter.IsAggressive) ||
             isDialogueTarget;
-        bool showHealth = !standalone && fighter.HasTakenDamage;
+        bool showHealth = standalone ? StandaloneHealthFraction >= 0f : fighter.HasTakenDamage;
         // The anchor sits just above the head: the stack grows upward from
         // it (health bar, then name) so the name stays close to the head.
         float stackBottom = Screen.height - screen.y - AnchorGapPixels;
@@ -96,8 +98,8 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         {
             DrawHealthBar(
                 screen.x, stackBottom - HealthBarHeight,
-                fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth),
-                fighter.HealthBarColor);
+                standalone ? StandaloneHealthFraction : fighter.CurrentHealth / Mathf.Max(1f, fighter.MaxHealth),
+                standalone ? new Color(0.92f, 0.04f, 0.04f, 1f) : fighter.HealthBarColor);
             stackBottom -= HealthBarHeight + 2f;
         }
 

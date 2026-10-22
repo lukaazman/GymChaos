@@ -668,7 +668,42 @@ public sealed class PlayerHandRig : MonoBehaviour
     // so the sole height is re-measured every few frames (and on every clip
     // change or jump edge); in between the last sole offset below the model
     // root is reused, which a walk cycle changes only by millimetres.
-    private const int SoleMeasureInterval = 3;
+    // Between bakes the soles follow the foot bones (the bake only refreshes
+    // the sole-below-bone offset), so the full-body bake can be rare: it was
+    // every third frame, a regular hitch.
+    private const int SoleMeasureInterval = 30;
+    private Transform[] soleFootBones;
+    private float soleBelowFeet;
+    private bool hasSoleBelowFeet;
+
+    private float LowestFootBoneY()
+    {
+        if (soleFootBones == null && modelRoot != null)
+        {
+            System.Collections.Generic.List<Transform> feet = new System.Collections.Generic.List<Transform>();
+            foreach (Transform bone in modelRoot.GetComponentsInChildren<Transform>(true))
+            {
+                string name = bone.name.ToLowerInvariant();
+                if (name.Contains("foot") || name.Contains("toe"))
+                {
+                    feet.Add(bone);
+                }
+            }
+            soleFootBones = feet.ToArray();
+        }
+        float lowest = float.PositiveInfinity;
+        if (soleFootBones != null)
+        {
+            for (int i = 0; i < soleFootBones.Length; i++)
+            {
+                if (soleFootBones[i] != null && soleFootBones[i].position.y < lowest)
+                {
+                    lowest = soleFootBones[i].position.y;
+                }
+            }
+        }
+        return lowest;
+    }
     private int nextSoleMeasureFrame;
     private float soleBelowRoot;
     private bool hasSoleMeasurement;
@@ -693,6 +728,9 @@ public sealed class PlayerHandRig : MonoBehaviour
             lowestPoint = MeasureLowestBodyPoint();
             if (float.IsInfinity(lowestPoint)) return;
             soleBelowRoot = lowestPoint - modelRoot.transform.position.y;
+            float feetY = LowestFootBoneY();
+            hasSoleBelowFeet = !float.IsInfinity(feetY);
+            soleBelowFeet = hasSoleBelowFeet ? lowestPoint - feetY : 0f;
             hasSoleMeasurement = true;
             soleMeasuredClip = currentClip;
             soleMeasuredJumping = jumping;
@@ -700,7 +738,10 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
         else
         {
-            lowestPoint = modelRoot.transform.position.y + soleBelowRoot;
+            float feetY = hasSoleBelowFeet ? LowestFootBoneY() : float.PositiveInfinity;
+            lowestPoint = !float.IsInfinity(feetY)
+                ? feetY + soleBelowFeet
+                : modelRoot.transform.position.y + soleBelowRoot;
         }
         float floorY = controller != null
             ? controller.transform.TransformPoint(controller.center).y - controller.height * 0.5f

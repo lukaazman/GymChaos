@@ -266,6 +266,7 @@ public class GymArenaBootstrap : MonoBehaviour
     {
         player = targetPlayer;
         GymInteriorBuilder.Build(player);
+        SettleFloorMats();
         GymOutdoorBuilder.Build(player);
         GymLooseItemSpawner.CreateForScene(player);
         EquipmentMaterialRestorer.ApplyToScene();
@@ -601,6 +602,55 @@ public class GymArenaBootstrap : MonoBehaviour
                 }
             }
         }
+    }
+
+    // The cardio and calisthenics floor mats are scene boxes that float about
+    // 0.15 m above the lowered rubber floor. Members' bodies are locked to
+    // the floor height, so the mat edges stopped them like a kerb and they
+    // got stuck. Lay the mats on the floor and let members' body colliders
+    // pass the remaining few centimetres of mat (the player still steps on).
+    public const int FloorMatLayer = 24;
+    private static readonly string[] FloorMatRoots = { "FlooringMats", "LungesMatt" };
+
+    private static void SettleFloorMats()
+    {
+        GameObject floor = GymSceneLookup.Find("Rubber Floor");
+        Renderer floorRenderer = floor != null ? floor.GetComponent<Renderer>() : null;
+        if (floorRenderer == null)
+        {
+            return;
+        }
+        float floorTop = floorRenderer.bounds.max.y;
+        Physics.IgnoreLayerCollision(FloorMatLayer, EnemyFighter.EnemyCollisionLayer, true);
+        foreach (string rootName in FloorMatRoots)
+        {
+            GameObject root = GameObject.Find(rootName);
+            if (root == null)
+            {
+                continue;
+            }
+            Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0)
+            {
+                continue;
+            }
+            float bottom = float.PositiveInfinity;
+            foreach (Renderer renderer in renderers)
+            {
+                bottom = Mathf.Min(bottom, renderer.bounds.min.y);
+            }
+            float lift = floorTop + 0.002f - bottom;
+            if (Mathf.Abs(lift) > 0.005f)
+            {
+                root.transform.position += Vector3.up * lift;
+            }
+            foreach (Collider collider in root.GetComponentsInChildren<Collider>(true))
+            {
+                collider.gameObject.layer = FloorMatLayer;
+            }
+            Debug.Log($"GYMCHAOS_FLOOR_MATS_SETTLED root={rootName} lift={lift:F3} floorTop={floorTop:F3}");
+        }
+        Physics.SyncTransforms();
     }
 
     private static bool IsMountedEquipmentName(string objectName)

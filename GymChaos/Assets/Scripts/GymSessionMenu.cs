@@ -48,6 +48,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     private readonly PersonaShape[] statFills = new PersonaShape[6];
     private readonly Text[] statValues = new Text[6];
     private int highlightedClass;
+    private int selectedClass;
 
     private readonly List<GameObject> listEntries = new List<GameObject>();
     private Text listEmpty;
@@ -72,6 +73,7 @@ public sealed class GymSessionMenu : MonoBehaviour
 
     public State Current => state;
     public string HighlightedClassId => GymClassCatalog.All[highlightedClass].id;
+    public string SelectedClassId => GymClassCatalog.All[selectedClass].id;
     public int ValidSaveCount => saves.Count;
     public string ChoiceNoteText => choiceNote != null ? choiceNote.text : string.Empty;
     public bool LoadGameOffered => loadGameButton != null && loadGameButton.gameObject.activeSelf;
@@ -125,6 +127,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         if (!Accepts(State.SessionChoice)) return;
         highlightedClass = IndexOfClass(GymClassCatalog.BaselineId);
+        selectedClass = highlightedClass;
         Show(State.ClassSelect);
     }
 
@@ -144,10 +147,21 @@ public sealed class GymSessionMenu : MonoBehaviour
         RefreshClassDetails();
     }
 
+    // Clicking a card commits it; hovering others only previews their details.
+    public void SelectClass(string classId)
+    {
+        if (state != State.ClassSelect) return;
+        int index = IndexOfClass(classId);
+        if (index < 0) return;
+        selectedClass = index;
+        highlightedClass = index;
+        RefreshClassDetails();
+    }
+
     public void ConfirmClass()
     {
         if (!Accepts(State.ClassSelect)) return;
-        GymSessionService.BeginNew(HighlightedClassId);
+        GymSessionService.BeginNew(SelectedClassId);
         StartSession();
     }
 
@@ -475,7 +489,7 @@ public sealed class GymSessionMenu : MonoBehaviour
             string id = definition.id;
             Button card = PersonaMenuStyle.CreateButton(parent, "Class Card " + id, bodyFont,
                 string.Empty, 128f + i * 182f, 800f, 160f, 196f, 24, tilts[i % tilts.Length],
-                () => HighlightClass(id));
+                () => SelectClass(id));
             RawImage thumbnail = CreateArt(card.transform, "Thumbnail", 0f, 0f, 1f, 1f);
             RectTransform thumbRect = thumbnail.rectTransform;
             thumbRect.anchorMin = new Vector2(0.04f, 0.2f);
@@ -505,6 +519,9 @@ public sealed class GymSessionMenu : MonoBehaviour
 
         confirmClassButton = PersonaMenuStyle.CreateButton(parent, "Class Confirm Button", bodyFont,
             "CONFIRM", 1210f, 862f, 330f, 84f, 70, -2f, ConfirmClass);
+        // Leaving the cards for Confirm shows the committed class again.
+        PersonaMenuButton confirmPersona = confirmClassButton.GetComponent<PersonaMenuButton>();
+        if (confirmPersona != null) confirmPersona.Focused += () => HighlightClass(SelectedClassId);
         PersonaMenuStyle.CreateButton(parent, "Class Back Button", bodyFont,
             "BACK", 1540f, 874f, 200f, 60f, 46, -1f, Back);
     }
@@ -571,7 +588,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         GymClassDefinition definition = GymClassCatalog.All[highlightedClass];
         for (int i = 0; i < classCards.Count; i++)
         {
-            classCards[i].SetSelected(i == highlightedClass);
+            classCards[i].SetSelected(i == selectedClass);
         }
         className.text = definition.displayName.ToUpperInvariant();
         classDescription.text = definition.description;

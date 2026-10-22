@@ -594,6 +594,8 @@ public partial class PlayerMovement : MonoBehaviour
         if (Time.unscaledTime >= nextPickupPromptScanTime)
         {
             nearbyPickup = heldItem == null ? FindBestPickup() : null;
+            nearbyCorpse = heldItem == null && carriedCorpse == null && nearbyPickup == null
+                ? FindCarryableCorpse() : null;
             nearbyTalkTarget = GymDialogueDirector.Active != null
                 ? GymDialogueDirector.Active.FindNearbyTalkTarget(this)
                 : null;
@@ -664,6 +666,7 @@ public partial class PlayerMovement : MonoBehaviour
         HandleMovement();
         HandleCombatAndInteraction();
         UpdateHeldItem();
+        UpdateCarriedCorpse();
         UpdateHands();
     }
 
@@ -1066,7 +1069,11 @@ public partial class PlayerMovement : MonoBehaviour
 
         if (ReadInteractPressed())
         {
-            if (heldItem != null)
+            if (carriedCorpse != null)
+            {
+                DropCarriedCorpse();
+            }
+            else if (heldItem != null)
             {
                 DropHeldItem();
             }
@@ -1080,7 +1087,11 @@ public partial class PlayerMovement : MonoBehaviour
         {
             lastAttackTime = Time.time;
 
-            if (heldItem != null)
+            if (carriedCorpse != null)
+            {
+                ThrowCarriedCorpse();
+            }
+            else if (heldItem != null)
             {
                 ThrowHeldItem();
             }
@@ -1134,11 +1145,7 @@ public partial class PlayerMovement : MonoBehaviour
             return;
         }
 
-        EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
-        if (!IsTightEnemySurface(enemy, hit.collider))
-        {
-            enemy = null;
-        }
+        EnemyFighter enemy = ResolvePunchedEnemy(hit);
         if (enemy != null)
         {
             GymAudio.Play(GymSoundEffect.PunchFeedback, hit.point, 1f);
@@ -1382,6 +1389,8 @@ public partial class PlayerMovement : MonoBehaviour
         PickupItem candidate = FindBestPickup();
         if (candidate == null)
         {
+            // Nothing to lift: a strong enough player lifts a body instead.
+            TryPickupCorpse();
             return;
         }
 
@@ -1584,7 +1593,7 @@ public partial class PlayerMovement : MonoBehaviour
         GymHomelessAgent hank = collider.GetComponentInParent<GymHomelessAgent>();
         if (hank != null)
         {
-            return !hank.IsDead && !collider.isTrigger;
+            return !hank.IsDead && (!collider.isTrigger || hank.IsHitVolume(collider));
         }
         EnemyFighter enemy = collider.GetComponentInParent<EnemyFighter>();
         return enemy != null && !enemy.IsDead && IsTightEnemySurface(enemy, collider);
@@ -2493,6 +2502,45 @@ public partial class PlayerMovement : MonoBehaviour
 
     internal GymRadio NearbyRadioForVerification => nearbyRadio;
     internal EnemyFighter NearbyTalkTargetForVerification => nearbyTalkTarget;
+
+    /// <summary>Verifier: which enemy a punch from <paramref name="origin"/> along
+    /// <paramref name="direction"/> would damage (the real punch resolution).</summary>
+    internal EnemyFighter ResolvePunchEnemyForVerification(Vector3 origin, Vector3 direction)
+    {
+        direction = direction.normalized;
+        if (!TryResolvePunchHit(origin, ref direction, out RaycastHit hit))
+        {
+            return null;
+        }
+        return ResolvePunchedEnemy(hit);
+    }
+
+    /// <summary>Verifier: the homeless man a punch along this line would knock out.</summary>
+    internal GymHomelessAgent ResolvePunchHomelessForVerification(Vector3 origin, Vector3 direction)
+    {
+        direction = direction.normalized;
+        if (!TryResolvePunchHit(origin, ref direction, out RaycastHit hit))
+        {
+            return null;
+        }
+        GymHomelessAgent hank = hit.collider.GetComponentInParent<GymHomelessAgent>();
+        return hank != null && IsPunchBody(hit.collider) ? hank : null;
+    }
+
+    internal bool TryPickupCorpseForVerification() => TryPickupCorpse();
+    internal void ThrowCarriedCorpseForVerification() => ThrowCarriedCorpse();
+
+    private static EnemyFighter ResolvePunchedEnemy(RaycastHit hit)
+    {
+        EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
+        if (IsTightEnemySurface(enemy, hit.collider))
+        {
+            return enemy;
+        }
+        // A punch on a car window reaches the driver sitting behind it.
+        GymVisitorVehicle car = hit.collider.GetComponentInParent<GymVisitorVehicle>();
+        return car != null ? car.CabinOccupantAt(hit.point) : null;
+    }
     internal void PressCallFixerForVerification() => CallFixerFromReception();
 #endif
 
@@ -2532,8 +2580,9 @@ public partial class PlayerMovement : MonoBehaviour
                 return string.IsNullOrWhiteSpace(nearbyBackRoomInteractable.DisplayName)
                     ? "INTERACT"
                     : nearbyBackRoomInteractable.DisplayName.ToUpperInvariant();
-            case ContextAction.Drop: return "DROP " + GetPromptItemName(heldItem);
-            case ContextAction.Pickup: return "PICK UP " + GetPromptItemName(nearbyPickup);
+            case ContextAction.Drop: return carriedCorpse != null ? "DROP BODY" : "DROP " + GetPromptItemName(heldItem);
+            case ContextAction.Pickup: return nearbyPickup == null && nearbyCorpse != null
+                ? "PICK UP BODY" : "PICK UP " + GetPromptItemName(nearbyPickup);
             case ContextAction.Radio: return StripPromptKey(nearbyRadio.GetInteractionPrompt());
             case ContextAction.Workout: return StripPromptKey(nearbyExerciseStation.GetInteractionPrompt());
             default: return string.Empty;
@@ -2559,14 +2608,14 @@ public partial class PlayerMovement : MonoBehaviour
         {
             bool sitPreferred = PrefersSitOverTalk();
             eAction = ResolveContextAction(ContextKey.E,
-                HasTalkTarget && !sitPreferred, nearbyBackRoomInteractable != null, heldItem != null,
-                nearbyPickup != null, nearbyRadio != null,
+                HasTalkTarget && !sitPreferred, nearbyBackRoomInteractable != null, heldItem != null || carriedCorpse != null,
+                nearbyPickup != null || nearbyCorpse != null, nearbyRadio != null,
                 nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer,
                 sit: sitPreferred);
             ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
             fAction = ResolveContextAction(ContextKey.F,
-                HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null,
-                nearbyPickup != null, radioOnF,
+                HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null || carriedCorpse != null,
+                nearbyPickup != null || nearbyCorpse != null, radioOnF,
                 nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF,
                 CanShopNearby, dealer: CanDealNearby);
         }

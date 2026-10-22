@@ -9,7 +9,7 @@ using UnityEngine.InputSystem;
 /// Locker outfit selector in the menu and HUD style: an upright ink-rimmed
 /// plate with a red title tag, Bebas labels and Persona buttons for every
 /// top, shirt colour and headwear option. The worn item keeps the selected plate, locked
-/// items are dimmed and show their unlock rank. Equip rules stay in
+/// items are dimmed with a padlock; hovering one names its unlock requirement. Equip rules stay in
 /// <see cref="GymExperienceService"/>; this only presents and forwards clicks.
 /// </summary>
 public sealed class GymLockerMenuUI : MonoBehaviour
@@ -36,6 +36,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
     private Button[] headwearButtons;
     private Button doneButton;
     private bool shown;
+    private System.Func<string> hoveredRequirement;
     private float shownAt;
 
     public static GymLockerMenuUI Active => instance;
@@ -107,6 +108,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             topButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Top " + top, body, string.Empty,
                 Cell(i, 142f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipTop(top); Refresh(); });
+            AddLockHover(topButtons[i], () => service != null ? service.GetLockerTopRequirement(top) : string.Empty);
         }
 
         // The colour tints whichever top is worn.
@@ -119,6 +121,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             shirtButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Shirt " + shirt, body, string.Empty,
                 Cell(i, 258f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipShirt(shirt); Refresh(); });
+            AddLockHover(shirtButtons[i], () => service != null ? service.GetLockerShirtRequirement(shirt) : string.Empty);
         }
 
         PersonaMenuStyle.CreateLayoutLabel(panel, "Headwear Section", body, "HEADWEAR",
@@ -130,6 +133,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             headwearButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Headwear " + item, body, string.Empty,
                 Cell(i, 454f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipHeadwear(item); Refresh(); });
+            AddLockHover(headwearButtons[i], () => service != null ? service.GetLockerHeadwearRequirement(item) : string.Empty);
         }
 
         wearingLabel = PersonaMenuStyle.CreateLayoutLabel(panel, "Wearing", body, string.Empty,
@@ -215,7 +219,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
         }
         rankLabel.text = service.LockerRankLine;
         wearingLabel.text = service.LockerWearingLine;
-        challengeLabel.text = service.MasteryChallengeLabel.ToUpperInvariant();
+        RefreshHint();
         for (int i = 0; i < topButtons.Length; i++)
         {
             GymTopStyle top = GymExperienceService.LockerTops[i];
@@ -236,9 +240,70 @@ public sealed class GymLockerMenuUI : MonoBehaviour
         }
     }
 
+    private void AddLockHover(Button button, System.Func<string> requirement)
+    {
+        LockHover hover = button.gameObject.AddComponent<LockHover>();
+        hover.Changed = inside =>
+        {
+            hoveredRequirement = inside ? requirement : null;
+            RefreshHint();
+        };
+        BuildPadlock(button.transform);
+    }
+
+    // The hint row shows the hovered item's unlock requirement, otherwise the
+    // mastery challenge once one exists; it never shows a bare "locked".
+    private void RefreshHint()
+    {
+        if (service == null) return;
+        string requirement = hoveredRequirement != null ? hoveredRequirement() : string.Empty;
+        if (!string.IsNullOrEmpty(requirement))
+        {
+            challengeLabel.text = requirement;
+            challengeLabel.color = PersonaMenuStyle.Gold;
+            return;
+        }
+        string challenge = service.MasteryChallengeLabel;
+        challengeLabel.text = challenge == GymExperienceService.GetMasteryChallengeLabel(0)
+            ? string.Empty : challenge.ToUpperInvariant();
+        challengeLabel.color = PersonaMenuStyle.Muted;
+    }
+
+    // Small drawn padlock at the right edge of a button; shown only while locked.
+    private static void BuildPadlock(Transform button)
+    {
+        GameObject root = new GameObject("Padlock", typeof(RectTransform));
+        root.transform.SetParent(button, false);
+        RectTransform rect = root.GetComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax = new Vector2(1f, 0.5f);
+        rect.pivot = new Vector2(1f, 0.5f);
+        rect.anchoredPosition = new Vector2(-10f, -1f);
+        rect.sizeDelta = new Vector2(14f, 18f);
+        PadlockPart(rect, 0f, 0f, 14f, 10f);   // body
+        PadlockPart(rect, 2f, 9f, 2.5f, 6f);   // shackle left
+        PadlockPart(rect, 9.5f, 9f, 2.5f, 6f); // shackle right
+        PadlockPart(rect, 2f, 14f, 10f, 2.5f); // shackle top
+        root.SetActive(false);
+    }
+
+    private static void PadlockPart(RectTransform parent, float x, float y, float width, float height)
+    {
+        GameObject part = new GameObject("Part", typeof(RectTransform), typeof(Image));
+        part.transform.SetParent(parent, false);
+        RectTransform rect = part.GetComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax = rect.pivot = Vector2.zero;
+        rect.anchoredPosition = new Vector2(x, y);
+        rect.sizeDelta = new Vector2(width, height);
+        Image image = part.GetComponent<Image>();
+        image.color = PersonaMenuStyle.Muted;
+        image.raycastTarget = false;
+    }
+
     private static void Configure(Button button, string label, bool unlocked, bool worn)
     {
         button.interactable = unlocked;
+        Transform padlock = button.transform.Find("Padlock");
+        if (padlock != null) padlock.gameObject.SetActive(!unlocked);
         button.GetComponentInChildren<Text>().text = label;
         PersonaMenuStyle.FitLabelToButton(button, 32);
         button.GetComponent<PersonaMenuButton>().SetSelected(worn);
@@ -251,6 +316,16 @@ public sealed class GymLockerMenuUI : MonoBehaviour
 #else
         return Input.GetKeyDown(KeyCode.Escape);
 #endif
+    }
+
+    // Disabled buttons still receive pointer events; this only reports hover
+    // so locked plates keep their look while the hint row explains the unlock.
+    private sealed class LockHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        public System.Action<bool> Changed;
+        public void OnPointerEnter(PointerEventData eventData) => Changed?.Invoke(true);
+        public void OnPointerExit(PointerEventData eventData) => Changed?.Invoke(false);
+        private void OnDisable() => Changed?.Invoke(false);
     }
 
     private void OnDestroy()

@@ -340,6 +340,15 @@ public partial class EnemyFighter : MonoBehaviour
     private Quaternion gokuFlightTargetRotation;
     private CollisionDetectionMode gokuGroundCollisionMode = CollisionDetectionMode.Discrete;
     private Transform visitorVehicleRideAnchor;
+    // A driver sits in a car seat: GymVehicleDriverSeat owns the pose
+    // (car_driving / car_exit) and the root, so the ride must not drive the
+    // locomotion animation.
+    private bool visitorVehicleSeated;
+    private bool seatSavedKinematic;
+    private bool seatSavedGravity;
+    private bool seatSavedDetectCollisions;
+    private RigidbodyConstraints seatSavedConstraints;
+    private RigidbodyInterpolation seatSavedInterpolation;
     private bool visitorVehicleRideDetectCollisions;
     private int visitorDismountGroundSnapFrames;
     private float visitorDismountGroundY;
@@ -488,6 +497,7 @@ public partial class EnemyFighter : MonoBehaviour
         floorRootY = ResolveGymFloorY(transform.position.y);
         standingRootY = floorRootY;
         isAggressive = false;
+        ClearGrudges();
         throwPushbackUntilTime = 0f;
         roamState = RoamState.Idle;
         hasRoamTarget = false;
@@ -643,12 +653,18 @@ public partial class EnemyFighter : MonoBehaviour
             {
                 body.position = ridePosition;
                 body.rotation = rideRotation;
-                body.linearVelocity = Vector3.zero;
-                body.angularVelocity = Vector3.zero;
+                if (!body.isKinematic)
+                {
+                    body.linearVelocity = Vector3.zero;
+                    body.angularVelocity = Vector3.zero;
+                }
             }
             transform.SetPositionAndRotation(ridePosition, rideRotation);
-            SetAnimatedMovement(false);
-            externalBodyAnimator?.SetFlying(false);
+            if (!visitorVehicleSeated)
+            {
+                SetAnimatedMovement(false);
+                externalBodyAnimator?.SetFlying(false);
+            }
             return;
         }
         // The station is runtime-created and imported enemy colliders can be
@@ -726,7 +742,10 @@ public partial class EnemyFighter : MonoBehaviour
         {
             EndTreadmillVisit();
             RestoreGokuGroundPhysicsForDeath();
-            UpdatePermanentDeathPose();
+            if (!TickCarriedOrThrownCorpse())
+            {
+                UpdatePermanentDeathPose();
+            }
             return;
         }
 
@@ -814,8 +833,7 @@ public partial class EnemyFighter : MonoBehaviour
 #endif
             )
         {
-            currentTarget = playerTarget != null ? playerTarget.transform : null;
-            currentFighterTarget = null;
+            RefreshGrudgeTarget();
         }
         else
         {
@@ -876,7 +894,10 @@ public partial class EnemyFighter : MonoBehaviour
             // once the officer is clear of the doorway.
             RestoreDoorwayCrowdCollisions(false);
         }
-        if (isPolice && TickAuthoredPolicePursuit())
+        // An angry member follows the same authored corridor as the police
+        // once the fight leaves the gym (exit, path, parking, store).
+        if ((isPolice || isAggressive) && !GymBackRoomBuilder.IsInsideRoom(body.position) &&
+            TickAuthoredPolicePursuit())
         {
             return;
         }
@@ -936,8 +957,29 @@ public partial class EnemyFighter : MonoBehaviour
                 // UpdateGokuFlight already steers toward the current target every
                 // FixedUpdate. Do not apply the grounded velocity path as well.
             }
+            else if (GymBackRoomBuilder.TryGetLockerChaseWaypoint(
+                body.position, currentTarget.position, out Vector3 lockerWaypoint))
+            {
+                // Into or out of the locker room: through the door, not the
+                // main floor grid (which ends at the locker wall).
+                Vector3 toDoor = Vector3.ProjectOnPlane(lockerWaypoint - body.position, Vector3.up);
+                chaseStopReason = "chasing-locker-door";
+                if (toDoor.sqrMagnitude > 0.0025f)
+                {
+                    Vector3 doorDirection = toDoor.normalized;
+                    chaseIgnoresRoomBounds = true;
+                    Vector3 clear = FindClearMovementDirection(doorDirection, toDoor.magnitude, false, false);
+                    chaseIgnoresRoomBounds = false;
+                    moveDirection = clear.sqrMagnitude > 0.001f ? clear : doorDirection;
+                    ApplyChaseVelocity(moveDirection, chaseSpeed);
+                }
+            }
             else
             {
+                // Off the main floor (locker room, outside) the floor bounds
+                // must not veto every step.
+                chaseIgnoresRoomBounds = !IsOnMainFloor(body.position) ||
+                    !IsOnMainFloor(currentTarget.position);
                 Vector3 clearDirection = FindClearMovementDirection(moveDirection, distance, false, false);
                 bool directBlocked = clearDirection.sqrMagnitude < 0.001f;
                 // The local probe only looks 1.25 m ahead. If something blocks
@@ -979,6 +1021,7 @@ public partial class EnemyFighter : MonoBehaviour
                         chaseStopReason = "chasing-route";
                     }
                 }
+                chaseIgnoresRoomBounds = false;
                 moveDirection = clearDirection;
                 if (moveDirection.sqrMagnitude < 0.001f)
                 {
@@ -986,18 +1029,7 @@ public partial class EnemyFighter : MonoBehaviour
                     StopMoving();
                     return;
                 }
-                Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
-                Vector3 desiredVelocity = moveDirection * chaseSpeed;
-                // Directly steer the planar Rigidbody velocity. The old 11 N force
-                // was negligible against the 85 kg body and made the walking clip
-                // play while the fighter remained effectively stationary.
-                planarVelocity = Vector3.MoveTowards(
-                    planarVelocity, desiredVelocity, Mathf.Max(moveForce, 12f) * Time.fixedDeltaTime);
-                body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
-
-                Quaternion lookRotation = Quaternion.LookRotation(moveDirection, Vector3.up);
-                transform.rotation = Quaternion.Slerp(
-                    transform.rotation, lookRotation, 10f * Time.fixedDeltaTime);
+                ApplyChaseVelocity(moveDirection, chaseSpeed);
             }
         }
 
@@ -1010,6 +1042,22 @@ public partial class EnemyFighter : MonoBehaviour
             SetAnimatedMovementFromVelocity(chaseSpeed);
         }
 
+    }
+
+    private void ApplyChaseVelocity(Vector3 moveDirection, float chaseSpeed)
+    {
+        Vector3 planarVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+        Vector3 desiredVelocity = moveDirection * chaseSpeed;
+        // Directly steer the planar Rigidbody velocity. The old 11 N force
+        // was negligible against the 85 kg body and made the walking clip
+        // play while the fighter remained effectively stationary.
+        planarVelocity = Vector3.MoveTowards(
+            planarVelocity, desiredVelocity, Mathf.Max(moveForce, 12f) * Time.fixedDeltaTime);
+        body.linearVelocity = planarVelocity + Vector3.Project(body.linearVelocity, Vector3.up);
+
+        Quaternion lookRotation = Quaternion.LookRotation(moveDirection, Vector3.up);
+        transform.rotation = Quaternion.Slerp(
+            transform.rotation, lookRotation, 10f * Time.fixedDeltaTime);
     }
 
     private readonly List<Vector3> groundChaseRoute = new List<Vector3>();
@@ -1126,6 +1174,20 @@ public partial class EnemyFighter : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (visitorVehicleRideAnchor != null && !isDead)
+        {
+            // Follow the car (or Goku's cloud) every rendered frame, not only
+            // per physics step, or the rider lags behind: the cloud moves
+            // 48 m/s and Goku trailed it by over a metre.
+            transform.SetPositionAndRotation(
+                visitorVehicleRideAnchor.position, visitorVehicleRideAnchor.rotation);
+            if (body != null)
+            {
+                body.position = visitorVehicleRideAnchor.position;
+                body.rotation = visitorVehicleRideAnchor.rotation;
+            }
+            return;
+        }
         if (visitorDismountGroundSnapFrames <= 0 ||
             visitorVehicleRideAnchor != null || isDead)
         {
@@ -1165,33 +1227,50 @@ public partial class EnemyFighter : MonoBehaviour
         PickupItem item = collision.rigidbody != null
             ? collision.rigidbody.GetComponentInParent<PickupItem>()
             : null;
-        if (item == null || !item.IsThrowableWeapon || !item.WasThrownRecently)
+        if (item == null)
         {
             return;
         }
+        ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
+        ReceiveThrownItem(
+            item, collision.relativeVelocity,
+            collision.contactCount > 0 ? contact.point : transform.position + Vector3.up,
+            collision.contactCount > 0 ? contact.normal : -collision.relativeVelocity.normalized,
+            collision.contactCount > 0 && contact.thisCollider != null
+                ? contact.thisCollider.transform
+                : transform);
+    }
 
-        float impactSpeed = collision.relativeVelocity.magnitude;
+    /// <summary>
+    /// A thrown item struck this fighter (directly, or through the window of
+    /// the car it sits in). Returns false when the contact does not count.
+    /// </summary>
+    internal bool ReceiveThrownItem(
+        PickupItem item, Vector3 relativeVelocity, Vector3 bloodPoint, Vector3 bloodNormal,
+        Transform bloodParent)
+    {
+        if (item == null || !item.IsThrowableWeapon || !item.WasThrownRecently)
+        {
+            return false;
+        }
+
+        float impactSpeed = relativeVelocity.magnitude;
         float minimumImpactSpeed = item.ItemType == WeightType.Barbell ||
             item.ItemType == WeightType.EzBar || item.ItemType == WeightType.Radio
             ? 0.8f : 3f;
         if (impactSpeed < minimumImpactSpeed || !item.TryConsumeThrownHit())
         {
-            return;
+            return false;
         }
 
         float damage = item.GetImpactDamage(impactSpeed);
-        Vector3 impulse = collision.relativeVelocity.normalized *
+        Vector3 impulse = relativeVelocity.normalized *
             Mathf.Clamp(impactSpeed * item.ImpactMultiplier, 5f, 28f);
-        ContactPoint contact = collision.contactCount > 0 ? collision.GetContact(0) : default;
-        Vector3 bloodPoint = collision.contactCount > 0 ? contact.point : transform.position + Vector3.up;
-        Vector3 bloodNormal = collision.contactCount > 0 ? contact.normal : -collision.relativeVelocity.normalized;
         GymAudio.Play(GymSoundEffect.ThrownEnemyImpact, bloodPoint, 0.9f);
         BloodSplatter.SpawnOnBody(
             this, bloodPoint, bloodNormal,
             BloodSplatter.GetThrownScale(item.ItemType, item.BaseMass),
-            collision.contactCount > 0 && contact.thisCollider != null
-                ? contact.thisCollider.transform
-                : transform);
+            bloodParent != null ? bloodParent : transform);
         if (isDead)
         {
             ApplyCorpseImpact(impulse * 0.75f);
@@ -1205,5 +1284,6 @@ public partial class EnemyFighter : MonoBehaviour
                 GymExperienceService.Active?.RegisterEnemyDefeat(this);
             }
         }
+        return true;
     }
 }

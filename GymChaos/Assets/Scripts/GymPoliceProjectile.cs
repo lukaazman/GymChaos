@@ -218,7 +218,8 @@ public sealed class GymPoliceProjectile : MonoBehaviour
         {
             Vector3 impulse = velocity.normalized * 1.5f + Vector3.up * 0.08f;
             LastCollisionKind = "enemy";
-            fighter.TakeMeleeHit(impulse, damage, 0.08f);
+            // The shooter is the attacker: the target fights back at the officer.
+            fighter.TakeMeleeHit(impulse, damage, 0.08f, owner);
             Debug.Log(
                 $"GYMCHAOS_POLICE_PROJECTILE_HIT kind=enemy target={fighter.Identity} " +
                 $"collisions={ResolvedCollisionCount}", this);

@@ -49,6 +49,14 @@ public partial class EnemyFighter
 
         isDead = false;
         deathPoseFrozen = false;
+        carriedByPlayer = false;
+        thrownCorpseUntil = -1f;
+        if (corpseIgnoredPlayerColliders != null)
+        {
+            SetPlayerCorpseCollision(corpseIgnoredPlayerColliders, false);
+            corpseIgnoredPlayerColliders = null;
+            corpsePlayerCollisionRestoreAt = -1f;
+        }
         celebratingPlayerKill = false;
         stunnedUntilTime = 0f;
         policeReturnTarget = null;
@@ -99,6 +107,7 @@ public partial class EnemyFighter
         policeReturnArrived = arrived;
         forcedPoliceTarget = carPoint;
         isAggressive = false;
+        ClearGrudges();
         policeRangedMode = false;
         policePursuitRoute.Clear();
         policePursuitRouteIndex = 0;

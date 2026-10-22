@@ -19,6 +19,13 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         configuredIdentity == BodybuilderIdentity.Goku ? BasePunchDuration * 0.5f : BasePunchDuration;
     private const float AuthoredTransitionDuration = 0.12f;
 
+    public enum VehiclePose
+    {
+        None,
+        Driving,
+        Exit
+    }
+
     public enum MotionState
     {
         Uninitialized,
@@ -46,6 +53,27 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private AnimationClip authoredFlyingClip;
     private AnimationClip authoredSquatClip;
     private AnimationClip authoredDeadliftClip;
+    // Driven visitors sit in their car (car_driving loops) and climb out of
+    // the driver door (car_exit, played backwards to get in). Both keep the
+    // clip's own root motion; GymVehicleDriverSeat places the actor root and
+    // adds a seat offset so the hips stay on the seat.
+    private AnimationClip authoredCarDrivingClip;
+    private AnimationClip authoredCarExitClip;
+    // Goku on his cloud: held nimbus_stance pose, soles planted on the cloud.
+    private AnimationClip nimbusStanceClip;
+    private Func<Vector3, float> nimbusSurface;
+    public bool HasNimbusStanceClip => nimbusStanceClip != null;
+    public bool IsNimbusStanceActive => nimbusSurface != null && nimbusStanceClip != null;
+    public float NimbusLeftSoleGapForVerification { get; private set; }
+    public float NimbusRightSoleGapForVerification { get; private set; }
+    private VehiclePose vehiclePose;
+    private float vehicleExitPhase;
+    private float vehicleDriveTime;
+    private Vector3 vehicleRootOffset;
+    // Uniform scale of a seated driver (the giant bodybuilders fold into
+    // 1.25x cars); 1 once out of the car.
+    private float vehicleScale = 1f;
+    private float vehicleSampleScale = -1f;
     // The workout pose plays the squat unless a deadlift set selected its own
     // clip. The deadlift phase is a clamped position in the clip (the set
     // runs it forward and back), never a loop.
@@ -78,6 +106,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private float attackTime = -1f;
     private AnimationClip gunActionClip;
     private float gunActionTime = -1f;
+    private bool gunActionReverse;
     private MotionState gunActionState;
     private bool punchContactSent;
     private bool celebrating;
@@ -127,6 +156,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public bool HasAuthoredDeadliftClip => authoredDeadliftClip != null;
     public AnimationClip AuthoredDeadliftClip => authoredDeadliftClip;
     public bool IsDeadliftWorkoutClip => deadliftWorkoutClip;
+    public bool HasVehicleClips => authoredCarDrivingClip != null && authoredCarExitClip != null;
+    public float CarExitClipLength => authoredCarExitClip != null ? authoredCarExitClip.length : 0f;
+    public VehiclePose CurrentVehiclePose => vehiclePose;
+    public BodybuilderEnemyVisual.Rig BodyRig => rig;
     public bool HasGunDrawingClip => authoredGunDrawingClip != null;
     public bool HasGunShootingClip => authoredGunShootingClip != null;
     public bool IsGunActionPlaying => gunActionTime >= 0f;
@@ -230,6 +263,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             ? null : LoadAuthoredClip(resourcePath, "squat");
         authoredDeadliftClip = policeSet
             ? null : LoadAuthoredClip(resourcePath, "deadlift");
+        authoredCarDrivingClip = LoadAuthoredClip(resourcePath, "vehicle_driving");
+        authoredCarExitClip = LoadAuthoredClip(resourcePath, "vehicle_exit");
+        nimbusStanceClip = LoadAuthoredClip(resourcePath, "nimbus_stance");
+        vehiclePose = VehiclePose.None;
         authoredGunDrawingClip = policeSet
             ? LoadAuthoredClip(resourcePath, "gun_drawing") : null;
         authoredGunShootingClip = policeSet
@@ -404,6 +441,191 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         workoutPosePhaseDriven = true;
     }
 
+    /// <summary>
+    /// Goku stands on his cloud in the nimbus stance; <paramref name="surface"/>
+    /// gives the cloud's top height under a world point (NaN off the cloud).
+    /// Null ends the stance.
+    /// </summary>
+    public bool SetNimbusStance(Func<Vector3, float> surface)
+    {
+        if (surface != null && nimbusStanceClip == null)
+        {
+            return false;
+        }
+        nimbusSurface = surface;
+        nimbusSoleOffsets = Vector2.zero;
+        if (surface != null)
+        {
+            moving = false;
+            flying = false;
+            celebrating = false;
+            attackTime = -1f;
+            punchContactSent = false;
+        }
+        return true;
+    }
+
+    // The held clip keeps its soles on the clip ground. Lower the whole body
+    // so the soles meet the cloud on average, then bend each leg so its sole
+    // rests exactly on the cloud under it (the cloud top is uneven).
+    private void PlantFeetOnSurface(Func<Vector3, float> surface)
+    {
+        if (rig == null || rig.Root == null || rig.LeftThigh == null || rig.LeftShin == null ||
+            rig.LeftFoot == null || rig.RightThigh == null || rig.RightShin == null || rig.RightFoot == null)
+        {
+            return;
+        }
+        // Ankle above the boot sole, measured once on the baked skin of
+        // this pose (boots and Goku's scale make any proportion guess float).
+        if (nimbusSoleOffsets.x <= 0f)
+        {
+            nimbusSoleOffsets = MeasureSoleOffsets();
+        }
+        float leftSole = nimbusSoleOffsets.x;
+        float rightSole = nimbusSoleOffsets.y;
+        float leftTarget = surface(rig.LeftFoot.position) + leftSole;
+        float rightTarget = surface(rig.RightFoot.position) + rightSole;
+        if (float.IsNaN(leftTarget) || float.IsNaN(rightTarget))
+        {
+            NimbusLeftSoleGapForVerification = float.NaN;
+            NimbusRightSoleGapForVerification = float.NaN;
+            return;
+        }
+        float shift = ((leftTarget - rig.LeftFoot.position.y) + (rightTarget - rig.RightFoot.position.y)) * 0.5f;
+        rig.Root.position += Vector3.up * shift;
+        SolveLegToHeight(rig.LeftThigh, rig.LeftShin, rig.LeftFoot, leftTarget);
+        SolveLegToHeight(rig.RightThigh, rig.RightShin, rig.RightFoot, rightTarget);
+        NimbusLeftSoleGapForVerification = rig.LeftFoot.position.y - leftTarget;
+        NimbusRightSoleGapForVerification = rig.RightFoot.position.y - rightTarget;
+    }
+
+    private Vector2 nimbusSoleOffsets;
+    private Mesh soleScratch;
+
+    private Vector2 MeasureSoleOffsets()
+    {
+        float fallback = 0.196f * Vector3.Distance(rig.LeftThigh.position, rig.LeftShin.position);
+        SkinnedMeshRenderer skin = null;
+        foreach (SkinnedMeshRenderer candidate in GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (candidate.sharedMesh != null && (skin == null || candidate.sharedMesh.vertexCount > skin.sharedMesh.vertexCount))
+            {
+                skin = candidate;
+            }
+        }
+        if (skin == null)
+        {
+            return new Vector2(fallback, fallback);
+        }
+        if (soleScratch == null) soleScratch = new Mesh { name = "Nimbus Sole Bake" };
+        Vector3[] world = GymSkinSampler.BakeWorld(skin, soleScratch);
+        float Lowest(Transform foot)
+        {
+            float lowest = float.PositiveInfinity;
+            for (int i = 0; i < world.Length; i += 2)
+            {
+                Vector3 p = world[i];
+                float dx = p.x - foot.position.x, dz = p.z - foot.position.z;
+                if (dx * dx + dz * dz < 0.09f && p.y < foot.position.y + 0.1f && p.y < lowest) lowest = p.y;
+            }
+            return float.IsInfinity(lowest) ? fallback : Mathf.Clamp(foot.position.y - lowest, 0.02f, 0.4f);
+        }
+        return new Vector2(Lowest(rig.LeftFoot), Lowest(rig.RightFoot));
+    }
+
+    // Two-bone leg: moves the ankle straight up/down to targetY, keeping the
+    // knee in its current bend plane and the foot's world rotation.
+    private static void SolveLegToHeight(Transform thigh, Transform shin, Transform foot, float targetY)
+    {
+        Quaternion footRotation = foot.rotation;
+        Vector3 hip = thigh.position;
+        Vector3 knee = shin.position;
+        Vector3 ankle = foot.position;
+        Vector3 target = new Vector3(ankle.x, targetY, ankle.z);
+        float upper = Vector3.Distance(hip, knee);
+        float lower = Vector3.Distance(knee, ankle);
+        Vector3 toTarget = target - hip;
+        float reach = Mathf.Clamp(toTarget.magnitude, Mathf.Abs(upper - lower) + 0.001f, upper + lower - 0.001f);
+        Vector3 axis = toTarget.normalized;
+        // Bend direction: the current knee offset from the hip-ankle line.
+        Vector3 bend = Vector3.ProjectOnPlane(knee - hip, axis);
+        if (bend.sqrMagnitude < 1e-6f)
+        {
+            bend = Vector3.ProjectOnPlane(thigh.forward, axis);
+        }
+        bend.Normalize();
+        float along = (upper * upper - lower * lower + reach * reach) / (2f * reach);
+        float height = Mathf.Sqrt(Mathf.Max(0f, upper * upper - along * along));
+        Vector3 newKnee = hip + axis * along + bend * height;
+        thigh.rotation = Quaternion.FromToRotation(knee - hip, newKnee - hip) * thigh.rotation;
+        Vector3 currentAnkle = foot.position;
+        shin.rotation = Quaternion.FromToRotation(currentAnkle - shin.position, hip + axis * reach - shin.position) * shin.rotation;
+        foot.rotation = footRotation;
+    }
+
+    /// <summary>
+    /// Holds the car pose: Driving loops car_driving; Exit samples car_exit
+    /// at <paramref name="exitPhase"/> (0 seated, 1 standing outside).
+    /// <paramref name="rootWorldOffset"/> moves the sampled skeleton root.
+    /// </summary>
+    public bool SetVehiclePose(VehiclePose pose, float exitPhase, Vector3 rootWorldOffset,
+        float scale = 1f)
+    {
+        vehicleScale = pose == VehiclePose.None ? 1f : Mathf.Clamp(scale, 0.5f, 1f);
+        if (pose != VehiclePose.None && !HasVehicleClips)
+        {
+            return false;
+        }
+        if (pose == VehiclePose.Driving && vehiclePose != VehiclePose.Driving)
+        {
+            vehicleDriveTime = 0f;
+        }
+        vehiclePose = pose;
+        vehicleExitPhase = Mathf.Clamp01(exitPhase);
+        vehicleRootOffset = rootWorldOffset;
+        if (pose != VehiclePose.None)
+        {
+            moving = false;
+            flying = false;
+            celebrating = false;
+            attackTime = -1f;
+            punchContactSent = false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Writes a car pose right now (no seat offset) so the seat can measure
+    /// this rig's own hips, hands and head. The next LateUpdate samples the
+    /// selected pose again.
+    /// </summary>
+    public bool SampleVehiclePoseNow(VehiclePose pose, float normalized, float scale = 1f)
+    {
+        if (!configured || !HasVehicleClips || pose == VehiclePose.None)
+        {
+            return false;
+        }
+        AnimationClip clip = pose == VehiclePose.Driving ? authoredCarDrivingClip : authoredCarExitClip;
+        float duration = Mathf.Max(0.01f, clip.length - 0.001f);
+        vehicleSampleScale = scale;
+        bool sampled = SampleDirect(clip, Mathf.Clamp01(normalized) * duration);
+        vehicleSampleScale = -1f;
+        return sampled;
+    }
+
+    /// <summary>
+    /// Writes the first walking frame (pinned, grounded root) right now and
+    /// returns false when there is no walking clip.
+    /// </summary>
+    public bool SampleWalkingPoseNow()
+    {
+        if (!configured || walkingClip == null)
+        {
+            return false;
+        }
+        return SampleDirect(walkingClip, 0f);
+    }
+
     /// <summary>Selects the deadlift (true) or squat clip for the locked workout pose.</summary>
     public bool SetDeadliftWorkoutClip(bool deadlift)
     {
@@ -569,7 +791,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
                     if (!groundOffsetsLogged)
                     {
                         groundOffsetsLogged = true;
-                        Debug.Log($"GYMCHAOS_CLIP_GROUND_OFFSETS identity={configuredIdentity}{groundDetails}", this);
+                        Debug.Log($"GYMCHAOS_CLIP_GROUND_OFFSETS identity={configuredIdentity} " +
+                            $"restSole={groundLevel:0.000}{groundDetails}", this);
                     }
                     break;
                 }
@@ -591,7 +814,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             // A correction is a pose height mismatch, never a teleport.
             float offset = Mathf.Clamp(groundLevel - groundClipMin, -0.3f, 0.3f);
             clipGroundOffsets[groundClip] = offset;
-            groundDetails += $" {ClipName(groundClip)}={offset:0.000}";
+            groundDetails += $" {ClipName(groundClip)}={offset:0.000}" +
+                (Mathf.Abs(groundLevel - groundClipMin) > 0.3f ? $"(raw={groundLevel - groundClipMin:0.000})" : "");
             groundClip = null;
         }
         RestoreGroundPose();
@@ -717,6 +941,23 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         return BeginGunAction(authoredGunShootingClip, MotionState.GunShooting);
     }
 
+    /// <summary>Puts the gun away: the draw clip played backwards.</summary>
+    public bool BeginGunHolstering()
+    {
+        bool started = BeginGunAction(authoredGunDrawingClip, MotionState.GunDrawing);
+        gunActionReverse = started;
+        return started;
+    }
+
+    public void EndCelebration()
+    {
+        celebrating = false;
+        if (lastMotionState == MotionState.Celebration)
+        {
+            lastMotionState = MotionState.Idle;
+        }
+    }
+
     private bool BeginGunAction(AnimationClip clip, MotionState state)
     {
         if (!configured || configuredIdentity != BodybuilderIdentity.Policeman || clip == null)
@@ -732,6 +973,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         gunActionClip = clip;
         gunActionState = state;
         gunActionTime = 0f;
+        gunActionReverse = false;
         lastMotionState = state;
         return true;
     }
@@ -1122,6 +1364,40 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             TickGroundOffsetMeasurement();
         }
 
+        if (IsNimbusStanceActive)
+        {
+            lastMotionState = MotionState.Idle;
+            PreparePoseTransition(nimbusStanceClip, "nimbus-stance");
+            EmitAnimationMarker(MotionState.Idle, nimbusStanceClip, "nimbus-stance");
+            SampleDirectNormalized(nimbusStanceClip, 0.5f);
+            PlantFeetOnSurface(nimbusSurface);
+            return;
+        }
+
+        if (vehiclePose != VehiclePose.None)
+        {
+            lastMotionState = MotionState.Idle;
+            bool driving = vehiclePose == VehiclePose.Driving;
+            AnimationClip vehicleClip = driving ? authoredCarDrivingClip : authoredCarExitClip;
+            string branch = driving ? "car-driving" : "car-exit";
+            PreparePoseTransition(vehicleClip, branch);
+            EmitAnimationMarker(MotionState.Idle, vehicleClip, branch);
+            if (driving)
+            {
+                vehicleDriveTime += Time.deltaTime;
+                SampleDirectLoop(vehicleClip, vehicleDriveTime);
+            }
+            else
+            {
+                SampleDirectNormalized(vehicleClip, vehicleExitPhase);
+            }
+            if (rig != null && rig.Root != null)
+            {
+                rig.Root.position += vehicleRootOffset;
+            }
+            return;
+        }
+
         if (workoutPoseLocked)
         {
             lastMotionState = MotionState.Idle;
@@ -1167,8 +1443,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
                 0.01f, gunActionClip != null ? gunActionClip.length - 0.001f : 0.01f);
             gunActionTime += Time.deltaTime;
             EmitAnimationMarker(gunActionState, gunActionClip, branch);
-            SampleDirectNormalized(
-                gunActionClip, Mathf.Clamp01(gunActionTime / duration));
+            float gunPhase = Mathf.Clamp01(gunActionTime / duration);
+            SampleDirectNormalized(gunActionClip, gunActionReverse ? 1f - gunPhase : gunPhase);
             if (gunActionTime >= duration)
             {
                 gunActionTime = -1f;
@@ -1426,7 +1702,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         // remains the only intentional airborne root-motion exception.
         bool preserveAuthoredRootMotion =
             ReferenceEquals(clip, flyClip) || ReferenceEquals(clip, authoredSquatClip) ||
-            ReferenceEquals(clip, authoredDeadliftClip);
+            ReferenceEquals(clip, authoredDeadliftClip) ||
+            ReferenceEquals(clip, authoredCarDrivingClip) ||
+            ReferenceEquals(clip, authoredCarExitClip);
         appliedGroundOffset = 0f;
         if (!preserveAuthoredRootMotion && rig != null &&
             rig.Root != null && restPositions.TryGetValue(
@@ -1446,6 +1724,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         modelRoot.localPosition = modelBaseLocalPosition;
         modelRoot.localRotation = modelBaseLocalRotation;
         modelRoot.localScale = modelBaseLocalScale;
+        if (ReferenceEquals(clip, authoredCarDrivingClip) || ReferenceEquals(clip, authoredCarExitClip))
+        {
+            modelRoot.localScale = modelBaseLocalScale *
+                (vehicleSampleScale > 0f ? vehicleSampleScale : vehicleScale);
+        }
         return true;
     }
 

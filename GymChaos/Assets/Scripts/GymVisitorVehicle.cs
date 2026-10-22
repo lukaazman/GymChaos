@@ -17,7 +17,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private const float DavieBusTargetLength = 10.4f * S;
     private const string ArnoldHummerAsset =
         "BodyBuilders/vehicles/Arnold_Hummer_lod.glb";
-    private const float ArnoldHummerTargetLength = 4.0f * S;
+    private const float ArnoldHummerTargetLength = 4.0f * S * GymOutdoorBuilder.CarSizeBoost;
     private const float CloudTargetLength = 2.8f * S;
     private const float TurnSpeed = 5f;
     private const float MaxGroundRouteDeltaTime = 0.05f;
@@ -77,6 +77,11 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private Coroutine driveRoutine;
     private Transform riderAnchor;
     private EnemyFighter mountedRider;
+    // Driven cars (not Goku's cloud, not Davie's bus) have a see-through
+    // cabin; their visitor sits in it while the car moves.
+    private GymVehicleCabin cabin;
+    private GymVehicleDriverSeat driverSeat;
+    private EnemyFighter pendingDriver;
     private bool runtimeVisualReady;
     private bool runtimeVisualLoadFailed;
     // A runtime GLB vehicle owns a coroutine while its visual is loading, but
@@ -358,6 +363,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             vehicle.ApplyOriginalMaterial(visual);
             vehicle.AddPhysicalBody(visual);
             if (vehicle.IsCloud) vehicle.CreateRiderAnchor(visual);
+            else vehicle.AttachCabin(visual);
         }
         else
         {
@@ -829,7 +835,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         for (int i = 0; i < overlapCount; i++)
         {
             Collider hit = nearPeople[i];
-            if (hit == null || hit.transform.IsChildOf(transform))
+            if (hit == null || hit.transform.IsChildOf(transform) || IsOwnOccupant(hit))
             {
                 continue;
             }
@@ -925,6 +931,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         AlignArnoldVisualAxis(visual);
         FitVisual(visual, ArnoldHummerTargetLength, centerHorizontally: true);
         AddPhysicalBody(visual);
+        AttachCabin(visual);
         runtimeVisualReady = true;
 
 
@@ -953,11 +960,157 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
     }
 
+    public bool ExpectsSeatedDriver => !IsCloud && !IsBus;
+    /// <summary>
+    /// The driver behind the car's glass at <paramref name="worldPoint"/>, if a
+    /// throw or punch landing there reaches it: the point is on the upper
+    /// (window) half of the car body and close to the seated driver.
+    /// </summary>
+    private BoxCollider cabinBodyCollider;
+
+    public EnemyFighter CabinOccupantAt(Vector3 worldPoint)
+    {
+        EnemyFighter occupant = driverSeat != null ? driverSeat.Driver : null;
+        if (cabinBodyCollider == null)
+        {
+            cabinBodyCollider = GetComponent<BoxCollider>();
+        }
+        BoxCollider bodyCollider = cabinBodyCollider;
+        if (occupant == null || occupant.IsDead || !occupant.IsInVehicleSeatMode || bodyCollider == null)
+        {
+            return null;
+        }
+        Vector3 local = transform.InverseTransformPoint(worldPoint);
+        float top = bodyCollider.center.y + bodyCollider.size.y * 0.5f;
+        if (local.y < bodyCollider.center.y || local.y > top - bodyCollider.size.y * 0.06f)
+        {
+            return null;
+        }
+        Vector3 chest = occupant.transform.position + Vector3.up * 1.1f;
+        return (chest - worldPoint).sqrMagnitude <= 1.8f * 1.8f ? occupant : null;
+    }
+
+    // A throw through the window hits the driver; the car body itself is one
+    // box collider around the cabin.
+    private void OnCollisionEnter(Collision collision)
+    {
+        PickupItem item = collision.rigidbody != null
+            ? collision.rigidbody.GetComponentInParent<PickupItem>()
+            : null;
+        if (item == null || !item.WasThrownRecently || collision.contactCount == 0)
+        {
+            return;
+        }
+        ContactPoint contact = collision.GetContact(0);
+        EnemyFighter occupant = CabinOccupantAt(contact.point);
+        if (occupant != null)
+        {
+            Vector3 chest = occupant.transform.position + Vector3.up * 1.1f;
+            occupant.ReceiveThrownItem(item, collision.relativeVelocity, chest,
+                (contact.point - chest).normalized, occupant.transform);
+        }
+    }
+
+    public bool HasSeatedDriver => driverSeat != null && driverSeat.Driver != null;
+    public bool IsDriverSeatBusy => driverSeat != null && driverSeat.IsBusy;
+    public GymVehicleDriverSeat DriverSeat => driverSeat;
+    public GymVehicleCabin Cabin => cabin;
+
+    private void AttachCabin(GameObject visual)
+    {
+        if (!ExpectsSeatedDriver) return;
+        cabin = GymVehicleCabin.Attach(transform, visual);
+        if (cabin == null || !cabin.IsReady)
+        {
+            Debug.LogWarning($"GYMCHAOS_VEHICLE_CABIN_MISSING identity={identity}", this);
+            return;
+        }
+        driverSeat = gameObject.AddComponent<GymVehicleDriverSeat>();
+        // The aisle end of the parked car, in its own frame: the driver walks
+        // to and from the aisle along the driver side up to here.
+        Vector3 aisleLocal = Quaternion.Inverse(ParkedRotation) * (PassengerPoint - parkingPoint);
+        driverSeat.Initialize(this, cabin, -RouteHeightAboveFloor, aisleLocal);
+        // Only while the car is still on its way in; a late GLB never seats
+        // a visitor who already walked off.
+        if (pendingDriver != null && !IsParked)
+        {
+            EnemyFighter waiting = pendingDriver;
+            pendingDriver = null;
+            SeatDriverNow(waiting);
+        }
+        pendingDriver = null;
+    }
+
+    /// <summary>
+    /// Puts an arriving visitor behind the wheel (visible through the glass)
+    /// before the car drives in. False when this car or rig has no cabin
+    /// support; the caller then hides the visitor as before.
+    /// </summary>
+    public bool TrySeatArrivingDriver(EnemyFighter fighter)
+    {
+        if (!ExpectsSeatedDriver || !GymVehicleDriverSeat.SupportsDriver(fighter)) return false;
+        if (driverSeat == null)
+        {
+            if (NeedsRuntimeVisual && !runtimeVisualReady && !runtimeVisualLoadFailed)
+            {
+                // The Hummer GLB is still loading: seat the driver once it is in.
+                pendingDriver = fighter;
+                fighter.gameObject.SetActive(false);
+                return true;
+            }
+            return false;
+        }
+        return SeatDriverNow(fighter);
+    }
+
+    private bool SeatDriverNow(EnemyFighter fighter)
+    {
+        fighter.gameObject.SetActive(true);
+        if (driverSeat.Mount(fighter)) return true;
+        fighter.gameObject.SetActive(false);
+        return false;
+    }
+
+    public bool BeginDriverExit(Action standing) =>
+        driverSeat != null && driverSeat.BeginExit(standing);
+
+    public bool CanBoardSeatedDriver(EnemyFighter fighter) =>
+        driverSeat != null && GymVehicleDriverSeat.SupportsDriver(fighter) &&
+        driverSeat.EnsureFit(fighter);
+
+    /// <summary>Where a departing visitor walks to before getting in.</summary>
+    public Vector3 BoardingPointFor(EnemyFighter fighter) =>
+        CanBoardSeatedDriver(fighter) ? driverSeat.LanePointWorld : PassengerPoint;
+
+    public float BoardingReachFor(EnemyFighter fighter) =>
+        CanBoardSeatedDriver(fighter) ? 0.45f : BoardingReachDistance;
+
+    public bool BeginDriverBoarding(EnemyFighter fighter, Action seated) =>
+        driverSeat != null && driverSeat.BeginBoarding(fighter, seated);
+
+    public void ClearPendingDriver() => pendingDriver = null;
+
+    /// <summary>The car has left: stand the hidden driver down.</summary>
+    public void ReleaseDriver()
+    {
+        pendingDriver = null;
+        driverSeat?.Release();
+    }
+
     public void MountRider(EnemyFighter fighter)
     {
         if (!IsCloud || fighter == null || riderAnchor == null) return;
         mountedRider = fighter;
         mountedRider.BeginVisitorVehicleRide(riderAnchor);
+    }
+
+    /// <summary>The rider jumped off on its own (attacked mid-ride).</summary>
+    public void ForgetRider(EnemyFighter fighter)
+    {
+        if (mountedRider == fighter)
+        {
+            mountedRider = null;
+        }
     }
 
     public void DismountRider(Vector3 groundPoint, Quaternion rotation)
@@ -1210,9 +1363,18 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         Debug.Log($"GYMCHAOS_VEHICLE_{(park ? "PARKED" : "DEPARTED")} identity={identity}", this);
     }
 
+    // This vehicle's own driver or rider keeps its body colliders (so it
+    // can be hit), but it is never traffic in front of its own car.
+    private bool IsOwnOccupant(Collider collider)
+    {
+        EnemyFighter fighter = collider != null ? collider.GetComponentInParent<EnemyFighter>() : null;
+        return fighter != null &&
+            (fighter == mountedRider || (driverSeat != null && fighter == driverSeat.Driver));
+    }
+
     private bool IsPerson(Collider collider)
     {
-        return collider != null && !collider.transform.IsChildOf(transform) &&
+        return collider != null && !collider.transform.IsChildOf(transform) && !IsOwnOccupant(collider) &&
             (collider.GetComponentInParent<PlayerMovement>() != null ||
              collider.GetComponentInParent<EnemyFighter>() != null ||
              collider.GetComponentInParent<GymVisitorAgent>() != null);
@@ -1550,7 +1712,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private bool IsTrafficObstacle(Collider collider)
     {
         if (collider == null || collider.isTrigger ||
-            collider.transform.IsChildOf(transform))
+            collider.transform.IsChildOf(transform) || IsOwnOccupant(collider))
         {
             return false;
         }
@@ -1773,6 +1935,13 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         parkingPoint = new Vector3(
             x, floorY, GymOutdoorBuilder.GetParkingStallCenterZ(rowSign));
         aislePoint = new Vector3(x, floorY, parking.center.z);
+        if (!IsCloud)
+        {
+            // Cars are drawn CarSizeBoost longer than the bay layout: park
+            // that extra half length toward the aisle, off the back boundary.
+            float extraHalf = 4.0f * S * (GymOutdoorBuilder.CarSizeBoost - 1f) * 0.5f;
+            parkingPoint.z += Mathf.Sign(aislePoint.z - parkingPoint.z) * extraHalf;
+        }
         junctionPoint = GymOutdoorBuilder.VehicleRoadJunctionPoint;
         junctionPoint.y = floorY;
         roadTurnPoint = GymOutdoorBuilder.VehicleRoadTurnPoint;
@@ -1872,16 +2041,167 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         ? parkingPoint.y
         : parkingPoint.y - RouteHeightAboveFloor) - TyreContactSink;
 
+    // Cloud top heights on a grid in vehicle space (max vertex height per
+    // cell), so Goku's soles can rest on the cloud's uneven top.
+    private const float CloudCell = 0.1f;
+    private float[,] cloudTop;
+    private Vector2 cloudTopMin;
+
     private void CreateRiderAnchor(GameObject visual)
     {
         Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0) return;
         Bounds bounds = CombinedBounds(renderers);
+        BuildCloudTop(visual);
+        AddCloudSurface(visual);
         riderAnchor = new GameObject("Goku Rider Anchor").transform;
         riderAnchor.SetParent(transform, true);
-        riderAnchor.position = new Vector3(bounds.center.x, bounds.max.y + 0.04f, bounds.center.z);
         riderAnchor.rotation = transform.rotation;
+        riderAnchor.position = new Vector3(bounds.center.x, bounds.max.y + 0.04f, bounds.center.z);
+        if (cloudTop == null)
+        {
+            return;
+        }
+        // The cloud flies broadside: its puffy body is one half of its local
+        // x extent, the tail the other. Goku stands over the middle of the
+        // body (feet spread along x), on the cloud's height under his feet.
+        float halfLength = (cloudTop.GetLength(0) - 1) * CloudCell * 0.5f;
+        Vector3 localCenter = new Vector3(
+            cloudTopMin.x + halfLength, 0f,
+            cloudTopMin.y + (cloudTop.GetLength(1) - 1) * CloudCell * 0.5f);
+        float plus = CloudLocalTop(localCenter.x + halfLength * 0.5f, localCenter.z);
+        float minus = CloudLocalTop(localCenter.x - halfLength * 0.5f, localCenter.z);
+        float bodySide = (float.IsNaN(minus) ? float.MinValue : minus) >
+            (float.IsNaN(plus) ? float.MinValue : plus) ? -1f : 1f;
+        float standX = localCenter.x + bodySide * halfLength * 0.45f;
+        float footSpread = 0.56f;
+        float footY = (CloudLocalTop(standX - footSpread, localCenter.z) + CloudLocalTop(standX + footSpread, localCenter.z)) * 0.5f;
+        if (float.IsNaN(footY))
+        {
+            footY = float.IsNaN(plus) ? minus : float.IsNaN(minus) ? plus : Mathf.Max(plus, minus);
+        }
+        if (float.IsNaN(footY))
+        {
+            Debug.LogWarning("GYMCHAOS_GOKU_CLOUD_ANCHOR_FALLBACK no cloud top under the stance", this);
+            return;
+        }
+        riderAnchor.localPosition = new Vector3(standX, footY, localCenter.z);
+        Debug.Log($"GYMCHAOS_GOKU_CLOUD_ANCHOR local={riderAnchor.localPosition} bodySide={bodySide} plus={plus} minus={minus} footY={footY} half={halfLength} center={localCenter}", this);
     }
+
+    private void BuildCloudTop(GameObject visual)
+    {
+        MeshFilter[] filters = visual.GetComponentsInChildren<MeshFilter>(true);
+        Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 max = new Vector2(float.MinValue, float.MinValue);
+        var points = new System.Collections.Generic.List<Vector3>();
+        foreach (MeshFilter filter in filters)
+        {
+            if (filter.sharedMesh == null || !filter.sharedMesh.isReadable) continue;
+            Vector3[] vertices = filter.sharedMesh.vertices;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector3 local = transform.InverseTransformPoint(filter.transform.TransformPoint(vertices[i]));
+                points.Add(local);
+                min = Vector2.Min(min, new Vector2(local.x, local.z));
+                max = Vector2.Max(max, new Vector2(local.x, local.z));
+            }
+        }
+        if (points.Count == 0) return;
+        int nx = Mathf.CeilToInt((max.x - min.x) / CloudCell) + 1;
+        int nz = Mathf.CeilToInt((max.y - min.y) / CloudCell) + 1;
+        float[,] top = new float[nx, nz];
+        for (int x = 0; x < nx; x++)
+            for (int z = 0; z < nz; z++)
+                top[x, z] = float.NaN;
+        foreach (Vector3 p in points)
+        {
+            int x = Mathf.Clamp((int)((p.x - min.x) / CloudCell), 0, nx - 1);
+            int z = Mathf.Clamp((int)((p.z - min.y) / CloudCell), 0, nz - 1);
+            if (float.IsNaN(top[x, z]) || p.y > top[x, z]) top[x, z] = p.y;
+        }
+        cloudTop = top;
+        cloudTopMin = min;
+        int filled = 0;
+        foreach (float h in top) if (!float.IsNaN(h)) filled++;
+        Debug.Log($"GYMCHAOS_GOKU_CLOUD_TOP filters={filters.Length} points={points.Count} grid={nx}x{nz} filled={filled} min={min} max={max} center={top[nx / 2, nz / 2]}", this);
+    }
+
+    // Highest cloud point within two cells of (x, z) in vehicle space.
+    private float CloudLocalTop(float x, float z)
+    {
+        if (cloudTop == null) return float.NaN;
+        int cx = (int)((x - cloudTopMin.x) / CloudCell);
+        int cz = (int)((z - cloudTopMin.y) / CloudCell);
+        float best = float.NaN;
+        for (int dx = -2; dx <= 2; dx++)
+        {
+            for (int dz = -2; dz <= 2; dz++)
+            {
+                int ix = cx + dx, iz = cz + dz;
+                if (ix < 0 || iz < 0 || ix >= cloudTop.GetLength(0) || iz >= cloudTop.GetLength(1)) continue;
+                float h = cloudTop[ix, iz];
+                if (!float.IsNaN(h) && (float.IsNaN(best) || h > best)) best = h;
+            }
+        }
+        return best;
+    }
+
+    // The cloud's exact top for Goku's soles: a mesh collider on its own
+    // layer that collides with nothing, used only by CloudSurfaceY rays.
+    // (The grid above only places the rider anchor; its cells are coarse.)
+    public const int CloudSurfaceLayer = 25;
+    private static bool cloudSurfaceLayerIsolated;
+
+    private void AddCloudSurface(GameObject visual)
+    {
+        if (!cloudSurfaceLayerIsolated)
+        {
+            for (int layer = 0; layer < 32; layer++)
+            {
+                Physics.IgnoreLayerCollision(CloudSurfaceLayer, layer, true);
+            }
+            cloudSurfaceLayerIsolated = true;
+        }
+        foreach (MeshFilter filter in visual.GetComponentsInChildren<MeshFilter>(true))
+        {
+            if (filter.sharedMesh == null || !filter.sharedMesh.isReadable) continue;
+            GameObject surface = new GameObject("Cloud Surface") { layer = CloudSurfaceLayer };
+            surface.transform.SetParent(filter.transform, false);
+            surface.AddComponent<MeshCollider>().sharedMesh = filter.sharedMesh;
+        }
+    }
+
+    /// <summary>World height of the cloud's top under <paramref name="world"/> (NaN off the cloud).</summary>
+    public float CloudSurfaceY(Vector3 world)
+    {
+        if (this == null)
+        {
+            return float.NaN;
+        }
+        // The cloud moves in Update; its colliders follow only on sync.
+        if (cloudSurfaceSyncFrame != Time.frameCount)
+        {
+            cloudSurfaceSyncFrame = Time.frameCount;
+            Physics.SyncTransforms();
+        }
+        Vector3 from = new Vector3(world.x, world.y + 3f, world.z);
+        int count = Physics.RaycastNonAlloc(from, Vector3.down, cloudSurfaceHits, 8f,
+            1 << CloudSurfaceLayer, QueryTriggerInteraction.Ignore);
+        float best = float.NaN;
+        for (int i = 0; i < count; i++)
+        {
+            if (cloudSurfaceHits[i].collider.transform.IsChildOf(transform) &&
+                (float.IsNaN(best) || cloudSurfaceHits[i].point.y > best))
+            {
+                best = cloudSurfaceHits[i].point.y;
+            }
+        }
+        return best;
+    }
+
+    private readonly RaycastHit[] cloudSurfaceHits = new RaycastHit[8];
+    private static int cloudSurfaceSyncFrame = -1;
 
     private void ApplyOriginalMaterial(GameObject visual)
     {
@@ -1896,6 +2216,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         var replacements = new Dictionary<Material, Material>();
         for (int r = 0; r < renderers.Length; r++)
         {
+            // Cabin parts (glass, interior colours, markers) get their own
+            // materials from GymVehicleCabin.
+            if (!GymVehicleCabin.UsesScanTexture(renderers[r].name)) continue;
             Material[] source = renderers[r].sharedMaterials;
             for (int i = 0; i < source.Length; i++)
             {

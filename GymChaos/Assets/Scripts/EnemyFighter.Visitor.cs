@@ -10,6 +10,7 @@ public partial class EnemyFighter
         currentTarget = null;
         currentFighterTarget = null;
         isAggressive = false;
+        ClearGrudges();
     }
     public void DetachVisitorAgent(GymVisitorAgent agent)
     {
@@ -83,17 +84,98 @@ public partial class EnemyFighter
             visitorVehicleRideDetectCollisions = body.detectCollisions;
             body.linearVelocity = Vector3.zero;
             body.angularVelocity = Vector3.zero;
-            body.detectCollisions = false;
+            // Collisions stay on so a rider can be hit by a punch or a throw;
+            // the kinematic body is not pushed by the cloud's own colliders.
             body.useGravity = false;
             body.isKinematic = true;
         }
         transform.SetPositionAndRotation(anchor.position, anchor.rotation);
         StopVisitorMovement();
         externalBodyAnimator?.SetFlying(false);
+        GymVisitorVehicle cloud = anchor.GetComponentInParent<GymVisitorVehicle>(true);
+        MixamoScanRetargetAnimator bodyAnimator = VehicleBodyAnimator;
+        bool stance = cloud != null && bodyAnimator != null && bodyAnimator.SetNimbusStance(cloud.CloudSurfaceY);
+        Debug.Log($"GYMCHAOS_GOKU_NIMBUS_STANCE identity={identity} active={stance} cloud={cloud != null} " +
+            $"clip={bodyAnimator != null && bodyAnimator.HasNimbusStanceClip}", this);
     }
+    public bool IsSeatedInVehicle => visitorVehicleSeated && visitorVehicleRideAnchor != null;
+    public bool IsRidingVehicleForVerification => visitorVehicleRideAnchor != null && !visitorVehicleSeated;
+    // Seat mode still on, even if the car (and its anchor) is already gone.
+    public bool IsInVehicleSeatMode => visitorVehicleSeated;
+    public MixamoScanRetargetAnimator VehicleBodyAnimator
+    {
+        get
+        {
+            if (externalBodyAnimator == null)
+            {
+                externalBodyAnimator = GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+            }
+            return externalBodyAnimator;
+        }
+    }
+
+    /// <summary>
+    /// Seats this visitor in a car: the root follows <paramref name="anchor"/>
+    /// with physics off until <see cref="EndVisitorVehicleSeat"/>.
+    /// </summary>
+    public void BeginVisitorVehicleSeat(Transform anchor)
+    {
+        if (anchor == null || isDead) return;
+        if (!visitorVehicleSeated && body != null)
+        {
+            seatSavedKinematic = body.isKinematic;
+            seatSavedGravity = body.useGravity;
+            seatSavedDetectCollisions = body.detectCollisions;
+            seatSavedConstraints = body.constraints;
+            seatSavedInterpolation = body.interpolation;
+        }
+        visitorVehicleRideAnchor = anchor;
+        visitorVehicleSeated = true;
+        if (body != null)
+        {
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+            // Collisions stay on: a seated driver can still be hit. The
+            // kinematic body gets no contacts from the kinematic car.
+            body.useGravity = false;
+            body.isKinematic = true;
+            body.interpolation = RigidbodyInterpolation.None;
+        }
+        StopVisitorMovement();
+        transform.SetPositionAndRotation(anchor.position, anchor.rotation);
+        Physics.SyncTransforms();
+    }
+
+    /// <summary>Stands a seated driver on the ground outside the car.</summary>
+    public void EndVisitorVehicleSeat(Vector3 groundPosition, Quaternion rotation)
+    {
+        if (!visitorVehicleSeated) return;
+        visitorVehicleRideAnchor = null;
+        visitorVehicleSeated = false;
+        if (body != null)
+        {
+            body.isKinematic = seatSavedKinematic;
+            body.useGravity = seatSavedGravity;
+            body.detectCollisions = seatSavedDetectCollisions;
+            body.constraints = seatSavedConstraints;
+            body.interpolation = seatSavedInterpolation;
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+        }
+        SetVisitorSpawnPose(groundPosition, rotation);
+        Physics.SyncTransforms();
+    }
+
     public void EndVisitorVehicleRide(Vector3 groundPosition, Quaternion rotation)
     {
         visitorVehicleRideAnchor = null;
+        VehicleBodyAnimator?.SetNimbusStance(null);
         gokuFlightState = GokuFlightState.Grounded;
         gokuFlightTransition = 0f;
         groundPosition.y = ResolveGymFloorY(groundPosition.y);
@@ -779,8 +861,11 @@ public partial class EnemyFighter
         {
             EnemyFighter candidate = registered[i];
             if (candidate == null || candidate == this || candidate == visitorCrowdPass ||
-                !candidate.isActiveAndEnabled || candidate.isDead || candidate.body == null)
+                !candidate.isActiveAndEnabled || candidate.isDead || candidate.body == null ||
+                candidate.visitorVehicleRideAnchor != null)
             {
+                // A driver in a car (or a rider) moves with the vehicle; the
+                // traffic code already handles the vehicle itself.
                 continue;
             }
 
@@ -894,7 +979,8 @@ public partial class EnemyFighter
             {
                 continue;
             }
-            if (blockedFighter != null && blockedFighter == visitorCrowdPass)
+            if (blockedFighter != null &&
+                (blockedFighter == visitorCrowdPass || blockedFighter.visitorVehicleRideAnchor != null))
             {
                 continue;
             }
@@ -1064,7 +1150,14 @@ public partial class EnemyFighter
     {
         // Every probe that blocks on a member records that exact fighter; it
         // must still be next to this visitor (the field survives clear probes).
-        EnemyFighter other = routeBlockerFighter;
+        TryVisitorCrowdPassThrough(routeBlockerFighter);
+    }
+
+    /// <summary>The member that blocked the last probe, if a member did.</summary>
+    internal EnemyFighter VisitorRouteBlockerFighter => routeBlockerFighter;
+
+    internal void TryVisitorCrowdPassThrough(EnemyFighter other)
+    {
         if (other == null || other == this || other.isDead || other.isAggressive ||
             (other.isPolice && other.currentTarget != null) ||
             !other.isActiveAndEnabled || visitorCrowdPass == other ||

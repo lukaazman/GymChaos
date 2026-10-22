@@ -195,6 +195,14 @@ public static class GymChaosClassSessionPlay
         FocusCard(classId);
         yield return Step;
         Require(Menu.HighlightedClassId == classId, "Focusing the " + classId + " card did not preview it");
+        Require(Menu.SelectedClassId == "bodybuilding", "Hovering a card changed the selected class");
+        Menu.SelectClass(classId);
+        if (classId != "bodybuilding")
+        {
+            FocusCard("bodybuilding");
+            yield return Step;
+            Require(Menu.SelectedClassId == classId, "Hovering another card broke the clicked selection");
+        }
         int before = GymSessionService.CompletedWriteCount;
         Menu.ConfirmClass();
         // A second activation in the same frame must not create a second character.
@@ -313,6 +321,7 @@ public static class GymChaosClassSessionPlay
         FocusCard("cardio");
         yield return Step;
         Require(Menu.HighlightedClassId == "cardio", "Card focus did not change the preview");
+        Menu.SelectClass("cardio");
         yield return 0.5f;
         PersonaMenuButton focusedCard = Menu.transform.Find("Class Select/Class Card cardio")
             .GetComponent<PersonaMenuButton>();

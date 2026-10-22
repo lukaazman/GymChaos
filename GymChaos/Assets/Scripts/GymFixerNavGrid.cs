@@ -12,7 +12,9 @@ using UnityEngine;
 public sealed class GymFixerNavGrid
 {
     public const float CellSize = 0.35f;
-    private const float BodyRadius = 0.27f;
+    // Larry's body is about 0.6 m across; the old 0.27 m let the path brush
+    // through bench ends and rack corners.
+    private const float BodyRadius = 0.32f;
     private const float StepTolerance = 0.45f;
 
     private readonly Collider[] overlap = new Collider[24];
@@ -277,8 +279,10 @@ public sealed class GymFixerNavGrid
             return false;
         }
         ground = best;
-        Vector3 boxCenter = new Vector3(center.x, ground + 1.0f, center.z);
-        Vector3 halfExtents = new Vector3(BodyRadius, 0.6f, BodyRadius);
+        // From shin height up: benches, plate trees and the deadlift
+        // platform edge block too (the old box started at 0.4 m).
+        Vector3 boxCenter = new Vector3(center.x, ground + 0.98f, center.z);
+        Vector3 halfExtents = new Vector3(BodyRadius, 0.83f, BodyRadius);
         int count = Physics.OverlapBoxNonAlloc(
             boxCenter, halfExtents, overlap, Quaternion.identity,
             Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
@@ -303,9 +307,11 @@ public sealed class GymFixerNavGrid
         {
             return true;
         }
+        // Only props he can push aside are ignored; heavy machines with a
+        // physics body (racks, benches) are obstacles like static ones.
         Rigidbody body = collider.attachedRigidbody;
-        if (body != null && (!body.isKinematic ||
-            body.GetComponent<PickupItem>() != null))
+        if (body != null && (body.GetComponent<PickupItem>() != null ||
+            (!body.isKinematic && body.mass < 40f)))
         {
             return true;
         }

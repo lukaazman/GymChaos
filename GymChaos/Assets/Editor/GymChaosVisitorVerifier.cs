@@ -940,6 +940,13 @@ public static class GymChaosVisitorVerifier
             {
                 continue;
             }
+            // A driver seated in (or climbing out of) a car has no soles on the
+            // ground; GymChaosVehicleCabinVerifier checks that pose instead.
+            if (fighter.IsSeatedInVehicle || (animator != null &&
+                animator.CurrentVehiclePose != MixamoScanRetargetAnimator.VehiclePose.None))
+            {
+                continue;
+            }
 
             ExternalRiggedCharacterVisual visual =
                 fighter.GetComponent<ExternalRiggedCharacterVisual>();

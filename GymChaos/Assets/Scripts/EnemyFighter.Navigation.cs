@@ -386,7 +386,7 @@ public partial class EnemyFighter
         for (int i = 0; i < MovementProbeAngles.Length; i++)
         {
             Vector3 candidate = Quaternion.Euler(0f, MovementProbeAngles[i], 0f) * desiredDirection;
-            if (!IsInsideRoom(candidate, lookAhead) ||
+            if ((!chaseIgnoresRoomBounds && !IsInsideRoom(candidate, lookAhead)) ||
                 !IsMovementPathClear(candidate, lookAhead, allowTargetEquipment))
             {
                 continue;
@@ -495,6 +495,19 @@ public partial class EnemyFighter
         }
         return separation;
     }
+    // Set only around a chase step whose fighter or target is off the main floor.
+    private bool chaseIgnoresRoomBounds;
+
+    private bool IsOnMainFloor(Vector3 position)
+    {
+        if (!TryGetRoomBounds(out Bounds floorBounds))
+        {
+            return true;
+        }
+        return position.x >= floorBounds.min.x && position.x <= floorBounds.max.x &&
+            position.z >= floorBounds.min.z && position.z <= floorBounds.max.z;
+    }
+
     private bool IsInsideRoom(Vector3 direction, float distance)
     {
         if (!TryGetRoomBounds(out Bounds floorBounds))
@@ -511,28 +524,55 @@ public partial class EnemyFighter
     }
     private void ClampToRoomBounds()
     {
-        if (body == null || !TryGetRoomBounds(out Bounds floorBounds))
+        // Only keep a roamer on the floor it already stands on; never pull a
+        // body in from the locker room or outside (a visible teleport).
+        if (body == null || !TryGetRoomBounds(out Bounds floorBounds) || !IsOnMainFloor(body.position))
         {
             return;
         }
 
         float margin = GetBodyRadius() + 0.24f;
         Vector3 position = body.position;
-        position.x = Mathf.Clamp(position.x, floorBounds.min.x + margin, floorBounds.max.x - margin);
-        position.z = Mathf.Clamp(position.z, floorBounds.min.z + margin, floorBounds.max.z - margin);
-        body.position = position;
+        Vector3 clamped = position;
+        clamped.x = Mathf.Clamp(position.x, floorBounds.min.x + margin, floorBounds.max.x - margin);
+        clamped.z = Mathf.Clamp(position.z, floorBounds.min.z + margin, floorBounds.max.z - margin);
+        // Ease back from the floor edge (e.g. just in from a doorway) instead
+        // of snapping up to the full margin in one step.
+        body.position = Vector3.MoveTowards(position, clamped, 2.5f * Time.fixedDeltaTime);
     }
+    // The rubber floor never moves: look it up once and keep its bounds (this
+    // runs inside every movement probe of every fighter).
+    private static Renderer cachedFloorRenderer;
+    private static Bounds cachedFloorBounds;
+    private static float nextFloorLookupTime;
+
     private bool TryGetRoomBounds(out Bounds bounds)
     {
-        GameObject floor = GymSceneLookup.Find("Rubber Floor");
-        Renderer renderer = floor != null ? floor.GetComponent<Renderer>() : null;
-        if (renderer == null)
+        if (cachedFloorRenderer == null)
         {
             bounds = default;
-            return false;
+            if (Time.unscaledTime < nextFloorLookupTime)
+            {
+                return false;
+            }
+            nextFloorLookupTime = Time.unscaledTime + 0.5f;
+            GameObject floor = GymSceneLookup.Find("Rubber Floor");
+            cachedFloorRenderer = floor != null ? floor.GetComponent<Renderer>() : null;
+            if (cachedFloorRenderer == null)
+            {
+                return false;
+            }
+            cachedFloorBounds = cachedFloorRenderer.bounds;
         }
 
-        bounds = renderer.bounds;
+        else if (Time.unscaledTime >= nextFloorLookupTime)
+        {
+            // Builders may still resize the floor while the scene starts.
+            nextFloorLookupTime = Time.unscaledTime + 2f;
+            cachedFloorBounds = cachedFloorRenderer.bounds;
+        }
+
+        bounds = cachedFloorBounds;
         return bounds.size.x > 2f && bounds.size.z > 2f;
     }
     // Name-based classification is static per object; cache it so probes do

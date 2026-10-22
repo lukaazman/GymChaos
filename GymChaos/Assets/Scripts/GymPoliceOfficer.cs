@@ -17,6 +17,45 @@ public sealed class GymPoliceOfficer : MonoBehaviour
     private bool armed;
     private float nextShotTime;
     private bool playerKillCelebrationSent;
+    private const float PlayerKillCelebrationSeconds = 6f;
+    private bool holstering;
+    private bool leaving;
+    public bool IsLeavingForVerification => leaving;
+    public int HolsterCountForVerification { get; private set; }
+
+    // Target down: play the draw backwards with the gun in hand, hide the gun
+    // at its end, then start the walk back to the police car.
+    private void TickJobDone()
+    {
+        if (leaving)
+        {
+            return;
+        }
+        if (!holstering)
+        {
+            holstering = true;
+            killerTarget = null;
+            fighter.SetPoliceKillerTarget(null);
+            fighter.SetPoliceRangedMode(false);
+            bool visible = weapon != null && weapon.IsVisible;
+            if (visible && animator != null && animator.BeginGunHolstering())
+            {
+                HolsterCountForVerification++;
+                Debug.Log("GYMCHAOS_POLICEMAN_HOLSTERING", this);
+                return;
+            }
+        }
+        if (animator != null && animator.IsGunActionPlaying)
+        {
+            return;
+        }
+        weapon?.SetVisible(false);
+        armed = false;
+        drawingStarted = false;
+        leaving = true;
+        bool returning = GymPoliceDirector.BeginOfficerReturn(fighter);
+        Debug.Log($"GYMCHAOS_POLICEMAN_JOB_DONE returning={returning}", this);
+    }
     private float handAttackRange;
     private bool handToHandObserved;
     private bool rangedModeObserved;
@@ -100,6 +139,12 @@ public sealed class GymPoliceOfficer : MonoBehaviour
             return;
         }
 
+        if (holstering)
+        {
+            TickJobDone();
+            return;
+        }
+
         if (weapon != null && weapon.IsReady && !weapon.IsVisible)
         {
             // This is sampled every frame before armed state is entered, so
@@ -125,12 +170,19 @@ public sealed class GymPoliceOfficer : MonoBehaviour
                 fighter.CelebratePlayerKill();
                 Debug.Log("GYMCHAOS_POLICEMAN_PLAYER_KILL_CELEBRATION", this);
             }
+            // After the celebration the job is done: holster and leave.
+            if (fighter.CelebrationSeconds >= PlayerKillCelebrationSeconds)
+            {
+                fighter.EndPlayerKillCelebration();
+                TickJobDone();
+            }
             return;
         }
         if (targetFighter != null && targetFighter.IsDead)
         {
-            killerTarget = null;
-            fighter.SetPoliceKillerTarget(null);
+            // The killer (any fighter, not only the player) is down: put the
+            // gun away and walk back to the car.
+            TickJobDone();
             return;
         }
 

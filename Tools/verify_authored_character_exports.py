@@ -16,7 +16,11 @@ ENEMY_CLIPS = (
     "flying", "squat", "celebration1", "celebration2", "celebration3",
 )
 MEMBER_CLIPS = ENEMY_CLIPS + ("deadlift",)
-POLICE_CLIPS = ENEMY_CLIPS + ("gun_drawing", "gun_shooting")
+VEHICLE_CLIPS = ("vehicle_driving", "vehicle_exit")
+DRIVER_CLIPS = ENEMY_CLIPS + VEHICLE_CLIPS + ("deadlift",)
+DRIVERS = {"arnold_authored", "cbum_authored", "jaycutler_authored",
+           "ronnie_authored", "zyzz_authored"}
+POLICE_CLIPS = ENEMY_CLIPS + VEHICLE_CLIPS + ("gun_drawing", "gun_shooting")
 PLAYER_CLIPS = (
     "walking", "running", "idle1", "idle2", "idle3", "crouched_walking",
     "jumping", "punch_left", "punch_right", "throw_frisbee",
@@ -27,7 +31,7 @@ EXPORTS = {
         name: (
             PROJECT / "GymChaos/Assets/Resources/Characters/Enemies" /
             f"{name}.fbx",
-            MEMBER_CLIPS,
+            DRIVER_CLIPS if name in DRIVERS else MEMBER_CLIPS,
         )
         for name in ("arnold_authored", "cbum_authored", "goku_authored",
                      "jaycutler_authored", "ronnie_authored", "zyzz_authored",

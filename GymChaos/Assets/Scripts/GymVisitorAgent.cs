@@ -740,8 +740,142 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		}
 	}
 
+	// A locker walk that makes no progress (someone standing in the door or
+	// its lane) first steps aside to let the other member by, then, if still
+	// blocked, walks through the blocking member as exits do.
+	private const float LockerVisitSidestepAfter = 1.0f;
+	private const float LockerVisitCrowdPassAfter = 1.6f;
+	private const float LockerVisitSidestepSeconds = 1.6f;
+	private float lockerVisitStallTime;
+	private float lockerVisitBestDistance = float.PositiveInfinity;
+	private Vector3 lockerSidestepTarget;
+	private float lockerSidestepUntil = -1f;
+	private int lockerSidestepsThisLeg;
+	private EnemyFighter lockerStallMember;
+#if UNITY_EDITOR
+	internal static bool LockerStallRecoveryDisabledForVerification;
+#else
+	private const bool LockerStallRecoveryDisabledForVerification = false;
+#endif
+	public int LockerVisitCrowdPassCountForVerification { get; private set; }
+	public int LockerVisitSidestepCountForVerification { get; private set; }
+
+	private void ResetLockerVisitStall()
+	{
+		lockerVisitStallTime = 0f;
+		lockerVisitBestDistance = float.PositiveInfinity;
+		lockerSidestepUntil = -1f;
+		lockerSidestepsThisLeg = 0;
+		lockerStallMember = null;
+	}
+
+	// True while a sidestep owns the movement this tick.
+	private bool TickLockerVisitStall()
+	{
+		if (LockerStallRecoveryDisabledForVerification)
+		{
+			return false;
+		}
+		Vector3 position = fighter.transform.position;
+		if (lockerSidestepUntil > 0f)
+		{
+			if (Time.time < lockerSidestepUntil)
+			{
+				// Walk to the side spot, then wait there for the other to pass.
+				if (fighter.MoveVisitorTo(lockerSidestepTarget, 1.4f, allowOutsideRoom: true))
+				{
+					fighter.StopVisitorMovement();
+				}
+				return true;
+			}
+			lockerSidestepUntil = -1f;
+			lockerVisitStallTime = 0f;
+			lockerVisitBestDistance = float.PositiveInfinity;
+		}
+		float distance = Vector3.ProjectOnPlane(travelTarget - position, Vector3.up).magnitude;
+		if (distance < lockerVisitBestDistance - 0.12f)
+		{
+			lockerVisitBestDistance = distance;
+			lockerVisitStallTime = 0f;
+			return false;
+		}
+		lockerVisitStallTime += Time.fixedDeltaTime;
+		EnemyFighter blockingMember = fighter.VisitorRouteBlockerFighter;
+		if (blockingMember != null)
+		{
+			// The last probe may report a wall beside the member instead.
+			lockerStallMember = blockingMember;
+		}
+		bool blockedByMember = lockerStallMember != null;
+		if (lockerSidestepsThisLeg == 0 && blockedByMember &&
+			lockerVisitStallTime >= LockerVisitSidestepAfter && TryBeginLockerSidestep(position))
+		{
+			return true;
+		}
+		if (lockerVisitStallTime < (lockerSidestepsThisLeg == 0 ? LockerVisitSidestepAfter + LockerVisitCrowdPassAfter : LockerVisitCrowdPassAfter))
+		{
+			return false;
+		}
+		lockerVisitStallTime = 0f;
+		lockerVisitBestDistance = distance;
+		EnemyFighter before = fighter.VisitorCrowdPassForVerification;
+		fighter.TryVisitorCrowdPassThrough(lockerStallMember != null ? lockerStallMember : fighter.VisitorRouteBlockerFighter);
+		if (fighter.VisitorCrowdPassForVerification != before)
+		{
+			LockerVisitCrowdPassCountForVerification++;
+		}
+		Debug.LogWarning($"GYMCHAOS_VISITOR_LOCKER_STALLED enemy={fighter.Identity} target={travelTarget} blocker={fighter.LastVisitorRouteBlocker}", this);
+		return false;
+	}
+
+	private bool TryBeginLockerSidestep(Vector3 position)
+	{
+		Vector3 forward = Vector3.ProjectOnPlane(travelTarget - position, Vector3.up);
+		if (forward.sqrMagnitude < 0.01f)
+		{
+			return false;
+		}
+		forward.Normalize();
+		Vector3 right = Vector3.Cross(Vector3.up, forward);
+		// Keep right first (the other member keeps its own right), then left;
+		// back off a little so the step also clears a narrow door frame.
+		for (int side = 0; side < 2; side++)
+		{
+			Vector3 lateral = side == 0 ? right : -right;
+			Vector3 offset = lateral * 1.0f - forward * 0.6f;
+			if (!fighter.IsVisitorExternalPathClear(offset, offset.magnitude))
+			{
+				continue;
+			}
+			lockerSidestepTarget = position + offset;
+			lockerSidestepUntil = Time.time + LockerVisitSidestepSeconds;
+			lockerSidestepsThisLeg++;
+			LockerVisitSidestepCountForVerification++;
+			Debug.Log($"GYMCHAOS_VISITOR_LOCKER_SIDESTEP enemy={fighter.Identity} side={(side == 0 ? "right" : "left")} blocker={fighter.LastVisitorRouteBlocker}", this);
+			return true;
+		}
+		lockerSidestepsThisLeg++;
+		return false;
+	}
+
+#if UNITY_EDITOR
+	/// <summary>Verifier: start the walk out of the locker room from where the visitor stands.</summary>
+	public bool BeginLockerReturnForVerification(Vector3 destination)
+	{
+		if (fighter == null || fighter.IsDead)
+		{
+			return false;
+		}
+		lockerVisitTarget = destination;
+		lockerVisitDwellSeconds = 0.5f;
+		lockerVisitLabel = "verification";
+		return BeginLockerRoomReturn();
+	}
+#endif
+
 	private bool BeginLockerRoomReturn()
 	{
+		ResetLockerVisitStall();
 		//IL_0011: Unknown result type (might be due to invalid IL or missing references)
 		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
 		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
@@ -755,7 +889,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		{
 			return false;
 		}
-		if (!GymBackRoomBuilder.TryGetLockerVisitRoute(lockerVisitTarget, out var fullRoute, out var _) || fullRoute == null || fullRoute.Length < 2)
+		if (!GymBackRoomBuilder.TryGetLockerVisitRoute(lockerVisitTarget, exiting: true, out var fullRoute, out var _) || fullRoute == null || fullRoute.Length < 2)
 		{
 			GymBackRoomBuilder.ReleaseLockerSlot(fighter.Identity);
 			return false;
@@ -837,6 +971,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			return false;
 		}
 		lockerVisitWaypointIndex = 0;
+		ResetLockerVisitStall();
 		travelTarget = lockerVisitWaypoints[0];
 		lockerVisitTarget = destination;
 		lockerVisitTarget.y = ((Component)fighter).transform.position.y;
@@ -1444,8 +1579,13 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 				fighter.StopVisitorMovement();
 				return true;
 			}
+			if (TickLockerVisitStall())
+			{
+				return true;
+			}
 			if (fighter.MoveVisitorTo(travelTarget, 1.8f, allowOutsideRoom: true))
 			{
+				ResetLockerVisitStall();
 				lockerVisitWaypointIndex++;
 				if (lockerVisitWaypointIndex < lockerVisitWaypoints.Length)
 				{
@@ -1767,7 +1907,9 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			return true;
 		}
 		case VisitorState.Dormant:
-			if (leftGym && !enteredGym)
+			// A visitor attacked outside (path, parking, at its car) fights back;
+			// combat owns the physics then.
+			if (leftGym && !enteredGym && !fighter.IsAggressive)
 			{
 				fighter.StopVisitorMovement();
 				return true;

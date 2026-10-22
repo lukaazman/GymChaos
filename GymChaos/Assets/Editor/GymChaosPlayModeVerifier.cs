@@ -1020,7 +1020,9 @@ public static class GymChaosPlayModeVerifier
         // Give the flight state enough runway for the editor callback to
         // observe the authored TakingOff -> Flying transition before Goku
         // reaches the player and begins the landing/punch phase.
-        float safeDistance = Mathf.Clamp(towardRoomCenter.magnitude, 9f, 10f);
+        // Goku flies twice as fast since dc4e5ab: 10 m was covered during
+        // take-off, so he landed without ever reporting Flying.
+        float safeDistance = Mathf.Clamp(towardRoomCenter.magnitude, 15f, 16f);
         Vector3 safePlayerPosition = gokuForVerification.transform.position +
             towardRoomCenter.normalized * safeDistance;
         if (floor != null)

@@ -45,15 +45,30 @@ ENEMY_CLIPS = (
 # (snatch.fbx); the game plays it forward, slows at the top and reverses it.
 MEMBER_CLIPS = ENEMY_CLIPS + ("deadlift",)
 
+# Visitors who drive their own car sit in it while it moves (car_driving
+# loops) and climb out of the driver door (car_exit; played backwards to get
+# back in). Goku rides his cloud and Davie the bus, so they keep MEMBER_CLIPS.
+# Unity takes the FBX default (rest) pose from the alphabetically first take,
+# which every clip is grounded against: these names must not sort before
+# celebration1 (a seated "car_driving" default sank every walk 0.4 m).
+VEHICLE_CLIPS = ("vehicle_driving", "vehicle_exit")
+DRIVER_CLIPS = ENEMY_CLIPS + VEHICLE_CLIPS + ("deadlift",)
+
+# Goku stands on his flying nimbus in a held fighting stance
+# (Tools/build_nimbus_stance_clip.py).
+GOKU_CLIPS = MEMBER_CLIPS + ("nimbus_stance",)
+
 # Clips whose name differs from their source file.
 CLIP_SOURCES = {
     "deadlift": "snatch",
+    "vehicle_driving": "car_driving",
+    "vehicle_exit": "car_exit",
 }
 
 # Clips that keep both feet planted on fixed-length legs.
 CONTACT_CLIPS = {"squat", "deadlift"}
 
-POLICE_CLIPS = ENEMY_CLIPS + ("gun_drawing", "gun_shooting")
+POLICE_CLIPS = ENEMY_CLIPS + VEHICLE_CLIPS + ("gun_drawing", "gun_shooting")
 
 PLAYER_CLIPS = (
     "walking",
@@ -83,19 +98,19 @@ CHARACTERS = {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/arnold_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/arnold_authored.fbx",
-        "clip_names": MEMBER_CLIPS,
+        "clip_names": DRIVER_CLIPS,
     },
     "cbum": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/cbum_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/cbum_authored.fbx",
-        "clip_names": MEMBER_CLIPS,
+        "clip_names": DRIVER_CLIPS,
     },
     "goku": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/goku_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/goku_authored.fbx",
-        "clip_names": MEMBER_CLIPS,
+        "clip_names": GOKU_CLIPS,
     },
     "mark": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/mark_rig.blend",
@@ -108,13 +123,13 @@ CHARACTERS = {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/jaycutler_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/jaycutler_authored.fbx",
-        "clip_names": MEMBER_CLIPS,
+        "clip_names": DRIVER_CLIPS,
     },
     "ronnie": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/ronnie_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/ronnie_authored.fbx",
-        "clip_names": MEMBER_CLIPS,
+        "clip_names": DRIVER_CLIPS,
     },
     "davie": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/davie_rig.blend",
@@ -127,7 +142,7 @@ CHARACTERS = {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/zyzz_rig.blend",
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/zyzz_authored.fbx",
-        "clip_names": MEMBER_CLIPS,
+        "clip_names": DRIVER_CLIPS,
     },
     "policeman": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/policeman_rig.blend",

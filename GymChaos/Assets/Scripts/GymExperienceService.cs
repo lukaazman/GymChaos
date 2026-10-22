@@ -318,6 +318,10 @@ public sealed class GymExperienceService : MonoBehaviour
         return state != null ? state.GetStatRank(stat) : 0;
     }
 
+#if UNITY_EDITOR
+    internal void SetStatRankForVerification(GymStat stat, int rank) => state?.SetStatRank(stat, rank);
+#endif
+
     public bool HasStrengthUltimate => GetStatRank(GymStat.Strength) >= MaxStatRank;
     public bool HasEnduranceUltimate => GetStatRank(GymStat.Endurance) >= MaxStatRank;
     public bool HasTechniqueUltimate => GetStatRank(GymStat.Technique) >= MaxStatRank;
@@ -987,7 +991,8 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public void RegisterCombatHit(EnemyFighter enemy)
     {
-        if (enemy == null)
+        // Hitting a body that was already dead earns nothing.
+        if (enemy == null || (enemy.IsDead && !enemy.DiedThisFrame))
         {
             return;
         }
@@ -998,7 +1003,8 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public void RegisterEnemyDefeat(EnemyFighter enemy)
     {
-        if (enemy == null)
+        // Only the killing blow counts, never a later hit on the corpse.
+        if (enemy == null || !enemy.DiedThisFrame)
         {
             return;
         }
@@ -1763,9 +1769,21 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public string GetLockerTopLabel(GymTopStyle top)
     {
-        string name = PlayerCosmeticLoadout.GetTopDisplayName(top);
-        return IsCosmeticUnlocked(top) ? name : name + "  L" + GetTopUnlockLevel(top);
+        return PlayerCosmeticLoadout.GetTopDisplayName(top);
     }
+
+    public string GetLockerTopRequirement(GymTopStyle top) =>
+        IsCosmeticUnlocked(top) ? string.Empty : "UNLOCKS AT LEVEL " + GetTopUnlockLevel(top);
+
+    public string GetLockerShirtRequirement(GymShirtColor shirt) =>
+        IsCosmeticUnlocked(shirt) ? string.Empty
+        : shirt == GymShirtColor.Gold ? "UNLOCKS AT MASTERY 1"
+        : "UNLOCKS AT LEVEL " + GetShirtUnlockLevel(shirt);
+
+    public string GetLockerHeadwearRequirement(GymHeadwear item) =>
+        IsCosmeticUnlocked(item) ? string.Empty
+        : item == GymHeadwear.BucketHat ? "UNLOCKS AT MASTERY 2"
+        : "UNLOCKS AT LEVEL " + GetHeadwearUnlockLevel(item);
 
     public bool IsShirtWorn(GymShirtColor shirt) =>
         state != null && string.Equals(state.shirt, shirt.ToString(), StringComparison.OrdinalIgnoreCase);
@@ -1775,16 +1793,12 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public string GetLockerShirtLabel(GymShirtColor shirt)
     {
-        string name = shirt.ToString().ToUpperInvariant();
-        if (IsCosmeticUnlocked(shirt)) return name;
-        return shirt == GymShirtColor.Gold ? name + "  M1" : name + "  L" + GetShirtUnlockLevel(shirt);
+        return shirt.ToString().ToUpperInvariant();
     }
 
     public string GetLockerHeadwearLabel(GymHeadwear item)
     {
-        string name = PlayerCosmeticLoadout.GetHeadwearDisplayName(item).ToUpperInvariant();
-        if (IsCosmeticUnlocked(item)) return name;
-        return item == GymHeadwear.BucketHat ? name + "  M2" : name + "  L" + GetHeadwearUnlockLevel(item);
+        return PlayerCosmeticLoadout.GetHeadwearDisplayName(item).ToUpperInvariant();
     }
 
     public string LockerRankLine => state != null

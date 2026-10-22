@@ -9,10 +9,11 @@ public sealed class GymPoliceWeapon : MonoBehaviour
 {
     private const string GlockAsset = "BodyBuilders/items/glock17.glb";
     private const float GlockScale = 0.35f;
-    // Real Glock 17 length is 0.186 m; sized up to match the policeman's
-    // oversized hands and forearms (0.235 m base, then 1.15x on request).
+    // Real Glock 17 length is 0.186 m; the officer is 1.36x a 1.82 m man,
+    // so the same gun in his hand is about 0.25 m (the earlier 0.27 m gun
+    // looked oversized against the fist).
     public const float GlockBaseWorldLength = 0.235f;
-    public const float GlockScaleMultiplier = 1.15f;
+    public const float GlockScaleMultiplier = 1.07f;
     public const float GlockWorldLength = GlockBaseWorldLength * GlockScaleMultiplier;
     public const float BulletDamage = 16f;
 
@@ -77,7 +78,15 @@ public sealed class GymPoliceWeapon : MonoBehaviour
             handAnchor.SetPositionAndRotation(rightHand.position, rightHand.rotation);
         }
         CurlFingersAroundGrip();
-        HoldInPalm();
+        if (IsVisible)
+        {
+            HoldInPalm();
+        }
+        else if (thumbBase != null && Quaternion.Angle(thumbBase.localRotation, thumbWrittenLocal) <= 0.01f)
+        {
+            // Gun away: give the thumb back to the animation.
+            thumbBase.localRotation = thumbBaseLocal;
+        }
     }
 
     // The gun clips leave the right hand open. While the gun is out, curl the
@@ -90,6 +99,11 @@ public sealed class GymPoliceWeapon : MonoBehaviour
     private Quaternion[] curlWrittenLocal;
     private Transform curlIndexBase;
     private Transform curlPinkyBase;
+    private Transform curlMiddleTip;
+    private Transform thumbBase;
+    private Transform thumbTip;
+    private Quaternion thumbBaseLocal;
+    private Quaternion thumbWrittenLocal;
 
     private void CurlFingersAroundGrip()
     {
@@ -145,6 +159,7 @@ public sealed class GymPoliceWeapon : MonoBehaviour
                         bones.Add(child);
                         if (segment == 1 && finger == "index") curlIndexBase = child;
                         if (segment == 1 && finger == "pinky") curlPinkyBase = child;
+                        if (segment == 3 && finger == "middle") curlMiddleTip = child;
                         break;
                     }
                 }
@@ -153,6 +168,17 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         if (bones.Count != CurledFingers.Length * CurlDegrees.Length)
         {
             bones.Clear();
+        }
+        foreach (Transform child in all)
+        {
+            if (!child.name.StartsWith("DEF-")) continue;
+            if (child.name.Contains("thumb.01")) thumbBase = child;
+            if (child.name.Contains("thumb.03")) thumbTip = child;
+        }
+        if (thumbBase != null)
+        {
+            thumbBaseLocal = thumbBase.localRotation;
+            thumbWrittenLocal = thumbBase.localRotation;
         }
         curlBones = bones.ToArray();
         curlBaseLocal = new Quaternion[curlBones.Length];
@@ -270,6 +296,49 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         }
     }
 
+    // Pistol grip in the hand's own frame, so the gun follows every twist of
+    // the wrist instead of passing through the fingers:
+    // - the grip runs from the index knuckle down to the pinky knuckle,
+    // - the barrel points from the wrist toward the knuckles,
+    // - the grip sits in the palm, a fist's half-thickness to the palm side
+    //   (the side the curled fingers close toward).
+    private const float GripPalmDepth = 0.035f;
+    private const float GripAnchorRear = 0.22f;
+    private const float GripAnchorHeight = 0.3f;
+
+    private bool TryGetHandFrame(out Vector3 palm, out Vector3 forward, out Vector3 gripDown, out Vector3 palmSide)
+    {
+        palm = forward = gripDown = palmSide = Vector3.zero;
+        if (rightHand == null || curlIndexBase == null || curlPinkyBase == null)
+        {
+            return false;
+        }
+        Vector3 knuckles = (curlIndexBase.position + curlPinkyBase.position) * 0.5f;
+        forward = knuckles - rightHand.position;
+        if (forward.sqrMagnitude < 1e-6f)
+        {
+            return false;
+        }
+        forward.Normalize();
+        gripDown = Vector3.ProjectOnPlane(curlPinkyBase.position - curlIndexBase.position, forward);
+        if (gripDown.sqrMagnitude < 1e-6f)
+        {
+            return false;
+        }
+        gripDown.Normalize();
+        palmSide = Vector3.Cross(forward, gripDown);
+        // The curled middle finger's tip lies on the palm side.
+        if (curlMiddleTip != null &&
+            Vector3.Dot(curlMiddleTip.position - knuckles, palmSide) < 0f)
+        {
+            palmSide = -palmSide;
+        }
+        float handScale = Vector3.Distance(rightHand.position, knuckles) / 0.1f;
+        palm = Vector3.Lerp(rightHand.position, knuckles, PalmKnuckleBlend) +
+            palmSide * GripPalmDepth * Mathf.Clamp(handScale, 0.8f, 1.6f);
+        return true;
+    }
+
     private void HoldInPalm()
     {
         if (weaponRoot == null || rightHand == null || !weaponRoot.gameObject.activeInHierarchy ||
@@ -277,27 +346,177 @@ public sealed class GymPoliceWeapon : MonoBehaviour
         {
             return;
         }
-        Vector3 palm = PalmPoint;
-        Vector3 barrel = HeldBarrelDirection(palm);
-        // Slide up for a level aim, forward when the muzzle points down out of
-        // the holster, back toward the officer when it points up.
-        Vector3 side = owner != null ? owner.transform.right : transform.right;
-        Vector3 slideUp = Vector3.Cross(barrel, side);
-        if (slideUp.sqrMagnitude < 0.01f)
+        if (!TryGetHandFrame(out Vector3 palm, out Vector3 forward, out Vector3 gripDown, out Vector3 palmSide))
         {
-            slideUp = Vector3.up;
+            return;
         }
         // Prop long axis is local +X; LookRotation maps +Z to the barrel, so
-        // turn +X onto +Z first.
-        weaponRoot.rotation = Quaternion.LookRotation(barrel, slideUp) * Quaternion.Euler(0f, -90f, 0f);
+        // turn +X onto +Z first. Slide up = away from the pinky.
+        weaponRoot.rotation = Quaternion.LookRotation(forward, -gripDown) * Quaternion.Euler(0f, -90f, 0f);
         Vector3 grip = new Vector3(
-            local.min.x + local.size.x * GripRearFraction,
-            local.min.y + local.size.y * GripHeightFraction,
+            local.min.x + local.size.x * GripAnchorRear,
+            local.min.y + local.size.y * GripAnchorHeight,
             local.center.z);
-        weaponRoot.position += palm - weaponRoot.TransformPoint(grip);
+        Vector3 fit = gripFitDone ? palmSide * gripFit.x + forward * gripFit.y + gripDown * gripFit.z : Vector3.zero;
+        weaponRoot.position += palm + fit - weaponRoot.TransformPoint(grip);
+        if (!gripFitDone && curlBones != null && curlBones.Length > 0)
+        {
+            FitGripToHandSkin(palmSide, forward, gripDown, local);
+            fit = palmSide * gripFit.x + forward * gripFit.y + gripDown * gripFit.z;
+            weaponRoot.position += fit;
+        }
+        WrapThumb(forward);
+    }
+
+    // Once per officer, with the fingers curled: bake the hand skin and slide
+    // the gun (palm side, along the barrel, along the grip) to the smallest
+    // offset at which almost no hand skin is inside it. The fist then closes
+    // round the grip instead of the gun passing through the palm.
+    private bool gripFitDone;
+    private Vector3 gripFit;
+    public float GripFitInsideShare { get; private set; } = -1f;
+
+    private void FitGripToHandSkin(Vector3 palmSide, Vector3 forward, Vector3 gripDown, Bounds local)
+    {
+        gripFitDone = true;
+        gripFit = Vector3.zero;
+        SkinnedMeshRenderer skin = null;
+        foreach (SkinnedMeshRenderer candidate in owner.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (candidate.sharedMesh != null && (skin == null || candidate.sharedMesh.vertexCount > skin.sharedMesh.vertexCount))
+                skin = candidate;
+        }
+        if (skin == null || !skin.sharedMesh.isReadable)
+        {
+            return;
+        }
+        BoneWeight[] weights = skin.sharedMesh.boneWeights;
+        Transform[] bones = skin.bones;
+        Mesh scratch = new Mesh();
+        Vector3[] world = GymSkinSampler.BakeWorld(skin, scratch);
+        Destroy(scratch);
+        System.Collections.Generic.List<Vector3> hand = new System.Collections.Generic.List<Vector3>();
+        for (int i = 0; i < world.Length && i < weights.Length; i += 2)
+        {
+            int b = weights[i].boneIndex0;
+            if (b >= 0 && b < bones.Length && bones[b] != null && (bones[b] == rightHand || bones[b].IsChildOf(rightHand)))
+                hand.Add(weaponRoot.InverseTransformPoint(world[i]));
+        }
+        if (hand.Count == 0)
+        {
+            return;
+        }
+        Bounds inner = new Bounds(local.center, local.size * 0.85f);
+        // Skin within ~2 cm of the gun: the fist must still close on it.
+        float avgScale = Mathf.Max(1e-4f, (Mathf.Abs(weaponRoot.lossyScale.x) + Mathf.Abs(weaponRoot.lossyScale.y) + Mathf.Abs(weaponRoot.lossyScale.z)) / 3f);
+        Bounds shell = new Bounds(local.center, local.size + Vector3.one * (0.04f / avgScale));
+        Vector3 localPalm = weaponRoot.InverseTransformDirection(palmSide);
+        Vector3 localForward = weaponRoot.InverseTransformDirection(forward);
+        Vector3 localDown = weaponRoot.InverseTransformDirection(gripDown);
+        Vector3 scale = weaponRoot.lossyScale;
+        float best = float.MaxValue;
+        int bestInside = hand.Count;
+        for (float p = 0f; p <= 0.16f; p += 0.01f)
+        {
+            for (float f = -0.06f; f <= 0.08f; f += 0.02f)
+            {
+                for (float d = -0.04f; d <= 0.04f; d += 0.02f)
+                {
+                    Vector3 shiftWorld = new Vector3(p, f, d);
+                    Vector3 shift = localPalm * p + localForward * f + localDown * d;
+                    shift = new Vector3(shift.x / Mathf.Max(1e-4f, scale.x), shift.y / Mathf.Max(1e-4f, scale.y), shift.z / Mathf.Max(1e-4f, scale.z));
+                    int inside = 0, touching = 0;
+                    for (int i = 0; i < hand.Count; i++)
+                    {
+                        // Moving the gun by +shift moves the skin by -shift in gun space.
+                        Vector3 point = hand[i] - shift;
+                        if (inner.Contains(point)) inside++;
+                        else if (shell.Contains(point)) touching++;
+                    }
+                    // Few vertices inside, the fist still touching, small move.
+                    float touchShare = touching / (float)hand.Count;
+                    float score = inside / (float)hand.Count * 10f +
+                        Mathf.Max(0f, 0.12f - touchShare) * 4f + shiftWorld.magnitude * 0.5f;
+                    if (score < best)
+                    {
+                        best = score;
+                        bestInside = inside;
+                        gripFit = shiftWorld;
+                    }
+                }
+            }
+        }
+        GripFitInsideShare = bestInside / (float)hand.Count;
+        Debug.Log($"GYMCHAOS_POLICE_GRIP_FIT palm={gripFit.x:F2} forward={gripFit.y:F2} down={gripFit.z:F2} inside={GripFitInsideShare:P1} handSamples={hand.Count}", this);
+    }
+
+    // The clip leaves the thumb sticking up; lay it forward along the side
+    // of the slide, as in a thumbs-forward pistol grip.
+    private void WrapThumb(Vector3 forward)
+    {
+        if (thumbBase == null || thumbTip == null)
+        {
+            return;
+        }
+        if (Quaternion.Angle(thumbBase.localRotation, thumbWrittenLocal) > 0.01f)
+        {
+            thumbBaseLocal = thumbBase.localRotation;
+        }
+        thumbBase.localRotation = thumbBaseLocal;
+        Vector3 current = thumbTip.position - thumbBase.position;
+        Vector3 goal = forward * current.magnitude;
+        if (current.sqrMagnitude > 1e-6f && goal.sqrMagnitude > 1e-6f)
+        {
+            thumbBase.rotation = Quaternion.FromToRotation(current, goal) * thumbBase.rotation;
+        }
+        thumbWrittenLocal = thumbBase.localRotation;
     }
 
     public Vector3 PalmPointForVerification => rightHand != null ? PalmPoint : Vector3.zero;
+
+#if UNITY_EDITOR
+    /// <summary>
+    /// Verifier: share of the right-hand skin (vertices mainly weighted to the
+    /// hand and finger bones) inside the gun's box shrunk by 15 %: the gun
+    /// passing through the fist instead of sitting in it.
+    /// </summary>
+    internal float HandSkinInsideGunForVerification(out int handVertices)
+    {
+        handVertices = 0;
+        if (weaponRoot == null || rightHand == null || !TryGetLocalBounds(out Bounds local))
+        {
+            return -1f;
+        }
+        SkinnedMeshRenderer skin = null;
+        foreach (SkinnedMeshRenderer candidate in owner.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        {
+            if (candidate.sharedMesh != null && (skin == null || candidate.sharedMesh.vertexCount > skin.sharedMesh.vertexCount))
+                skin = candidate;
+        }
+        if (skin == null || !skin.sharedMesh.isReadable) return -1f;
+        BoneWeight[] weights = skin.sharedMesh.boneWeights;
+        Transform[] bones = skin.bones;
+        Mesh scratch = new Mesh();
+        Vector3[] world = GymSkinSampler.BakeWorld(skin, scratch);
+        Object.Destroy(scratch);
+        Bounds inner = new Bounds(local.center, local.size * 0.85f);
+        int inside = 0;
+        for (int i = 0; i < world.Length && i < weights.Length; i++)
+        {
+            int b = weights[i].boneIndex0;
+            if (b < 0 || b >= bones.Length || bones[b] == null) continue;
+            if (bones[b] != rightHand && !bones[b].IsChildOf(rightHand)) continue;
+            handVertices++;
+            if (inner.Contains(weaponRoot.InverseTransformPoint(world[i]))) inside++;
+        }
+        return handVertices > 0 ? inside / (float)handVertices : -1f;
+    }
+
+    internal float GunWorldLengthForVerification => MeasureWorldLength();
+    internal float ThumbToGripForVerification =>
+        thumbTip != null && weaponRoot != null && TryGetLocalBounds(out Bounds b)
+            ? Vector3.Distance(thumbTip.position, weaponRoot.TransformPoint(b.center)) : -1f;
+#endif
     public Vector3 WeaponCenterForVerification =>
         weaponRoot != null && TryGetLocalBounds(out Bounds local)
             ? weaponRoot.TransformPoint(local.center)

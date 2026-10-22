@@ -12,7 +12,7 @@ using UnityEngine.Networking;
 public sealed class GymPoliceDirector : MonoBehaviour
 {
     private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar_lod.glb";
-    private const float PoliceCarTargetLength = 4.0f * GymOutdoorBuilder.VehicleScale;
+    private const float PoliceCarTargetLength = 4.0f * GymOutdoorBuilder.VehicleScale * GymOutdoorBuilder.CarSizeBoost;
     private const float PoliceCarSpeed =
         GymVisitorVehicle.NormalDriveSpeed * 3f;
     private const float PoliceCarProbeRadius = 1.05f;
@@ -39,6 +39,11 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private bool dispatchActive;
 
     private GameObject policeCar;
+    // The officer rides in the car's see-through cabin, climbs out of the
+    // driver door when it stops and gets back in to leave.
+    private GymVehicleDriverSeat policeSeat;
+    private EnemyFighter seatedOfficer;
+    private bool officerBoarding;
     private bool policeCarReady;
     private bool policeCarFailed;
     private float floorY;
@@ -271,6 +276,22 @@ public sealed class GymPoliceDirector : MonoBehaviour
             yield break;
         }
 
+        seatedOfficer = null;
+        if (policeSeat != null)
+        {
+            EnemyFighter rider = SpawnOfficer(ronnie, target, player);
+            if (rider != null && policeSeat.Mount(rider))
+            {
+                SetOfficerAwake(rider, false);
+                seatedOfficer = rider;
+            }
+            else if (rider != null)
+            {
+                Destroy(rider.gameObject);
+            }
+            officerExited = false;
+        }
+
         dispatchPhase = DispatchPhase.Driving;
         yield return WaitForPoliceSiren(8f);
         yield return MoveCarAlongRoute(currentRoute, true);
@@ -284,7 +305,32 @@ public sealed class GymPoliceDirector : MonoBehaviour
             VerifyPoliceCarStopWithinRoadEnvelope();
         Debug.Log("GYMCHAOS_POLICE_CAR_ARRIVED", this);
 
-        EnemyFighter officer = SpawnOfficer(ronnie, target, player);
+        EnemyFighter officer;
+        if (seatedOfficer != null)
+        {
+            bool standing = false;
+            policeSeat.BeginExit(() => standing = true);
+            float exitDeadline = Time.time + 12f;
+            while (!standing && seatedOfficer != null && !seatedOfficer.IsDead &&
+                Time.time < exitDeadline)
+            {
+                yield return null;
+            }
+            officer = seatedOfficer;
+            seatedOfficer = null;
+            if (!standing) policeSeat.Release();
+            if (officer != null)
+            {
+                officerExitPosition = new Vector3(
+                    officer.transform.position.x, floorY, officer.transform.position.z);
+                officerExited = true;
+                SetOfficerAwake(officer, true);
+            }
+        }
+        else
+        {
+            officer = SpawnOfficer(ronnie, target, player);
+        }
         if (officer == null)
         {
             Debug.LogError("GYMCHAOS_POLICEMAN_SPAWN_FAILED", this);
@@ -368,8 +414,34 @@ public sealed class GymPoliceDirector : MonoBehaviour
         }
     }
 
+    private static void SetOfficerAwake(EnemyFighter officer, bool awake)
+    {
+        if (officer == null) return;
+        GymPoliceOfficer brain = officer.GetComponent<GymPoliceOfficer>();
+        if (brain != null) brain.enabled = awake;
+        GymPoliceWeapon weapon = officer.GetComponent<GymPoliceWeapon>();
+        if (weapon != null) weapon.enabled = awake;
+    }
+
     private void HandleOfficerReachedCar(EnemyFighter officer)
     {
+        if (officerBoarding || calmDeparture) return;
+        if (officer != null && !officer.IsDead && policeSeat != null)
+        {
+            officerBoarding = true;
+            SetOfficerAwake(officer, false);
+            if (policeSeat.BeginBoarding(officer, () =>
+            {
+                officerBoarding = false;
+                if (LastOfficer == officer) LastOfficer = null;
+                Debug.Log("GYMCHAOS_POLICE_OFFICER_BOARDED seated=1", this);
+                StartCoroutine(DriveAwayCalmly(officer));
+            }))
+            {
+                return;
+            }
+            officerBoarding = false;
+        }
         if (officer != null)
         {
             Destroy(officer.gameObject);
@@ -379,10 +451,10 @@ public sealed class GymPoliceDirector : MonoBehaviour
             LastOfficer = null;
         }
         Debug.Log("GYMCHAOS_POLICE_OFFICER_BOARDED", this);
-        StartCoroutine(DriveAwayCalmly());
+        StartCoroutine(DriveAwayCalmly(null));
     }
 
-    private IEnumerator DriveAwayCalmly()
+    private IEnumerator DriveAwayCalmly(EnemyFighter rider)
     {
         calmDeparture = true;
         dispatchPhase = DispatchPhase.Driving;
@@ -392,6 +464,11 @@ public sealed class GymPoliceDirector : MonoBehaviour
             yield return MoveCarAlongRoute(currentRoute, false);
         }
         Debug.Log("GYMCHAOS_POLICE_CAR_DEPARTED", this);
+        if (rider != null)
+        {
+            policeSeat?.Release();
+            Destroy(rider.gameObject);
+        }
         CleanupDispatch();
         dispatchPhase = DispatchPhase.Idle;
         calmDeparture = false;
@@ -409,6 +486,24 @@ public sealed class GymPoliceDirector : MonoBehaviour
         FitCarVisual(root);
         GymVehicleWheelSpinner.Attach(root, () => policeCarMoving);
         AddCarCollider(root);
+        policeSeat = null;
+        // The GLB root is scaled to the car length; seat and door work in
+        // metres, so they hang off an unscaled frame under it.
+        Transform frame = new GameObject("Police Cabin Frame").transform;
+        frame.SetParent(root.transform, false);
+        Vector3 rootScale = root.transform.lossyScale;
+        frame.localScale = new Vector3(1f / rootScale.x, 1f / rootScale.y, 1f / rootScale.z);
+        GymVehicleCabin cabin = GymVehicleCabin.Attach(frame, root);
+        if (cabin != null && cabin.IsReady)
+        {
+            policeSeat = frame.gameObject.AddComponent<GymVehicleDriverSeat>();
+            float ground = frame.InverseTransformPoint(
+                new Vector3(frame.position.x, floorY, frame.position.z)).y;
+            // The car faces into its stall: the aisle is behind it.
+            policeSeat.Initialize(null, cabin, ground,
+                new Vector3(0f, ground, -(PoliceCarTargetLength * 0.5f + 1.1f)));
+            policeSeat.PlaybackSpeed = 1.5f;
+        }
         GymShadowProxy.Apply(root);
         policeCarRouteBoundsClear = true;
         policeCarStopWithinRoadEnvelope = false;
@@ -958,6 +1053,13 @@ public sealed class GymPoliceDirector : MonoBehaviour
         }
     }
 
+    // Seated drivers keep their hitboxes; they sit inside the car body.
+    private static bool IsSeatedOccupant(Collider collider)
+    {
+        EnemyFighter fighter = collider.GetComponentInParent<EnemyFighter>();
+        return fighter != null && fighter.IsInVehicleSeatMode;
+    }
+
     private bool HasClearCarSegment(Vector3 direction, float distance)
     {
         if (policeCar == null)
@@ -978,7 +1080,8 @@ public sealed class GymPoliceDirector : MonoBehaviour
         {
             Collider collider = routeHits[i].collider;
             if (collider == null ||
-                collider.transform.IsChildOf(policeCar.transform))
+                collider.transform.IsChildOf(policeCar.transform) ||
+                IsSeatedOccupant(collider))
             {
                 continue;
             }
@@ -1063,7 +1166,8 @@ public sealed class GymPoliceDirector : MonoBehaviour
         {
             Collider collider = carOverlapHits[i];
             if (collider == null || collider == policeCarCollider ||
-                collider.transform.IsChildOf(policeCar.transform))
+                collider.transform.IsChildOf(policeCar.transform) ||
+                IsSeatedOccupant(collider))
             {
                 continue;
             }
@@ -1206,6 +1310,21 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private void CleanupDispatch()
     {
         SetPoliceCarMoving(false);
+        if (seatedOfficer != null)
+        {
+            policeSeat?.Release();
+            Destroy(seatedOfficer.gameObject);
+            seatedOfficer = null;
+        }
+        if (policeSeat != null && policeSeat.Driver != null)
+        {
+            // An officer still climbing back in leaves with the car.
+            EnemyFighter boarding = policeSeat.Driver;
+            policeSeat.Release();
+            if (officerBoarding) Destroy(boarding.gameObject);
+        }
+        policeSeat = null;
+        officerBoarding = false;
         if (policeSirenLoadRoutine != null)
         {
             StopCoroutine(policeSirenLoadRoutine);

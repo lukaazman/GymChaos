@@ -745,9 +745,22 @@ public sealed class GymFixerDirector : MonoBehaviour
         GymFixerMagicEffect.Burst(resident.transform.position + Vector3.up * 1.1f, 0.7f, 60);
     }
 
+#if UNITY_EDITOR
+    /// <summary>Verifier: revive this body now, as Larry's spell does.</summary>
+    internal void ReviveForVerification(EnemyFighter fighter) => StartCoroutine(ReviveCorpse(fighter, null));
+#endif
+
     private IEnumerator ReviveCorpse(EnemyFighter fighter, GymFixerAgent fixer)
     {
         Vector3 corpse = fighter.VisitorPhysicsPosition;
+        // A body the player is carrying leaves his hands and comes back to
+        // life right beside him, on the side he was holding it.
+        PlayerMovement carrier = fighter.IsCarriedByPlayer
+            ? FindAnyObjectByType<PlayerMovement>() : null;
+        if (carrier != null)
+        {
+            carrier.ReleaseCarriedCorpseForRevive(fighter);
+        }
         reviving.Add(fighter);
         GymFixerMagicEffect.Burst(corpse + Vector3.up * 0.4f, 0.7f, 60);
         List<Renderer> hidden = new List<Renderer>();
@@ -770,6 +783,41 @@ public sealed class GymFixerDirector : MonoBehaviour
         GymVisitorDirector visitors = GymVisitorDirector.Instance;
         bool visitor = visitors != null && visitors.IsScheduledVisitor(fighter);
         Vector3 stand = corpse;
+        if (carrier != null)
+        {
+            Vector3 front = Vector3.ProjectOnPlane(carrier.transform.forward, Vector3.up).normalized;
+            stand = carrier.transform.position + front * 1.3f;
+            if (fixer != null && fixer.NavGrid != null &&
+                fixer.NavGrid.TryNearestWalkable(stand, 1.2f, out Vector3 beside))
+            {
+                stand = beside;
+            }
+            if (GymFixerAgent.TryGroundAt(stand, stand.y, fighter.transform, out float carrierGround))
+            {
+                stand.y = carrierGround;
+            }
+            Vector3 toPlayer = Vector3.ProjectOnPlane(carrier.transform.position - stand, Vector3.up);
+            fighter.ReviveByFixer(stand, toPlayer.sqrMagnitude > 0.01f
+                ? Quaternion.LookRotation(toPlayer.normalized, Vector3.up) : fighter.transform.rotation);
+            for (int i = 0; i < hidden.Count; i++)
+            {
+                if (hidden[i] != null)
+                {
+                    hidden[i].enabled = true;
+                }
+            }
+            GymFixerMagicEffect.Burst(stand + Vector3.up * 1.1f, 0.7f, 60);
+            if (visitor)
+            {
+                visitors.NotifyFighterRevived(fighter);
+            }
+            if (fighter.Identity == BodybuilderIdentity.Policeman && fighter.IsPolice)
+            {
+                GymPoliceDirector.BeginOfficerReturn(fighter);
+            }
+            Debug.Log($"GYMCHAOS_FIXER_REVIVED_BESIDE_CARRIER identity={fighter.Identity} stand={stand}", this);
+            yield break;
+        }
         if (fighter.HasFixerHome)
         {
             // Shop and desk staff go back to their post, not where they fell.

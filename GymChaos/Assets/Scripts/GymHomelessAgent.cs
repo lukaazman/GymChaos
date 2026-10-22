@@ -187,6 +187,12 @@ public sealed class GymHomelessAgent : MonoBehaviour
         }
         Instance = this;
         EyeBar?.SetDead(false);
+        // Back at full health: hide the bar again, like an unhurt member.
+        ScreenSpaceCharacterLabel reviveLabel = GetComponent<ScreenSpaceCharacterLabel>();
+        if (reviveLabel != null)
+        {
+            reviveLabel.StandaloneHealthFraction = -1f;
+        }
         if (graph.IsValid())
         {
             graph.Play();
@@ -216,6 +222,12 @@ public sealed class GymHomelessAgent : MonoBehaviour
             return;
         }
         IsDead = true;
+        // Show the emptied health bar over the body, like every other death.
+        ScreenSpaceCharacterLabel label = GetComponent<ScreenSpaceCharacterLabel>();
+        if (label != null)
+        {
+            label.StandaloneHealthFraction = 0f;
+        }
         Fallen = this;
         DiedAt = Time.time;
         talking = false;
@@ -415,6 +427,16 @@ public sealed class GymHomelessAgent : MonoBehaviour
         Rigidbody body = gameObject.AddComponent<Rigidbody>();
         body.isKinematic = true;
         body.useGravity = false;
+        // The capsule is off in the tent and only fits him standing. A
+        // trigger box round his animated bones takes punches and throws in
+        // every pose (sitting, lying in the bag, crawling, standing up).
+        GameObject volume = new GameObject("Hank Hit Volume");
+        // Default layer: thrown props collide with it (his own layer may not).
+        volume.layer = 0;
+        volume.transform.SetParent(transform, false);
+        hitVolume = volume.AddComponent<BoxCollider>();
+        hitVolume.isTrigger = true;
+        UpdateHitVolume();
         return true;
     }
 
@@ -723,6 +745,85 @@ public sealed class GymHomelessAgent : MonoBehaviour
 
     // --------------------------------------------------------------- states
 
+    private BoxCollider hitVolume;
+
+    public bool IsHitVolume(Collider collider) => collider != null && collider == hitVolume;
+
+    // World-aligned box round the deform bones, padded for flesh and clothes.
+    private void UpdateHitVolume()
+    {
+        if (hitVolume == null || bodyRenderer == null || bodyRenderer.bones == null)
+        {
+            return;
+        }
+        Transform[] bones = bodyRenderer.bones;
+        Bounds bounds = default;
+        bool any = false;
+        for (int i = 0; i < bones.Length; i++)
+        {
+            if (bones[i] == null) continue;
+            if (!any) { bounds = new Bounds(bones[i].position, Vector3.zero); any = true; }
+            else bounds.Encapsulate(bones[i].position);
+        }
+        if (!any)
+        {
+            return;
+        }
+        bounds.Expand(0.3f);
+        Transform volume = hitVolume.transform;
+        volume.SetPositionAndRotation(bounds.center, Quaternion.identity);
+        Vector3 scale = volume.lossyScale;
+        hitVolume.center = Vector3.zero;
+        hitVolume.size = new Vector3(
+            bounds.size.x / Mathf.Max(0.001f, Mathf.Abs(scale.x)),
+            bounds.size.y / Mathf.Max(0.001f, Mathf.Abs(scale.y)),
+            bounds.size.z / Mathf.Max(0.001f, Mathf.Abs(scale.z)));
+    }
+
+    private void LateUpdate()
+    {
+        if (IsReady && !IsDead)
+        {
+            UpdateHitVolume();
+        }
+    }
+
+    // A thrown item that reaches him (any pose) knocks him out, like a punch:
+    // through the trigger round his bones or against his body capsule.
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other != null && other.attachedRigidbody != null)
+        {
+            HandleThrownContact(other.attachedRigidbody, other.ClosestPoint(hitVolume.bounds.center));
+        }
+    }
+
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (collision.rigidbody != null)
+        {
+            HandleThrownContact(collision.rigidbody,
+                collision.contactCount > 0 ? collision.GetContact(0).point : transform.position + Vector3.up);
+        }
+    }
+
+    private void HandleThrownContact(Rigidbody thrown, Vector3 point)
+    {
+        if (IsDead || !IsReady)
+        {
+            return;
+        }
+        PickupItem item = thrown.GetComponentInParent<PickupItem>();
+        if (item == null || !item.IsThrowableWeapon || !item.WasThrownRecently ||
+            thrown.linearVelocity.magnitude < 2f || !item.TryConsumeThrownHit())
+        {
+            return;
+        }
+        Vector3 velocity = thrown.linearVelocity;
+        GymAudio.Play(GymSoundEffect.ThrownEnemyImpact, point, 0.9f);
+        KnockOut(velocity.normalized * Mathf.Clamp(velocity.magnitude * item.ImpactMultiplier, 5f, 28f), point);
+    }
+
     private void Update()
     {
         if (!IsReady || IsDead)
@@ -928,6 +1029,17 @@ public sealed class GymHomelessAgent : MonoBehaviour
             EnterSitting(true);
         }
     }
+
+    /// <summary>Verifier hook: lying in the sleeping bag in the tent now.</summary>
+    internal void SleepInTentForVerification()
+    {
+        if (IsReady && !talking)
+        {
+            EnterSleeping(true);
+        }
+    }
+
+    internal Bounds HitVolumeBoundsForVerification => hitVolume != null ? hitVolume.bounds : default;
 #endif
 
     private void EnterSitting(bool snap)

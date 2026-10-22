@@ -238,6 +238,12 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             GetComponentInChildren<MixamoScanRetargetAnimator>(true);
         bool workoutPoseLocked = retargetAnimator != null &&
             retargetAnimator.IsWorkoutPoseLocked;
+        // A seated or climbing car driver is posed (and scaled) by its car
+        // seat: its bounds are no standing-height measure.
+        bool vehiclePose = retargetAnimator != null &&
+            retargetAnimator.CurrentVehiclePose != MixamoScanRetargetAnimator.VehiclePose.None;
+        // The crouched cloud stance is no upright face reference either.
+        bool nimbusPose = retargetAnimator != null && retargetAnimator.IsNimbusStanceActive;
         if (runtimeIdentity == BodybuilderIdentity.Goku && fighter != null && fighter.IsGokuFlightActive)
         {
             return;
@@ -256,7 +262,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             workoutGroundingCorrected = true;
         }
 
-        if (!workoutPoseLocked && heightCorrectionFrames > 0)
+        if (!workoutPoseLocked && !vehiclePose && heightCorrectionFrames > 0)
         {
             heightCorrectionFrames--;
             float measuredHeight = runtimeRenderer.bounds.size.y;
@@ -288,7 +294,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // sample the visible pose once and keep the result for the session.
         if (!runtimeFaceCalibrationSettled &&
             heightCorrectionFrames == 0 &&
-            !workoutPoseLocked)
+            !workoutPoseLocked && !vehiclePose && !nimbusPose)
         {
             RefreshRuntimeFaceCensor();
             runtimeFaceCalibrationSettled = true;
