@@ -206,6 +206,131 @@ def car_door_close():
     return thunk * 1.2 + body + latch
 
 
+# --- Race minigame ---------------------------------------------------------
+
+def race_beep():
+    # Countdown light: short square-ish beep.
+    t = t_axis(0.32)
+    wave_ = np.sign(tone(t, 660.0)) * 0.5 + tone(t, 660.0) * 0.5
+    return lowpass(wave_, 5000.0) * envelope(t, 0.004, 9.0)
+
+
+def race_go():
+    # GO light: higher, longer beep with a fifth on top.
+    t = t_axis(0.75)
+    wave_ = np.sign(tone(t, 1320.0)) * 0.4 + tone(t, 1320.0) * 0.4 + tone(t, 1980.0) * 0.25
+    return lowpass(wave_, 6500.0) * envelope(t, 0.004, 3.2)
+
+
+def race_drift_loop():
+    # Tyre squeal: band-limited noise with a wavering squeal tone; loops cleanly.
+    rng = np.random.default_rng(20261023)
+    t = t_axis(1.0)
+    noise = rng.standard_normal(len(t))
+    hiss = lowpass(highpass(noise, 1800.0), 5200.0) * 0.5
+    squeal = tone(t, 1150.0 + 60.0 * np.sin(2.0 * math.pi * 3.0 * t)) * 0.35
+    out = hiss + squeal
+    # Cross-fade the ends so the loop has no click.
+    n = int(RATE * 0.05)
+    out[:n] = out[:n] * np.linspace(0.0, 1.0, n) + out[-n:] * np.linspace(1.0, 0.0, n)
+    return out[:-n]
+
+
+def race_mini_turbo():
+    # Drift release: rising zip plus a puff of noise.
+    rng = np.random.default_rng(20261024)
+    t = t_axis(0.5)
+    zip_ = tone(t, 400.0 + 1600.0 * t) * envelope(t, 0.01, 6.0)
+    puff = lowpass(rng.standard_normal(len(t)), 900.0) * envelope(t, 0.005, 10.0)
+    return zip_ * 0.6 + puff
+
+
+def race_boost():
+    # Boost: jet whoosh, swelling then fading over the boost.
+    rng = np.random.default_rng(20261025)
+    t = t_axis(1.6)
+    noise = rng.standard_normal(len(t))
+    cutoff = 600.0 + 2600.0 * np.exp(-t * 2.0)
+    whoosh = lowpass(noise, cutoff) * envelope(t, 0.06, 1.6)
+    rumble = tone(t, 70.0 + 30.0 * t) * envelope(t, 0.02, 1.8) * 0.6
+    return whoosh + rumble
+
+
+def race_bump():
+    # Kart to kart: dull body thump with a plastic rattle.
+    rng = np.random.default_rng(20261026)
+    t = t_axis(0.35)
+    noise = rng.standard_normal(len(t))
+    thump = tone(t, 90.0 + 80.0 * np.exp(-t * 30.0)) * envelope(t, 0.002, 18.0)
+    rattle = highpass(noise, 1500.0) * envelope(t, 0.001, 35.0) * 0.4
+    return thump + rattle
+
+
+def race_wall_hit():
+    # Scrape into a concrete barrier: grinding noise with a hit at the start.
+    rng = np.random.default_rng(20261027)
+    t = t_axis(0.55)
+    noise = rng.standard_normal(len(t))
+    hit = lowpass(noise, 700.0) * envelope(t, 0.001, 25.0)
+    scrape = lowpass(highpass(noise, 900.0), 3500.0) * envelope(t, 0.02, 6.0) * 0.5
+    return hit + scrape
+
+
+def race_lap():
+    # New lap: two bright bell tones.
+    t = t_axis(0.8)
+    out = np.zeros_like(t)
+    for index, freq in enumerate((1046.5, 1568.0)):
+        start = index * 0.12
+        local = np.maximum(0.0, t - start)
+        out += (tone(local, freq) + 0.3 * tone(local, freq * 2.76)) * envelope(local, 0.002, 5.0) * (t >= start)
+    return out
+
+
+def race_final_lap():
+    # Final lap fanfare: quick rising triad, repeated higher.
+    t = t_axis(1.1)
+    out = np.zeros_like(t)
+    notes = (523.25, 659.25, 783.99, 659.25, 783.99, 1046.5)
+    for index, freq in enumerate(notes):
+        start = index * 0.11
+        local = np.maximum(0.0, t - start)
+        voice = np.sign(tone(local, freq)) * 0.3 + tone(local, freq) * 0.6
+        out += lowpass(voice, 4000.0) * envelope(local, 0.004, 6.0 if index < 5 else 2.5) * (t >= start)
+    return out
+
+
+def race_finish():
+    # Finish: major chord swell with a sparkle on top.
+    t = t_axis(1.8)
+    out = np.zeros_like(t)
+    for freq in (523.25, 659.25, 783.99, 1046.5):
+        out += (tone(t, freq) + 0.2 * tone(t, freq * 2.0)) * envelope(t, 0.03, 1.4)
+    sparkle = np.zeros_like(t)
+    for index, freq in enumerate((2093.0, 2637.0, 3136.0, 4186.0)):
+        start = 0.1 + index * 0.08
+        local = np.maximum(0.0, t - start)
+        sparkle += tone(local, freq) * envelope(local, 0.002, 9.0) * (t >= start)
+    return out + sparkle * 0.4
+
+
+def race_horn():
+    # Kart horn: two detuned square tones.
+    t = t_axis(0.45)
+    wave_ = np.sign(tone(t, 415.0)) + np.sign(tone(t, 523.0))
+    return lowpass(wave_, 2400.0) * envelope(t, 0.01, 2.0)
+
+
+def race_crumble():
+    # Towers dropping away: deep rumble with gravel noise.
+    rng = np.random.default_rng(20261028)
+    t = t_axis(1.6)
+    noise = rng.standard_normal(len(t))
+    rumble = lowpass(noise, 140.0) * envelope(t, 0.05, 1.8) * 3.0
+    gravel = lowpass(highpass(noise, 500.0), 2500.0) * envelope(t, 0.1, 2.4) * 0.4
+    return rumble + gravel
+
+
 SOUNDS = {
     "ui_hover.wav": (ui_hover, 0.55),
     "ui_error.wav": (ui_error, 0.6),
@@ -215,6 +340,18 @@ SOUNDS = {
     "level_up.wav": (level_up, 0.7),
     "car_door_open.wav": (car_door_open, 0.6),
     "car_door_close.wav": (car_door_close, 0.75),
+    "race_beep.wav": (race_beep, 0.6),
+    "race_go.wav": (race_go, 0.7),
+    "race_drift_loop.wav": (race_drift_loop, 0.5),
+    "race_mini_turbo.wav": (race_mini_turbo, 0.65),
+    "race_boost.wav": (race_boost, 0.75),
+    "race_bump.wav": (race_bump, 0.75),
+    "race_wall_hit.wav": (race_wall_hit, 0.65),
+    "race_lap.wav": (race_lap, 0.6),
+    "race_final_lap.wav": (race_final_lap, 0.6),
+    "race_finish.wav": (race_finish, 0.7),
+    "race_horn.wav": (race_horn, 0.6),
+    "race_crumble.wav": (race_crumble, 0.8),
 }
 
 

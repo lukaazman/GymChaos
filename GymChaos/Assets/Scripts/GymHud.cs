@@ -305,6 +305,7 @@ public sealed class GymHud : MonoBehaviour
         bool shouldShow = player != null && GymArenaBootstrap.IsGameplayStarted &&
             !GymStartScreen.IsMenuVisible && !GymPauseMenu.IsVisible &&
             !GymDialogueDirector.IsDialogueActive && !GymProteinShopUI.IsOpen && !GymDealerShopUI.IsOpen &&
+            !GymRaceDirector.IsRaceActive &&
             (progression == null || !progression.IsLockerMenuOpen);
         if (shouldShow != visible)
         {

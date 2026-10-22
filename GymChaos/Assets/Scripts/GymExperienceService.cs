@@ -88,7 +88,10 @@ public sealed class GymExperienceService : MonoBehaviour
     public bool IsSkillChoiceVisible => levelChoiceVisible;
     public bool IsLockerMenuOpen => lockerMenuOpen;
     public bool IsBlockingPlayerInput => lockerMenuOpen || GymProteinShopUI.IsOpen || GymDealerShopUI.IsOpen ||
-        (levelChoiceVisible && !EnemyFighter.IsFightActive && !GymDialogueDirector.IsDialogueActive);
+        (levelChoiceVisible && !SkillChoiceDeferred);
+    /// <summary>A stat choice waits while a fight, dialogue or race runs.</summary>
+    public static bool SkillChoiceDeferred =>
+        EnemyFighter.IsFightActive || GymDialogueDirector.IsDialogueActive || GymRaceDirector.IsRaceActive;
     public int Level => state != null ? state.level : 1;
     public int Experience => state != null ? state.experience : 0;
     public int ExperienceToNextLevel => GetExperienceToNextLevel(Level);
@@ -263,8 +266,7 @@ public sealed class GymExperienceService : MonoBehaviour
             return;
         }
 
-        if (levelChoiceVisible && !timeScaleChanged &&
-            !EnemyFighter.IsFightActive && !GymDialogueDirector.IsDialogueActive)
+        if (levelChoiceVisible && !timeScaleChanged && !SkillChoiceDeferred)
         {
             Time.timeScale = SkillChoiceTimeScale;
             timeScaleChanged = true;
@@ -276,8 +278,7 @@ public sealed class GymExperienceService : MonoBehaviour
             GymLevelUpMenuUI.Ensure(this);
         }
 
-        if (levelChoiceVisible && !EnemyFighter.IsFightActive &&
-            !GymDialogueDirector.IsDialogueActive && !levelChoiceCursorReleased &&
+        if (levelChoiceVisible && !SkillChoiceDeferred && !levelChoiceCursorReleased &&
             player != null)
         {
             // PlayerMovement intentionally stops consuming gameplay input while
@@ -623,8 +624,7 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public void AllocateSkill(GymStat stat)
     {
-        if (state == null || !levelChoiceVisible || state.skillPoints <= 0 ||
-            EnemyFighter.IsFightActive || GymDialogueDirector.IsDialogueActive)
+        if (state == null || !levelChoiceVisible || state.skillPoints <= 0 || SkillChoiceDeferred)
         {
             return;
         }

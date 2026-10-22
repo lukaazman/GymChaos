@@ -280,6 +280,8 @@ public class GymArenaBootstrap : MonoBehaviour
         GymShadowProxy.DisableSmallCasters();
         GymExperienceService.CreateForScene(targetPlayer);
         GymDialogueDirector.CreateForScene(targetPlayer);
+        // The RACE sign appears once the exterior is built.
+        GymRaceDirector.CreateForScene(targetPlayer);
 
         // Load and build heavyweight character FBXs before the start screen is
         // interactive. Keeping their common root inactive prevents AI,

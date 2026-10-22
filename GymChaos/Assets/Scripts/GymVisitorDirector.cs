@@ -215,6 +215,11 @@ public sealed class GymVisitorDirector : MonoBehaviour
     // Verification only: no timed arrivals; forced arrivals and the rest of
     // the visit lifecycle keep running.
     private bool scheduledArrivalsHeldForVerification;
+    /// <summary>
+    /// While the race runs, no visitor car enters or leaves: the visitor road
+    /// is the start grid. Leaving visitors wait at their car.
+    /// </summary>
+    public static bool RaceTrafficHold { get; set; }
     public void HoldScheduledArrivalsForVerification()
     {
         scheduledArrivalsHeldForVerification = true;
@@ -1508,7 +1513,7 @@ public bool BeginDepartureForVerification(
         {
             return false;
         }
-        if (!forced && (scheduledArrivalsHeldForVerification ||
+        if (!forced && (scheduledArrivalsHeldForVerification || RaceTrafficHold ||
             Time.unscaledTime < record.nextEligibleRealtime))
         {
             return false;
@@ -1686,6 +1691,11 @@ public bool BeginDepartureForVerification(
         if (!record.agent.HasReachedVehicle)
         {
             record.leaveAfter = Time.time + 0.25f;
+            return;
+        }
+        if (!record.vehicleDepartureStarted && RaceTrafficHold)
+        {
+            record.leaveAfter = Time.time + 0.5f;
             return;
         }
         if (!record.vehicleDepartureStarted)

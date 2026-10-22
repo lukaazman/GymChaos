@@ -230,7 +230,11 @@ public sealed class GymTimeOfDay : MonoBehaviour
             return;
         }
 
-        Advance(Time.deltaTime * ClockScale);
+        // A race keeps its sky: cars never switch their lamps mid-race.
+        if (!GymRaceDirector.IsRaceActive)
+        {
+            Advance(Time.deltaTime * ClockScale);
+        }
         ApplyVisuals();
     }
 

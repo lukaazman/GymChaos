@@ -29,6 +29,9 @@ public sealed class GymVehicleWheelSpinner : MonoBehaviour
         public int UpAxis;
         public float LocalRadius;
         public float Angle;
+        // Front wheels only, once steering is on: turns about the vehicle's up.
+        public Transform SteerPivot;
+        public Quaternion SteerRestLocal;
     }
 
     private readonly List<Wheel> wheels = new List<Wheel>();
@@ -36,10 +39,30 @@ public sealed class GymVehicleWheelSpinner : MonoBehaviour
     private Vector3 lastPosition;
     private float nextSearchTime;
     private float searchUntil;
+    // Off by default: the visitor and police cars never steer their wheels.
+    private bool steering;
+    private float steerDegrees;
 
     public int WheelCount => wheels.Count;
     public float TotalRolledDistance { get; private set; }
     public float TotalSpinDegrees { get; private set; }
+    public float SteerDegrees => steerDegrees;
+    public int SteeredWheelCount { get; private set; }
+
+    /// <summary>
+    /// Turns the front wheels (ahead of the axle midpoint) by
+    /// <paramref name="degrees"/> about the vehicle's up axis, positive to
+    /// the right. The first call puts each front wheel under a steer pivot.
+    /// </summary>
+    public void SetSteer(float degrees)
+    {
+        steering = true;
+        steerDegrees = degrees;
+        if (wheels.Count > 0 && SteeredWheelCount == 0) CreateSteerPivots();
+        ApplySteer();
+    }
+
+    public Transform GetSteerPivot(int index) => wheels[index].SteerPivot;
 
     public static GymVehicleWheelSpinner Attach(GameObject root, Func<bool> isDriving)
     {
@@ -88,6 +111,7 @@ public sealed class GymVehicleWheelSpinner : MonoBehaviour
             {
                 nextSearchTime = Time.unscaledTime + SearchInterval;
                 FindWheels();
+                if (steering && wheels.Count > 0) SetSteer(steerDegrees);
             }
             return;
         }
@@ -124,7 +148,7 @@ public sealed class GymVehicleWheelSpinner : MonoBehaviour
             // grow while the wheel is turned, and GLB vehicles are fitted to
             // their target size after the parts appear.
             float degrees = distance / Mathf.Max(0.02f, GetWheelRadius(index)) * Mathf.Rad2Deg;
-            wheel.Node.Rotate(axle, degrees, Space.World);
+            wheel.Node.Rotate(wheel.SteerPivot != null ? wheel.SteerPivot.right : axle, degrees, Space.World);
             wheel.Angle = Mathf.Repeat(wheel.Angle + degrees, 360f);
             KeepBoundsTight(wheel);
             spun = degrees;
@@ -155,6 +179,39 @@ public sealed class GymVehicleWheelSpinner : MonoBehaviour
             }
         }
         wheel.Renderer.localBounds = new Bounds(wheel.MeshBounds.center, size);
+    }
+
+    // The steer pivot sits on the axle with the vehicle's axes, so turning
+    // it about its own up steers the wheel and its right is the new axle.
+    private void CreateSteerPivots()
+    {
+        float middle = 0f;
+        for (int i = 0; i < wheels.Count; i++)
+            middle += transform.InverseTransformPoint(wheels[i].Node.position).z / wheels.Count;
+        for (int i = 0; i < wheels.Count; i++)
+        {
+            Wheel wheel = wheels[i];
+            if (wheel.Node == null || transform.InverseTransformPoint(wheel.Node.position).z <= middle + 0.05f)
+                continue;
+            Transform pivot = new GameObject(wheel.Node.name + " Steer Pivot").transform;
+            pivot.SetParent(wheel.Node.parent, false);
+            pivot.SetPositionAndRotation(wheel.Node.position, transform.rotation);
+            pivot.localScale = Vector3.one;
+            wheel.Node.SetParent(pivot, true);
+            wheel.SteerPivot = pivot;
+            wheel.SteerRestLocal = pivot.localRotation;
+            SteeredWheelCount++;
+        }
+    }
+
+    private void ApplySteer()
+    {
+        for (int i = 0; i < wheels.Count; i++)
+        {
+            Wheel wheel = wheels[i];
+            if (wheel.SteerPivot == null) continue;
+            wheel.SteerPivot.localRotation = wheel.SteerRestLocal * Quaternion.Euler(0f, steerDegrees, 0f);
+        }
     }
 
     private static int DominantAxis(Vector3 v)

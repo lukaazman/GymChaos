@@ -531,6 +531,29 @@ public partial class PlayerMovement : MonoBehaviour
             return;
         }
 
+        if (GymRaceDirector.IsChoiceOpen)
+        {
+            // End-of-race popup: a free, visible pointer for its buttons; a
+            // click there must not re-lock the cursor.
+            if (Cursor.lockState != CursorLockMode.None || !Cursor.visible)
+            {
+                LockCursor(false);
+            }
+            return;
+        }
+
+        if (GymRaceDirector.IsRaceActive)
+        {
+            // The kart owns the controls; Esc still pauses and a click
+            // re-locks the pointer (WebGL drops it on a browser Esc).
+            cursorCaptureAllowedThisFrame = true;
+            if (!TryCaptureCursor())
+            {
+                HandleCursorToggle();
+            }
+            return;
+        }
+
         if (GymExperienceService.Active != null &&
             GymExperienceService.Active.IsBlockingPlayerInput)
         {
@@ -626,7 +649,12 @@ public partial class PlayerMovement : MonoBehaviour
             ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
             fPressed = ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
                 nearbyExerciseStation != null, callFixerOnF, CanShopNearby,
-                dealer: CanDealNearby);
+                dealer: CanDealNearby, race: CanRaceNearby);
+        }
+        if (fPressed == ContextAction.Race)
+        {
+            GymRaceDirector.Instance.TryStartFromSign(this);
+            return;
         }
         if (fPressed == ContextAction.Dealer)
         {
@@ -2403,7 +2431,7 @@ public partial class PlayerMovement : MonoBehaviour
     }
 
     public enum ContextKey { E, F }
-    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer, Shop, Sit, StandUp, Dealer }
+    public enum ContextAction { None, Talk, BackRoom, Workout, Radio, Drop, Pickup, CallFixer, Shop, Sit, StandUp, Dealer, Race }
 
     // Priority per key, highest first. Talking to a person beats a workout,
     // which beats picking something up; only one action is shown per key.
@@ -2411,19 +2439,19 @@ public partial class PlayerMovement : MonoBehaviour
     private static readonly ContextAction[] ContextPriority =
     {
         ContextAction.StandUp, ContextAction.Talk, ContextAction.Sit, ContextAction.Shop,
-        ContextAction.Dealer, ContextAction.BackRoom, ContextAction.Workout,
+        ContextAction.Dealer, ContextAction.Race, ContextAction.BackRoom, ContextAction.Workout,
         ContextAction.CallFixer, ContextAction.Radio, ContextAction.Drop, ContextAction.Pickup
     };
 
     public static ContextKey GetContextActionKey(ContextAction action) =>
         action == ContextAction.Workout || action == ContextAction.Radio ||
         action == ContextAction.CallFixer || action == ContextAction.Shop ||
-        action == ContextAction.Dealer ? ContextKey.F : ContextKey.E;
+        action == ContextAction.Dealer || action == ContextAction.Race ? ContextKey.F : ContextKey.E;
 
     /// <summary>The single action shown on (and triggered by) a key.</summary>
     public static ContextAction ResolveContextAction(ContextKey key, bool talk, bool backRoom,
         bool drop, bool pickup, bool radio, bool workout, bool callFixer = false, bool shop = false,
-        bool sit = false, bool standUp = false, bool dealer = false)
+        bool sit = false, bool standUp = false, bool dealer = false, bool race = false)
     {
         for (int i = 0; i < ContextPriority.Length; i++)
         {
@@ -2437,6 +2465,7 @@ public partial class PlayerMovement : MonoBehaviour
                 action == ContextAction.Sit ? sit :
                 action == ContextAction.StandUp ? standUp :
                 action == ContextAction.Dealer ? dealer :
+                action == ContextAction.Race ? race :
                 action == ContextAction.Drop ? drop : pickup;
             if (available && GetContextActionKey(action) == key)
             {
@@ -2448,6 +2477,8 @@ public partial class PlayerMovement : MonoBehaviour
 
     private bool CanShopNearby => GymProteinShopUI.CanShopAt(this, nearbyTalkTarget);
     private bool CanDealNearby => nearbyTalkTarget == null && GymDealerShopUI.CanDealWith(this);
+    public bool IsHoldingItem => heldItem != null;
+    private bool CanRaceNearby => GymRaceDirector.Instance != null && GymRaceSign.IsNear(transform.position);
 
     // The radio sits on the reception counter, so the receptionist's call and
     // the radio share F there; the one the camera faces more gets the key.
@@ -2497,7 +2528,8 @@ public partial class PlayerMovement : MonoBehaviour
             : null;
         ResolveReceptionFKey(out bool radioOnF, out bool callFixerOnF);
         return ResolveContextAction(ContextKey.F, false, false, false, false, radioOnF,
-            nearbyExerciseStation != null, callFixerOnF, CanShopNearby, dealer: CanDealNearby);
+            nearbyExerciseStation != null, callFixerOnF, CanShopNearby, dealer: CanDealNearby,
+            race: CanRaceNearby);
     }
 
     internal GymRadio NearbyRadioForVerification => nearbyRadio;
@@ -2574,6 +2606,7 @@ public partial class PlayerMovement : MonoBehaviour
             case ContextAction.CallFixer: return "CALL " + GymFixerAgent.DisplayName.ToUpperInvariant();
             case ContextAction.Shop: return "SHOP SUPPLEMENTS";
             case ContextAction.Dealer: return "BUY FROM " + GymHomelessAgent.FirstName.ToUpperInvariant();
+            case ContextAction.Race: return GymRaceDirector.Instance != null ? GymRaceDirector.Instance.SignPrompt : "START RACE";
             case ContextAction.Sit: return "SIT DOWN";
             case ContextAction.StandUp: return "STAND UP";
             case ContextAction.BackRoom:
@@ -2591,7 +2624,7 @@ public partial class PlayerMovement : MonoBehaviour
 
     private void DrawContextInteractionPrompts()
     {
-        if (GymExperienceService.Active != null &&
+        if (GymRaceDirector.IsRaceActive || GymExperienceService.Active != null &&
             GymExperienceService.Active.IsBlockingPlayerInput)
         {
             return;
@@ -2617,7 +2650,7 @@ public partial class PlayerMovement : MonoBehaviour
                 HasTalkTarget, nearbyBackRoomInteractable != null, heldItem != null || carriedCorpse != null,
                 nearbyPickup != null || nearbyCorpse != null, radioOnF,
                 nearbyExerciseStation != null && nearbyExerciseStation.IsAvailableForPlayer, callFixerOnF,
-                CanShopNearby, dealer: CanDealNearby);
+                CanShopNearby, dealer: CanDealNearby, race: CanRaceNearby);
         }
         bool hasE = eAction != ContextAction.None;
         bool hasF = fAction != ContextAction.None;

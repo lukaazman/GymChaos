@@ -40,6 +40,8 @@ public sealed class GymChaosCabinPenetrationProbe
     public int WorstSampleCrossings { get; private set; }
     public int SampledVertices { get; private set; }
     public string WorstCrossing { get; private set; } = "";
+    // Phase and hit-point box (vehicle-local) of the step with the most crossings.
+    public string WorstStep { get; private set; } = "";
     private readonly SortedDictionary<string, int> crossingBuckets = new SortedDictionary<string, int>();
     private readonly SortedDictionary<string, int> outsideBuckets = new SortedDictionary<string, int>();
 
@@ -52,7 +54,7 @@ public sealed class GymChaosCabinPenetrationProbe
         return $"crossings[{string.Join(",", parts)}] outside[{string.Join(",", outside)}]";
     }
 
-    public GymChaosCabinPenetrationProbe(Transform vehicleRoot, EnemyFighter driver)
+    public GymChaosCabinPenetrationProbe(Transform vehicleRoot, Component driver)
     {
         vehicle = vehicleRoot;
         foreach (SkinnedMeshRenderer candidate in driver.GetComponentsInChildren<SkinnedMeshRenderer>(true))
@@ -73,7 +75,8 @@ public sealed class GymChaosCabinPenetrationProbe
                 hidden.Add((filter.transform, b));
                 continue;
             }
-            bool shell = name == "geometry_0" || name == "Door_Driver__Shell" ||
+            // geometry_0 is a scanned car's body; Body__Shell the race buggy's tub.
+            bool shell = name == "geometry_0" || name == "Body__Shell" || name == "Door_Driver__Shell" ||
                 name == "Door_Driver__Glass" || name == "Glass__Body";
             if (!shell || filter.sharedMesh == null) continue;
             GameObject copy = new GameObject("Cabin Probe " + name) { layer = ProbeLayer };
@@ -141,6 +144,8 @@ public sealed class GymChaosCabinPenetrationProbe
         Enable(true);
         int mask = 1 << ProbeLayer;
         int before = Crossings;
+        Bounds stepHits = default;
+        bool anyHit = false;
         MotionSamples++;
         SampledVertices = (vertices.Length + VertexStride - 1) / VertexStride;
         for (int i = 0; i < vertices.Length; i += VertexStride)
@@ -153,6 +158,9 @@ public sealed class GymChaosCabinPenetrationProbe
                 string bucket = phase.Length > 0 ? phase.Substring(0, Mathf.Min(phase.Length, phase.IndexOf('@') + 4)) : phase;
                 bucket += "/" + hit.collider.name.Replace("Cabin Probe ", "");
                 Vector3 hitLocal = vehicle.InverseTransformPoint(hit.point);
+                if (!anyHit) stepHits = new Bounds(hitLocal, Vector3.zero);
+                else stepHits.Encapsulate(hitLocal);
+                anyHit = true;
                 bucket += $"@y{Mathf.Round(hitLocal.y * 5f) / 5f:F1}";
                 crossingBuckets[bucket] = crossingBuckets.TryGetValue(bucket, out int c) ? c + 1 : 1;
                 if (Crossings <= 1 || Random.value < 0.02f)
@@ -163,7 +171,11 @@ public sealed class GymChaosCabinPenetrationProbe
             }
             previousLocal[i] = vehicle.InverseTransformPoint(vertices[i]);
         }
-        WorstSampleCrossings = Mathf.Max(WorstSampleCrossings, Crossings - before);
+        if (Crossings - before > WorstSampleCrossings)
+        {
+            WorstSampleCrossings = Crossings - before;
+            WorstStep = $"{phase} n={WorstSampleCrossings} hits={stepHits.min.ToString("F2")}..{stepHits.max.ToString("F2")}";
+        }
         Enable(false);
     }
 

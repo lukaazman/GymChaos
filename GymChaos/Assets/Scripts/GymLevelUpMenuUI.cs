@@ -175,7 +175,7 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
     private void LateUpdate()
     {
         bool open = service != null && service.IsSkillChoiceVisible && service.SkillPoints > 0 &&
-            !EnemyFighter.IsFightActive && !GymDialogueDirector.IsDialogueActive &&
+            !GymExperienceService.SkillChoiceDeferred &&
             !service.IsLockerMenuOpen && !GymStartScreen.IsMenuVisible && !GymPauseMenu.IsVisible;
         if (open != shown)
         {

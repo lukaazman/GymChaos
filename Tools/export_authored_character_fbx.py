@@ -82,7 +82,7 @@ PLAYER_CLIPS = (
     "punch_right",
     "throw_frisbee",
     "throw_object_hard",
-)
+) + VEHICLE_CLIPS  # The race buggy seats the player like a visitor driver.
 
 PLAYER_ONLY_CLIPS = {
     "crouched_walking",

@@ -25,7 +25,7 @@ PLAYER_CLIPS = (
     "walking", "running", "idle1", "idle2", "idle3", "crouched_walking",
     "jumping", "punch_left", "punch_right", "throw_frisbee",
     "throw_object_hard",
-)
+) + VEHICLE_CLIPS
 EXPORTS = {
     **{
         name: (

@@ -31,7 +31,19 @@ public enum GymSoundEffect
     FixerGlitter,
     ToiletSeat,
     CarDoorOpen,
-    CarDoorClose
+    CarDoorClose,
+    RaceBeep,
+    RaceGo,
+    RaceDriftLoop,
+    RaceMiniTurbo,
+    RaceBoost,
+    RaceBump,
+    RaceWallHit,
+    RaceLap,
+    RaceFinalLap,
+    RaceFinish,
+    RaceHorn,
+    RaceCrumble
 }
 
 public sealed class GymAudio : MonoBehaviour
@@ -95,7 +107,20 @@ public sealed class GymAudio : MonoBehaviour
             { GymSoundEffect.ToiletSeat, new ClipDefinition("toilet_seat_drop.wav", AudioType.WAV) },
             // Tools/generate_sfx.py: a car's driver door unlatching and shutting.
             { GymSoundEffect.CarDoorOpen, new ClipDefinition("car_door_open.wav", AudioType.WAV) },
-            { GymSoundEffect.CarDoorClose, new ClipDefinition("car_door_close.wav", AudioType.WAV) }
+            { GymSoundEffect.CarDoorClose, new ClipDefinition("car_door_close.wav", AudioType.WAV) },
+            // Tools/generate_sfx.py: race minigame cues (the drift squeal is looped).
+            { GymSoundEffect.RaceBeep, new ClipDefinition("race_beep.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceGo, new ClipDefinition("race_go.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceDriftLoop, new ClipDefinition("race_drift_loop.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceMiniTurbo, new ClipDefinition("race_mini_turbo.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceBoost, new ClipDefinition("race_boost.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceBump, new ClipDefinition("race_bump.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceWallHit, new ClipDefinition("race_wall_hit.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceLap, new ClipDefinition("race_lap.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceFinalLap, new ClipDefinition("race_final_lap.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceFinish, new ClipDefinition("race_finish.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceHorn, new ClipDefinition("race_horn.wav", AudioType.WAV) },
+            { GymSoundEffect.RaceCrumble, new ClipDefinition("race_crumble.wav", AudioType.WAV) }
         };
 
     // Interface and first-person cues: played flat (2D) from one pooled

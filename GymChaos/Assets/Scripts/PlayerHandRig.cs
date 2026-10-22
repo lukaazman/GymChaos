@@ -287,6 +287,115 @@ public sealed class PlayerHandRig : MonoBehaviour
         isHolding = holding;
     }
 
+    // Car seat (PlayerVehicleOccupant, GymVehicleDriverSeat): vehicle_driving
+    // loops, vehicle_exit is held at a phase. Unlike the gameplay clips these
+    // keep their hip root motion; the seat places the actor root and adds a
+    // world offset to the hips.
+    private AnimationClip vehicleDrivingClip;
+    private AnimationClip vehicleExitClip;
+    private MixamoScanRetargetAnimator.VehiclePose vehiclePose;
+    private float vehicleExitPhase;
+    private float vehicleDriveTime;
+    private Vector3 vehicleRootOffset;
+    private float vehicleScale = 1f;
+    // The fitted model root plants the idle soles only roughly; gameplay
+    // re-plants them every frame. Car poses get the same lift, measured once
+    // on the first walking frame, so a standing car pose and the walk agree.
+    private float vehicleGroundOffset;
+    private bool hasVehicleGroundOffset;
+    // The seat matches the hips at every hand-over (walk, climb, drive);
+    // blending local bone positions there would drag the hips across the car.
+    private bool cutNextTransition;
+
+    public bool HasVehicleClips => vehicleDrivingClip != null && vehicleExitClip != null;
+    public float CarExitClipLength => vehicleExitClip != null ? vehicleExitClip.length : 0f;
+    public MixamoScanRetargetAnimator.VehiclePose CurrentVehiclePose => vehiclePose;
+    public IReadOnlyList<SkinnedMeshRenderer> RuntimeBodyRenderers => mirrorBodyRenderers;
+
+    public bool SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose pose, float exitPhase,
+        Vector3 rootWorldOffset, float scale = 1f)
+    {
+        if (pose != MixamoScanRetargetAnimator.VehiclePose.None && !HasVehicleClips)
+        {
+            return false;
+        }
+        if (pose == MixamoScanRetargetAnimator.VehiclePose.Driving &&
+            vehiclePose != MixamoScanRetargetAnimator.VehiclePose.Driving)
+        {
+            vehicleDriveTime = 0f;
+        }
+        if (pose != vehiclePose) cutNextTransition = true;
+        vehiclePose = pose;
+        vehicleExitPhase = Mathf.Clamp01(exitPhase);
+        vehicleRootOffset = rootWorldOffset;
+        vehicleScale = pose == MixamoScanRetargetAnimator.VehiclePose.None ? 1f : Mathf.Clamp(scale, 0.5f, 1f);
+        if (pose != MixamoScanRetargetAnimator.VehiclePose.None)
+        {
+            activeAttackClip = null;
+            heldShoveReach = 0f;
+        }
+        else if (modelRoot != null)
+        {
+            RestoreVerificationModelTransform();
+        }
+        return true;
+    }
+
+    /// <summary>Writes a car pose right now (no seat offset) so the seat can measure it.</summary>
+    public bool SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose pose, float normalized, float scale = 1f)
+    {
+        if (!HasVehicleClips || pose == MixamoScanRetargetAnimator.VehiclePose.None || modelRoot == null)
+        {
+            return false;
+        }
+        AnimationClip clip = pose == MixamoScanRetargetAnimator.VehiclePose.Driving ? vehicleDrivingClip : vehicleExitClip;
+        return SampleVehicleClip(clip, Mathf.Clamp01(normalized) * Mathf.Max(0.01f, clip.length - 0.001f), scale);
+    }
+
+    /// <summary>Writes the first walking frame, soles on the floor, right now.</summary>
+    public bool SampleWalkingPoseNow()
+    {
+        if (walkClip == null || modelRoot == null)
+        {
+            return false;
+        }
+        EnsureVehicleGroundOffset();
+        bool sampled = SampleDirectClip(walkClip, 0f);
+        modelRoot.transform.position += transform.up * vehicleGroundOffset;
+        return sampled;
+    }
+
+    private void EnsureVehicleGroundOffset()
+    {
+        if (hasVehicleGroundOffset || walkClip == null || modelRoot == null) return;
+        SampleDirectClip(walkClip, 0f);
+        float lowest = MeasureLowestBodyPoint();
+        if (float.IsInfinity(lowest)) return;
+        float floorY = controller != null
+            ? controller.transform.TransformPoint(controller.center).y - controller.height * 0.5f
+            : transform.position.y - 1f;
+        vehicleGroundOffset = floorY - lowest;
+        hasVehicleGroundOffset = true;
+        Debug.Log($"GYMCHAOS_PLAYER_VEHICLE_GROUND_OFFSET offset={vehicleGroundOffset:F3}", this);
+    }
+
+    private bool SampleVehicleClip(AnimationClip clip, float sampleTime, float scale)
+    {
+        if (clip == null || modelRoot == null)
+        {
+            return false;
+        }
+        EnsureVehicleGroundOffset();
+        RestoreAnimatedBones();
+        RestoreVerificationModelTransform();
+        GymClipSampler.Sample(clip, modelRoot, Mathf.Max(0f, sampleTime));
+        RestoreAnimatedScales();
+        RestoreVerificationModelTransform();
+        modelRoot.transform.localScale = baseModelLocalScale * scale;
+        modelRoot.transform.position += transform.up * vehicleGroundOffset;
+        return true;
+    }
+
     public void TriggerPunch(bool useRightHand)
     {
         AnimationClip punchClip = useRightHand ? punchRightClip : punchLeftClip;
@@ -641,6 +750,28 @@ public sealed class PlayerHandRig : MonoBehaviour
             return;
         }
 
+        if (vehiclePose != MixamoScanRetargetAnimator.VehiclePose.None)
+        {
+            bool driving = vehiclePose == MixamoScanRetargetAnimator.VehiclePose.Driving;
+            AnimationClip vehicleClip = driving ? vehicleDrivingClip : vehicleExitClip;
+            PreparePoseTransition(vehicleClip, false);
+            if (driving)
+            {
+                vehicleDriveTime += Time.deltaTime;
+                SampleVehicleClip(vehicleClip,
+                    Mathf.Repeat(vehicleDriveTime, Mathf.Max(0.01f, vehicleClip.length - 0.001f)), vehicleScale);
+            }
+            else
+            {
+                SampleVehicleClip(vehicleClip,
+                    vehicleExitPhase * Mathf.Max(0.01f, vehicleClip.length - 0.001f), vehicleScale);
+            }
+            poseTransition.Apply(Time.deltaTime);
+            if (animationRootBone != null) animationRootBone.position += vehicleRootOffset;
+            UpdateBakedRenderers();
+            return;
+        }
+
         AnimationClip desiredClip = activeAttackClip != null
             ? activeAttackClip
             : GetLocomotionClip();
@@ -782,6 +913,15 @@ public sealed class PlayerHandRig : MonoBehaviour
 
     private void PreparePoseTransition(AnimationClip nextClip, bool attackMode)
     {
+        if (cutNextTransition)
+        {
+            cutNextTransition = false;
+            poseTransition.Cancel();
+            hasSampledPose = true;
+            lastSampledClip = nextClip;
+            lastSampledAttackMode = attackMode;
+            return;
+        }
         if (!hasSampledPose)
         {
             hasSampledPose = true;
@@ -881,6 +1021,10 @@ public sealed class PlayerHandRig : MonoBehaviour
             PlayerAnimationBundleResource, "throw_frisbee");
         throwHardClip = LoadAuthoredAnimationClip(
             PlayerAnimationBundleResource, "throw_object_hard");
+        vehicleDrivingClip = LoadAuthoredAnimationClip(
+            PlayerAnimationBundleResource, "vehicle_driving");
+        vehicleExitClip = LoadAuthoredAnimationClip(
+            PlayerAnimationBundleResource, "vehicle_exit");
         Debug.Log(
             $"GYMCHAOS_PLAYER_AUTHORED_CLIP_INVENTORY loaded=" +
             $"{(HasRequiredMixamoAttackClips ? "11/11" : "0/11")} " +
@@ -1252,6 +1396,8 @@ public sealed class PlayerHandRig : MonoBehaviour
         if (string.Equals(clipStem, "punch_right", StringComparison.OrdinalIgnoreCase)) return punchRightClip;
         if (string.Equals(clipStem, "throw_frisbee", StringComparison.OrdinalIgnoreCase)) return throwFrisbeeClip;
         if (string.Equals(clipStem, "throw_object_hard", StringComparison.OrdinalIgnoreCase)) return throwHardClip;
+        if (string.Equals(clipStem, "vehicle_driving", StringComparison.OrdinalIgnoreCase)) return vehicleDrivingClip;
+        if (string.Equals(clipStem, "vehicle_exit", StringComparison.OrdinalIgnoreCase)) return vehicleExitClip;
         return null;
     }
 

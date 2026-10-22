@@ -82,6 +82,12 @@ public sealed class GymProgressionState
     // Homeless Hank sells his gear once the friendly talk ends in a yes.
     public bool hankDealerUnlocked;
 
+    // City race minigame records (milliseconds; 0 = no time yet).
+    public int raceStarts;
+    public int raceWins;
+    public int raceBestLapMs;
+    public int raceBestTotalMs;
+
     public void Normalize()
     {
         level = Mathf.Max(1, level);
@@ -98,6 +104,10 @@ public sealed class GymProgressionState
         loyaltyStamps = Mathf.Clamp(loyaltyStamps, 0, GymExperienceService.MaxLoyaltyStamps);
         loyaltyStampsToday = Mathf.Max(0, loyaltyStampsToday);
         loyaltyRepCounter = Mathf.Max(0, loyaltyRepCounter);
+        raceStarts = Mathf.Max(0, raceStarts);
+        raceWins = Mathf.Max(0, raceWins);
+        raceBestLapMs = Mathf.Max(0, raceBestLapMs);
+        raceBestTotalMs = Mathf.Max(0, raceBestTotalMs);
 
         if (dailyProgress == null || dailyProgress.Length != 3)
         {

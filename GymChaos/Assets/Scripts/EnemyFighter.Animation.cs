@@ -15,7 +15,11 @@ public partial class EnemyFighter
             externalBodyAnimator?.SetFlying(gokuFlightState != GokuFlightState.Grounded);
         }
         animatedMovementActive = moving;
-        bool chasing = currentTarget != null && !isPassive;
+        // Walking back in through the doors is not a chase: the return point
+        // is only borrowed as a route target. Without this the route step
+        // picked Run and the caller Walk in the same frame, and each switch
+        // restarted the clip, so the body slid along in its first pose.
+        bool chasing = currentTarget != null && !isPassive && currentTarget != mainFloorReturnPoint;
         externalBodyAnimator?.SetMoving(
             moving, normalizedSpeed, forceRunningClip || isAggressive || chasing);
     }

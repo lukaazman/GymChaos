@@ -484,6 +484,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
 
         policeCar = root;
         FitCarVisual(root);
+        GymVehicleLights.Attach(root.transform, "police", () => policeCarMoving);
         GymVehicleWheelSpinner.Attach(root, () => policeCarMoving);
         AddCarCollider(root);
         policeSeat = null;

@@ -88,10 +88,10 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     private Transform anchor;
     private float groundLocalY;
     private Vector3 aisleEndLocal;
-    private EnemyFighter driver;
-    private MixamoScanRetargetAnimator animator;
+    // The seated body: a visitor, the police officer or the player.
+    private IVehicleSeatOccupant driver;
     private Fit fit;
-    private BodybuilderIdentity fitIdentity;
+    private string fitOwner;
     private float exitPhase;
     private float clipLength = 4.2f;
     private Action onFinished;
@@ -101,7 +101,10 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     // The police officer climbs out faster than a visitor.
     public float PlaybackSpeed { get; set; } = 1f;
     public SeatState State { get; private set; }
-    public EnemyFighter Driver => driver;
+    public EnemyFighter Driver => driver as EnemyFighter;
+    public IVehicleSeatOccupant Occupant => driver;
+    // A destroyed driver component compares equal to null only through Unity's operator.
+    private bool HasDriver => driver is UnityEngine.Object body ? body != null : driver != null;
     public GymVehicleCabin Cabin => cabin;
     public bool IsBusy => State == SeatState.Exiting || State == SeatState.WalkingAway ||
         State == SeatState.WalkingIn || State == SeatState.Boarding;
@@ -128,23 +131,27 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         }
     }
 
-    public static bool SupportsDriver(EnemyFighter fighter)
+    public static bool SupportsDriver(EnemyFighter fighter) => SupportsDriver((IVehicleSeatOccupant)fighter);
+
+    public static bool SupportsDriver(IVehicleSeatOccupant occupant)
     {
-        MixamoScanRetargetAnimator body = fighter != null ? fighter.VehicleBodyAnimator : null;
-        return body != null && body.HasVehicleClips && body.BodyRig != null &&
-            body.BodyRig.Head != null && body.BodyRig.LeftHand != null && body.BodyRig.RightHand != null;
+        BodybuilderEnemyVisual.Rig rig = occupant?.BodyRig;
+        return rig != null && occupant.HasVehicleClips &&
+            rig.Head != null && rig.LeftHand != null && rig.RightHand != null;
     }
 
     /// <summary>Seats <paramref name="fighter"/> in the driving pose at once.</summary>
-    public bool Mount(EnemyFighter fighter)
+    public bool Mount(EnemyFighter fighter) => Mount((IVehicleSeatOccupant)fighter);
+
+    public bool Mount(IVehicleSeatOccupant occupant)
     {
-        if (!Prepare(fighter)) return false;
+        if (!Prepare(occupant)) return false;
         exitPhase = 0f;
-        driver.BeginVisitorVehicleSeat(anchor);
+        driver.BeginVehicleSeat(anchor);
         ApplySeat(true);
         State = SeatState.Seated;
         Debug.Log(
-            $"GYMCHAOS_VEHICLE_DRIVER_SEATED identity={fighter.Identity} " +
+            $"GYMCHAOS_VEHICLE_DRIVER_SEATED identity={occupant.OccupantName} " +
             $"sink={fit.Sink:F3} headClearance={fit.HeadClearance:F3} " +
             $"cushion={fit.CushionLocalY:F3} door={fit.DoorPointLocal} lane={fit.LanePointLocal}",
             this);
@@ -154,44 +161,47 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     /// <summary>Climbs out and walks to the aisle end of the car; then <paramref name="standing"/>.</summary>
     public bool BeginExit(Action standing)
     {
-        if (State != SeatState.Seated || driver == null) return false;
+        if (State != SeatState.Seated || !HasDriver) return false;
         onFinished = standing;
         RefreshGroundedFit();
         exitPhase = 0f;
         State = SeatState.Exiting;
-        Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_EXIT_STARTED identity={driver.Identity}", this);
+        Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_EXIT_STARTED identity={driver.OccupantName}", this);
         return true;
     }
 
     /// <summary>Walks from the aisle end to the door, gets in; then <paramref name="seated"/>.</summary>
-    public bool BeginBoarding(EnemyFighter fighter, Action seated)
+    public bool BeginBoarding(EnemyFighter fighter, Action seated) =>
+        BeginBoarding((IVehicleSeatOccupant)fighter, seated);
+
+    public bool BeginBoarding(IVehicleSeatOccupant occupant, Action seated)
     {
-        if (!Prepare(fighter)) return false;
+        if (!Prepare(occupant)) return false;
         onFinished = seated;
         // Ride a free anchor from where the visitor stands to the door.
-        anchor.SetPositionAndRotation(fighter.transform.position, fighter.transform.rotation);
-        driver.BeginVisitorVehicleSeat(anchor);
-        animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
+        Transform root = occupant.Root;
+        anchor.SetPositionAndRotation(root.position, root.rotation);
+        driver.BeginVehicleSeat(anchor);
+        driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
         walkTarget = DoorPointWorld;
         walkFinalRotation = transform.rotation * fit.DoorRotationLocal;
         State = SeatState.WalkingIn;
-        Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_BOARDING_STARTED identity={fighter.Identity}", this);
+        Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_BOARDING_STARTED identity={occupant.OccupantName}", this);
         return true;
     }
 
     /// <summary>The car has gone: forget the driver (it is hidden by its director).</summary>
     public void Release()
     {
-        if (driver != null)
+        if (HasDriver)
         {
-            animator?.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
+            driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
             if (driver.IsInVehicleSeatMode)
             {
-                driver.EndVisitorVehicleSeat(driver.transform.position, driver.transform.rotation);
+                driver.EndVehicleSeat(driver.Root.position, driver.Root.rotation);
             }
         }
         driver = null;
-        animator = null;
         onFinished = null;
         State = SeatState.Empty;
         lastDoorOpen = 0f;
@@ -204,43 +214,41 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     /// </summary>
     public void EjectDriverForCombat()
     {
-        EnemyFighter standing = driver;
-        if (standing == null)
+        IVehicleSeatOccupant standing = driver;
+        if (!HasDriver)
         {
             return;
         }
-        animator?.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
+        standing.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
         // Beside the door, from the seat anchor: while the car drives, its
         // body moves away from this (parking) root, so DoorPointWorld lags.
-        Transform seat = anchor != null ? anchor : standing.transform;
+        Transform seat = anchor != null ? anchor : standing.Root;
         float side = fit.Valid ? Mathf.Sign((fit.DoorPointLocal - fit.AnchorLocal).x) : 1f;
         if (side == 0f) side = 1f;
         Vector3 point = seat.position + seat.right * side * 1.4f;
         Quaternion rotation = Quaternion.LookRotation(seat.right * side, Vector3.up);
         driver = null;
-        animator = null;
         onFinished = null;
         State = SeatState.Empty;
         lastDoorOpen = 0f;
         cabin?.SetDoorOpen01(0f);
         if (standing.IsInVehicleSeatMode)
         {
-            standing.EndVisitorVehicleSeat(point, Quaternion.Euler(0f, rotation.eulerAngles.y, 0f));
+            standing.EndVehicleSeat(point, Quaternion.Euler(0f, rotation.eulerAngles.y, 0f));
         }
-        Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_EJECTED identity={standing.Identity} point={point}", this);
+        Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_EJECTED identity={standing.OccupantName} point={point}", this);
     }
 
     /// <summary>Measures this rig's seat fit (door and lane points) without seating it.</summary>
-    public bool EnsureFit(EnemyFighter fighter)
+    public bool EnsureFit(EnemyFighter fighter) => EnsureFit((IVehicleSeatOccupant)fighter);
+
+    public bool EnsureFit(IVehicleSeatOccupant occupant)
     {
-        if (fighter == null || cabin == null || !cabin.IsReady || !SupportsDriver(fighter)) return false;
-        if (fit.Valid && fitIdentity == fighter.Identity) return true;
-        if (!fighter.gameObject.activeInHierarchy) return false;
-        MixamoScanRetargetAnimator previous = animator;
-        animator = fighter.VehicleBodyAnimator;
-        fit = Measure(fighter);
-        fitIdentity = fighter.Identity;
-        if (driver == null) animator = previous;
+        if (occupant == null || cabin == null || !cabin.IsReady || !SupportsDriver(occupant)) return false;
+        if (fit.Valid && fitOwner == occupant.OccupantName) return true;
+        if (!occupant.Root.gameObject.activeInHierarchy) return false;
+        fit = Measure(occupant);
+        fitOwner = occupant.OccupantName;
         return fit.Valid;
     }
 
@@ -249,26 +257,24 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     // taken before that would make the hand-over to walking jump.
     private void RefreshGroundedFit()
     {
-        if (fit.Valid && !fit.Grounded && driver != null && animator != null &&
-            animator.GroundOffsetsReadyForVerification)
+        if (fit.Valid && !fit.Grounded && HasDriver && driver.GroundOffsetsReady)
         {
             fit = Measure(driver);
         }
     }
 
-    private bool Prepare(EnemyFighter fighter)
+    private bool Prepare(IVehicleSeatOccupant occupant)
     {
-        if (fighter == null || cabin == null || !cabin.IsReady || !SupportsDriver(fighter))
+        if (occupant == null || cabin == null || !cabin.IsReady || !SupportsDriver(occupant))
         {
             return false;
         }
-        driver = fighter;
-        animator = fighter.VehicleBodyAnimator;
-        clipLength = Mathf.Max(1f, animator.CarExitClipLength);
-        if (!fit.Valid || fitIdentity != fighter.Identity)
+        driver = occupant;
+        clipLength = Mathf.Max(1f, occupant.CarExitClipLength);
+        if (!fit.Valid || fitOwner != occupant.OccupantName)
         {
-            fit = Measure(fighter);
-            fitIdentity = fighter.Identity;
+            fit = Measure(occupant);
+            fitOwner = occupant.OccupantName;
         }
         else
         {
@@ -277,7 +283,6 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         if (!fit.Valid)
         {
             driver = null;
-            animator = null;
             return false;
         }
         cabin.SetSeatCushionHeight(fit.CushionLocalY);
@@ -297,7 +302,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     // or that cannot clear the roof edge and the sill together folds
     // (uniformly scaled) while seated and grows back while it stands up
     // outside the door.
-    private Fit Measure(EnemyFighter fighter)
+    private Fit Measure(IVehicleSeatOccupant fighter)
     {
         Fit fitted = MeasureAt(fighter, 1f, 1f);
         if (!fitted.Valid) return fitted;
@@ -338,19 +343,19 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
 
     private float ScaleAt(float t) => fit.InCarScale <= 0f ? 1f : ScaleFor(fit.InCarScale, fit.ScaleOutStart, t);
 
-    private Fit MeasureAt(EnemyFighter fighter, float inCarScale, float scaleOutStart)
+    private Fit MeasureAt(IVehicleSeatOccupant fighter, float inCarScale, float scaleOutStart)
     {
         Fit result = default;
         result.InCarScale = inCarScale;
         result.ScaleOutStart = scaleOutStart;
-        BodybuilderEnemyVisual.Rig rig = animator.BodyRig;
+        BodybuilderEnemyVisual.Rig rig = fighter.BodyRig;
         Transform hips = rig.Hips != null ? rig.Hips : rig.Root;
-        Transform actor = fighter.transform;
+        Transform actor = fighter.Root;
         Vector3 Local(Transform bone) => actor.InverseTransformPoint(bone.position);
         float Foot() => Mathf.Min(Local(rig.LeftFoot != null ? rig.LeftFoot : hips).y,
             Local(rig.RightFoot != null ? rig.RightFoot : hips).y);
 
-        if (!animator.SampleWalkingPoseNow()) return result;
+        if (!fighter.SampleWalkingPoseNow()) return result;
         Vector3 hipsWalk = Local(hips);
         float footWalk = Foot();
         result.AnkleHeight = Mathf.Max(0.04f, footWalk);
@@ -360,11 +365,11 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         float crownAboveHead = height - headWalk;
         float hipsAboveCushion = 0.055f * height * inCarScale;
 
-        animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Exit, 0f,
+        fighter.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Exit, 0f,
             ScaleFor(inCarScale, scaleOutStart, 0f));
         Vector3 hipsExit0 = Local(hips);
         Quaternion hipsExit0Rotation = Quaternion.Inverse(actor.rotation) * hips.rotation;
-        animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Exit, 1f);
+        fighter.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Exit, 1f);
         Vector3 hipsExit1 = Local(hips);
         Quaternion hipsExit1Rotation = Quaternion.Inverse(actor.rotation) * hips.rotation;
         float footExit1 = Foot();
@@ -376,7 +381,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         const int samples = 6;
         for (int i = 0; i < samples; i++)
         {
-            animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Driving, i / (float)samples,
+            fighter.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Driving, i / (float)samples,
                 inCarScale);
             hipsDrive += Local(hips) / samples;
             leftDrive += Local(rig.LeftHand) / samples;
@@ -388,7 +393,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
             {
                 // Hair and caps rise well above the estimate: take the real
                 // crown from the baked skin round the head.
-                headDrive = Mathf.Max(headDrive, BakedCrown(fighter, rig.Head, 0.4f));
+                headDrive = Mathf.Max(headDrive, fighter.BakedCrown(0.4f));
             }
         }
 
@@ -417,7 +422,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         result.DrivingOffsetLocal = hipsTarget - (result.AnchorLocal + hipsDrive);
         result.EndFootLift = footWalk - footExit1;
         cabin.TryGetMarker("Hinge", out Vector3 hinge);
-        result.Rise = PlanRise(rig, actor, result, roof.y, cabin.DoorSillLocalY, hinge.x, headDrive - headBoneDrive,
+        result.Rise = PlanRise(fighter, rig, actor, result, roof.y, cabin.DoorSillLocalY, hinge.x, headDrive - headBoneDrive,
             out result.RiseConflicts);
         result.Shift = planShift;
         result.ShiftAxis = planShiftAxis;
@@ -442,9 +447,9 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         result.WheelLeftLocal = seatedShift + leftDrive;
         result.WheelRightLocal = seatedShift + rightDrive;
         result.Valid = true;
-        result.Grounded = animator.GroundOffsetsReadyForVerification;
+        result.Grounded = fighter.GroundOffsetsReady;
         Debug.Log(
-            $"GYMCHAOS_VEHICLE_DRIVER_FIT identity={fighter.Identity} height={height:F2} " +
+            $"GYMCHAOS_VEHICLE_DRIVER_FIT identity={fighter.OccupantName} height={height:F2} " +
             $"sink={result.Sink:F3} headClearance={result.HeadClearance:F3} " +
             $"exitOffset={result.ExitStartOffsetY:F3} endFootLift={result.EndFootLift:F3} " +
             $"doorYaw={result.DoorRotationLocal.eulerAngles.y:F0} door={result.DoorPointLocal} " +
@@ -458,11 +463,12 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     private static Mesh crownScratch;
 
     // Highest baked skin vertex (actor-local y) within `radius` of the head
-    // bone horizontally, at or above it.
-    private static float BakedCrown(EnemyFighter fighter, Transform head, float radius)
+    // bone horizontally, at or above it. The largest skinned mesh under
+    // `skinOwner` is the body.
+    internal static float BakedSkinCrown(Transform actor, Component skinOwner, Transform head, float radius)
     {
         SkinnedMeshRenderer skin = null;
-        foreach (SkinnedMeshRenderer candidate in fighter.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+        foreach (SkinnedMeshRenderer candidate in skinOwner.GetComponentsInChildren<SkinnedMeshRenderer>(true))
         {
             if (candidate.sharedMesh != null && (skin == null ||
                 candidate.sharedMesh.vertexCount > skin.sharedMesh.vertexCount))
@@ -470,7 +476,6 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                 skin = candidate;
             }
         }
-        Transform actor = fighter.transform;
         Vector3 headLocal = actor.InverseTransformPoint(head.position);
         if (skin == null) return headLocal.y;
         if (crownScratch == null) crownScratch = new Mesh { name = "Driver Crown Bake" };
@@ -492,7 +497,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         anchor.localRotation = Quaternion.identity;
         if (driving)
         {
-            animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Driving, 0f,
+            driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Driving, 0f,
                 transform.TransformVector(fit.DrivingOffsetLocal), fit.InCarScale);
         }
     }
@@ -519,7 +524,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     // still inside the door aperture its crown stays under the roof edge,
     // and while a foot crosses the threshold (or is outside) it stays above
     // the sill (or the road). Head clearance wins a conflict.
-    private float[] PlanRise(BodybuilderEnemyVisual.Rig rig, Transform actor, Fit result,
+    private float[] PlanRise(IVehicleSeatOccupant occupant, BodybuilderEnemyVisual.Rig rig, Transform actor, Fit result,
         float roofY, float sillY, float doorX, float crownAboveHeadBone, out int conflicts)
     {
         conflicts = 0;
@@ -549,13 +554,14 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         float[] shiftLimit = new float[RiseSamples + 1];
         Transform[] shiftBones = { rig.Head, rig.Chest, rig.Hips, rig.LeftHand, rig.RightHand,
             rig.LeftForearm, rig.RightForearm, rig.LeftShin, rig.RightShin, rig.LeftFoot, rig.RightFoot };
-        EnemyMeshHitboxRig hitboxes = actor.GetComponent<EnemyMeshHitboxRig>();
+        occupant.GetBodyVolumes(planVolumes);
+        bool hitboxes = planVolumes.Count > 0;
         // Bone points stand for thick limbs: bodybuilder forearms, fists, calves.
         float[] radii = { 0.18f, 0.34f, 0.3f, 0.17f, 0.17f, 0.2f, 0.2f, 0.17f, 0.17f, 0.15f, 0.15f };
         for (int k = 0; k <= RiseSamples; k++)
         {
             float t = k / (float)RiseSamples;
-            animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Exit, t,
+            occupant.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.Exit, t,
                 ScaleFor(result.InCarScale, result.ScaleOutStart, t));
             float g = result.EndFootLift * Smooth(GroundMatchStart, 1f, t);
             if (rig.Hips != null && hipsOut > 1f)
@@ -595,9 +601,9 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
             // calves and thighs over the sill, shoulders and fists under the
             // roof rail. Volumes are the skin-sized hitbox capsules.
             float bodyScale = ScaleFor(result.InCarScale, result.ScaleOutStart, t);
-            if (hitboxes != null)
+            if (hitboxes)
             {
-                hitboxes.GetBodyVolumes(planVolumes);
+                occupant.GetBodyVolumes(planVolumes);
                 for (int vi = 0; vi < planVolumes.Count; vi++)
                 {
                     (Vector3 wa, Vector3 wb, float wr) = planVolumes[vi];
@@ -637,7 +643,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                     lastInSwing = Mathf.Max(lastInSwing, t);
                 }
             }
-            if (hitboxes != null)
+            if (hitboxes)
             {
                 for (int vi = 0; vi < planVolumes.Count; vi++)
                 {
@@ -784,7 +790,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
 
     private void Update()
     {
-        if (driver == null || animator == null)
+        if (!HasDriver)
         {
             // The driver was destroyed mid-sequence: finish so the owner
             // (director, police) never waits on it.
@@ -792,7 +798,6 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
             {
                 Action done = onFinished;
                 driver = null;
-                animator = null;
                 onFinished = null;
                 State = SeatState.Empty;
                 lastDoorOpen = 0f;
@@ -816,53 +821,52 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                 exitPhase = Mathf.Min(1f, exitPhase + step);
                 anchor.localPosition = fit.AnchorLocal;
                 anchor.localRotation = Quaternion.identity;
-                animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, exitPhase,
+                driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, exitPhase,
                     ExitOffsetWorld(exitPhase), ScaleAt(exitPhase));
                 SetDoor(DoorAt(exitPhase));
                 if (exitPhase >= 1f)
                 {
                     // Stand on the walking root exactly where the clip ended.
                     anchor.SetPositionAndRotation(DoorPointWorld, transform.rotation * fit.DoorRotationLocal);
-                    animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
+                    driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
                     cabin.SetDoorOpen01(0f);
                     walkTarget = LanePointWorld;
                     walkFinalRotation = Quaternion.identity;
                     State = SeatState.WalkingAway;
-                    Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_EXITED identity={driver.Identity} " +
+                    Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_EXITED identity={driver.OccupantName} " +
                         $"door={DoorPointWorld}", this);
                 }
                 break;
             case SeatState.WalkingAway:
                 if (Walk(walkTarget, false))
                 {
-                    EnemyFighter standing = driver;
+                    IVehicleSeatOccupant standing = driver;
                     Action done = onFinished;
-                    animator.SetMoving(false);
-                    standing.EndVisitorVehicleSeat(anchor.position, anchor.rotation);
+                    standing.SetMoving(false, 1f);
+                    standing.EndVehicleSeat(anchor.position, anchor.rotation);
                     driver = null;
-                    animator = null;
                     onFinished = null;
                     State = SeatState.Empty;
-                    Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_STANDING identity={standing.Identity} " +
-                        $"point={standing.transform.position}", this);
+                    Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_STANDING identity={standing.OccupantName} " +
+                        $"point={standing.Root.position}", this);
                     done?.Invoke();
                 }
                 break;
             case SeatState.WalkingIn:
                 if (Walk(walkTarget, true))
                 {
-                    animator.SetMoving(false);
+                    driver.SetMoving(false, 1f);
                     exitPhase = 1f;
                     anchor.localPosition = fit.AnchorLocal;
                     anchor.localRotation = Quaternion.identity;
-                    animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, 1f,
+                    driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, 1f,
                         ExitOffsetWorld(1f), 1f);
                     State = SeatState.Boarding;
                 }
                 break;
             case SeatState.Boarding:
                 exitPhase = Mathf.Max(0f, exitPhase - step);
-                animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, exitPhase,
+                driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, exitPhase,
                     ExitOffsetWorld(exitPhase), ScaleAt(exitPhase));
                 SetDoor(DoorAt(exitPhase));
                 if (exitPhase <= 0f)
@@ -872,7 +876,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                     State = SeatState.Seated;
                     Action done = onFinished;
                     onFinished = null;
-                    Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_BOARDED identity={driver.Identity}", this);
+                    Debug.Log($"GYMCHAOS_VEHICLE_DRIVER_BOARDED identity={driver.OccupantName}", this);
                     done?.Invoke();
                 }
                 break;
@@ -900,7 +904,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
             // Turn before striding off when the heading is far off.
             float alignment = Mathf.Clamp01(Vector3.Dot(rotation * Vector3.forward, to / distance));
             position += to / distance * Mathf.Min(distance, stepLength * Mathf.Lerp(0.35f, 1f, alignment));
-            animator.SetMoving(true, 0.45f, false);
+            driver.SetMoving(true, 0.45f);
         }
         position.y = target.y;
         bool arrived = distance <= 0.02f;
@@ -909,7 +913,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
             rotation = Quaternion.RotateTowards(rotation, walkFinalRotation,
                 WalkTurnDegreesPerSecond * Time.deltaTime);
             arrived = Quaternion.Angle(rotation, walkFinalRotation) < 1f;
-            animator.SetMoving(!arrived, 0.2f, false);
+            driver.SetMoving(!arrived, 0.2f);
             if (arrived) position = target;
         }
         anchor.SetPositionAndRotation(position, rotation);
@@ -918,14 +922,14 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (animator == null || cabin == null || driver == null) return;
+        if (cabin == null || !HasDriver) return;
         if (State == SeatState.Seated || State == SeatState.Exiting || State == SeatState.Boarding)
         {
             KeepFeetAboveFloor();
         }
         // The rim follows the hands' steering motion while seated.
         if (State != SeatState.Seated) return;
-        BodybuilderEnemyVisual.Rig rig = animator.BodyRig;
+        BodybuilderEnemyVisual.Rig rig = driver.BodyRig;
         if (rig?.LeftHand == null || rig.RightHand == null) return;
         Vector3 left = transform.InverseTransformPoint(rig.LeftHand.position);
         Vector3 right = transform.InverseTransformPoint(rig.RightHand.position);
@@ -939,7 +943,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     // inside, clears the sill over the threshold and stays on the road out.
     private void KeepFeetAboveFloor()
     {
-        BodybuilderEnemyVisual.Rig rig = animator.BodyRig;
+        BodybuilderEnemyVisual.Rig rig = driver.BodyRig;
         if (rig == null || !cabin.TryGetMarker("Floor", out Vector3 floor) ||
             !cabin.TryGetMarker("Hinge", out Vector3 hinge)) return;
         float scale = State == SeatState.Seated ? fit.InCarScale : ScaleAt(exitPhase);

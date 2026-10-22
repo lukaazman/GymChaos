@@ -81,6 +81,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     // cabin; their visitor sits in it while the car moves.
     private GymVehicleCabin cabin;
     private GymVehicleDriverSeat driverSeat;
+    private bool raceVisual;
     private EnemyFighter pendingDriver;
     private bool runtimeVisualReady;
     private bool runtimeVisualLoadFailed;
@@ -370,6 +371,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Debug.LogError($"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} path={resource}");
         }
         vehicle.CreateEngineAudio();
+        if (!vehicle.IsCloud && !vehicle.IsBus)
+        {
+            // The root faces the way the car drives and parks.
+            // Lamps only while driving: a parked car stays dark.
+            GymVehicleLights.Attach(root.transform, identity.ToString(), () => !vehicle.IsParked);
+        }
         if (!vehicle.IsCloud)
         {
             // Only the separated tyre nodes roll, and only while driving.
@@ -379,6 +386,64 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         root.SetActive(initiallyParked);
         return vehicle;
     }
+
+    /// <summary>
+    /// Race-only car for <paramref name="identity"/>: the visitor car's visual,
+    /// cabin, driver seat and rolling wheels, without a route, physical body or
+    /// engine audio (the race kart owns physics and sound). Arnold's Hummer
+    /// loads asynchronously; <see cref="RaceVisualReady"/> turns true with it.
+    /// </summary>
+    public static GymVisitorVehicle CreateRaceVisual(BodybuilderIdentity identity, Vector3 position, Quaternion rotation)
+    {
+        GameObject root = new GameObject(identity + " Race Car");
+        GymVisitorVehicle vehicle = root.AddComponent<GymVisitorVehicle>();
+        vehicle.identity = identity;
+        vehicle.raceVisual = true;
+        vehicle.ConfigureRoute(0);
+        root.transform.SetPositionAndRotation(position, rotation);
+        if (vehicle.IsArnold)
+        {
+            RuntimeGlbSceneLoader.Request(
+                ArnoldHummerAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one,
+                "Arnold Hummer Race Car",
+                root.layer,
+                settleOnSupport: true,
+                supportY: position.y - RaceGroundOffset,
+                onLoaded: vehicle.FinalizeRuntimeArnold);
+        }
+        else
+        {
+            GameObject prefab = Resources.Load<GameObject>(GetResource(identity));
+            if (prefab == null)
+            {
+                Debug.LogError($"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} race=1");
+                vehicle.runtimeVisualLoadFailed = true;
+            }
+            else
+            {
+                GameObject visual = Instantiate(prefab, root.transform);
+                visual.name = identity + " Race Car Model";
+                vehicle.FitVisual(visual, GymOutdoorBuilder.ParkingVehicleTargetLength);
+                vehicle.ApplyOriginalMaterial(visual);
+                vehicle.AddPhysicalBody(visual);
+                vehicle.AttachCabin(visual);
+                vehicle.runtimeVisualReady = true;
+            }
+        }
+        // Wheels roll with the kart; the kart drives the visual root.
+        GymVehicleWheelSpinner.Attach(root, () => true);
+        vehicle.IsParked = false;
+        return vehicle;
+    }
+
+    /// <summary>Height of a race car root above the road: tyres touch the road this far below it.</summary>
+    public static float RaceGroundOffset => RouteHeightAboveFloor + TyreContactSink;
+    public bool RaceVisualReady => runtimeVisualReady || runtimeVisualLoadFailed;
+    public bool RaceVisualFailed => runtimeVisualLoadFailed;
 
     public void DriveIn(Action onParked)
     {
@@ -2246,6 +2311,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     private void AddPhysicalBody(GameObject visual)
     {
+        if (raceVisual)
+        {
+            // The race kart sphere owns the physics; keep only the shadow proxy.
+            if (visual != null) GymShadowProxy.Apply(visual);
+            return;
+        }
         if (visual == null ||
             !TryGetOrientedLocalBounds(visual, transform, out Bounds localBounds))
         {
