@@ -94,6 +94,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     public bool IsParked { get; private set; }
     public bool IsDriving => driveRoutine != null && !waitingForRuntimeVisual;
+    public bool IsLeaving => IsDriving && !drivingIntoParking;
     public static bool HasActiveParkingArrival =>
         HasActiveParkingArrivalExcept(null);
 
@@ -320,6 +321,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         vehicle.identity = identity;
         vehicle.player = player;
         vehicle.ConfigureRoute(slot);
+        // Davie's bus never starts parked at the stop: it waits hidden at the
+        // corner spawn and drives in only for a drop-off or pickup.
+        if (vehicle.UsesRoadsideBusRoute) initiallyParked = false;
         root.transform.position = initiallyParked ? vehicle.parkingPoint : vehicle.roadPoint;
         root.transform.rotation = vehicle.ParkedRotation;
         GameObject prefab = vehicle.IsBus ? null : Resources.Load<GameObject>(resource);
@@ -447,6 +451,13 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     public void DriveIn(Action onParked)
     {
+        if (UsesRoadsideBusRoute && IsParked && gameObject.activeSelf &&
+            driveRoutine == null)
+        {
+            // Already standing at the stop: never jump back to the corner.
+            onParked?.Invoke();
+            return;
+        }
         if (driveRoutine != null) StopCoroutine(driveRoutine);
         followingBusPath = false;
         gameObject.SetActive(true);

@@ -55,9 +55,10 @@ public sealed class GymRaceSign : MonoBehaviour
         // Face the lot and the road mouth (south-west).
         root.transform.rotation = Quaternion.Euler(0f, 45f, 0f);
         GymRaceSign sign = root.AddComponent<GymRaceSign>();
-        sign.Build();
-        sign.StandPoint = basePosition + new Vector3(-1.6f, 0f, -2f);
+        // Set first: a failed build must not respawn the sign every frame.
         Instance = sign;
+        sign.StandPoint = basePosition + new Vector3(-1.6f, 0f, -2f);
+        sign.Build();
         return sign;
     }
 

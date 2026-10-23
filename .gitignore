@@ -31,7 +31,13 @@ AGENTS.md
 # Parallel regression mirror projects (Tools/Invoke-UnityRegression.ps1)
 /.lanes/
 
+# Generated verifier and render evidence
+/GymChaos/Assets/VisualFidelity/evidence_unity/
+/GymChaos/Assets/VisualFidelity/evidence_unity.meta
+/Assets/ProteinStore/v2/renders/
+
 # Blender backups, Python caches
 *.blend1
 __pycache__/
 *.pyc
+/GymChaos/Assets/VisualFidelity.meta

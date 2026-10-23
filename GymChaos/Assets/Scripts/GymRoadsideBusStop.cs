@@ -24,7 +24,6 @@ public static class GymRoadsideBusStop
     private const float MinimumLaneClearance = 0.15f;
     private const float MinimumCornerClearance = 5.5f * S;
     private static GameObject davieBusPreviewRoot;
-    private static bool dynamicDavieBusActive;
 
     public static bool IsBuilt { get; private set; }
     public static bool IsDavieBusReady { get; private set; }
@@ -70,12 +69,15 @@ public static class GymRoadsideBusStop
     }
     public static Quaternion DavieBusRotation { get; private set; }
 
+    // The preview only proves the bay fits the bus (bounds contract). It is
+    // never shown: a bus standing at the stop must be the dynamic one, which
+    // arrives from and leaves to the corner spawn instead of popping in or
+    // out at the bay.
     public static void SetDavieDynamicBusActive(bool active)
     {
-        dynamicDavieBusActive = active;
         if (davieBusPreviewRoot != null)
         {
-            davieBusPreviewRoot.SetActive(!active);
+            davieBusPreviewRoot.SetActive(false);
         }
     }
 
@@ -373,7 +375,7 @@ public static class GymRoadsideBusStop
         DavieBusBounds = bounds;
         IsDavieBusReady = contractPassed;
         davieBusPreviewRoot = loaded;
-        loaded.SetActive(!dynamicDavieBusActive);
+        loaded.SetActive(false);
         Debug.Log(
             $"GYMCHAOS_DAVIE_BUS_{(contractPassed ? "OK" : "FAIL")} " +
             $"source={DavieBusAsset} bounds={bounds} " +

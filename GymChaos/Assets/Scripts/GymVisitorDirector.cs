@@ -1065,6 +1065,7 @@ public bool BeginDepartureForVerification(
             record.suspendedForCombat = false;
             record.agent.MarkDormant();
             record.fighter.gameObject.SetActive(false);
+            SendIdleDavieBusAway(record);
         }
 
         for (int selected = 0; selected < initialCount; selected++)
@@ -1186,8 +1187,10 @@ public bool BeginDepartureForVerification(
                     record.agent.CancelForCombat();
                 }
                 // A driver still in (or climbing out of) its car stands down
-                // where it is; the car itself stays parked.
+                // where it is; the car itself stays parked. Davie's bus has
+                // its own driver, so it leaves the stop instead of idling.
                 record.vehicle?.ReleaseDriver();
+                SendIdleDavieBusAway(record);
                 record.visitInProgress = false;
                 record.workoutInProgress = false;
                 record.active = false;
@@ -1666,6 +1669,14 @@ public bool BeginDepartureForVerification(
 
         EnsureVehicle(record, true);
         if (record.vehicle != null && record.vehicle.IsBus &&
+            !record.vehicleDepartureStarted && record.vehicle.IsLeaving)
+        {
+            // The bus is still driving away to the corner. Let it finish its
+            // lap; restarting it here would snap it back to the bay.
+            record.leaveAfter = Time.time + 0.5f;
+            return;
+        }
+        if (record.vehicle != null && record.vehicle.IsBus &&
             !record.vehicle.IsParked && !record.vehicle.IsDriving)
         {
             // The arrival bus already completed its route and was hidden.
@@ -1789,6 +1800,19 @@ public bool BeginDepartureForVerification(
         return record != null && !record.active && !record.suspendedForCombat &&
             record.visitsToday < 2 &&
             (forced || Time.unscaledTime >= record.nextEligibleRealtime);
+    }
+
+    private static void SendIdleDavieBusAway(VisitorRecord record)
+    {
+        GymVisitorVehicle bus = record?.vehicle;
+        if (bus == null || !bus.IsBus || !bus.IsParked || bus.IsDriving ||
+            !bus.gameObject.activeSelf)
+        {
+            return;
+        }
+        record.davieBusDeparturePendingAfterEntry = false;
+        bus.DriveOut(null);
+        Debug.Log("GYMCHAOS_DAVIE_BUS_IDLE_DEPARTURE reason=visitor_gone", bus);
     }
 
     private void EnsureVehicle(VisitorRecord record, bool parked)
