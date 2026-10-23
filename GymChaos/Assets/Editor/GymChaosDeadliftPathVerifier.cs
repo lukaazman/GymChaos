@@ -226,6 +226,7 @@ public static class GymChaosDeadliftPathVerifier
 
         if (EditorApplication.timeSinceStartup - lastProgressAt > 4.2d)
         {
+            LogNearbyColliders(position);
             Fail(
                 $"stalled remaining={remaining:0.00} position={position} " +
                 $"routeRemaining={fighter.CurrentRoamRouteRemaining} " +
@@ -240,6 +241,39 @@ public static class GymChaosDeadliftPathVerifier
                 $"routeRemaining={fighter.CurrentRoamRouteRemaining}");
         }
     }
+    private static void LogNearbyColliders(Vector3 position)
+    {
+        float radius = EnemyFighter.GetBodyRadiusForIdentity(fighter.Identity);
+        for (int step = 0; step < 8; step++)
+        {
+            Vector3 dir = Quaternion.Euler(0f, step * 45f, 0f) * Vector3.forward;
+            string blocked = "free";
+            if (Physics.CapsuleCast(position + Vector3.up * 0.4f, position + Vector3.up * 1.4f,
+                radius, dir, out RaycastHit probe, 1.2f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                blocked = probe.collider.name + "@" + probe.distance.ToString("0.00");
+            }
+            Debug.Log($"GYMCHAOS_DEADLIFT_PATH_PROBE yaw={step * 45} radius={radius:0.00} {blocked}");
+        }
+        Collider[] nearby = Physics.OverlapSphere(
+            position + Vector3.up, 1.6f, ~0, QueryTriggerInteraction.Ignore);
+        for (int index = 0; index < nearby.Length; index++)
+        {
+            Collider hit = nearby[index];
+            if (hit == null || hit.transform.IsChildOf(fighter.transform))
+            {
+                continue;
+            }
+            Debug.Log($"GYMCHAOS_DEADLIFT_PATH_NEAR_DIST name={hit.name} " +
+                $"distance={Vector3.Distance(hit.ClosestPoint(position + Vector3.up), position + Vector3.up):0.00}");
+            Transform parent = hit.transform.parent;
+            Debug.Log(
+                $"GYMCHAOS_DEADLIFT_PATH_NEAR name={hit.name} " +
+                $"parent={(parent != null ? parent.name : "-")} " +
+                $"center={hit.bounds.center} size={hit.bounds.size} " +
+                $"rigidbody={hit.attachedRigidbody != null}");
+        }
+    }
     private static bool TryStartRoute()
     {
         GymVisitorDirector director =
@@ -249,6 +283,17 @@ public static class GymChaosDeadliftPathVerifier
             if (EditorApplication.timeSinceStartup - startedAt > 24d)
             {
                 Fail("director_not_ready");
+            }
+            return false;
+        }
+
+        // Loose props (yoga mats, plates) spawn asynchronously. A route built
+        // before they exist runs into them later and reads as a stall.
+        if (!GymLooseItemSpawner.IsReady)
+        {
+            if (EditorApplication.timeSinceStartup - startedAt > 24d)
+            {
+                Fail("loose_items_not_ready");
             }
             return false;
         }

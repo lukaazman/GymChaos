@@ -137,7 +137,19 @@ public partial class PlayerMovement : MonoBehaviour
     private bool combatThreatActive;
     private float nextPickupPromptScanTime;
     private GymExerciseStation activeExerciseStation;
-    private GymExerciseStation pendingWeightStation;
+    private GymExerciseStation pendingWeightStationValue;
+    private GymExerciseStation pendingWeightStation
+    {
+        get => pendingWeightStationValue;
+        set
+        {
+            pendingWeightStationValue = value;
+            if (value == null)
+            {
+                GymWeightMenuUI.Hide();
+            }
+        }
+    }
     private Vector3 positionBeforeExercise;
     private Quaternion rotationBeforeExercise;
     private Vector3 cameraPositionBeforeExercise;
@@ -2082,6 +2094,7 @@ public partial class PlayerMovement : MonoBehaviour
         }
 
         pendingWeightStation = station;
+        GymWeightMenuUI.Ensure().Show(station, SelectWeightAndBegin);
         planarVelocity = Vector3.zero;
         impactVelocity = Vector3.zero;
         verticalVelocity = 0f;
@@ -2328,7 +2341,6 @@ public partial class PlayerMovement : MonoBehaviour
 
         if (pendingWeightStation != null)
         {
-            DrawWeightSelection();
             return;
         }
 
@@ -3090,90 +3102,6 @@ public partial class PlayerMovement : MonoBehaviour
             hudHintStyle);
     }
 
-    private bool DrawWeightChoiceButton(Rect rect, string label, GUIStyle style)
-    {
-        bool hovered = rect.Contains(Event.current.mousePosition);
-        Color previousColor = GUI.color;
-        GUI.color = hovered
-            ? new Color(0.12f, 0.16f, 0.22f, 0.96f)
-            : new Color(0.05f, 0.075f, 0.11f, 0.96f);
-        GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = hovered
-            ? new Color(0.98f, 0.34f, 0.13f, 1f)
-            : new Color(0.34f, 0.48f, 0.64f, 0.9f);
-        GUI.DrawTexture(new Rect(rect.x, rect.y, 3f, rect.height), Texture2D.whiteTexture);
-        GUI.color = previousColor;
-        return GymUiSounds.ImGuiButton(rect, label, style);
-    }
-
-    private void DrawWeightSelection()
-    {
-        int[] options = pendingWeightStation.WeightOptions;
-        if (options == null || options.Length == 0)
-        {
-            return;
-        }
-
-        const int columns = 3;
-        const float buttonWidth = 138f;
-        const float buttonHeight = 58f;
-        const float gap = 12f;
-        const float headerHeight = 124f;
-        int rows = Mathf.CeilToInt(options.Length / (float)columns);
-        float panelWidth = columns * buttonWidth + (columns + 1) * gap;
-        float panelHeight = headerHeight + rows * buttonHeight + (rows + 1) * gap;
-        Rect panel = new Rect(
-            (Screen.width - panelWidth) * 0.5f,
-            (Screen.height - panelHeight) * 0.5f,
-            panelWidth,
-            panelHeight);
-        DrawHudPanel(panel);
-
-        DrawHudText(
-            new Rect(panel.x + 20f, panel.y + 14f, panel.width - 40f, 26f),
-            pendingWeightStation.DisplayName.ToUpperInvariant(),
-            hudTitleStyle);
-        DrawHudText(
-            new Rect(panel.x + 20f, panel.y + 47f, panel.width - 40f, 22f),
-            "SELECT LOAD",
-            hudAccentStyle);
-        string weightInfo = pendingWeightStation.EmptyBarWeight > 0
-            ? $"BAR  {pendingWeightStation.EmptyBarWeight} KG"
-            : "WEIGHT STACK";
-        DrawHudText(
-            new Rect(panel.x + 20f, panel.y + 72f, panel.width - 40f, 18f),
-            weightInfo,
-            hudHintStyle);
-        DrawHudBar(
-            new Rect(panel.x + 20f, panel.y + 100f, panel.width - 40f, 2f),
-            1f,
-            new Color(0.95f, 0.62f, 0.16f, 0.85f));
-        DrawHudText(
-            new Rect(panel.x + 20f, panel.y + 104f, panel.width - 40f, 16f),
-            "Q / E / ESC  CANCEL",
-            hudHintStyle);
-
-        GUIStyle choiceStyle = CreateHudStyle(19, FontStyle.Bold, TextAnchor.MiddleCenter);
-        choiceStyle.normal.textColor = Color.white;
-        choiceStyle.hover.textColor = new Color(1f, 0.82f, 0.35f);
-        choiceStyle.active.textColor = new Color(0.98f, 0.34f, 0.13f);
-        choiceStyle.focused.textColor = Color.white;
-
-        for (int i = 0; i < options.Length; i++)
-        {
-            int row = i / columns;
-            int column = i % columns;
-            Rect button = new Rect(
-                panel.x + gap + column * (buttonWidth + gap),
-                panel.y + headerHeight + gap + row * (buttonHeight + gap),
-                buttonWidth,
-                buttonHeight);
-            if (DrawWeightChoiceButton(button, $"{options[i]} KG", choiceStyle))
-            {
-                SelectWeightAndBegin(options[i]);
-            }
-        }
-    }
     private bool ReadExerciseActionPressed()
     {
 #if ENABLE_INPUT_SYSTEM

@@ -179,7 +179,8 @@ public static class GymChaosOverhaulVerifier
         float scale = GymOutdoorBuilder.VehicleScale;
         if (Mathf.Abs(scale - 1.25f) > 0.001f)
             throw new InvalidOperationException($"vehicle scale {scale}");
-        if (Mathf.Abs(GymOutdoorBuilder.ParkingVehicleTargetLength - 5f) > 0.01f)
+        if (Mathf.Abs(GymOutdoorBuilder.ParkingVehicleTargetLength -
+                4f * scale * GymOutdoorBuilder.CarSizeBoost) > 0.01f)
             throw new InvalidOperationException(
                 $"car target length {GymOutdoorBuilder.ParkingVehicleTargetLength}");
         float bayStep = GymOutdoorBuilder.ParkingBayStep;
@@ -201,8 +202,8 @@ public static class GymChaosOverhaulVerifier
             float length = Mathf.Max(bounds.size.x, bounds.size.z);
             if (vehicle.name.Contains("Davie") || vehicle.name.Contains("Goku")) continue;
             parkedCars++;
-            if (length < 4.6f || length > 5.4f)
-                throw new InvalidOperationException($"{vehicle.name} length {length:F2} is not 1.25x");
+            if (Mathf.Abs(length - GymOutdoorBuilder.ParkingVehicleTargetLength) > 0.4f)
+                throw new InvalidOperationException($"{vehicle.name} length {length:F2} is not the boosted 1.25x car size");
             if (!GymOutdoorBuilder.ParkingBounds.Contains(new Vector3(bounds.center.x,
                 GymOutdoorBuilder.ParkingBounds.center.y, bounds.center.z)))
                 throw new InvalidOperationException($"{vehicle.name} parked outside the lot");

@@ -470,6 +470,7 @@ public partial class EnemyFighter
             {
                 continue;
             }
+            lastVisitorRouteBlocker = "static:" + hit.name;
             return false;
         }
         return true;
@@ -657,6 +658,12 @@ public partial class EnemyFighter
         for (Transform current = collider.transform; current != null; current = current.parent)
         {
             string lowerName = current.name.ToLowerInvariant();
+            // A thick loose prop (the half-rolled yoga mat) still blocks the
+            // body; only flat mats count as floor.
+            if (lowerName.StartsWith("loose item") && collider.bounds.size.y > 0.12f)
+            {
+                return false;
+            }
             if (lowerName.Contains("mat") || lowerName.Contains("carpet") ||
                 lowerName.Contains("rug") || lowerName.Contains("parking lot") ||
                 lowerName.Contains("courtyard foundation") ||
