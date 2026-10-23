@@ -716,7 +716,7 @@ public static class GymRaceTrackBuilder
             Box(board.transform, "Chevron Board", Vector3.zero, new Vector3(1.6f, 1.1f, 0.08f), materials.ChevronDark, false);
             // Seen from the road the board's +X runs to the viewer's left: the
             // arrow points the way the lap continues.
-            float direction = Vector3.Dot(t, Vector3.Cross(Vector3.up, -flatOut)) >= 0f ? -1f : 1f;
+            float direction = Vector3.Dot(t, Vector3.Cross(Vector3.up, -flatOut)) >= 0f ? 1f : -1f;
             for (int stroke = 0; stroke < 2; stroke++)
             {
                 float sign = stroke == 0 ? 1f : -1f;

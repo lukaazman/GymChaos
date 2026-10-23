@@ -186,7 +186,7 @@ public sealed class GymRaceChaseCamera : MonoBehaviour
         {
             position = target.transform.position;
             look = position + target.transform.forward;
-            desiredFov = BaseFieldOfView;
+            desiredFov = 2f * Mathf.Atan(Mathf.Tan(BaseFieldOfView * 0.5f * Mathf.Deg2Rad) * 0.5f) * Mathf.Rad2Deg;
             return;
         }
         float top = Mathf.Max(kart.KartStats.TopSpeed, 1f);
@@ -195,6 +195,8 @@ public sealed class GymRaceChaseCamera : MonoBehaviour
         float desiredDistance = BaseDistance + SpeedDistance * speed01 + BoostDistance * boost;
         distance = Mathf.Lerp(distance, desiredDistance, 1f - Mathf.Exp(-dt * 2.5f));
         desiredFov = BaseFieldOfView + SpeedFieldOfView * speed01 + BoostFieldOfView * boost;
+        // 2x zoom: half the frustum height at the same speed-driven spread.
+        desiredFov = 2f * Mathf.Atan(Mathf.Tan(desiredFov * 0.5f * Mathf.Deg2Rad) * 0.5f) * Mathf.Rad2Deg;
 
         // Follow the travel heading, not the drifting body, so the slide reads.
         Vector3 forward = kart.Heading;
