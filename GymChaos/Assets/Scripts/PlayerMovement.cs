@@ -2562,6 +2562,8 @@ public partial class PlayerMovement : MonoBehaviour
     internal bool TryPickupCorpseForVerification() => TryPickupCorpse();
     internal void ThrowCarriedCorpseForVerification() => ThrowCarriedCorpse();
 
+#endif
+
     private static EnemyFighter ResolvePunchedEnemy(RaycastHit hit)
     {
         EnemyFighter enemy = hit.collider.GetComponentInParent<EnemyFighter>();
@@ -2573,6 +2575,8 @@ public partial class PlayerMovement : MonoBehaviour
         GymVisitorVehicle car = hit.collider.GetComponentInParent<GymVisitorVehicle>();
         return car != null ? car.CabinOccupantAt(hit.point) : null;
     }
+
+#if UNITY_EDITOR
     internal void PressCallFixerForVerification() => CallFixerFromReception();
 #endif
 

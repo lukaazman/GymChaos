@@ -212,6 +212,8 @@ public sealed class GymVisitorDirector : MonoBehaviour
         enabled = false;
     }
 
+#endif
+
     // Verification only: no timed arrivals; forced arrivals and the rest of
     // the visit lifecycle keep running.
     private bool scheduledArrivalsHeldForVerification;
@@ -220,6 +222,7 @@ public sealed class GymVisitorDirector : MonoBehaviour
     /// is the start grid. Leaving visitors wait at their car.
     /// </summary>
     public static bool RaceTrafficHold { get; set; }
+#if UNITY_EDITOR
     public void HoldScheduledArrivalsForVerification()
     {
         scheduledArrivalsHeldForVerification = true;
