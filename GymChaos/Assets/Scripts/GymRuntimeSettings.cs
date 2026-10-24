@@ -434,7 +434,7 @@ public static class GymRuntimeSettings
         scroll.viewport = viewport;
 
         GameObject contentObject = new GameObject(
-            "Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            "Content", typeof(RectTransform));
         contentObject.transform.SetParent(viewportObject.transform, false);
         RectTransform content = contentObject.GetComponent<RectTransform>();
         content.anchorMin = new Vector2(0f, 1f);
@@ -443,22 +443,25 @@ public static class GymRuntimeSettings
         // A new RectTransform defaults to a 100x100 sizeDelta; with stretched
         // anchors that makes the list 100 px wider than the masked viewport
         // and the mask clips the first letters of every option.
-        content.sizeDelta = Vector2.zero;
+        content.sizeDelta = new Vector2(0f, 44f);
         content.anchoredPosition = Vector2.zero;
-        VerticalLayoutGroup layout = contentObject.GetComponent<VerticalLayoutGroup>();
-        layout.childForceExpandWidth = true;
-        layout.childForceExpandHeight = false;
-        ContentSizeFitter fitter = contentObject.GetComponent<ContentSizeFitter>();
-        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
         scroll.content = content;
 
+        // Dropdown.Show places and sizes every row itself and derives the
+        // list height from the item's offset inside Content, so the template
+        // must be Unity's standard one: item centred vertically in Content,
+        // no layout group or size fitter (those cut the list to one row short).
         GameObject itemObject = new GameObject(
-            "Item", typeof(RectTransform), typeof(Image), typeof(Toggle), typeof(LayoutElement));
+            "Item", typeof(RectTransform), typeof(Image), typeof(Toggle));
         itemObject.transform.SetParent(contentObject.transform, false);
-        itemObject.GetComponent<RectTransform>().sizeDelta = new Vector2(0f, 44f);
+        RectTransform itemRect = itemObject.GetComponent<RectTransform>();
+        itemRect.anchorMin = new Vector2(0f, 0.5f);
+        itemRect.anchorMax = new Vector2(1f, 0.5f);
+        itemRect.pivot = new Vector2(0.5f, 0.5f);
+        itemRect.anchoredPosition = Vector2.zero;
+        itemRect.sizeDelta = new Vector2(0f, 44f);
         Image itemImage = itemObject.GetComponent<Image>();
         itemImage.color = Color.white;
-        itemObject.GetComponent<LayoutElement>().preferredHeight = 44f;
         Toggle itemToggle = itemObject.GetComponent<Toggle>();
         itemToggle.targetGraphic = itemImage;
         itemToggle.transition = Selectable.Transition.ColorTint;
