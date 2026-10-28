@@ -86,7 +86,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         GameObject root = new GameObject("Session Menu", typeof(RectTransform));
         root.transform.SetParent(canvasRoot, false);
-        Stretch(root.GetComponent<RectTransform>());
+        GymShared.Stretch(root.GetComponent<RectTransform>());
         GymSessionMenu menu = root.AddComponent<GymSessionMenu>();
         menu.bodyFont = PersonaMenuStyle.LoadButtonFont(fallbackFont);
         menu.titleFont = PersonaMenuStyle.LoadTitleFont(fallbackFont);
@@ -280,21 +280,21 @@ public sealed class GymSessionMenu : MonoBehaviour
                         ? " SAVE COULD NOT BE READ AND IS NOT LISTED"
                         : " SAVES COULD NOT BE READ AND ARE NOT LISTED")
                     : string.Empty;
-                Focus(hasSaves ? loadGameButton : newGameButton);
+                GymShared.Select(hasSaves ? loadGameButton : newGameButton);
                 break;
             case State.ClassSelect:
                 RefreshClassDetails();
-                Focus(classCardButtons[highlightedClass]);
+                GymShared.Select(classCardButtons[highlightedClass]);
                 break;
             case State.SaveList:
                 RebuildSaveList();
                 break;
             case State.SavePreview:
                 RefreshPreview();
-                Focus(previewLoadButton);
+                GymShared.Select(previewLoadButton);
                 break;
             case State.Error:
-                Focus(errorBackButton);
+                GymShared.Select(errorBackButton);
                 break;
         }
         Debug.Log("GYMCHAOS_SESSION_MENU state=" + next);
@@ -329,12 +329,12 @@ public sealed class GymSessionMenu : MonoBehaviour
             switch (state)
             {
                 case State.SessionChoice:
-                    Focus(loadGameButton.gameObject.activeSelf ? loadGameButton : newGameButton);
+                    GymShared.Select(loadGameButton.gameObject.activeSelf ? loadGameButton : newGameButton);
                     break;
-                case State.ClassSelect: Focus(classCardButtons[highlightedClass]); break;
-                case State.SaveList: Focus(listBackButton); break;
-                case State.SavePreview: Focus(previewLoadButton); break;
-                case State.Error: Focus(errorBackButton); break;
+                case State.ClassSelect: GymShared.Select(classCardButtons[highlightedClass]); break;
+                case State.SaveList: GymShared.Select(listBackButton); break;
+                case State.SavePreview: GymShared.Select(previewLoadButton); break;
+                case State.Error: GymShared.Select(errorBackButton); break;
             }
         }
     }
@@ -383,13 +383,13 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         GameObject page = new GameObject(name, typeof(RectTransform));
         page.transform.SetParent(transform, false);
-        Stretch(page.GetComponent<RectTransform>());
+        GymShared.Stretch(page.GetComponent<RectTransform>());
         if (fullScreenVeil)
         {
             // Opaque enough to read text, thin enough to keep the menu art and gym visible.
             PersonaShape veil = PersonaMenuStyle.CreateShape("Veil", page.transform,
                 new Color(0.012f, 0.035f, 0.09f, 1f));
-            Stretch(veil.rectTransform);
+            GymShared.Stretch(veil.rectTransform);
             veil.raycastTarget = true;
             PersonaShape slash = PersonaMenuStyle.CreateShape("Accent Slash", page.transform, PersonaMenuStyle.Accent);
             RectTransform slashRect = slash.rectTransform;
@@ -651,7 +651,7 @@ public sealed class GymSessionMenu : MonoBehaviour
             listEntries.Add(button.gameObject);
             if (first == null) first = button;
         }
-        Focus(first != null ? first : listBackButton);
+        GymShared.Select(first != null ? first : listBackButton);
     }
 
     private static string DescribeEntry(GymCharacterSave save)
@@ -743,23 +743,5 @@ public sealed class GymSessionMenu : MonoBehaviour
         {
             image.rectTransform.localScale = Vector3.one;
         }
-    }
-
-    private static void Focus(Selectable selectable)
-    {
-        if (EventSystem.current != null && selectable != null)
-        {
-            EventSystem.current.SetSelectedGameObject(selectable.gameObject);
-        }
-    }
-
-    private static void Stretch(RectTransform rect)
-    {
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.offsetMin = Vector2.zero;
-        rect.offsetMax = Vector2.zero;
-        rect.localScale = Vector3.one;
-        rect.localRotation = Quaternion.identity;
     }
 }

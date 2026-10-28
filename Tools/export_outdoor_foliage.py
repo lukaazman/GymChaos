@@ -11,9 +11,9 @@ Outputs (GymChaos/Assets/StreamingAssets/BodyBuilders/outside/foliage/):
   (the sources are ~90k vertices each, too heavy to scatter) with a
   non-metallic material so the albedo texture reads in URP.
 - bush3_custom.glb: clustered shrub built here, textured with a darker,
-  olive-shifted copy of the bush2 leaf texture.
+  slightly desaturated copy of the bush2 leaf texture.
 - tree3_custom.glb: round-canopy tree built here, canopy textured with a
-  lighter yellow-green copy of the bush1 leaf texture and a trunk in the
+  slightly lighter, desaturated copy of the bush1 leaf texture and a trunk in the
   tree1 bark tone.
 """
 
@@ -244,7 +244,9 @@ def export_lod(name):
           f"boundaryEdges={boundary_edge_count(obj)}")
     source = obj.data.materials[0]
     image = base_image(source)
-    material = flat_material(name + "_leaf", downsized_copy(image, name + "_albedo"))
+    # The authored textures are near-lime; pull them to a grounded green.
+    material = flat_material(name + "_leaf", downsized_copy(
+        image, name + "_albedo", saturation=0.75, gain=0.92))
     obj.data.materials.clear()
     obj.data.materials.append(material)
     ground_object(obj)
@@ -307,7 +309,7 @@ def build_custom_bush(source):
     spherical_uv(obj, scale=3.0)
     image = downsized_copy(
         leaf_image, "bush3_custom_albedo",
-        tint=(0.86, 0.98, 0.62), saturation=1.15, gain=0.92)
+        tint=(0.92, 0.97, 0.84), saturation=0.88, gain=0.9)
     obj.data.materials.append(flat_material("bush3_custom_leaf", image))
     ground_object(obj)
     export(obj, "bush3_custom.glb")
@@ -342,7 +344,7 @@ def build_custom_tree(source):
     spherical_uv(crown, scale=2.5)
     image = downsized_copy(
         tree_image, "tree3_custom_albedo",
-        tint=(1.08, 1.12, 0.72), saturation=1.05, gain=1.05)
+        tint=(0.96, 1.0, 0.86), saturation=0.85, gain=0.95)
     crown.data.materials.append(flat_material("tree3_custom_leaf", image))
 
     bpy.ops.object.select_all(action="DESELECT")

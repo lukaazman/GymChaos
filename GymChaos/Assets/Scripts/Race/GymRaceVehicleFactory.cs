@@ -11,8 +11,6 @@ public static class GymRaceVehicleFactory
     public const string PlayerBuggyAsset = "BodyBuilders/vehicles/player_buggy.glb";
     private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar_lod.glb";
     private const float PoliceCarLength = 4.0f * GymOutdoorBuilder.VehicleScale * GymOutdoorBuilder.CarSizeBoost;
-    // Fallback length when the buggy GLB is not exported yet.
-    private const float PlayerBuggyLength = 3.4f;
 
     public sealed class Car
     {

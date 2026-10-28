@@ -38,13 +38,7 @@ public static class GymChaosEyeBarVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= Changed;
-        EditorApplication.playModeStateChanged += Changed;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, Changed);
 
     private static void Changed(PlayModeStateChange change)
     {

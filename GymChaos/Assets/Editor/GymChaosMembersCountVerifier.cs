@@ -40,19 +40,13 @@ public static class GymChaosMembersCountVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
-        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, OnPlayModeStateChanged);
 
     private static void ResumeAfterReload()
     {
         if (EditorApplication.isPlaying)
         {
-            startedAt = EditorApplication.timeSinceStartup;
+            startedAt = Time.timeAsDouble;
         }
     }
 
@@ -60,7 +54,7 @@ public static class GymChaosMembersCountVerifier
     {
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
-            startedAt = EditorApplication.timeSinceStartup;
+            startedAt = Time.timeAsDouble;
             return;
         }
         if (state != PlayModeStateChange.EnteredEditMode)
@@ -83,7 +77,7 @@ public static class GymChaosMembersCountVerifier
             return;
         }
 
-        double elapsed = EditorApplication.timeSinceStartup - startedAt;
+        double elapsed = Time.timeAsDouble - startedAt;
         if (!GymOutdoorBuilder.IsBuilt ||
             !GymInteriorBuilder.TryGetMainGymBounds(out Bounds mainBounds) ||
             !GymBackRoomBuilder.TryGetRoomBounds(out Bounds lockerBounds))

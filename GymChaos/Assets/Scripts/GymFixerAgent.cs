@@ -126,7 +126,6 @@ public sealed class GymFixerAgent : MonoBehaviour
     public float PeakAltitude { get; private set; }
     public float MeasuredHeight { get; private set; }
     public float GlowEnvelope => magic != null ? magic.Envelope : 0f;
-    public float RunningWeight => weights[ClipRunning];
     public GymFixerNavGrid NavGrid => navGrid;
     public Vector3 LandingPoint => landingPoint;
     public float GroundY => groundY;
@@ -238,7 +237,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         Texture2D texture = Resources.Load<Texture2D>(TexturePath);
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
         Material material = new Material(shader) { name = "Jolly Dog Body" };
         material.SetColor("_BaseColor", Color.white);
@@ -440,7 +439,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         for (int i = 0; i < work.Count; i++)
         {
             // Far-flung props are fixed from range; keep the grid compact.
-            if (work[i].Exists && PlanarDistance(work[i].Position, doorway.DoorCenter) < 45f)
+            if (work[i].Exists && GymShared.FlatDistance(work[i].Position, doorway.DoorCenter) < 45f)
             {
                 region.Encapsulate(work[i].Position);
             }
@@ -593,7 +592,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         }
 
         Vector3 target = currentIssue.Position;
-        if (PlanarDistance(transform.position, target) <= CastRange)
+        if (GymShared.FlatDistance(transform.position, target) <= CastRange)
         {
             StartCast();
             return;
@@ -953,7 +952,7 @@ public sealed class GymFixerAgent : MonoBehaviour
     {
         GymDoorway doorway = GymDoorway.Instance;
         bool want = doorway != null &&
-            PlanarDistance(doorway.DoorCenter, transform.position) <= 3.5f;
+            GymShared.FlatDistance(doorway.DoorCenter, transform.position) <= 3.5f;
         if (want == doorRequested)
         {
             return;
@@ -1024,13 +1023,6 @@ public sealed class GymFixerAgent : MonoBehaviour
         return !Physics.Raycast(
             point + Vector3.up * (GameplayHeight + 0.2f), Vector3.up, 150f,
             Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-    }
-
-    private static float PlanarDistance(Vector3 a, Vector3 b)
-    {
-        a.y = 0f;
-        b.y = 0f;
-        return Vector3.Distance(a, b);
     }
 
     private static Transform FindBone(Transform[] bones, string name)

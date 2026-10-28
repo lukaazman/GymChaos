@@ -31,9 +31,9 @@ public static class GymIndustrialCeiling
         Mesh cube = PrimitiveMesh(PrimitiveType.Cube);
         Mesh cylinder = PrimitiveMesh(PrimitiveType.Cylinder);
 
-        Material deck = CreateMaterial("Corrugated ceiling deck", new Color(0.2f, 0.21f, 0.22f), 0.55f, 0.32f);
-        Material steel = CreateMaterial("Ceiling steel", new Color(0.035f, 0.038f, 0.042f), 0.6f, 0.4f);
-        Material duct = CreateMaterial("Galvanised duct", new Color(0.42f, 0.44f, 0.45f), 0.8f, 0.55f);
+        Material deck = GymMaterialLibrary.Lit("Corrugated ceiling deck", new Color(0.2f, 0.21f, 0.22f), 0.55f, 0.32f);
+        Material steel = GymMaterialLibrary.Lit("Ceiling steel", new Color(0.035f, 0.038f, 0.042f), 0.6f, 0.4f);
+        Material duct = GymMaterialLibrary.Lit("Galvanised duct", new Color(0.42f, 0.44f, 0.45f), 0.8f, 0.55f);
 
         var deckParts = new List<CombineInstance>();
         var steelParts = new List<CombineInstance>();
@@ -219,16 +219,5 @@ public static class GymIndustrialCeiling
         Mesh mesh = temp.GetComponent<MeshFilter>().sharedMesh;
         Object.Destroy(temp);
         return mesh;
-    }
-
-    private static Material CreateMaterial(string name, Color color, float metallic, float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        Material material = new Material(shader != null ? shader : Shader.Find("Standard")) { name = name };
-        material.color = color;
-        if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
-        if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", metallic);
-        if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", smoothness);
-        return material;
     }
 }

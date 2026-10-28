@@ -22,6 +22,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
     private bool continuousRefresh;
     private bool refreshRequested = true;
     private bool useObliqueClip = true;
+    private bool halfRate;
     private float nextPlayerMaterialRepair;
     private static float nextGlobalPlayerMaterialRepair;
     private static float nextPlayerRendererDiscovery;
@@ -105,7 +106,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         Shader shader = Shader.Find("GymChaos/PlanarMirror");
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
         if (shader == null)
         {
@@ -118,8 +119,13 @@ public sealed class PlanarGymMirror : MonoBehaviour
             hideFlags = HideFlags.DontSave
         };
 
-        int width = Mathf.Clamp(Mathf.RoundToInt(Screen.width * 0.62f), 512, 1024);
-        int height = Mathf.Clamp(Mathf.RoundToInt(Screen.height * 0.62f), 288, 576);
+        // WebGL: a smaller reflection target; the mirror is a secondary view
+        // and fill rate is the browser GPU budget.
+        bool web = Application.platform == RuntimePlatform.WebGLPlayer;
+        halfRate = web;
+        float scale = web ? 0.4f : 0.62f;
+        int width = Mathf.Clamp(Mathf.RoundToInt(Screen.width * scale), web ? 384 : 512, web ? 640 : 1024);
+        int height = Mathf.Clamp(Mathf.RoundToInt(Screen.height * scale), web ? 216 : 288, web ? 360 : 576);
         reflectionTexture = new RenderTexture(width, height, 16, RenderTextureFormat.Default)
         {
             name = "Gym Planar Reflection",
@@ -167,7 +173,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
         RenderPipelineManager.endCameraRendering += EndCameraRendering;
         UpdateReflectionCamera();
         Debug.Log(
-            $"GYMCHAOS_PLANAR_MIRROR_READY normal={planeNormal} " +
+            $"GYMCHAOS_PLANAR_MIRROR_READY normal={planeNormal} rt={width}x{height} " +
             $"playerLayer={(reflectionCamera.cullingMask & (1 << MirrorPlayerLayer)) != 0}",
             this);
     }
@@ -179,9 +185,10 @@ public sealed class PlanarGymMirror : MonoBehaviour
             return;
         }
 
-        bool shouldRefresh = continuousRefresh || refreshRequested ||
-            IsVisibleFromSourceCamera();
-        if (!shouldRefresh)
+        // WebGL: the reflection refreshes every other frame (the mirror keeps
+        // the previous image), unless a refresh was asked for.
+        bool skipFrame = halfRate && !continuousRefresh && !refreshRequested && (Time.frameCount & 1) == 1;
+        if (skipFrame || !(continuousRefresh || refreshRequested || IsVisibleFromSourceCamera()))
         {
             reflectionCamera.enabled = false;
             return;

@@ -58,7 +58,6 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         public Vector3 LanePointLocal;
         public Vector3 WheelLeftLocal;
         public Vector3 WheelRightLocal;
-        public float WheelRestAngle;
         public float HeadClearance;
         // Seat-offset fade over the climb (0 seated .. 1 standing), sampled
         // per rig so the crown stays under the roof edge and the feet clear
@@ -102,20 +101,15 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     public float PlaybackSpeed { get; set; } = 1f;
     public SeatState State { get; private set; }
     public EnemyFighter Driver => driver as EnemyFighter;
-    public IVehicleSeatOccupant Occupant => driver;
     // A destroyed driver component compares equal to null only through Unity's operator.
     private bool HasDriver => driver is UnityEngine.Object body ? body != null : driver != null;
     public GymVehicleCabin Cabin => cabin;
-    public bool IsBusy => State == SeatState.Exiting || State == SeatState.WalkingAway ||
-        State == SeatState.WalkingIn || State == SeatState.Boarding;
     public float ExitPhase => exitPhase;
     public float SeatSink => fit.Sink;
     public float HeadClearance => fit.HeadClearance;
     public Vector3 LanePointWorld => fit.Valid ? transform.TransformPoint(fit.LanePointLocal) : transform.position;
     public Vector3 DoorPointWorld => fit.Valid ? transform.TransformPoint(fit.DoorPointLocal) : transform.position;
     private const float SoleBelowFootBone = 0.05f;
-
-    public Vector3 SeatAnchorWorld => anchor != null ? anchor.position : transform.position;
 
     public void Initialize(GymVisitorVehicle owner, GymVehicleCabin cabinParts,
         float groundLocal, Vector3 aisleSideLocal)
@@ -448,7 +442,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         result.WheelRightLocal = seatedShift + rightDrive;
         result.Valid = true;
         result.Grounded = fighter.GroundOffsetsReady;
-        Debug.Log(
+        GymLog.Diag(
             $"GYMCHAOS_VEHICLE_DRIVER_FIT identity={fighter.OccupantName} height={height:F2} " +
             $"sink={result.Sink:F3} headClearance={result.HeadClearance:F3} " +
             $"exitOffset={result.ExitStartOffsetY:F3} endFootLift={result.EndFootLift:F3} " +

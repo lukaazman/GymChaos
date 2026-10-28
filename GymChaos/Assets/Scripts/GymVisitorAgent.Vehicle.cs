@@ -828,7 +828,8 @@ public sealed partial class GymVisitorAgent
 		if ((UnityEngine.Object)(object)activeVehicleApproachAgent != (UnityEngine.Object)null &&
 			(UnityEngine.Object)(object)activeVehicleApproachAgent != (UnityEngine.Object)(object)this &&
 			((Behaviour)activeVehicleApproachAgent).isActiveAndEnabled &&
-			activeVehicleApproachAgent.IsUsingSharedParkingConnector)
+			activeVehicleApproachAgent.IsUsingSharedParkingConnector &&
+			!activeVehicleApproachAgent.IsInDoorEntryQueue)
 		{
 			return false;
 		}
@@ -1187,6 +1188,16 @@ public sealed partial class GymVisitorAgent
 	// connector makes it wait; one far away (or still queuing by its car)
 	// would otherwise hold every departure indefinitely.
 	private const float InboundMeetDistance = 8f;
+	// Parked at the door queue point (the waypoint BeginDoorwayEntryYieldForExit
+	// uses), an inbound walker waits for exits. A departure leaving the door
+	// cannot meet it on the connector; waiting for it deadlocked: the
+	// departure idled at the exterior door point, blocked the next exit, and
+	// the inbound kept yielding to that exit.
+	private bool IsInDoorEntryQueue =>
+		state == VisitorState.ApproachingGymFromVehicle && fighter != null &&
+		vehicleEntryWaypoints != null && vehicleEntryWaypoints.Length >= 2 &&
+		vehicleEntryWaypointIndex == vehicleEntryWaypoints.Length - 2 &&
+		Vector3.ProjectOnPlane(fighter.VisitorPhysicsPosition - travelTarget, Vector3.up).magnitude <= 0.60f;
 	private static bool IsOtherInboundOnSharedConnector(GymVisitorAgent self)
 	{
 		for (int i = 0; i < activeAgents.Count; i++)
@@ -1195,6 +1206,7 @@ public sealed partial class GymVisitorAgent
 			if (other != null && other != self && other.isActiveAndEnabled &&
 				other.state == VisitorState.ApproachingGymFromVehicle &&
 				other.IsUsingSharedParkingConnector &&
+				!other.IsInDoorEntryQueue &&
 				(self == null || self.fighter == null || other.fighter == null ||
 				 Vector3.ProjectOnPlane(other.fighter.VisitorPhysicsPosition -
 					self.fighter.VisitorPhysicsPosition, Vector3.up).magnitude < InboundMeetDistance) &&
@@ -1460,31 +1472,6 @@ public sealed partial class GymVisitorAgent
 				Debug.LogWarning((object)($"GYMCHAOS_VISITOR_VEHICLE_ROUTE_REROUTE enemy={fighter.Identity} " + $"attempt={vehicleRerouteAttempt} detour={detourWaypoints[0]} waypoints={detourWaypoints.Length} " + $"resume={resumeTarget} blocker={fighter.LastVisitorRouteBlocker}"), (UnityEngine.Object)(object)this);
 			}
 		}
-	}
-	private bool IsStaticCollisionCheckedVehicleRouteClear(Vector3 start, Vector3[] waypoints)
-	{
-		if (waypoints == null || waypoints.Length == 0 ||
-			(UnityEngine.Object)(object)fighter == (UnityEngine.Object)null)
-		{
-			return false;
-		}
-
-		Vector3 from = start;
-		foreach (Vector3 authoredTarget in waypoints)
-		{
-			Vector3 target = new Vector3(authoredTarget.x, from.y, authoredTarget.z);
-			Vector3 segment = Vector3.ProjectOnPlane(target - from, Vector3.up);
-			float distance = segment.magnitude;
-			if (distance > 0.2f &&
-				!fighter.IsVisitorExternalPathClearFrom(
-					from, segment / distance, distance, ignoreDynamicBlockers: true))
-			{
-				return false;
-			}
-			from = target;
-		}
-
-		return true;
 	}
 	private Vector3? GetVehicleRouteDetourLookAhead()
 	{

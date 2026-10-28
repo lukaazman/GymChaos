@@ -111,7 +111,7 @@ public sealed class GymDialogueCamera : MonoBehaviour
         }
 
         float now = Time.unscaledTime;
-        float transition = Ease01((now - transitionStartedAt) /
+        float transition = GymShared.Ease01((now - transitionStartedAt) /
             DialogueCameraTransitionDuration);
         DialogueNode currentNode = GetCurrentDialogueNode();
         if (currentNode != null && currentNode != lastDialogueNode)
@@ -121,7 +121,7 @@ public sealed class GymDialogueCamera : MonoBehaviour
         }
 
         float response = responseStartedAt >= 0f
-            ? 1f - Ease01((now - responseStartedAt) /
+            ? 1f - GymShared.Ease01((now - responseStartedAt) /
                 DialogueCameraResponseDuration)
             : 0f;
         float ambientPhase = Mathf.Max(0f, now - transitionStartedAt) *
@@ -193,12 +193,6 @@ public sealed class GymDialogueCamera : MonoBehaviour
         return director != null && GymDialogueDirector.IsDialogueActive
             ? director.CurrentNode
             : null;
-    }
-
-    private static float Ease01(float value)
-    {
-        value = Mathf.Clamp01(value);
-        return value * value * (3f - 2f * value);
     }
 
     private static Vector3 GetDialogueFocusPoint(Transform npc)

@@ -41,14 +41,6 @@ public sealed class GymClipSampler : MonoBehaviour
         sampler.SampleClip(clip, time);
     }
 
-    public static void Sample(AnimationClip clip, Component root, float time)
-    {
-        if (root != null)
-        {
-            Sample(clip, root.gameObject, time);
-        }
-    }
-
     private void EnsureGraph()
     {
         if (graph.IsValid())

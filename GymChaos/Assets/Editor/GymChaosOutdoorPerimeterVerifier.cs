@@ -29,7 +29,7 @@ public static class GymChaosOutdoorPerimeterVerifier
     public static void Run()
     {
         SessionState.SetBool(RequestedKey, true);
-        started = EditorApplication.timeSinceStartup;
+        started = Time.timeAsDouble;
         finished = false;
         resultCode = 1; GymChaosVerifierExit.Record(resultCode);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
@@ -37,19 +37,13 @@ public static class GymChaosOutdoorPerimeterVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void PlayModeChanged(PlayModeStateChange change)
     {
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
-            started = EditorApplication.timeSinceStartup;
+            started = Time.timeAsDouble;
             Time.timeScale = 1f;
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
@@ -64,7 +58,7 @@ public static class GymChaosOutdoorPerimeterVerifier
         if (finished || !EditorApplication.isPlaying) return;
         try
         {
-            double elapsed = EditorApplication.timeSinceStartup - started;
+            double elapsed = Time.timeAsDouble - started;
             if (!GymOutdoorBuilder.IsBuilt ||
                 !GymProteinStoreEnvironment.IsLoaded ||
                 GymOutdoorFoliage.LoadedPlants + GymOutdoorFoliage.FailedPlants <

@@ -108,7 +108,7 @@ public static class GymRaceTrackBuilder
 
         private Material Lit(string name, Color color, float metallic, float smoothness)
         {
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            Shader shader = GymMaterialLibrary.LitShader;
             Material material = new Material(shader) { name = name, color = color, enableInstancing = true };
             if (material.HasProperty("_BaseColor"))
             {
@@ -128,7 +128,7 @@ public static class GymRaceTrackBuilder
 
         private Material Unlit(string name, Color color)
         {
-            Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+            Shader shader = GymMaterialLibrary.UnlitShader;
             Material material = new Material(shader) { name = name, color = color, enableInstancing = true };
             if (material.HasProperty("_BaseColor"))
             {
@@ -763,7 +763,7 @@ public sealed class GymRaceTrack : MonoBehaviour
     {
         if (redLight == null)
         {
-            Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+            Shader shader = GymMaterialLibrary.UnlitShader;
             redLight = new Material(shader) { name = "Race Light Red", color = new Color(1f, 0.12f, 0.08f) };
             greenLight = new Material(shader) { name = "Race Light Green", color = new Color(0.2f, 1f, 0.3f) };
             redLight.SetColor("_BaseColor", redLight.color);

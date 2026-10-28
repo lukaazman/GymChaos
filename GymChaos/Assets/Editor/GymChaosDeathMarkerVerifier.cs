@@ -36,10 +36,7 @@ public static class GymChaosDeathMarkerVerifier
     {
         killedAt = -1d;
         fixedAt = -1d;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= Changed;
-        EditorApplication.playModeStateChanged += Changed;
+        GymChaosVerifierHooks.Hook(Tick, Changed);
     }
 
     private static void Changed(PlayModeStateChange change)

@@ -110,7 +110,7 @@ public class PickupItem : MonoBehaviour
             return;
         }
 
-        if (IsPlateType(weightType) &&
+        if (GymShared.IsPlateType(weightType) &&
             GetComponentInParent<GymMountedWeightMarker>() != null)
         {
             // A mounted plate is its own pickup item. Detach it before
@@ -171,7 +171,7 @@ public class PickupItem : MonoBehaviour
         for (int i = 0; i < children.Length; i++)
         {
             PickupItem child = children[i];
-            if (child == null || child == this || !IsPlateType(child.weightType) || child.IsHeld)
+            if (child == null || child == this || !GymShared.IsPlateType(child.weightType) || child.IsHeld)
             {
                 continue;
             }
@@ -572,12 +572,6 @@ public class PickupItem : MonoBehaviour
             default:
                 return 5f;
         }
-    }
-
-    private static bool IsPlateType(WeightType type)
-    {
-        return type == WeightType.Plate || type == WeightType.Plate5 ||
-            type == WeightType.Plate10 || type == WeightType.Plate20;
     }
 
     private static float GetImpactMultiplier(WeightType type)

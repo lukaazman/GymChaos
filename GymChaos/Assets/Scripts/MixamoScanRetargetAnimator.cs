@@ -116,7 +116,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private float workoutPosePhase;
     private Vector3 punchDirection = Vector3.forward;
     private Vector3 punchTargetPosition;
-    private bool hasPunchTarget;
     private MotionState lastMotionState = MotionState.Uninitialized;
     private BodybuilderIdentity configuredIdentity;
     private int variantSeed;
@@ -139,23 +138,14 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         configuredIdentity == BodybuilderIdentity.Policeman ? 7 : 11;
 
     public bool HasRunClip => runClip != null;
-    public bool HasWalkingClip => walkingClip != null;
     public bool HasPunchClip => punchClip != null;
     public bool HasIdleClip => idleClip != null;
-    public bool HasProceduralIdle => false;
-    public bool HasFlightPose => rig != null && rig.RightUpperArm != null &&
-        rig.RightForearm != null && rig.RightHand != null;
     public bool HasFlyClip => flyClip != null;
     public bool HasCelebrationClip => celebrationClip != null;
-    public bool HasAuthoredWalkingClip => authoredWalkingClip != null;
-    public bool HasAuthoredRunningClip => authoredRunningClip != null;
-    public bool HasAuthoredPunchClip => authoredPunchClip != null;
-    public bool HasAuthoredFlyingClip => authoredFlyingClip != null;
     public bool HasAuthoredSquatClip => authoredSquatClip != null;
     public AnimationClip AuthoredSquatClipForVerification => authoredSquatClip;
     public bool HasAuthoredDeadliftClip => authoredDeadliftClip != null;
     public AnimationClip AuthoredDeadliftClip => authoredDeadliftClip;
-    public bool IsDeadliftWorkoutClip => deadliftWorkoutClip;
     public bool HasVehicleClips => authoredCarDrivingClip != null && authoredCarExitClip != null;
     public float CarExitClipLength => authoredCarExitClip != null ? authoredCarExitClip.length : 0f;
     public VehiclePose CurrentVehiclePose => vehiclePose;
@@ -163,19 +153,15 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public bool HasGunDrawingClip => authoredGunDrawingClip != null;
     public bool HasGunShootingClip => authoredGunShootingClip != null;
     public bool IsGunActionPlaying => gunActionTime >= 0f;
-    public bool IsGunActionComplete => !IsGunActionPlaying;
     public bool HasAuthoredAnimationSetup =>
         authoredLoadedClipCount == ExpectedAuthoredClipCount;
-    public Transform RuntimeModelRoot => modelRoot;
     public int AuthoredIdleClipCount => CountAvailable(idleVariants);
-    public int AuthoredCelebrationClipCount => CountAvailable(celebrationVariants);
     public string AuthoredAnimationResourcePath => ResourcePath(configuredIdentity);
     public bool RuntimeModelRootIsAuthoredInstance =>
         modelRoot != null && modelRoot.IsChildOf(transform);
     public string CurrentAnimationClipName => GetClipNameForMarker(lastAnimationMarker);
     public bool IsPunchComplete => attackTime >= PunchDuration;
     public MotionState CurrentState => lastMotionState;
-    public MotionState LastMotionState => lastMotionState;
     public bool IsWorkoutPoseLocked => workoutPoseLocked;
     public bool IsUsingRunningClip => useRunningClip;
     public bool HasGroundedSkeletonRoot => rig != null && rig.Root != null;
@@ -694,9 +680,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         rig != null && rig.Root != null && modelRoot != null
             ? Vector3.Dot(rig.Root.position - modelRoot.position, modelRoot.up) : float.NaN;
 
-    public float GetClipGroundOffsetForVerification(AnimationClip clip) =>
-        clip != null && clipGroundOffsets.TryGetValue(clip, out float offset) ? offset : 0f;
-
     private void BeginGroundOffsetMeasurement()
     {
         groundOffsetsMeasured = true;
@@ -981,7 +964,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     {
         attackTime = -1f;
         punchContactSent = false;
-        hasPunchTarget = false;
         if (lastMotionState == MotionState.Punching)
         {
             lastMotionState = flying ? MotionState.Flying :
@@ -994,7 +976,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         attackTime = 0f;
         punchContactSent = false;
         celebrating = false;
-        hasPunchTarget = false;
         lastMotionState = MotionState.Punching;
         punchDirection = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
         if (punchDirection.sqrMagnitude < 0.001f)
@@ -1015,7 +996,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     public void SetPunchTarget(Vector3 worldPosition)
     {
         punchTargetPosition = worldPosition;
-        hasPunchTarget = true;
     }
 
     public void TriggerCelebration()
@@ -1591,7 +1571,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         if (nextClip != null)
         {
             poseTransition.Begin(modelRoot, AuthoredTransitionDuration);
-            Debug.Log(
+            GymLog.Diag(
                 $"GYMCHAOS_ENEMY_AUTHORED_TRANSITION identity={configuredIdentity} " +
                 $"from={ClipName(lastSampledClip)} to={ClipName(nextClip)} " +
                 $"branch={branch} duration={AuthoredTransitionDuration:F2}", this);
@@ -2018,16 +1998,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
     }
 
-    private static int PositiveModulo(int value, int modulus)
-    {
-        if (modulus <= 0)
-        {
-            return 0;
-        }
-        int remainder = value % modulus;
-        return remainder < 0 ? remainder + modulus : remainder;
-    }
-
     private void EmitAnimationMarker(
         MotionState state, AnimationClip clip, string branch)
     {
@@ -2045,7 +2015,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         lastAnimationMarkerBranch = branch;
         string marker = $"{state}|{branch}|{ClipName(clip)}";
         lastAnimationMarker = marker;
-        Debug.Log(
+        GymLog.Diag(
             $"GYMCHAOS_ENEMY_ANIMATION_STATE identity={configuredIdentity} " +
             $"state={state} branch={branch} clip={ClipName(clip)} " +
             $"speed01={speed01:F2}", this);

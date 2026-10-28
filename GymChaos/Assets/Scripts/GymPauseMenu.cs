@@ -190,7 +190,7 @@ public sealed class GymPauseMenu : MonoBehaviour
             failureMessage.text = message + "\nYour last successful save is intact.";
             pausePage.SetActive(false);
             failurePage.SetActive(true);
-            Select(retryButton);
+            GymShared.Select(retryButton);
         });
     }
 
@@ -226,7 +226,7 @@ public sealed class GymPauseMenu : MonoBehaviour
         saveAndReturnButton.gameObject.SetActive(hasCharacter);
         saveStatus.gameObject.SetActive(hasCharacter);
         SetMenuVisible(true);
-        Select(resumeButton);
+        GymShared.Select(resumeButton);
     }
 
     private void ShowOptions()
@@ -235,7 +235,7 @@ public sealed class GymPauseMenu : MonoBehaviour
         pausePage.SetActive(false);
         optionsPanel.SetActive(true);
         SetMenuVisible(true);
-        Select(optionsPanel.GetComponentInChildren<Selectable>(true));
+        GymShared.Select(optionsPanel.GetComponentInChildren<Selectable>(true));
     }
 
     private void Resume()
@@ -293,14 +293,6 @@ public sealed class GymPauseMenu : MonoBehaviour
             Cursor.lockState = CursorLockMode.None;
         }
         Cursor.visible = visible;
-    }
-
-    private static void Select(Selectable selectable)
-    {
-        if (EventSystem.current != null && selectable != null)
-        {
-            EventSystem.current.SetSelectedGameObject(selectable.gameObject);
-        }
     }
 
     private static bool ReadPauseToggle()

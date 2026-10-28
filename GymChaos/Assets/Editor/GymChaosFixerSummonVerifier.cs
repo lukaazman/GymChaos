@@ -32,10 +32,7 @@ public static class GymChaosFixerSummonVerifier
     private static void ResumeAfterReload()
     {
         if (!SessionState.GetBool(RequestedKey, false)) return;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
     }
 
     public static void Run()
@@ -45,10 +42,7 @@ public static class GymChaosFixerSummonVerifier
         PlayerPrefs.DeleteKey(ProgressionKey);
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         SessionState.SetBool(RequestedKey, true);
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
         EditorApplication.isPlaying = true;
     }
 

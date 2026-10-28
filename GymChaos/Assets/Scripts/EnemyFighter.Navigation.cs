@@ -381,19 +381,17 @@ public partial class EnemyFighter
         }
 
         float lookAhead = Mathf.Clamp(Mathf.Max(0.72f, targetDistance), 0.72f, 1.25f);
-        Vector3 best = Vector3.zero;
-        float bestScore = float.NegativeInfinity;
+        // Score every probe first (cheap), then cast in descending score
+        // order: the first clear probe is the best one. This used to cast all
+        // ten probes each physics step, including the ones the alignment
+        // filter always rejects.
+        int candidateCount = 0;
         for (int i = 0; i < MovementProbeAngles.Length; i++)
         {
             Vector3 candidate = Quaternion.Euler(0f, MovementProbeAngles[i], 0f) * desiredDirection;
-            if ((!chaseIgnoresRoomBounds && !IsInsideRoom(candidate, lookAhead)) ||
-                !IsMovementPathClear(candidate, lookAhead, allowTargetEquipment))
-            {
-                continue;
-            }
-
             float alignment = Vector3.Dot(candidate, desiredDirection);
-            if (alignment < 0.48f)
+            if (alignment < 0.48f ||
+                (!chaseIgnoresRoomBounds && !IsInsideRoom(candidate, lookAhead)))
             {
                 continue;
             }
@@ -405,15 +403,42 @@ public partial class EnemyFighter
                 // on consecutive physics frames.
                 score += Vector3.Dot(candidate, roamDirection.normalized) * 0.9f;
             }
-            if (score > bestScore)
+            ProbeCandidates[candidateCount] = candidate;
+            ProbeScores[candidateCount] = score;
+            candidateCount++;
+        }
+
+        while (candidateCount > 0)
+        {
+            // Highest score; ties keep the earlier probe, as before.
+            int bestIndex = 0;
+            for (int i = 1; i < candidateCount; i++)
             {
-                bestScore = score;
-                best = candidate;
+                if (ProbeScores[i] > ProbeScores[bestIndex])
+                {
+                    bestIndex = i;
+                }
+            }
+            Vector3 best = ProbeCandidates[bestIndex];
+            if (IsMovementPathClear(best, lookAhead, allowTargetEquipment))
+            {
+                return best;
+            }
+            candidateCount--;
+            for (int i = bestIndex; i < candidateCount; i++)
+            {
+                ProbeCandidates[i] = ProbeCandidates[i + 1];
+                ProbeScores[i] = ProbeScores[i + 1];
             }
         }
 
-        return best;
+        return Vector3.zero;
     }
+    // Scratch for FindClearMovementDirection (main thread only). Sized as a
+    // literal: static initializer order across partial files is undefined, so
+    // MovementProbeAngles.Length may not be set yet here.
+    private static readonly Vector3[] ProbeCandidates = new Vector3[16];
+    private static readonly float[] ProbeScores = new float[16];
     private GymExerciseStation equipmentEgressStation;
     internal void SetEquipmentEgressStation(GymExerciseStation station)
     {
@@ -618,24 +643,10 @@ public partial class EnemyFighter
         Transform id = target;
         if (!roomFloorCache.TryGetValue(id, out bool result))
         {
-            result = ComputeRoomFloorInHierarchy(target);
+            result = GymShared.ComputeRoomFloorInHierarchy(target);
             roomFloorCache[id] = result;
         }
         return result;
-    }
-
-    private static bool ComputeRoomFloorInHierarchy(Transform target)
-    {
-        for (Transform current = target; current != null; current = current.parent)
-        {
-            string lowerName = current.name.ToLowerInvariant();
-            if (lowerName.Contains("rubber floor") ||
-                lowerName == "plane" || lowerName.StartsWith("plane("))
-            {
-                return true;
-            }
-        }
-        return false;
     }
     private static bool IsWalkableFloorSurface(Collider collider)
     {

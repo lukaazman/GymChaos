@@ -85,13 +85,6 @@ public static class GymRoadsideBusStop
     // the bus stop exists.
     private const float DavieBusReturnLaneCentreOffset = 1.85f;
 
-    public static bool CanFitBay(float roadStartX, float roadTurnX, float roadWidth)
-    {
-        float bayLength = (roadTurnX - BusBayEndInset) - (roadStartX + BusBayStartOffset);
-        return roadWidth >= MinimumRoadWidth &&
-            bayLength >= DavieBusTargetLength + MinimumBayExtraLength;
-    }
-
     public static bool Build(
         Transform parent,
         float floorY,
@@ -135,7 +128,7 @@ public static class GymRoadsideBusStop
         root.transform.SetParent(parent, true);
         root.transform.position = Vector3.zero;
 
-        Material yellow = CreateMaterial(
+        Material yellow = GymMaterialLibrary.Lit(
             "Sprayed Yellow Bus Stop Road Paint",
             new Color(0.96f, 0.61f, 0.025f),
             0.0f,
@@ -667,24 +660,5 @@ public static class GymRoadsideBusStop
 
         Object.Destroy(box.GetComponent<Collider>());
         return box;
-    }
-
-    private static Material CreateMaterial(
-        string name,
-        Color color,
-        float metallic,
-        float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ??
-            Shader.Find("Standard");
-        Material material = new Material(shader) { name = name };
-        if (material.HasProperty("_BaseColor"))
-            material.SetColor("_BaseColor", color);
-        material.color = color;
-        if (material.HasProperty("_Metallic"))
-            material.SetFloat("_Metallic", metallic);
-        if (material.HasProperty("_Smoothness"))
-            material.SetFloat("_Smoothness", smoothness);
-        return material;
     }
 }

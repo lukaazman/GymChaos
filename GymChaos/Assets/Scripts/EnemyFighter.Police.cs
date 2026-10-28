@@ -668,13 +668,4 @@ public partial class EnemyFighter
         }
         return bestIndex;
     }
-    public void ReceivePoliceImpact(Vector3 impulse)
-    {
-        if (isDead || body == null)
-        {
-            return;
-        }
-        body.AddForce(impulse * 0.35f, ForceMode.Impulse);
-        stunnedUntilTime = Mathf.Max(stunnedUntilTime, Time.time + lightStunDuration);
-    }
 }

@@ -53,9 +53,21 @@ public sealed class GymTimeOfDay : MonoBehaviour
     private Texture2D cloudParticleTexture;
     private float cloudDrift;
 
-    private readonly Color dayAmbientSky = new Color(0.3f, 0.44f, 0.66f);
-    private readonly Color dayAmbientEquator = new Color(0.14f, 0.22f, 0.34f);
-    private readonly Color dayAmbientGround = new Color(0.025f, 0.05f, 0.09f);
+    // Cool sky fill, neutral horizon, warm-dark bounce; GymTimeOfDay is the
+    // only writer of RenderSettings ambient, fog and sun.
+    private static readonly Color DayAmbientSky = new Color(0.42f, 0.46f, 0.52f);
+    private static readonly Color DayAmbientEquator = new Color(0.3f, 0.31f, 0.31f);
+    private static readonly Color DayAmbientGround = new Color(0.12f, 0.11f, 0.1f);
+    private static readonly Color NightAmbientSky = new Color(0.04f, 0.045f, 0.056f);
+    private static readonly Color NightAmbientEquator = new Color(0.03f, 0.031f, 0.034f);
+    private static readonly Color NightAmbientGround = new Color(0.01f, 0.01f, 0.012f);
+    private static readonly Color DayHorizon = new Color(0.6f, 0.71f, 0.84f);
+    private static readonly Color DayZenith = new Color(0.2f, 0.37f, 0.64f);
+    private static readonly Color NightHorizon = new Color(0.04f, 0.055f, 0.1f);
+    private static readonly Color NightZenith = new Color(0.005f, 0.008f, 0.02f);
+    private static readonly Color NightFog = new Color(0.035f, 0.038f, 0.045f);
+    private const float DayFogDensity = 0.0055f;
+    private const float NightFogDensity = 0.008f;
 
     public event Action<int> DayChanged;
 
@@ -275,7 +287,6 @@ public sealed class GymTimeOfDay : MonoBehaviour
             sunObject.transform.SetParent(transform, true);
             sunLight = sunObject.AddComponent<Light>();
             sunLight.type = LightType.Directional;
-            sunLight.color = new Color(1f, 0.84f, 0.12f);
             sunLight.shadows = LightShadows.Soft;
             sunLight.shadowStrength = 0.78f;
         }
@@ -299,6 +310,15 @@ public sealed class GymTimeOfDay : MonoBehaviour
         moonLight.shadows = LightShadows.None;
         sunLight.enabled = true;
         moonLight.enabled = false;
+
+        // Exactly one directional light: any authored scene sun is switched off.
+        foreach (Light light in FindObjectsByType<Light>())
+        {
+            if (light.type == LightType.Directional && light != sunLight && light != moonLight)
+            {
+                light.enabled = false;
+            }
+        }
 
         if (sunGlowLight != null)
         {
@@ -341,6 +361,10 @@ public sealed class GymTimeOfDay : MonoBehaviour
         Vector3 moonPosition = GetCelestialPosition(
             celestialCenter, moonAngle, celestialRadius * 0.94f);
         sunDirection = (sunPosition - celestialCenter).normalized;
+        // Warm white at noon (~5600 K), golden near the horizon (~3400 K); cool moon.
+        float sunKelvin = Mathf.Lerp(3400f, 5600f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0f, 0.55f, sunDirection.y)));
+        Color sunColor = Mathf.CorrelatedColorTemperatureToRGB(sunKelvin);
+        Color moonColor = Mathf.CorrelatedColorTemperatureToRGB(7200f);
 
         if (sunRenderer != null)
         {
@@ -351,8 +375,8 @@ public sealed class GymTimeOfDay : MonoBehaviour
         {
             sunGlowLight.enabled = daylight >= 0.25f;
             sunGlowLight.transform.position = sunPosition;
-            sunGlowLight.color = new Color(1f, 0.84f, 0.12f);
-            sunGlowLight.intensity = 8f * daylight;
+            sunGlowLight.color = sunColor;
+            sunGlowLight.intensity = 6f * daylight;
             sunGlowLight.range = 32f;
         }
         if (moonRenderer != null)
@@ -364,36 +388,27 @@ public sealed class GymTimeOfDay : MonoBehaviour
         {
             moonGlowLight.enabled = night >= 0.25f;
             moonGlowLight.transform.position = moonPosition;
-            moonGlowLight.color = Color.white;
-            moonGlowLight.intensity = 4f * night;
+            moonGlowLight.color = moonColor;
+            moonGlowLight.intensity = 3f * night;
             moonGlowLight.range = 30f;
         }
 
-        SetMaterialColor(sunMaterial, Color.Lerp(
-            new Color(0.08f, 0.1f, 0.2f),
-            new Color(1f, 0.84f, 0.12f), daylight));
-        SetMaterialEmission(sunMaterial, Color.Lerp(
-            Color.black, new Color(10f, 7.2f, 0.8f), daylight));
-        SetMaterialColor(moonMaterial, Color.Lerp(
-            new Color(0.08f, 0.11f, 0.2f),
-            Color.white, night));
-        SetMaterialEmission(moonMaterial, Color.Lerp(
-            Color.black,
-            new Color(8f, 8f, 8f), night));
+        SetMaterialColor(sunMaterial, Color.Lerp(NightHorizon, sunColor, daylight));
+        SetMaterialEmission(sunMaterial, sunColor * (4f * daylight));
+        SetMaterialColor(moonMaterial, Color.Lerp(NightHorizon, moonColor, night));
+        SetMaterialEmission(moonMaterial, moonColor * (2.2f * night));
 
         if (sunLight != null)
         {
-            sunLight.intensity = 1.15f * daylight;
-            sunLight.color = Color.Lerp(
-                new Color(1f, 0.84f, 0.12f),
-                new Color(0.08f, 0.12f, 0.28f), night);
+            sunLight.intensity = 1.7f * daylight;
+            sunLight.color = sunColor;
             sunLight.transform.rotation = Quaternion.LookRotation(
                 (sunPosition - roomCenter).normalized, Vector3.up);
         }
         if (moonLight != null)
         {
-            moonLight.intensity = 0.32f * night;
-            moonLight.color = Color.white;
+            moonLight.intensity = 0.28f * night;
+            moonLight.color = moonColor;
             moonLight.transform.rotation = Quaternion.LookRotation(
                 (moonPosition - roomCenter).normalized, Vector3.up);
         }
@@ -416,15 +431,21 @@ public sealed class GymTimeOfDay : MonoBehaviour
             if (windowSunLights[i] != null)
             {
                 windowSunLights[i].intensity = 1450f * daylight;
+                windowSunLights[i].color = sunColor;
                 windowSunLights[i].enabled = daylight > 0.001f;
             }
         }
 
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-        RenderSettings.ambientSkyColor = Color.Lerp(dayAmbientSky, new Color(0.012f, 0.025f, 0.09f), night);
-        RenderSettings.ambientEquatorColor = Color.Lerp(dayAmbientEquator, new Color(0.012f, 0.03f, 0.08f), night);
-        RenderSettings.ambientGroundColor = Color.Lerp(dayAmbientGround, new Color(0.006f, 0.014f, 0.04f), night);
-        RenderSettings.ambientIntensity = Mathf.Lerp(1.08f, 0.38f, night);
+        RenderSettings.ambientSkyColor = Color.Lerp(DayAmbientSky, NightAmbientSky, night);
+        RenderSettings.ambientEquatorColor = Color.Lerp(DayAmbientEquator, NightAmbientEquator, night);
+        RenderSettings.ambientGroundColor = Color.Lerp(DayAmbientGround, NightAmbientGround, night);
+        RenderSettings.ambientIntensity = Mathf.Lerp(0.85f, 0.55f, night);
+        // Light distance haze in the horizon colour: towers recede, the lot stays crisp.
+        RenderSettings.fog = true;
+        RenderSettings.fogMode = FogMode.ExponentialSquared;
+        RenderSettings.fogDensity = Mathf.Lerp(DayFogDensity, NightFogDensity, night);
+        RenderSettings.fogColor = Color.Lerp(DayHorizon * 0.92f, NightFog, night);
         RenderSettings.sun = useSun ? sunLight : moonLight;
         UpdateProceduralSkybox(night);
         EnsureGameplaySkyboxCamera(night);
@@ -522,23 +543,19 @@ public sealed class GymTimeOfDay : MonoBehaviour
                 0f, 1f, Mathf.InverseLerp(0.88f, 0.998f, night));
             cloudDrift = Mathf.Repeat(cloudDrift + Time.deltaTime * 0.11f, 1000f);
             SetSkyboxColor(
-                proceduralSkyboxMaterial, "_DayHorizon",
-                new Color(0.34f, 0.66f, 1f));
+                proceduralSkyboxMaterial, "_DayHorizon", DayHorizon);
             SetSkyboxColor(
-                proceduralSkyboxMaterial, "_DayZenith",
-                new Color(0.045f, 0.22f, 0.68f));
+                proceduralSkyboxMaterial, "_DayZenith", DayZenith);
             SetSkyboxColor(
-                proceduralSkyboxMaterial, "_NightHorizon",
-                new Color(0.025f, 0.08f, 0.22f));
+                proceduralSkyboxMaterial, "_NightHorizon", NightHorizon);
             SetSkyboxColor(
-                proceduralSkyboxMaterial, "_NightZenith",
-                new Color(0.001f, 0.004f, 0.025f));
+                proceduralSkyboxMaterial, "_NightZenith", NightZenith);
             SetSkyboxColor(
                 proceduralSkyboxMaterial, "_CloudLight",
                 new Color(0.94f, 0.98f, 1f));
             SetSkyboxColor(
                 proceduralSkyboxMaterial, "_CloudShadow",
-                new Color(0.32f, 0.48f, 0.68f));
+                new Color(0.5f, 0.56f, 0.64f));
             proceduralSkyboxMaterial.SetFloat("_Daylight", daylight);
             proceduralSkyboxMaterial.SetFloat("_CloudFade", cloudVisibility);
             proceduralSkyboxMaterial.SetFloat("_StarFade", starVisibility);

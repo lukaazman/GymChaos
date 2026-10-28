@@ -7,6 +7,7 @@ using System.Text;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using Unity.Profiling;
+using Unity.Profiling.LowLevel.Unsafe;
 using UnityEngine;
 
 /// <summary>
@@ -31,6 +32,8 @@ public static class GymChaosPerformanceVerifier
         public float Yaw;
         // Time of day (0..1); 0.5 is noon, 0.95 is full night.
         public float Time01;
+        // Diagnostic mode only: switches one render feature off (cumulative).
+        public Action Ablate;
     }
 
     private static readonly List<float> frameMs = new List<float>(SampleFrames);
@@ -75,6 +78,10 @@ public static class GymChaosPerformanceVerifier
         "GymChaos.Late.MixamoScanRetargetAnimator",
         "GymChaos.Late.EnemyMeshHitboxRig",
         "GymChaos.Late.PlayerHandRig",
+        "GymChaos.Late.HitboxSync",
+        "GymChaos.Late.CharacterLabels",
+        "GymChaos.Late.ExternalRiggedVisual",
+        "GymChaos.Late.ExteriorVisibility",
         "Camera.Render",
         "Gfx.WaitForPresentOnGfxThread",
         // Editor-only work between player frames (batch/editor runs): a hitch
@@ -111,6 +118,13 @@ public static class GymChaosPerformanceVerifier
     private static double[] counterSums;
     private static ProfilerRecorder[] recorders;
     private static double[] markerSums;
+    // Per-script callback markers ("Foo.LateUpdate()" and the like) found at
+    // scenario start, so script time no named marker covers gets a name.
+    private static readonly List<ProfilerRecorder> scriptRecorders = new List<ProfilerRecorder>();
+    private static readonly List<string> scriptNames = new List<string>();
+    private static readonly List<double> scriptSums = new List<double>();
+    private static bool ScriptBreakdown =>
+        Environment.GetEnvironmentVariable("GYMCHAOS_PERF_SCRIPTS") == "1";
     private static int fixedStepsAtStart;
 
     static GymChaosPerformanceVerifier()
@@ -127,13 +141,7 @@ public static class GymChaosPerformanceVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void PlayModeChanged(PlayModeStateChange change)
     {
@@ -148,6 +156,7 @@ public static class GymChaosPerformanceVerifier
             BuildScenarios();
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
+        if (ScriptBreakdown) UnityEditorInternal.ProfilerDriver.enabled = false;
         EditorApplication.update -= Tick;
         EditorApplication.playModeStateChanged -= PlayModeChanged;
         SessionState.EraseBool(RequestedKey);
@@ -181,10 +190,118 @@ public static class GymChaosPerformanceVerifier
             new Scenario { Name = "roadBusStopNight", Yaw = 80f, Time01 = 0.95f, Position = () =>
                 new Vector3(168f, GymDoorway.Instance.ExteriorPoint.y, 26f) }
         };
+        if (Environment.GetEnvironmentVariable("GYMCHAOS_PERF_ABLATE") == "1") scenarios = AblationScenarios();
         for (int i = 0; i < scenarios.Length; i++)
         {
             if (scenarios[i].Time01 <= 0f) scenarios[i].Time01 = 0.5f;
         }
+    }
+
+    // GYMCHAOS_PERF_ABLATE=1: the mainGymMirror view, with render features
+    // switched off one after another, to find what a frame pays for.
+    private static Scenario[] AblationScenarios()
+    {
+        Func<Vector3> gym = () => GymDoorway.Instance.InteriorPoint + Vector3.left * 8f;
+        Scenario Step(string name, Action ablate) =>
+            new Scenario { Name = name, Yaw = -90f, Position = gym, Ablate = ablate };
+        Renderer[] Renderers() => UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None);
+        return new[]
+        {
+            Step("ablateBase", LogRenderState),
+            Step("ablateNoPost", () =>
+            {
+                foreach (var volume in UnityEngine.Object.FindObjectsByType<UnityEngine.Rendering.Volume>(FindObjectsSortMode.None))
+                    volume.enabled = false;
+            }),
+            Step("ablateNoFog", () =>
+            {
+                if (GymTimeOfDay.Instance != null) GymTimeOfDay.Instance.enabled = false;
+                RenderSettings.fog = false;
+            }),
+            Step("ablateNoInstancing", () =>
+            {
+                foreach (Renderer renderer in Renderers())
+                    foreach (Material material in renderer.sharedMaterials)
+                        if (material != null) material.enableInstancing = false;
+            }),
+            Step("ablateNoPropertyBlocks", () =>
+            {
+                foreach (Renderer renderer in Renderers())
+                    if (renderer.HasPropertyBlock()) renderer.SetPropertyBlock(null);
+            }),
+            Step("ablateNoFoliage", () => GameObject.Find(GymOutdoorFoliage.RootName)?.SetActive(false)),
+            Step("ablateNoMirror", () =>
+            {
+                foreach (PlanarGymMirror mirror in UnityEngine.Object.FindObjectsByType<PlanarGymMirror>(FindObjectsSortMode.None))
+                {
+                    if (mirror.ReflectionCamera != null) mirror.ReflectionCamera.gameObject.SetActive(false);
+                    mirror.enabled = false;
+                }
+            }),
+            Step("ablateNoShadows", () =>
+            {
+                foreach (Light light in UnityEngine.Object.FindObjectsByType<Light>(FindObjectsSortMode.None))
+                    light.shadows = LightShadows.None;
+            })
+        };
+    }
+
+    private static long TriangleCount(Mesh mesh)
+    {
+        long indices = 0;
+        for (int i = 0; i < mesh.subMeshCount; i++) indices += mesh.GetIndexCount(i);
+        return indices / 3;
+    }
+
+    private static void LogRenderState()
+    {
+        int renderers = 0, blocks = 0, instanced = 0, materials = 0;
+        var variants = new Dictionary<string, int>();
+        foreach (Renderer renderer in UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None))
+        {
+            if (!renderer.enabled || !renderer.gameObject.activeInHierarchy) continue;
+            renderers++;
+            if (renderer.HasPropertyBlock()) blocks++;
+            foreach (Material material in renderer.sharedMaterials)
+            {
+                if (material == null) continue;
+                materials++;
+                if (material.enableInstancing) instanced++;
+                string key = material.shader.name + "|" + string.Join(",", material.shaderKeywords);
+                variants[key] = variants.TryGetValue(key, out int n) ? n + 1 : 1;
+            }
+        }
+        var top = new List<KeyValuePair<string, int>>(variants);
+        top.Sort((a, b) => b.Value.CompareTo(a.Value));
+        var text = new StringBuilder();
+        for (int i = 0; i < top.Count && i < 25; i++) text.Append("\n  ").Append(top[i].Value).Append(' ').Append(top[i].Key);
+        // Triangles per scene root, for everything the gym mirror camera can see.
+        var trianglesByRoot = new Dictionary<string, long>();
+        foreach (PlanarGymMirror mirror in UnityEngine.Object.FindObjectsByType<PlanarGymMirror>(FindObjectsSortMode.None))
+        {
+            Camera camera = mirror.ReflectionCamera;
+            if (camera == null || mirror.transform.root.name.Contains("Locker")) continue;
+            Plane[] planes = GeometryUtility.CalculateFrustumPlanes(camera);
+            foreach (Renderer renderer in UnityEngine.Object.FindObjectsByType<Renderer>(FindObjectsSortMode.None))
+            {
+                if (!renderer.enabled || !renderer.gameObject.activeInHierarchy ||
+                    (camera.cullingMask & (1 << renderer.gameObject.layer)) == 0 ||
+                    !GeometryUtility.TestPlanesAABB(planes, renderer.bounds)) continue;
+                Mesh mesh = renderer is SkinnedMeshRenderer skinned ? skinned.sharedMesh
+                    : renderer.GetComponent<MeshFilter>()?.sharedMesh;
+                if (mesh == null) continue;
+                Transform group = renderer.transform;
+                while (group.parent != null && group.parent.parent != null) group = group.parent;
+                string key = group.name;
+                trianglesByRoot[key] = (trianglesByRoot.TryGetValue(key, out long t) ? t : 0) + TriangleCount(mesh);
+            }
+            break;
+        }
+        var heavy = new List<KeyValuePair<string, long>>(trianglesByRoot);
+        heavy.Sort((a, b) => b.Value.CompareTo(a.Value));
+        for (int i = 0; i < heavy.Count && i < 20; i++) text.Append("\n  mirrorTris ").Append(heavy[i].Value).Append(' ').Append(heavy[i].Key);
+        Debug.Log($"GYMCHAOS_PERF_RENDER_STATE renderers={renderers} propertyBlocks={blocks} " +
+            $"materialSlots={materials} instancingOn={instanced} variants={variants.Count}{text}");
     }
 
     private static void Tick()
@@ -204,6 +321,9 @@ public static class GymChaosPerformanceVerifier
                 if (now - started < WarmupSeconds) return;
                 warmedUp = true;
                 AttachRenderTarget();
+                // Diagnostic mode: per-script callback markers exist only while
+                // the profiler records, which itself costs frame time.
+                if (ScriptBreakdown) UnityEditorInternal.ProfilerDriver.enabled = true;
                 BeginScenario(now);
                 return;
             }
@@ -227,6 +347,8 @@ public static class GymChaosPerformanceVerifier
             if (recorders[playerLoop].Valid) gameMs.Add(recorders[playerLoop].LastValue / 1e6f);
             for (int i = 0; i < recorders.Length; i++)
                 if (recorders[i].Valid) markerSums[i] += recorders[i].LastValue / 1e6;
+            for (int i = 0; i < scriptRecorders.Count; i++)
+                if (scriptRecorders[i].Valid) scriptSums[i] += scriptRecorders[i].LastValue / 1e6;
             // Recorder LastValue is the previous frame: report a hitch one
             // tick later, when the recorders hold that frame's samples.
             if (pendingSpike > 0f) LogSpike(pendingSpike);
@@ -284,6 +406,22 @@ public static class GymChaosPerformanceVerifier
         markerSums = new double[Markers.Length];
         for (int i = 0; i < Markers.Length; i++)
             recorders[i] = ProfilerRecorder.StartNew(ProfilerCategory.Scripts, Markers[i]);
+        scriptNames.Clear();
+        scriptSums.Clear();
+        if (ScriptBreakdown)
+        {
+            var handles = new List<ProfilerRecorderHandle>();
+            ProfilerRecorderHandle.GetAvailable(handles);
+            foreach (ProfilerRecorderHandle handle in handles)
+            {
+                ProfilerRecorderDescription description = ProfilerRecorderHandle.GetDescription(handle);
+                string name = description.Name;
+                if (!name.Contains("Update()") || scriptNames.Contains(name)) continue;
+                scriptNames.Add(name);
+                scriptSums.Add(0d);
+                scriptRecorders.Add(ProfilerRecorder.StartNew(description.Category, name));
+            }
+        }
         counterRecorders = new ProfilerRecorder[Counters.Length];
         counterSums = new double[Counters.Length];
         for (int i = 0; i < Counters.Length; i++)
@@ -316,6 +454,7 @@ public static class GymChaosPerformanceVerifier
         }
         player.transform.SetPositionAndRotation(position, rotation);
         GymTimeOfDay.Instance?.SetTimeForVerification(scenario.Time01);
+        scenario.Ablate?.Invoke();
         phaseStarted = now;
         sampling = false;
     }
@@ -368,6 +507,18 @@ public static class GymChaosPerformanceVerifier
             counterRecorders[i].Dispose();
         }
         Debug.Log($"GYMCHAOS_PERF_RENDER scenario={name} {render}");
+        var top = new List<int>();
+        for (int i = 0; i < scriptNames.Count; i++)
+            if (scriptSums[i] / sorted.Count >= 0.03d) top.Add(i);
+        top.Sort((a, b) => scriptSums[b].CompareTo(scriptSums[a]));
+        StringBuilder scripts = new StringBuilder();
+        for (int i = 0; i < top.Count && i < 15; i++)
+            scripts.Append(' ').Append(scriptNames[top[i]].Replace(' ', '_')).Append('=')
+                .Append((scriptSums[top[i]] / sorted.Count).ToString("F2", CultureInfo.InvariantCulture));
+        foreach (ProfilerRecorder recorder in scriptRecorders) recorder.Dispose();
+        scriptRecorders.Clear();
+        if (ScriptBreakdown)
+            Debug.Log($"GYMCHAOS_PERF_SCRIPTS scenario={name} callbacks={scriptNames.Count}{scripts}");
         Debug.Log($"GYMCHAOS_PERF_SPLIT scenario={name} fixedStepsPerFrame=" +
             ((fixedSteps - fixedStepsAtStart) / (float)sorted.Count).ToString("F2", CultureInfo.InvariantCulture) +
             " " + split);
@@ -393,6 +544,7 @@ public static class GymChaosPerformanceVerifier
 
     private static void Finish()
     {
+        if (ScriptBreakdown) UnityEditorInternal.ProfilerDriver.enabled = false;
         if (target != null)
         {
             PlayerMovement player = UnityEngine.Object.FindFirstObjectByType<PlayerMovement>();

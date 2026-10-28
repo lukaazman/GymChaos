@@ -13,8 +13,6 @@ public partial class PlayerMovement
     private EnemyFighter carriedCorpse;
     private EnemyFighter nearbyCorpse;
     private static readonly Collider[] corpseScan = new Collider[48];
-
-    public EnemyFighter CarriedCorpseForVerification => carriedCorpse;
     public bool IsCarryingCorpse => carriedCorpse != null;
 
     private bool CanCarryCorpses()

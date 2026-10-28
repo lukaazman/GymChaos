@@ -45,7 +45,6 @@ public sealed class GymRaceChaseCamera : MonoBehaviour
     private bool snap;
 
     public bool IsActive => active;
-    public Mode CurrentMode => mode;
     public float CurrentDistance => distance;
     public float CurrentFieldOfView => target != null ? target.fieldOfView : fieldOfView;
     public bool LookBack { get; set; }

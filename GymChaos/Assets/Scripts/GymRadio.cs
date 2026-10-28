@@ -37,92 +37,6 @@ public sealed class GymRadio : MonoBehaviour
         "ZYZZ_-_Safe_And_Sound_X_Wildest_Dream_Hardstyle_Remix_Tiktok_Mix_KLICKAUD.mp3"
     };
 
-    private const uint GlbMagic = 0x46546C67;
-    private const uint JsonChunk = 0x4E4F534A;
-    private const uint BinaryChunk = 0x004E4942;
-
-    [Serializable]
-    private sealed class GltfRoot
-    {
-        public GltfAccessor[] accessors;
-        public GltfMesh[] meshes;
-        public GltfImage[] images;
-        public GltfTexture[] textures;
-        public GltfMaterial[] materials;
-        public GltfBufferView[] bufferViews;
-    }
-
-    [Serializable]
-    private sealed class GltfBufferView
-    {
-        public int byteOffset;
-        public int byteLength;
-        public int byteStride;
-    }
-
-    [Serializable]
-    private sealed class GltfAccessor
-    {
-        public int bufferView;
-        public int byteOffset;
-        public int componentType;
-        public int count;
-    }
-
-    [Serializable]
-    private sealed class GltfMesh
-    {
-        public GltfPrimitive[] primitives;
-    }
-
-    [Serializable]
-    private sealed class GltfPrimitive
-    {
-        public GltfAttributes attributes;
-        public int indices;
-    }
-
-    [Serializable]
-    private sealed class GltfAttributes
-    {
-        public int POSITION;
-        public int NORMAL;
-        public int TEXCOORD_0;
-    }
-
-    [Serializable]
-    private sealed class GltfImage
-    {
-        public int bufferView;
-        public string mimeType;
-    }
-
-    [Serializable]
-    private sealed class GltfTexture
-    {
-        public int source;
-    }
-
-    [Serializable]
-    private sealed class GltfMaterial
-    {
-        public GltfPbrMetallicRoughness pbrMetallicRoughness;
-    }
-
-    [Serializable]
-    private sealed class GltfPbrMetallicRoughness
-    {
-        public GltfTextureReference baseColorTexture;
-        public float metallicFactor = 0.0f;
-        public float roughnessFactor = 0.8f;
-    }
-
-    [Serializable]
-    private sealed class GltfTextureReference
-    {
-        public int index;
-    }
-
     private readonly List<string> playlistEntries = new List<string>();
     private AudioSource audioSource;
     private Bounds deskBounds;
@@ -177,12 +91,10 @@ public sealed class GymRadio : MonoBehaviour
     public string SoundCloudPlaylistUrl => soundCloudPlaylistUrl ?? string.Empty;
     public bool IsSoundCloudWidgetReady => soundCloudWidgetReady;
     public bool IsSoundCloudWidgetPlaying => soundCloudWidgetPlaying;
-    public int SoundCloudWidgetVolume => soundCloudWidgetVolume;
     public bool HasSoundCloudPlaylistPreference =>
         PlayerPrefs.HasKey(SoundCloudPlaylistUrlPref);
     public string PersistedSoundCloudPlaylistUrl => PlayerPrefs.GetString(
         SoundCloudPlaylistUrlPref, string.Empty);
-    public bool IsListenerInsideGym => listenerInsideGym;
     public bool CanInteractWithPlayer
     {
         get
@@ -666,20 +578,6 @@ public sealed class GymRadio : MonoBehaviour
         soundCloudPopup?.RefreshFromRadio();
     }
 
-    public void HandleSoundCloudWidgetPause(string payload)
-    {
-        soundCloudWidgetPlaying = false;
-        if (!soundCloudMode)
-        {
-            return;
-        }
-        soundCloudStatus = musicEnabled
-            ? "SOUNDCLOUD PLAYLIST // PAUSED"
-            : "MUSIC OFF // RADIO STILL ACTIVE";
-        soundCloudError = false;
-        soundCloudPopup?.RefreshFromRadio();
-    }
-
     public void HandleSoundCloudWidgetFinish(string payload)
     {
         if (!soundCloudMode || !musicEnabled)
@@ -700,16 +598,6 @@ public sealed class GymRadio : MonoBehaviour
         }
 #endif
         soundCloudPopup?.RefreshFromRadio();
-    }
-
-    public void HandleSoundCloudWidgetError(string payload)
-    {
-        if (!soundCloudMode)
-        {
-            return;
-        }
-        FallbackToLocal(
-            "SOUNDCLOUD PLAYLIST UNAVAILABLE // LOCAL PLAYLIST ACTIVE");
     }
 
 #if UNITY_EDITOR
@@ -954,7 +842,7 @@ public sealed class GymRadio : MonoBehaviour
         }
 
         byte[] glbBytes;
-        string path = JoinStreamingAssetsPath(RadioRelativePath);
+        string path = GymShared.JoinStreamingAssetsPath(RadioRelativePath);
         using (UnityWebRequest request = UnityWebRequest.Get(path))
         {
             request.downloadHandler = new DownloadHandlerBuffer();
@@ -970,7 +858,7 @@ public sealed class GymRadio : MonoBehaviour
             glbBytes = request.downloadHandler.data;
         }
 
-        if (!TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary) ||
+        if (!GymGlb.TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary) ||
             gltf.meshes[0].primitives == null || gltf.meshes[0].primitives.Length == 0)
         {
             Debug.LogError("GYMCHAOS_RADIO_MODEL_ERROR could not read radio.glb.", this);
@@ -980,17 +868,17 @@ public sealed class GymRadio : MonoBehaviour
         yield return null;
 
         GltfPrimitive primitive = gltf.meshes[0].primitives[0];
-        Vector3[] sourcePositions = ReadVector3Accessor(
+        Vector3[] sourcePositions = GymGlb.ReadVector3Accessor(
             gltf, binary, primitive.attributes.POSITION);
         Vector3[] sourceNormals = primitive.attributes.NORMAL >= 0 &&
             primitive.attributes.NORMAL < gltf.accessors.Length
-            ? ReadVector3Accessor(gltf, binary, primitive.attributes.NORMAL)
+            ? GymGlb.ReadVector3Accessor(gltf, binary, primitive.attributes.NORMAL)
             : null;
         Vector2[] sourceUvs = primitive.attributes.TEXCOORD_0 >= 0 &&
             primitive.attributes.TEXCOORD_0 < gltf.accessors.Length
-            ? ReadVector2Accessor(gltf, binary, primitive.attributes.TEXCOORD_0)
+            ? GymGlb.ReadVector2Accessor(gltf, binary, primitive.attributes.TEXCOORD_0)
             : null;
-        int[] triangles = ReadIndexAccessor(gltf, binary, primitive.indices);
+        int[] triangles = GymGlb.ReadIndexAccessor(gltf, binary, primitive.indices);
 
         Vector3[] positions = new Vector3[sourcePositions.Length];
         Vector3[] normals = sourceNormals != null && sourceNormals.Length == sourcePositions.Length
@@ -1089,7 +977,7 @@ public sealed class GymRadio : MonoBehaviour
             boxCollider = gameObject.AddComponent<BoxCollider>();
         }
         boxCollider.isTrigger = false;
-        ApplyRendererBoundsToBox(transform, renderer, boxCollider);
+        GymShared.ApplyRendererBoundsToBox(transform, renderer, boxCollider);
 
         PickupItem pickup = GetComponent<PickupItem>();
         if (pickup == null)
@@ -1118,18 +1006,6 @@ public sealed class GymRadio : MonoBehaviour
             $"collider={boxCollider.size} audioRoot={audioSource != null} " +
             $"deskAnchored={body.isKinematic}",
             this);
-    }
-
-    private static void ApplyRendererBoundsToBox(
-        Transform target, Renderer renderer, BoxCollider boxCollider)
-    {
-        Vector3 localCenter = target.InverseTransformPoint(renderer.bounds.center);
-        Vector3 lossy = target.lossyScale;
-        boxCollider.center = localCenter;
-        boxCollider.size = new Vector3(
-            renderer.bounds.size.x / Mathf.Max(Mathf.Abs(lossy.x), 0.0001f),
-            renderer.bounds.size.y / Mathf.Max(Mathf.Abs(lossy.y), 0.0001f),
-            renderer.bounds.size.z / Mathf.Max(Mathf.Abs(lossy.z), 0.0001f));
     }
 
     private void PlaceModelOnDesk(Renderer renderer)
@@ -1172,7 +1048,7 @@ public sealed class GymRadio : MonoBehaviour
         {
             string relativePath = playlistEntries[index];
             AudioClip clip = null;
-            string path = JoinStreamingAssetsPath(relativePath);
+            string path = GymShared.JoinStreamingAssetsPath(relativePath);
             using (UnityWebRequest request = UnityWebRequestMultimedia.GetAudioClip(
                 path, GetAudioType(relativePath)))
             {
@@ -1336,23 +1212,9 @@ public sealed class GymRadio : MonoBehaviour
         return hasBounds;
     }
 
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
-    }
-
     private static Material CreateRadioMaterial(GltfRoot gltf, byte[] binary)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null)
-        {
-            shader = Shader.Find("Standard");
-        }
+        Shader shader = GymMaterialLibrary.LitShader;
 
         Material material = new Material(shader) { name = "Reception radio material" };
         material.SetColor("_BaseColor", Color.white);
@@ -1423,112 +1285,6 @@ public sealed class GymRadio : MonoBehaviour
         }
 
         return texture;
-    }
-
-    private static bool TryReadGlb(byte[] bytes, out GltfRoot gltf, out byte[] binary)
-    {
-        gltf = null;
-        binary = null;
-        if (bytes == null || bytes.Length < 20 || BitConverter.ToUInt32(bytes, 0) != GlbMagic)
-        {
-            return false;
-        }
-
-        int offset = 12;
-        string json = null;
-        while (offset + 8 <= bytes.Length)
-        {
-            int length = (int)BitConverter.ToUInt32(bytes, offset);
-            uint type = BitConverter.ToUInt32(bytes, offset + 4);
-            offset += 8;
-            if (length < 0 || offset + length > bytes.Length)
-            {
-                return false;
-            }
-
-            if (type == JsonChunk)
-            {
-                json = Encoding.UTF8.GetString(bytes, offset, length)
-                    .TrimEnd('\0', ' ', '\n', '\r', '\t');
-            }
-            else if (type == BinaryChunk)
-            {
-                binary = new byte[length];
-                Buffer.BlockCopy(bytes, offset, binary, 0, length);
-            }
-            offset += length;
-        }
-
-        if (string.IsNullOrEmpty(json) || binary == null)
-        {
-            return false;
-        }
-
-        gltf = JsonUtility.FromJson<GltfRoot>(json);
-        return gltf != null && gltf.meshes != null && gltf.meshes.Length > 0 &&
-            gltf.accessors != null && gltf.bufferViews != null;
-    }
-
-    private static Vector3[] ReadVector3Accessor(
-        GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 12;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector3[] result = new Vector3[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector3(
-                BitConverter.ToSingle(binary, offset),
-                BitConverter.ToSingle(binary, offset + 4),
-                BitConverter.ToSingle(binary, offset + 8));
-        }
-        return result;
-    }
-
-    private static Vector2[] ReadVector2Accessor(
-        GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 8;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector2[] result = new Vector2[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector2(
-                BitConverter.ToSingle(binary, offset),
-                BitConverter.ToSingle(binary, offset + 4));
-        }
-        return result;
-    }
-
-    private static int[] ReadIndexAccessor(
-        GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int componentSize = accessor.componentType == 5125
-            ? 4
-            : accessor.componentType == 5123
-                ? 2
-                : 1;
-        int stride = view.byteStride > 0 ? view.byteStride : componentSize;
-        int start = view.byteOffset + accessor.byteOffset;
-        int[] result = new int[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = accessor.componentType == 5125
-                ? (int)BitConverter.ToUInt32(binary, offset)
-                : accessor.componentType == 5123
-                    ? BitConverter.ToUInt16(binary, offset)
-                    : binary[offset];
-        }
-        return result;
     }
 
 }

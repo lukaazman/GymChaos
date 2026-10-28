@@ -6,22 +6,9 @@ using UnityEngine.Rendering;
 
 public sealed class PlayerHandRig : MonoBehaviour
 {
-    private sealed class BakedRenderProxy
-    {
-        public SkinnedMeshRenderer source;
-        public Mesh mesh;
-        public Mesh sourceBakeMesh;
-        public Bounds faceBounds;
-        public bool hasFaceBounds;
-        public int[] selectedVertexIndices;
-        public Transform presentationRoot;
-    }
-
     private const string PlayerModelResource = "Player/player_authored";
     private const string PlayerAnimationBundleResource = "Player/player_authored";
     private const string PlayerBaseTextureResource = "Characters/Textures/player_authored";
-    private const float MirrorFallbackTargetHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight;
-    private const float MirrorEnemyHeightScale = 1f;
     private const float AuthoredTransitionDuration = 0.18f;
     private const float FirstPersonArmScale = 0.84f;
     private const float JumpLowerBodyYawCorrection = -10f;
@@ -57,8 +44,6 @@ public sealed class PlayerHandRig : MonoBehaviour
     private readonly Dictionary<Transform, Vector3> restPositions = new Dictionary<Transform, Vector3>();
     private readonly Dictionary<Transform, Vector3> restScales = new Dictionary<Transform, Vector3>();
     private readonly Dictionary<Transform, Vector3> restBoneAxes = new Dictionary<Transform, Vector3>();
-    private readonly Dictionary<AnimationClip, Quaternion> importedRootHeadingCorrections = new Dictionary<AnimationClip, Quaternion>();
-    private readonly List<BakedRenderProxy> bakedRenderProxies = new List<BakedRenderProxy>();
     private readonly List<SkinnedMeshRenderer> firstPersonArmRenderers =
         new List<SkinnedMeshRenderer>();
     private readonly List<SkinnedMeshRenderer> mirrorBodyRenderers =
@@ -120,8 +105,6 @@ public sealed class PlayerHandRig : MonoBehaviour
     private bool sampledThrowHardClip;
     private bool sampledHeldBarGrip;
     private bool sampledHeldPlateGrip;
-    private float mirrorScaleRefreshTimer;
-    private bool mirrorScaleMatched;
     private bool sampledRunClip;
     private bool sampledCrouchClip;
     private bool missingShoveLogged;
@@ -129,9 +112,6 @@ public sealed class PlayerHandRig : MonoBehaviour
     private AnimationClip lastSampledClip;
     private bool lastSampledAttackMode;
     private bool hasSampledPose;
-
-    private readonly Dictionary<Transform, Quaternion> lowerBodyRotations = new Dictionary<Transform, Quaternion>();
-    private readonly Dictionary<Transform, Vector3> lowerBodyPositions = new Dictionary<Transform, Vector3>();
 
     public bool HasRequiredMixamoAttackClips => walkClip != null && runClip != null &&
         crouchClip != null && jumpClip != null &&
@@ -145,7 +125,6 @@ public sealed class PlayerHandRig : MonoBehaviour
     public bool HasSampledHeldEquipmentGrips => sampledHeldBarGrip && sampledHeldPlateGrip;
     public bool HasMixamoRunClip => runClip != null;
     public bool HasSampledMixamoRunClip => sampledRunClip;
-    public bool HasMixamoCrouchClip => crouchClip != null;
     public bool HasSampledMixamoCrouchClip => sampledCrouchClip;
     public Transform RuntimeModelRoot => modelRoot != null ? modelRoot.transform : null;
     public float RuntimeVisibleHeight => GetFreshPlayerHeight();
@@ -587,51 +566,6 @@ public sealed class PlayerHandRig : MonoBehaviour
         return sampled;
     }
 
-    private static float MeasureVerificationSupportDelta(
-        Dictionary<Transform, Quaternion> supportPose)
-    {
-        float maximum = 0f;
-        foreach (KeyValuePair<Transform, Quaternion> pair in supportPose)
-        {
-            if (pair.Key != null)
-            {
-                maximum = Mathf.Max(
-                    maximum, Quaternion.Angle(pair.Value, pair.Key.localRotation));
-            }
-        }
-        return maximum;
-    }
-
-    private float MeasureMaximumResidualTwist(bool arms)
-    {
-        float maximum = 0f;
-        foreach (KeyValuePair<Transform, Quaternion> pair in restRotations)
-        {
-            Transform bone = pair.Key;
-            if (bone == null ||
-                !restBoneAxes.TryGetValue(bone, out Vector3 localAxis))
-            {
-                continue;
-            }
-            string name = NormalizeBoneName(bone.name);
-            bool armBone = name.Contains("shoulder") ||
-                name.Contains("upperarm") || name.Contains("forearm");
-            bool legBone = name.Contains("thigh") || name.Contains("shin") ||
-                name.Contains("calf");
-            if ((arms && !armBone) || (!arms && !legBone))
-            {
-                continue;
-            }
-            Vector3 restDirection = pair.Value * localAxis;
-            Vector3 animatedDirection = bone.localRotation * localAxis;
-            Quaternion expected = Quaternion.FromToRotation(
-                restDirection, animatedDirection) * pair.Value;
-            maximum = Mathf.Max(
-                maximum, Quaternion.Angle(expected, bone.localRotation));
-        }
-        return maximum;
-    }
-
     public bool SampleRunForVerification(float normalizedTime)
     {
         if (runClip == null || modelRoot == null)
@@ -940,7 +874,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         if (nextClip != null)
         {
             poseTransition.Begin(modelRoot.transform, AuthoredTransitionDuration);
-            Debug.Log(
+            GymLog.Diag(
                 $"GYMCHAOS_PLAYER_AUTHORED_TRANSITION " +
                 $"from={lastSampledClip?.name ?? "none"} to={nextClip.name} " +
                 $"attack={attackMode} duration={AuthoredTransitionDuration:F2}", this);
@@ -951,46 +885,6 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
         lastSampledClip = nextClip;
         lastSampledAttackMode = attackMode;
-    }
-
-    private void RefreshMirrorScale()
-    {
-        if (!initialized || modelRoot == null)
-        {
-            return;
-        }
-
-        // Enemy GLBs are loaded asynchronously. Refit the reflected player after
-        // those renderers exist so the mirror uses the same visible model scale,
-        // rather than the fallback scale captured during player initialization.
-        mirrorScaleRefreshTimer -= Time.deltaTime;
-        if (mirrorScaleRefreshTimer > 0f)
-        {
-            return;
-        }
-
-        if (mirrorScaleMatched)
-        {
-            return;
-        }
-
-        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
-        if (fighters.Length < 6)
-        {
-            mirrorScaleRefreshTimer = 0.5f;
-            return;
-        }
-
-        mirrorScaleRefreshTimer = 0.5f;
-        SkinnedMeshRenderer[] bodyRenderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true)
-            .Where(renderer => renderer != null && renderer.gameObject.layer == PlanarGymMirror.MirrorPlayerLayer)
-            .ToArray();
-        float targetHeight = FindAverageEnemyVisibleHeight() * MirrorEnemyHeightScale;
-        if (targetHeight > 0.01f)
-        {
-            ScaleMirrorBodyToTarget(bodyRenderers, targetHeight);
-            mirrorScaleMatched = true;
-        }
     }
 
     private void LoadAttackClips()
@@ -1229,59 +1123,6 @@ public sealed class PlayerHandRig : MonoBehaviour
                 pair.Key.localScale = pair.Value;
             }
         }
-    }
-
-    private void CaptureLowerBodyPose()
-    {
-        lowerBodyRotations.Clear();
-        lowerBodyPositions.Clear();
-        Transform inactiveArmRoot = null;
-        if (activeAttackClip == punchRightClip)
-        {
-            inactiveArmRoot = leftShoulder != null ? leftShoulder : leftUpperArm;
-        }
-        else if (activeAttackClip == punchLeftClip)
-        {
-            inactiveArmRoot = rightShoulder != null ? rightShoulder : rightUpperArm;
-        }
-        foreach (KeyValuePair<Transform, Quaternion> pair in restRotations)
-        {
-            Transform bone = pair.Key;
-            string normalizedName = bone != null
-                ? NormalizeBoneName(bone.name)
-                : string.Empty;
-            bool inactiveArmBone = inactiveArmRoot != null && bone != null &&
-                (bone == inactiveArmRoot || bone.IsChildOf(inactiveArmRoot));
-            bool stableTorsoBone = normalizedName.Contains("spine") ||
-                normalizedName.Contains("pelvis") || normalizedName.Contains("hips");
-            if (bone != null &&
-                (bone == animationRootBone || !IsUpperBodyBone(bone) ||
-                 inactiveArmBone || stableTorsoBone))
-            {
-                lowerBodyRotations[bone] = bone.localRotation;
-                lowerBodyPositions[bone] = bone.localPosition;
-            }
-        }
-    }
-
-    private void RestoreLowerBodyPose()
-    {
-        foreach (KeyValuePair<Transform, Quaternion> pair in lowerBodyRotations)
-        {
-            if (pair.Key != null)
-            {
-                pair.Key.localRotation = pair.Value;
-                pair.Key.localPosition = lowerBodyPositions[pair.Key];
-            }
-        }
-    }
-
-    private static bool IsUpperBodyBone(Transform bone)
-    {
-        string name = NormalizeBoneName(bone.name);
-        return name.Contains("spine") || name.Contains("chest") || name.Contains("neck") ||
-               name.Contains("head") || name.Contains("shoulder") || name.Contains("arm") ||
-               name.Contains("hand") || name.Contains("finger") || name.Contains("thumb");
     }
 
     private void AnimateHeldGripOverAttack(float elapsed, float duration, float gripReach)
@@ -1817,216 +1658,6 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
     }
 
-    private void ScaleMirrorBodyToTarget(SkinnedMeshRenderer[] renderers, float targetHeight)
-    {
-        Bounds visibleBounds = default;
-        bool found = false;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            SkinnedMeshRenderer renderer = renderers[i];
-            if (renderer == null || renderer.sharedMesh == null)
-            {
-                continue;
-            }
-
-            Mesh baked = new Mesh();
-            renderer.BakeMesh(baked, true);
-            Vector3[] vertices = baked.vertices;
-            for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
-            {
-                Vector3 world = renderer.transform.TransformPoint(vertices[vertexIndex]);
-                if (!found)
-                {
-                    visibleBounds = new Bounds(world, Vector3.zero);
-                    found = true;
-                }
-                else
-                {
-                    visibleBounds.Encapsulate(world);
-                }
-            }
-            UnityEngine.Object.Destroy(baked);
-        }
-
-        if (!found || visibleBounds.size.y < 0.01f)
-        {
-            return;
-        }
-
-        float scale = targetHeight / visibleBounds.size.y;
-        if (Mathf.Abs(scale - 1f) < 0.005f)
-        {
-            return;
-        }
-
-        float floorBefore = visibleBounds.min.y;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            if (renderers[i] != null)
-            {
-                // Scale only the reflected body renderer. The first-person arms
-                // share the model root and must not inherit this late refit.
-                renderers[i].transform.localScale *= scale;
-            }
-        }
-        Physics.SyncTransforms();
-
-        Bounds after = default;
-        bool foundAfter = false;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            if (renderers[i] == null || renderers[i].sharedMesh == null)
-            {
-                continue;
-            }
-            Mesh baked = new Mesh();
-            renderers[i].BakeMesh(baked, true);
-            Vector3[] vertices = baked.vertices;
-            for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
-            {
-                Vector3 world = renderers[i].transform.TransformPoint(vertices[vertexIndex]);
-                if (!foundAfter)
-                {
-                    after = new Bounds(world, Vector3.zero);
-                    foundAfter = true;
-                }
-                else
-                {
-                    after.Encapsulate(world);
-                }
-            }
-            UnityEngine.Object.Destroy(baked);
-        }
-        if (foundAfter)
-        {
-            Vector3 floorCorrection = Vector3.up * (floorBefore - after.min.y);
-            for (int i = 0; i < renderers.Length; i++)
-            {
-                if (renderers[i] != null)
-                {
-                    renderers[i].transform.position += floorCorrection;
-                }
-            }
-        }
-    }
-
-    private static float FindAverageEnemyVisibleHeight()
-    {
-        EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
-        float total = 0f;
-        int count = 0;
-        for (int i = 0; i < fighters.Length; i++)
-        {
-            if (fighters[i] == null)
-            {
-                continue;
-            }
-            SkinnedMeshRenderer[] renderers = fighters[i].GetComponentsInChildren<SkinnedMeshRenderer>(true);
-            for (int j = 0; j < renderers.Length; j++)
-            {
-                SkinnedMeshRenderer renderer = renderers[j];
-                if (renderer == null || renderer.sharedMesh == null || !renderer.enabled)
-                {
-                    continue;
-                }
-                Mesh baked = new Mesh();
-                renderer.BakeMesh(baked, true);
-                Vector3[] vertices = baked.vertices;
-                if (vertices.Length > 0)
-                {
-                    float minY = float.PositiveInfinity;
-                    float maxY = float.NegativeInfinity;
-                    for (int vertexIndex = 0; vertexIndex < vertices.Length; vertexIndex++)
-                    {
-                        float worldY = renderer.transform.TransformPoint(vertices[vertexIndex]).y;
-                        minY = Mathf.Min(minY, worldY);
-                        maxY = Mathf.Max(maxY, worldY);
-                    }
-                    if (maxY > minY)
-                    {
-                        total += maxY - minY;
-                        count++;
-                    }
-                }
-                UnityEngine.Object.Destroy(baked);
-            }
-        }
-        return count > 0 ? total / count : 0f;
-    }
-
-    private Mesh CreateLowerLodMesh(Mesh source)
-    {
-        if (source == null || source.lodCount <= 1)
-        {
-            return source;
-        }
-
-        int lod = Mathf.Min(1, source.lodCount - 1);
-        int[][] subMeshTriangles = new int[source.subMeshCount][];
-        int[] remap = new int[source.vertexCount];
-        for (int i = 0; i < remap.Length; i++)
-        {
-            remap[i] = -1;
-        }
-
-        Vector3[] sourceVertices = source.vertices;
-        Vector3[] sourceNormals = source.normals;
-        Vector4[] sourceTangents = source.tangents;
-        Vector2[] sourceUvs = source.uv;
-        Color32[] sourceColors = source.colors32;
-        BoneWeight[] sourceWeights = source.boneWeights;
-        List<Vector3> vertices = new List<Vector3>();
-        List<Vector3> normals = new List<Vector3>();
-        List<Vector4> tangents = new List<Vector4>();
-        List<Vector2> uvs = new List<Vector2>();
-        List<Color32> colors = new List<Color32>();
-        List<BoneWeight> weights = new List<BoneWeight>();
-
-        for (int subMesh = 0; subMesh < source.subMeshCount; subMesh++)
-        {
-            int[] lodTriangles = source.GetTriangles(subMesh, lod, true);
-            for (int i = 0; i < lodTriangles.Length; i++)
-            {
-                int sourceIndex = lodTriangles[i];
-                int reducedIndex = remap[sourceIndex];
-                if (reducedIndex < 0)
-                {
-                    reducedIndex = vertices.Count;
-                    remap[sourceIndex] = reducedIndex;
-                    vertices.Add(sourceVertices[sourceIndex]);
-                    if (sourceNormals.Length == sourceVertices.Length) normals.Add(sourceNormals[sourceIndex]);
-                    if (sourceTangents.Length == sourceVertices.Length) tangents.Add(sourceTangents[sourceIndex]);
-                    if (sourceUvs.Length == sourceVertices.Length) uvs.Add(sourceUvs[sourceIndex]);
-                    if (sourceColors.Length == sourceVertices.Length) colors.Add(sourceColors[sourceIndex]);
-                    if (sourceWeights.Length == sourceVertices.Length) weights.Add(sourceWeights[sourceIndex]);
-                }
-                lodTriangles[i] = reducedIndex;
-            }
-            subMeshTriangles[subMesh] = lodTriangles;
-        }
-
-        Mesh reduced = new Mesh
-        {
-            name = source.name + " (Compacted Runtime LOD " + lod + ")",
-            indexFormat = vertices.Count > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16,
-            vertices = vertices.ToArray(),
-            subMeshCount = source.subMeshCount,
-            bindposes = source.bindposes,
-            bounds = source.bounds
-        };
-        if (normals.Count == vertices.Count) reduced.normals = normals.ToArray();
-        if (tangents.Count == vertices.Count) reduced.tangents = tangents.ToArray();
-        if (uvs.Count == vertices.Count) reduced.uv = uvs.ToArray();
-        if (colors.Count == vertices.Count) reduced.colors32 = colors.ToArray();
-        if (weights.Count == vertices.Count) reduced.boneWeights = weights.ToArray();
-        for (int subMesh = 0; subMesh < subMeshTriangles.Length; subMesh++)
-        {
-            reduced.SetTriangles(subMeshTriangles[subMesh], subMesh, false);
-        }
-        runtimeMeshes.Add(reduced);
-        return reduced;
-    }
-
     private static Material[] CreateOpaqueMaterials(Material[] sourceMaterials)
     {
         Texture2D fallbackBaseColor = LoadPlayerBaseColorTexture();
@@ -2055,7 +1686,7 @@ public sealed class PlayerHandRig : MonoBehaviour
                     sourceColor = source.GetColor("_Color");
                 }
             }
-            Shader opaqueShader = Shader.Find("Universal Render Pipeline/Lit");
+            Shader opaqueShader = GymMaterialLibrary.LitShader;
             Material material = opaqueShader != null
                 ? new Material(opaqueShader)
                 : source != null
@@ -2111,7 +1742,7 @@ public sealed class PlayerHandRig : MonoBehaviour
     private static Material[] CreateFirstPersonMaterials(Material[] sourceMaterials)
     {
         Material[] opaqueMaterials = CreateOpaqueMaterials(sourceMaterials);
-        Shader firstPersonShader = Shader.Find("Universal Render Pipeline/Unlit") ??
+        Shader firstPersonShader = GymMaterialLibrary.UnlitShader ??
             Shader.Find("Unlit/Texture");
         if (firstPersonShader == null)
         {
@@ -2396,24 +2027,6 @@ public sealed class PlayerHandRig : MonoBehaviour
         return arms;
     }
 
-    private static int[] BuildSelectedVertexIndices(bool[] selectedVertexMask)
-    {
-        if (selectedVertexMask == null)
-        {
-            return new int[0];
-        }
-
-        List<int> indices = new List<int>();
-        for (int i = 0; i < selectedVertexMask.Length; i++)
-        {
-            if (selectedVertexMask[i])
-            {
-                indices.Add(i);
-            }
-        }
-        return indices.ToArray();
-    }
-
     private static float DistanceToBindPoseArmSurface(
         Vector3 vertex,
         Transform[] bones,
@@ -2580,43 +2193,6 @@ public sealed class PlayerHandRig : MonoBehaviour
         return current;
     }
 
-    private static float NormalizeCameraPitch(float angle)
-    {
-        angle %= 360f;
-        if (angle > 180f)
-        {
-            angle -= 360f;
-        }
-        // Unity's local X rotation is positive when the player looks down;
-        // keep the sign so looking sharply up does not hide the arms too.
-        return angle;
-    }
-
-    private void CreateBakedProxy(
-        SkinnedMeshRenderer source, int layer, string proxyName, bool castShadows)
-    {
-        GameObject proxy = new GameObject(proxyName);
-        proxy.layer = layer;
-        proxy.transform.SetParent(source.transform.parent, false);
-        proxy.transform.SetLocalPositionAndRotation(source.transform.localPosition, source.transform.localRotation);
-        proxy.transform.localScale = source.transform.localScale;
-        if (layer == PlanarGymMirror.FirstPersonPlayerLayer && playerCamera != null)
-        {
-            proxy.transform.position += playerCamera.transform.up * -0.18f + playerCamera.transform.forward * 0.2f;
-        }
-
-        Mesh bakedMesh = Instantiate(source.sharedMesh);
-        bakedMesh.name = proxyName + " Mesh";
-        bakedMesh.MarkDynamic();
-        proxy.AddComponent<MeshFilter>().sharedMesh = bakedMesh;
-        MeshRenderer renderer = proxy.AddComponent<MeshRenderer>();
-        renderer.sharedMaterials = source.sharedMaterials;
-        renderer.shadowCastingMode = castShadows ? ShadowCastingMode.On : ShadowCastingMode.Off;
-        renderer.receiveShadows = castShadows;
-        bakedRenderProxies.Add(new BakedRenderProxy { source = source, mesh = bakedMesh });
-        source.forceRenderingOff = true;
-    }
-
     private void UpdateBakedRenderers()
     {
         UpdateFirstPersonClonePose();
@@ -2726,12 +2302,6 @@ public sealed class PlayerHandRig : MonoBehaviour
     }
 
 #if UNITY_EDITOR
-    private static string DescribeBone(Transform bone)
-    {
-        return bone == null
-            ? "missing"
-            : $"{bone.name}:{bone.localPosition}/{bone.localRotation}";
-    }
 #endif
 
     private static void SetLayerRecursively(Transform root, int layer)
@@ -2756,17 +2326,6 @@ public sealed class PlayerHandRig : MonoBehaviour
             if (runtimeMeshes[i] != null)
             {
                 Destroy(runtimeMeshes[i]);
-            }
-        }
-        for (int i = 0; i < bakedRenderProxies.Count; i++)
-        {
-            if (bakedRenderProxies[i].mesh != null)
-            {
-                Destroy(bakedRenderProxies[i].mesh);
-            }
-            if (bakedRenderProxies[i].sourceBakeMesh != null)
-            {
-                Destroy(bakedRenderProxies[i].sourceBakeMesh);
             }
         }
     }

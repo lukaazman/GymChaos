@@ -50,6 +50,7 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
         if (collider != null && !stationColliders.Contains(collider))
         {
             stationColliders.Add(collider);
+            footprintFrame = -1;
         }
     }
 
@@ -168,54 +169,6 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
                 }
             }
         }
-    }
-
-    public bool TryGetEscapePoint(
-        Vector3 worldPosition, float margin, out Vector3 escapePoint)
-    {
-        escapePoint = worldPosition;
-        if (!TryGetLocalFootprint(out Bounds localFootprint))
-        {
-            return false;
-        }
-
-        Vector3 localPosition = transform.InverseTransformPoint(worldPosition);
-        bool inside = localPosition.x >= localFootprint.min.x &&
-            localPosition.x <= localFootprint.max.x &&
-            localPosition.z >= localFootprint.min.z &&
-            localPosition.z <= localFootprint.max.z;
-        if (!inside)
-        {
-            return false;
-        }
-
-        float left = localPosition.x - localFootprint.min.x;
-        float right = localFootprint.max.x - localPosition.x;
-        float front = localPosition.z - localFootprint.min.z;
-        float back = localFootprint.max.z - localPosition.z;
-        float nearest = Mathf.Min(Mathf.Min(left, right), Mathf.Min(front, back));
-        float safeMargin = Mathf.Max(0.75f, margin);
-        if (nearest == left)
-        {
-            localPosition.x = localFootprint.min.x - safeMargin;
-        }
-        else if (nearest == right)
-        {
-            localPosition.x = localFootprint.max.x + safeMargin;
-        }
-        else if (nearest == front)
-        {
-            localPosition.z = localFootprint.min.z - safeMargin;
-        }
-        else
-        {
-            localPosition.z = localFootprint.max.z + safeMargin;
-        }
-
-        localPosition.y = transform.InverseTransformPoint(worldPosition).y;
-        escapePoint = transform.TransformPoint(localPosition);
-        escapePoint.y = worldPosition.y;
-        return true;
     }
 
     public bool TryGetEscapePointForEnemy(
@@ -472,7 +425,28 @@ public sealed class GymDeadliftStationMarker : MonoBehaviour
         return true;
     }
 
+    // Route building asks for the footprint thousands of times per route;
+    // the colliders only move between physics steps.
+    private int footprintFrame = -1;
+    private float footprintFixedTime = -1f;
+    private bool footprintValid;
+    private Bounds footprintCache;
+
     private bool TryGetLocalFootprint(out Bounds localFootprint)
+    {
+        if (footprintFrame == Time.frameCount && footprintFixedTime == Time.fixedTime)
+        {
+            localFootprint = footprintCache;
+            return footprintValid;
+        }
+        footprintValid = ComputeLocalFootprint(out footprintCache);
+        footprintFrame = Time.frameCount;
+        footprintFixedTime = Time.fixedTime;
+        localFootprint = footprintCache;
+        return footprintValid;
+    }
+
+    private bool ComputeLocalFootprint(out Bounds localFootprint)
     {
         localFootprint = default;
         bool hasFootprint = false;
@@ -523,9 +497,6 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
 {
     private const string RootName = "Gym Loose Items (Runtime)";
     private const string InteriorRootName = "Gym Interior (Runtime)";
-    private const uint GlbMagic = 0x46546C67;
-    private const uint JsonChunk = 0x4E4F534A;
-    private const uint BinaryChunk = 0x004E4942;
     private const float CurrentFoamRollerScale = 0.81f;
     private const float CurrentMedicineBallScale = 0.95f;
     private const float FoamRollerScale = CurrentFoamRollerScale * 0.75f;
@@ -629,15 +600,6 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         return instance.deadliftStationMarker.AreEnemyCollisionsIgnored(enemy);
     }
 
-    public static bool TryGetDeadliftEscapePoint(
-        Vector3 worldPosition, float margin, out Vector3 escapePoint)
-    {
-        escapePoint = worldPosition;
-        return instance != null && instance.deadliftStationMarker != null &&
-            instance.deadliftStationMarker.TryGetEscapePoint(
-                worldPosition, margin, out escapePoint);
-    }
-
     public static bool TryGetDeadliftEscapePointForEnemy(
         EnemyFighter enemy, float margin, out Vector3 escapePoint)
     {
@@ -665,60 +627,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
     }
 
 #pragma warning disable 0649
-    [Serializable]
-    private sealed class GltfRoot
-    {
-        public GltfBufferView[] bufferViews;
-        public GltfAccessor[] accessors;
-        public GltfMesh[] meshes;
-        public GltfImage[] images;
-    }
 
-    [Serializable]
-    private sealed class GltfBufferView
-    {
-        public int byteOffset;
-        public int byteLength;
-        public int byteStride;
-    }
-
-    [Serializable]
-    private sealed class GltfAccessor
-    {
-        public int bufferView = -1;
-        public int byteOffset;
-        public int componentType;
-        public int count;
-    }
-
-    [Serializable]
-    private sealed class GltfMesh
-    {
-        public GltfPrimitive[] primitives;
-    }
-
-    [Serializable]
-    private sealed class GltfPrimitive
-    {
-        public GltfAttributes attributes;
-        public int indices = -1;
-        public int material;
-    }
-
-    [Serializable]
-    private sealed class GltfAttributes
-    {
-        public int POSITION = -1;
-        public int NORMAL = -1;
-        public int TEXCOORD_0 = -1;
-    }
-
-    [Serializable]
-    private sealed class GltfImage
-    {
-        public int bufferView = -1;
-        public string mimeType;
-    }
 #pragma warning restore 0649
 
     public static GymLooseItemSpawner CreateForScene(PlayerMovement player)
@@ -886,7 +795,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         float shelfY = floorY + 2.15f;
         Vector3 shelfCenter = new Vector3(shelfX, shelfY, shelfZ);
 
-        Material shelfMaterial = CreateSolidMaterial(
+        Material shelfMaterial = GymMaterialLibrary.Lit(
             "Loose item shelf material", new Color(0.055f, 0.065f, 0.08f), 0.62f, 0.48f);
         CreateShelfBox("Paper towel shelf", shelfCenter, new Vector3(2.35f, 0.14f, 0.68f), shelfMaterial);
         CreateShelfBox(
@@ -961,7 +870,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             new[] { "flooringmats", "matt" });
         if (flooringMaterial == null)
         {
-            flooringMaterial = CreateSolidMaterial(
+            flooringMaterial = GymMaterialLibrary.Lit(
                 "Deadlift Flooring Mats material",
                 new Color(0.055f, 0.065f, 0.078f), 0.08f, 0.38f);
         }
@@ -1151,7 +1060,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         List<Renderer> remove = new List<Renderer>();
         foreach (Renderer renderer in renderers)
         {
-            Bounds local = GetBoundsRelativeTo(barRoot, new[] { renderer });
+            Bounds local = GymShared.GetBoundsRelativeTo(barRoot, new[] { renderer });
             float across = Mathf.Max(local.size.y, local.size.z);
             if (local.size.x < 0.25f && across > 0.4f && Mathf.Abs(local.center.x) > 0.5f)
             {
@@ -1174,7 +1083,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             {
                 continue;
             }
-            Bounds local = GetBoundsRelativeTo(barRoot, new[] { renderer });
+            Bounds local = GymShared.GetBoundsRelativeTo(barRoot, new[] { renderer });
             bool onDiscSlice = false;
             foreach (float center in discCenters)
             {
@@ -1229,7 +1138,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         Renderer[] discRenderers = plateObject.GetComponentsInChildren<Renderer>(true);
         if (discRenderers.Length > 0)
         {
-            Bounds disc = GetBoundsRelativeTo(plateObject.transform, discRenderers);
+            Bounds disc = GymShared.GetBoundsRelativeTo(plateObject.transform, discRenderers);
             collider.center = disc.center;
             collider.size = new Vector3(
                 Mathf.Max(DeadliftLoadedPlateThickness, disc.size.x),
@@ -1524,7 +1433,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             return null;
         }
 
-        Bounds localBounds = GetBoundsRelativeTo(wrapper, renderers);
+        Bounds localBounds = GymShared.GetBoundsRelativeTo(wrapper, renderers);
         clone.transform.localPosition -= localBounds.center;
         Vector3 size = localBounds.size;
         Quaternion alignment = Quaternion.identity;
@@ -1608,7 +1517,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         Renderer renderer = bar.GetComponent<Renderer>();
         if (renderer != null)
         {
-            renderer.sharedMaterial = CreateSolidMaterial(
+            renderer.sharedMaterial = GymMaterialLibrary.NewLit(
                 "Deadlift fallback bar material", new Color(0.38f, 0.42f, 0.47f),
                 0.82f, 0.58f);
         }
@@ -1629,7 +1538,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         Renderer renderer = plate.GetComponent<Renderer>();
         if (renderer != null)
         {
-            renderer.sharedMaterial = CreateSolidMaterial(
+            renderer.sharedMaterial = GymMaterialLibrary.NewLit(
                 "Deadlift fallback plate material", new Color(0.06f, 0.07f, 0.085f),
                 0.7f, 0.38f);
         }
@@ -1662,29 +1571,6 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         {
             pickups[i].enabled = false;
         }
-    }
-
-    private static Bounds GetBoundsRelativeTo(Transform relativeTo, Renderer[] renderers)
-    {
-        Bounds result = new Bounds(
-            relativeTo.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            Bounds bounds = renderers[i].bounds;
-            Vector3 min = bounds.min;
-            Vector3 max = bounds.max;
-            for (int x = 0; x <= 1; x++)
-            for (int y = 0; y <= 1; y++)
-            for (int z = 0; z <= 1; z++)
-            {
-                result.Encapsulate(relativeTo.InverseTransformPoint(new Vector3(
-                    x == 0 ? min.x : max.x,
-                    y == 0 ? min.y : max.y,
-                    z == 0 ? min.z : max.z)));
-            }
-        }
-
-        return result;
     }
 
     private List<ItemSpec> CreateItemSpecs(ShelfLayout shelf, DeadliftLayout deadlift)
@@ -2114,7 +2000,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
         else
         {
-            string path = JoinStreamingAssetsPath(relativePath);
+            string path = GymShared.JoinStreamingAssetsPath(relativePath);
             using (UnityWebRequest request = UnityWebRequest.Get(path))
             {
                 request.downloadHandler = new DownloadHandlerBuffer();
@@ -2134,7 +2020,7 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             }
         }
 
-        if (!TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary))
+        if (!GymGlb.TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary))
         {
             Debug.LogError($"GYMCHAOS_LOOSE_ITEM_PARSE_ERROR file={fileName}", this);
             assetCache[fileName] = null;
@@ -2452,50 +2338,6 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         return material;
     }
 
-    private static bool TryReadGlb(byte[] bytes, out GltfRoot gltf, out byte[] binary)
-    {
-        gltf = null;
-        binary = null;
-        if (bytes == null || bytes.Length < 20 || BitConverter.ToUInt32(bytes, 0) != GlbMagic)
-        {
-            return false;
-        }
-
-        int offset = 12;
-        string json = null;
-        while (offset + 8 <= bytes.Length)
-        {
-            int length = (int)BitConverter.ToUInt32(bytes, offset);
-            uint type = BitConverter.ToUInt32(bytes, offset + 4);
-            offset += 8;
-            if (length < 0 || offset + length > bytes.Length)
-            {
-                return false;
-            }
-
-            if (type == JsonChunk)
-            {
-                json = Encoding.UTF8.GetString(bytes, offset, length)
-                    .TrimEnd('\0', ' ', '\n', '\r', '\t');
-            }
-            else if (type == BinaryChunk)
-            {
-                binary = new byte[length];
-                Buffer.BlockCopy(bytes, offset, binary, 0, length);
-            }
-
-            offset += length;
-        }
-
-        if (string.IsNullOrEmpty(json) || binary == null)
-        {
-            return false;
-        }
-
-        gltf = JsonUtility.FromJson<GltfRoot>(json);
-        return gltf != null && gltf.meshes != null && gltf.meshes.Length > 0;
-    }
-
     private static ItemAsset CreateAsset(string fileName, GltfRoot gltf, byte[] binary)
     {
         if (gltf.meshes[0].primitives == null || gltf.meshes[0].primitives.Length == 0)
@@ -2511,10 +2353,10 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             return null;
         }
 
-        Vector3[] sourcePositions = ReadVector3Accessor(gltf, binary, primitive.attributes.POSITION);
-        Vector3[] sourceNormals = ReadVector3Accessor(gltf, binary, primitive.attributes.NORMAL);
-        Vector2[] sourceUvs = ReadVector2Accessor(gltf, binary, primitive.attributes.TEXCOORD_0);
-        int[] triangles = ReadIndexAccessor(gltf, binary, primitive.indices);
+        Vector3[] sourcePositions = GymGlb.ReadVector3Accessor(gltf, binary, primitive.attributes.POSITION);
+        Vector3[] sourceNormals = GymGlb.ReadVector3Accessor(gltf, binary, primitive.attributes.NORMAL);
+        Vector2[] sourceUvs = GymGlb.ReadVector2Accessor(gltf, binary, primitive.attributes.TEXCOORD_0);
+        int[] triangles = GymGlb.ReadIndexAccessor(gltf, binary, primitive.indices);
         if (sourcePositions.Length == 0 || triangles.Length < 3)
         {
             Debug.LogError($"Loose item GLB has empty geometry: {fileName}");
@@ -2579,10 +2421,10 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
 
     private static Material CreateItemMaterial(string fileName, GltfRoot gltf, byte[] binary)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        Shader shader = GymMaterialLibrary.LitShader;
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
 
         if (shader == null)
@@ -2645,100 +2487,10 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         }
         else
         {
-            DestroyRuntimeObject(texture);
+            GymShared.DestroyRuntimeObject(texture);
         }
 
         return material;
-    }
-
-    private static void DestroyRuntimeObject(UnityEngine.Object target)
-    {
-        if (target == null)
-        {
-            return;
-        }
-
-        if (Application.isPlaying)
-        {
-            Destroy(target);
-        }
-        else
-        {
-            DestroyImmediate(target);
-        }
-    }
-
-    private static Vector3[] ReadVector3Accessor(GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        if (accessorIndex < 0 || accessorIndex >= gltf.accessors.Length)
-        {
-            return Array.Empty<Vector3>();
-        }
-
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 12;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector3[] result = new Vector3[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector3(
-                BitConverter.ToSingle(binary, offset),
-                BitConverter.ToSingle(binary, offset + 4),
-                BitConverter.ToSingle(binary, offset + 8));
-        }
-
-        return result;
-    }
-
-    private static Vector2[] ReadVector2Accessor(GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        if (accessorIndex < 0 || accessorIndex >= gltf.accessors.Length)
-        {
-            return Array.Empty<Vector2>();
-        }
-
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 8;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector2[] result = new Vector2[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector2(
-                BitConverter.ToSingle(binary, offset),
-                BitConverter.ToSingle(binary, offset + 4));
-        }
-
-        return result;
-    }
-
-    private static int[] ReadIndexAccessor(GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        if (accessorIndex < 0 || accessorIndex >= gltf.accessors.Length)
-        {
-            return Array.Empty<int>();
-        }
-
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int componentSize = accessor.componentType == 5125 ? 4 : accessor.componentType == 5123 ? 2 : 1;
-        int stride = view.byteStride > 0 ? view.byteStride : componentSize;
-        int start = view.byteOffset + accessor.byteOffset;
-        int[] result = new int[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = accessor.componentType == 5125
-                ? (int)BitConverter.ToUInt32(binary, offset)
-                : accessor.componentType == 5123
-                    ? BitConverter.ToUInt16(binary, offset)
-                    : binary[offset];
-        }
-
-        return result;
     }
 
     private bool TryFindFloorBounds(out Bounds bounds)
@@ -2954,32 +2706,5 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
             .Replace("-", string.Empty)
             .Replace("(", string.Empty)
             .Replace(")", string.Empty);
-    }
-
-    private static Material CreateSolidMaterial(
-        string name, Color color, float metallic, float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-        Material material = new Material(shader)
-        {
-            name = name,
-            color = color
-        };
-        material.SetColor("_BaseColor", color);
-        material.SetColor("_Color", color);
-        material.SetFloat("_Metallic", metallic);
-        material.SetFloat("_Smoothness", smoothness);
-        return material;
-    }
-
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
 }

@@ -66,22 +66,16 @@ public sealed class GymAutoDoor : MonoBehaviour
     private float appliedBlend = -1f;
     private float swingDirection = 1f;
     private float lastWantedTime = -100f;
-    private int openRequests;
     private bool sensedLastSample;
     private int sensedCount;
-
-    public static IReadOnlyList<GymAutoDoor> All => doors;
     public string DoorName => doorName;
     public DoorKind Kind => kind;
     public float OpenBlend => blend;
-    public bool IsFullyOpen => blend >= 0.98f;
     public bool IsClosed => blend <= 0.002f;
     public bool IsSensingSomeone => sensedLastSample;
-    public int SensedCount => sensedCount;
     public Vector3 Center => center;
     public Vector3 Normal => normal;
     public float HalfWidth => halfWidth;
-    public float SwingDirection => swingDirection;
     public int LeafCount => leaves.Count;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -152,11 +146,6 @@ public sealed class GymAutoDoor : MonoBehaviour
         appliedBlend = -1f;
     }
 
-    /// <summary>Scripted passages (police, fixer) can hold the door open.</summary>
-    public void RequestOpen() => openRequests++;
-
-    public void ReleaseOpen() => openRequests = Mathf.Max(0, openRequests - 1);
-
     /// <summary>True when a person at <paramref name="position"/> moving at
     /// <paramref name="velocity"/> should have this door open.</summary>
     public bool ShouldOpenFor(Vector3 position, Vector3 velocity)
@@ -194,7 +183,6 @@ public sealed class GymAutoDoor : MonoBehaviour
                 .Append('/').Append(Vector3.Dot(offset, tangent).ToString("F1"))
                 .Append(" v=").Append(peopleVelocities[i].magnitude.ToString("F1")).Append(';');
         }
-        text.Append(" requests=").Append(openRequests);
         return text.ToString();
     }
 
@@ -229,7 +217,7 @@ public sealed class GymAutoDoor : MonoBehaviour
         }
         sensedLastSample = sensedCount > 0;
 
-        bool want = sensedLastSample || openRequests > 0;
+        bool want = sensedLastSample;
         if (want)
         {
             lastWantedTime = Time.time;

@@ -257,8 +257,28 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
             ? toe.position
             : foot.position + Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized * radius * 3f;
         Transform tip = CreateFollower(objectName + " tip", foot, toePoint);
+        int count = segments.Count;
         AddSegment(objectName, foot, tip, radius, float.PositiveInfinity, null);
+        if (segments.Count > count)
+        {
+            segments[count].collider.sharedMaterial = FootMaterial;
+        }
     }
+
+    // Locomotion sets the body velocity directly and the root is frozen on Y,
+    // so the skin-fit feet sit in the floor. With default friction they
+    // dragged the body to half speed under slow frames and the gait idled
+    // mid-route.
+    private static PhysicsMaterial footMaterial;
+    private static PhysicsMaterial FootMaterial => footMaterial != null
+        ? footMaterial
+        : footMaterial = new PhysicsMaterial("Enemy foot hitbox")
+        {
+            dynamicFriction = 0f,
+            staticFriction = 0f,
+            frictionCombine = PhysicsMaterialCombine.Minimum,
+            bounceCombine = PhysicsMaterialCombine.Minimum
+        };
 
     private Transform CreateFollower(string objectName, Transform parent, Vector3 worldPosition)
     {
@@ -544,12 +564,15 @@ public sealed class HitboxSyncCoordinator : MonoBehaviour
         }
     }
 
+    private static readonly Unity.Profiling.ProfilerMarker SyncMarker =
+        new Unity.Profiling.ProfilerMarker("GymChaos.Late.HitboxSync");
+
     private void LateUpdate()
     {
         if (pending)
         {
             pending = false;
-            Physics.SyncTransforms();
+            using (SyncMarker.Auto()) Physics.SyncTransforms();
         }
     }
 }

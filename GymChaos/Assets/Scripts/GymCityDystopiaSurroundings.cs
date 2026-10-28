@@ -238,31 +238,8 @@ public static class GymCityDystopiaSurroundings
     {
         // Lit, in the paving colour the park ground fades into at its edge,
         // and at the park ground's height: park and tower bases meet flush.
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ??
-            Shader.Find("Standard");
-        if (shader == null)
-        {
-            return;
-        }
-
-        Material material = new Material(shader)
-        {
-            name = "City Dystopia Ground Infill",
-            color = GymOutdoorFoliage.CityPavingColor,
-            enableInstancing = true
-        };
-        if (material.HasProperty("_BaseColor"))
-        {
-            material.SetColor("_BaseColor", material.color);
-        }
-        if (material.HasProperty("_Metallic"))
-        {
-            material.SetFloat("_Metallic", 0f);
-        }
-        if (material.HasProperty("_Smoothness"))
-        {
-            material.SetFloat("_Smoothness", 0.08f);
-        }
+        Material material = GymMaterialLibrary.Lit(
+            "City Dystopia Ground Infill", GymOutdoorFoliage.CityPavingColor, 0f, 0.08f);
 
         float y = floorY + GymOutdoorFoliage.GroundTopOffset - 0.08f;
         float depth = CityGroundDepth;
@@ -411,7 +388,7 @@ public static class GymCityDystopiaSurroundings
             CityRendererCount += cityRenderers.Length;
             CheapRendererCount += cheapRendererCount;
             CityColliderCount += colliderCount;
-            Bounds cityBounds = CalculateRendererBounds(loaded);
+            Bounds cityBounds = GymShared.CalculateRendererBounds(loaded);
             bool horizontalOverlap =
                 cityBounds.min.x < protectedBounds.max.x &&
                 cityBounds.max.x > protectedBounds.min.x &&
@@ -444,24 +421,6 @@ public static class GymCityDystopiaSurroundings
                     $"colliders={CityColliderCount}",
                     loaded);
             }
-        }
-
-        private static Bounds CalculateRendererBounds(GameObject target)
-        {
-            MeshRenderer[] renderers =
-                target.GetComponentsInChildren<MeshRenderer>(true);
-            if (renderers.Length == 0)
-            {
-                return new Bounds(target.transform.position, Vector3.zero);
-            }
-
-            Bounds bounds = renderers[0].bounds;
-            for (int index = 1; index < renderers.Length; index++)
-            {
-                bounds.Encapsulate(renderers[index].bounds);
-            }
-
-            return bounds;
         }
     }
 }

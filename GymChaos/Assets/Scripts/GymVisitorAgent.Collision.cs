@@ -44,21 +44,17 @@ public sealed partial class GymVisitorAgent
 	{
 		SetVisitorPlayerBoundaryCollisionIgnored(ignored: false);
 	}
+	private static readonly string[] PlayerRouteBoundaryNames = { "Player Road Access Blocker", "Outdoor Boundary - Path Outer" };
 	private void SetVisitorPlayerBoundaryCollisionIgnored(bool ignored)
 	{
 		if ((UnityEngine.Object)(object)fighter == (UnityEngine.Object)null)
 		{
 			return;
 		}
-		Collider[] array = UnityEngine.Object.FindObjectsByType<Collider>((FindObjectsInactive)1, (FindObjectsSortMode)0);
+		Collider[] array = GymSceneLookup.FindCollidersNamed(PlayerRouteBoundaryNames);
 		Collider[] visitorColliders = ((Component)fighter).GetComponentsInChildren<Collider>(true);
-		Collider[] array2 = array;
-		foreach (Collider boundary in array2)
+		foreach (Collider boundary in array)
 		{
-			if (!IsPlayerRouteBoundaryCollider(boundary))
-			{
-				continue;
-			}
 			for (int j = 0; j < visitorColliders.Length; j++)
 			{
 				if ((UnityEngine.Object)(object)visitorColliders[j] != (UnityEngine.Object)null)
@@ -67,18 +63,5 @@ public sealed partial class GymVisitorAgent
 				}
 			}
 		}
-	}
-	private static bool IsPlayerRouteBoundaryCollider(Collider collider)
-	{
-		if ((UnityEngine.Object)(object)collider == (UnityEngine.Object)null)
-		{
-			return false;
-		}
-		string name = ((UnityEngine.Object)((Component)collider).gameObject).name;
-		if (!(name == "Player Road Access Blocker"))
-		{
-			return name == "Outdoor Boundary - Path Outer";
-		}
-		return true;
 	}
 }

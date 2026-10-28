@@ -29,7 +29,6 @@ public sealed class GymPoliceWeapon : MonoBehaviour
     public bool IsReady => weaponRoot != null && muzzle != null;
     public bool IsVisible => visible && weaponRoot != null &&
         weaponRoot.gameObject.activeInHierarchy;
-    public Transform WeaponRoot => weaponRoot;
     public Transform Muzzle => muzzle;
     public int ShotCount { get; private set; }
     public bool IsAttachedToRightHand =>
@@ -41,7 +40,6 @@ public sealed class GymPoliceWeapon : MonoBehaviour
     private Transform handAnchor;
     public Vector3 LastShotOrigin { get; private set; }
     public Vector3 LastShotDirection { get; private set; }
-    public float BulletDamageForVerification => BulletDamage;
     public Vector3 HeldBarrelDirectionForVerification =>
         weaponRoot != null
             ? weaponRoot.TransformDirection(Vector3.right).normalized
@@ -189,16 +187,6 @@ public sealed class GymPoliceWeapon : MonoBehaviour
             curlWrittenLocal[i] = curlBones[i].localRotation;
         }
     }
-
-    // The authored draw/shoot clips do not rotate the hand into a pistol
-    // grip, so a fixed bone-relative offset points the barrel down and back.
-    // Each frame: barrel follows the forearm and locks onto the target once
-    // the arm points at it, the grip sits in the palm and the slide on top.
-    private const float AimLockStartDot = 0.35f;
-    private const float AimLockFullDot = 0.8f;
-    // Grip anchor in prop bounds, measured from the rear/bottom corner.
-    private const float GripRearFraction = 0.2f;
-    private const float GripHeightFraction = 0.5f;
     // Palm centre between wrist (0) and the finger knuckles (1).
     private const float PalmKnuckleBlend = 0.6f;
     private Transform[] fingerBases;
@@ -253,47 +241,6 @@ public sealed class GymPoliceWeapon : MonoBehaviour
                 Vector3.up * (controller.height * 0.15f);
         }
         return target.position + Vector3.up * 1.15f;
-    }
-
-    // Where the officer shoots: the target's chest, else level ahead.
-    private Vector3 TargetAimDirection(Vector3 from)
-    {
-        Transform target = owner != null ? owner.CurrentTarget : null;
-        if (target == null)
-        {
-            return AimDirection;
-        }
-        Vector3 aimPoint = ResolveAimPoint(target);
-        Vector3 direction = aimPoint - from;
-        return direction.sqrMagnitude > 0.0001f ? direction.normalized : AimDirection;
-    }
-
-    // Barrel along the forearm while the arm travels (draw), blended onto the
-    // target once the forearm points roughly at it (aim and shoot).
-    private Vector3 HeldBarrelDirection(Vector3 palm)
-    {
-        Vector3 aim = TargetAimDirection(palm);
-        Vector3 forearm = rightForearm != null
-            ? rightHand.position - rightForearm.position
-            : Vector3.zero;
-        if (forearm.sqrMagnitude < 0.000001f)
-        {
-            return aim;
-        }
-        forearm.Normalize();
-        float lockOn = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(
-            AimLockStartDot, AimLockFullDot, Vector3.Dot(forearm, aim)));
-        return Vector3.Slerp(forearm, aim, lockOn).normalized;
-    }
-
-    public Vector3 AimDirection
-    {
-        get
-        {
-            Vector3 aim = owner != null ? owner.transform.forward : transform.forward;
-            aim = Vector3.ProjectOnPlane(aim, Vector3.up);
-            return aim.sqrMagnitude > 0.0001f ? aim.normalized : Vector3.forward;
-        }
     }
 
     // Pistol grip in the hand's own frame, so the gun follows every twist of

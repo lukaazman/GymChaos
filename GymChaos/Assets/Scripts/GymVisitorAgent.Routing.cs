@@ -153,11 +153,6 @@ public sealed partial class GymVisitorAgent
 		}
 		return (Vector3[])(object)new Vector3[4] { gymPath, approach, inside, front };
 	}
-	private bool MoveAlongAuthoredExteriorRoute(Vector3 target, float speed, Vector3? nextWaypoint = null, float requestedCompletionRadius = -1f)
-	{
-		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
-		return fighter.MoveVisitorAlongExteriorRoute(target, speed, nextWaypoint, requestedCompletionRadius);
-	}
 	private bool MoveAlongAuthoredExteriorRoute(Vector3 target, float speed, Vector3? nextWaypoint, float requestedCompletionRadius, bool allowWaypointPlaneCrossing, bool stopAtDestination)
 	{
 		//IL_0006: Unknown result type (might be due to invalid IL or missing references)
@@ -685,27 +680,6 @@ public sealed partial class GymVisitorAgent
 		if (num > 0.25f)
 		{
 			return endSeparation > startOffset.magnitude + 0.18f;
-		}
-		return false;
-	}
-	private static bool TryGetRoomFloorBounds(out Bounds bounds)
-	{
-		//IL_0032: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0037: Unknown result type (might be due to invalid IL or missing references)
-		//IL_003d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0028: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004f: Unknown result type (might be due to invalid IL or missing references)
-		GameObject floor = GymSceneLookup.Find("Rubber Floor");
-		Renderer renderer = (((UnityEngine.Object)(object)floor != (UnityEngine.Object)null) ? floor.GetComponent<Renderer>() : null);
-		if ((UnityEngine.Object)(object)renderer == (UnityEngine.Object)null)
-		{
-			bounds = default(Bounds);
-			return false;
-		}
-		bounds = renderer.bounds;
-		if (bounds.size.x > 2f)
-		{
-			return bounds.size.z > 2f;
 		}
 		return false;
 	}

@@ -49,11 +49,11 @@ public static class PersonaMenuStyle
         PlaceInArt(rect, centerX, centerY, width, height);
         rect.localRotation = Quaternion.Euler(0f, 0f, rotation);
         PersonaShape edge = CreateShape("Rim", root.transform, rim);
-        Stretch(edge.rectTransform);
+        GymShared.Stretch(edge.rectTransform);
         edge.SetCorners(new Vector2(-0.02f, -0.035f), new Vector2(-0.012f, 0.03f),
             new Vector2(0.03f, 0.045f), new Vector2(0.014f, -0.025f));
         PersonaShape plate = CreateShape("Plate", root.transform, fill);
-        Stretch(plate.rectTransform);
+        GymShared.Stretch(plate.rectTransform);
         plate.SetCorners(Vector2.zero, new Vector2(0.006f, 0f), new Vector2(0.018f, 0f), Vector2.zero);
         plate.raycastTarget = true;
         return rect;
@@ -128,13 +128,13 @@ public static class PersonaMenuStyle
         // the outline by the same margin on the right as on the left, so the
         // white border reads evenly around the focused plate.
         PersonaShape backing = CreateShape("Focus Backing", root.transform, Color.white);
-        Stretch(backing.rectTransform);
+        GymShared.Stretch(backing.rectTransform);
         backing.SetCorners(BackingBottomLeft, BackingTopLeft, BackingTopRight, BackingBottomRight);
         PersonaShape outline = CreateShape("Outline", root.transform, Accent);
-        Stretch(outline.rectTransform);
+        GymShared.Stretch(outline.rectTransform);
         outline.SetCorners(OutlineBottomLeft, OutlineTopLeft, OutlineTopRight, OutlineBottomRight);
         PersonaShape face = CreateShape("Face", root.transform, ButtonIdle);
-        Stretch(face.rectTransform);
+        GymShared.Stretch(face.rectTransform);
         face.SetCorners(Vector2.zero, Vector2.zero, new Vector2(0.05f, 0f), Vector2.zero);
         face.raycastTarget = true;
 
@@ -142,7 +142,7 @@ public static class PersonaMenuStyle
         GameObject textObject = new GameObject("Label", typeof(RectTransform), typeof(Text));
         textObject.transform.SetParent(root.transform, false);
         Text text = textObject.GetComponent<Text>();
-        Stretch(text.rectTransform);
+        GymShared.Stretch(text.rectTransform);
         text.rectTransform.offsetMin = new Vector2(width * scale * 0.09f, 0f);
         text.font = font;
         text.text = label;
@@ -193,7 +193,7 @@ public static class PersonaMenuStyle
         rim.rectTransform.offsetMin = new Vector2(-borderWidth, -borderWidth);
         rim.rectTransform.offsetMax = new Vector2(borderWidth, borderWidth);
         PersonaShape plate = CreateShape("Face", rect, face);
-        Stretch(plate.rectTransform);
+        GymShared.Stretch(plate.rectTransform);
     }
 
     public const float LayoutButtonBorder = 3f;
@@ -221,7 +221,7 @@ public static class PersonaMenuStyle
         PersonaShape backing = CreateShape("Focus Backing", root.transform, Color.white);
         Inset(backing.rectTransform, -7f, -6f, -9f, -6f);
         PersonaShape outline = CreateShape("Outline", root.transform, Accent);
-        Stretch(outline.rectTransform);
+        GymShared.Stretch(outline.rectTransform);
         PersonaShape face = CreateShape("Face", root.transform, ButtonIdle);
         Inset(face.rectTransform, LayoutButtonBorder, LayoutButtonBorder, LayoutButtonBorder, LayoutButtonBorder);
         face.raycastTarget = true;
@@ -326,15 +326,5 @@ public static class PersonaMenuStyle
         shape.color = color;
         shape.raycastTarget = false;
         return shape;
-    }
-
-    private static void Stretch(RectTransform rect)
-    {
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.offsetMin = Vector2.zero;
-        rect.offsetMax = Vector2.zero;
-        rect.localScale = Vector3.one;
-        rect.localRotation = Quaternion.identity;
     }
 }

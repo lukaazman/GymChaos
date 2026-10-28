@@ -51,13 +51,11 @@ public sealed class GymDealerShopUI : MonoBehaviour
     private bool dragStartedOnModel;
 
     public static bool IsOpen => open || lastClosedFrame == Time.frameCount;
-    public static GymDealerShopUI Active => instance;
     public int Index => index;
     public GymProteinProduct Current => GymDealerCatalog.Products[index];
     public GymProductInspectView InspectView => inspect;
     internal Text EffectLabelForVerification => effectLabel;
     internal Text RiskLabelForVerification => riskLabel;
-    internal Canvas CanvasForVerification => canvas;
 
     public enum PurchaseResult { Bought, Locked, NotEnoughStamps, TooManyActive, Unavailable }
 
@@ -120,13 +118,13 @@ public sealed class GymDealerShopUI : MonoBehaviour
             PersonaMenuStyle.PlateBlack, PersonaMenuStyle.Accent);
         Text slabText = PersonaMenuStyle.CreateLabel(slab, "Title", title, "THE STASH",
             0f, 0f, 360f, 84f, 58, PersonaMenuStyle.Accent, TextAnchor.MiddleCenter);
-        Center(slabText.rectTransform, 360f, 84f);
+        GymShared.Center(slabText.rectTransform, 360f, 84f);
         stampLabel = PersonaMenuStyle.CreateLabel(transform, "Stamps", body, string.Empty,
             0f, 0f, 640f, 44f, 34, PersonaMenuStyle.Gold, TextAnchor.MiddleRight);
-        PlaceTopRight(stampLabel.rectTransform, 40f, 28f, 640f, 44f);
+        GymShared.PlaceTopRight(stampLabel.rectTransform, 40f, 28f, 640f, 44f);
         activeLabel = PersonaMenuStyle.CreateLabel(transform, "Active", body, string.Empty,
             0f, 0f, 640f, 32f, 24, PersonaMenuStyle.Muted, TextAnchor.MiddleRight);
-        PlaceTopRight(activeLabel.rectTransform, 40f, 76f, 640f, 32f);
+        GymShared.PlaceTopRight(activeLabel.rectTransform, 40f, 76f, 640f, 32f);
 
         RectTransform column = new GameObject("Dealer Column", typeof(RectTransform)).GetComponent<RectTransform>();
         column.SetParent(transform, false);
@@ -166,20 +164,11 @@ public sealed class GymDealerShopUI : MonoBehaviour
         buyText = buyButton.GetComponentInChildren<Text>();
         foreach (Button button in new[] { backButton, buyButton })
         {
-            FillOnFocus(button);
-            CenterLabel(button);
+            GymShared.FillOnFocus(button);
+            GymShared.CenterLabel(button);
         }
 
         SetCanvasShown(false);
-    }
-
-    private static void PlaceTopRight(RectTransform rect, float right, float top, float width, float height)
-    {
-        float scale = 1080f / PersonaMenuStyle.ArtHeight;
-        rect.anchorMin = rect.anchorMax = Vector2.one;
-        rect.pivot = Vector2.one;
-        rect.anchoredPosition = new Vector2(-right * scale, -top * scale);
-        rect.sizeDelta = new Vector2(width * scale, height * scale);
     }
 
     private static void PlaceInColumn(RectTransform rect, float centerX, float centerY, float width, float height)
@@ -203,22 +192,9 @@ public sealed class GymDealerShopUI : MonoBehaviour
         rect.anchorMin = rect.anchorMax = new Vector2(side < 0 ? 0f : 1f, 0.5f);
         rect.pivot = new Vector2(0.5f, 0.5f);
         rect.anchoredPosition = new Vector2(side * (gap + size * 0.5f) * scale, 0f);
-        FillOnFocus(button);
-        CenterLabel(button);
+        GymShared.FillOnFocus(button);
+        GymShared.CenterLabel(button);
         return button;
-    }
-
-    private static void FillOnFocus(Button button)
-    {
-        button.GetComponent<PersonaMenuButton>().SetFocusOutlineColor(PersonaMenuStyle.Accent);
-    }
-
-    private static void CenterLabel(Button button)
-    {
-        Text label = button.GetComponentInChildren<Text>();
-        label.alignment = TextAnchor.MiddleCenter;
-        label.rectTransform.offsetMin = Vector2.zero;
-        label.rectTransform.offsetMax = Vector2.zero;
     }
 
     private Text InfoLabel(string name, Font font, float top, float width, float height, int size, Color color)
@@ -231,15 +207,6 @@ public sealed class GymDealerShopUI : MonoBehaviour
         rect.pivot = new Vector2(0f, 1f);
         rect.anchoredPosition = new Vector2(40f * scale, -top * scale);
         return text;
-    }
-
-    private static void Center(RectTransform rect, float width, float height)
-    {
-        float scale = 1080f / PersonaMenuStyle.ArtHeight;
-        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
-        rect.pivot = new Vector2(0.5f, 0.5f);
-        rect.anchoredPosition = Vector2.zero;
-        rect.sizeDelta = new Vector2(width * scale, height * scale);
     }
 
     private void Show(PlayerMovement targetPlayer)

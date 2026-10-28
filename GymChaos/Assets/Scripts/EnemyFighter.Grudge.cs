@@ -24,7 +24,6 @@ public partial class EnemyFighter
 
     public int GrudgeTargetSwitchesForVerification { get; private set; }
     public bool HasGrudgeAgainstForVerification(EnemyFighter other) => grudgeFighters.Contains(other);
-    public bool HasPlayerGrudgeForVerification => grudgePlayer;
 
     private void RecordGrudge(EnemyFighter attacker)
     {

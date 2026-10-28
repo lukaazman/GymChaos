@@ -52,7 +52,7 @@ public static class GymChaosArtFidelityVerifier
 
     private static readonly SurfaceContract[] RequiredSurfaces =
     {
-        new SurfaceContract("gymRubber", "Rubber Floor", "Dark navy gym rubber floor"),
+        new SurfaceContract("gymRubber", "Rubber Floor", "Gym rubber floor"),
         new SurfaceContract("lockerRubber", "Locker Room Floor", "Locker room rubber floor"),
         new SurfaceContract("bathroomTile", "Bathroom divider south", "Bathroom tile"),
         // Exterior ground is one continuous slab: every named outdoor surface
@@ -80,13 +80,7 @@ public static class GymChaosArtFidelityVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void ResumeAfterReload()
     {
@@ -338,7 +332,8 @@ public static class GymChaosArtFidelityVerifier
         if (outdoorPath == null)
             throw new InvalidOperationException("Outdoor concrete path renderer disappeared before capture.");
         CaptureBounds("outdoor-path", outdoorPath.bounds,
-            outdoorPath.bounds.center + new Vector3(8f, 8f, -8f),
+            // From above the path: the old east-side eye sat inside the protein store's roof.
+            outdoorPath.bounds.center + new Vector3(0f, 11f, -7f),
             outdoorPath.bounds.center, absoluteFolder, captures, fieldOfView: 46f);
 
         Renderer courtyard = FindRenderer("Exterior Courtyard Foundation");
@@ -418,39 +413,6 @@ public static class GymChaosArtFidelityVerifier
             CaptureFixture(capture, bounds, lookFrom,
                 fixture == "Solid_Counter" ? 4.8f : 2.4f, absoluteFolder, captures);
         }
-    }
-
-    private static List<Vector3> GetProductViewDirections(Renderer renderer)
-    {
-        List<Vector3> directions = new List<Vector3>();
-        AddProductViewDirection(directions,
-            Vector3.ProjectOnPlane(renderer.transform.forward, Vector3.up));
-        AddProductViewDirection(directions,
-            Vector3.ProjectOnPlane(-renderer.transform.forward, Vector3.up));
-        AddProductViewDirection(directions, Vector3.forward);
-        AddProductViewDirection(directions, Vector3.back);
-        AddProductViewDirection(directions, Vector3.right);
-        AddProductViewDirection(directions, Vector3.left);
-        return directions;
-    }
-
-    private static void AddProductViewDirection(List<Vector3> directions, Vector3 direction)
-    {
-        direction = Vector3.ProjectOnPlane(direction, Vector3.up);
-        if (direction.sqrMagnitude < 0.01f) return;
-        direction.Normalize();
-        for (int index = 0; index < directions.Count; index++)
-        {
-            if (Vector3.Dot(directions[index], direction) > 0.98f) return;
-        }
-        directions.Add(direction);
-    }
-
-    private static Vector3 ProductCameraPosition(Bounds bounds, Vector3 direction)
-    {
-        float radius = Mathf.Max(bounds.extents.x, bounds.extents.y, bounds.extents.z);
-        float distance = Mathf.Clamp(Mathf.Max(0.90f, radius * 3.8f), 0.90f, 2.7f);
-        return bounds.center + direction.normalized * distance + Vector3.up * 0.12f;
     }
 
     private static void CaptureFixture(

@@ -159,6 +159,29 @@ public static class GymChaosVisitorVerifier
         playerIsolationActive = false;
     }
 
+    private static void RestartWorkoutTest()
+    {
+        workoutRequested = false;
+        workoutMoved = false;
+        workoutStarted = false;
+        workoutCompleted = false;
+        workoutFighter = null;
+        workoutStation = null;
+        workoutVersionBefore = 0;
+        workoutStartPosition = Vector3.zero;
+        workoutNeedsMovement = false;
+        workoutEnteredStation = false;
+        workoutBarAttached = false;
+        workoutPoseValidated = false;
+        squatDepthWaitStarted = -1d;
+        workoutCompletionTime = 0d;
+        workoutCompletionPosition = Vector3.zero;
+        workoutReleaseMoveValidated = false;
+        nextWorkoutPoseDiagnosticAt = 0d;
+        workoutPoseDiagnosticSamples = 0;
+        SetPoseSamplingBound(false);
+    }
+
     private static void ResumeAfterDomainReload()
     {
         if (EditorApplication.isPlaying)
@@ -300,6 +323,19 @@ public static class GymChaosVisitorVerifier
                         $"GYMCHAOS_SQUAT_STATION_CONTRACT_UPDATED " +
                         $"enemy={workoutFighter.Identity} from={previousStation} " +
                         $"to={workoutStation.EquipmentName}");
+                    if (!workoutStation.IsSquat)
+                    {
+                        // The requested squat was dropped and the visitor's own
+                        // schedule picked a deadlift. The squat staging checks
+                        // (bar on the traps) cannot hold there (seen under lane
+                        // load as barOnTraps=False axisError=Infinity), so ask
+                        // for a new squat instead.
+                        Debug.LogWarning(
+                            $"GYMCHAOS_SQUAT_TEST_RESTARTED enemy={workoutFighter.Identity} " +
+                            $"station={workoutStation.EquipmentName}");
+                        RestartWorkoutTest();
+                        return;
+                    }
                 }
                 if (!workoutStarted && agent != null && elapsed >= nextWorkoutPoseDiagnosticAt)
                 {
@@ -935,8 +971,11 @@ public static class GymChaosVisitorVerifier
             }
             MixamoScanRetargetAnimator animator =
                 fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
+            // Goku on his nimbus stands on the cloud surface, not the floor;
+            // GymChaosGokuNimbusVerifier checks that pose instead.
             if (animator != null &&
-                animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Idle)
+                (animator.CurrentState != MixamoScanRetargetAnimator.MotionState.Idle ||
+                 animator.IsNimbusStanceActive))
             {
                 continue;
             }

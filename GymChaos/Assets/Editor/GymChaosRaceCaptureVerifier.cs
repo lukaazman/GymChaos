@@ -45,10 +45,7 @@ public static class GymChaosRaceCaptureVerifier
     {
         routine = null;
         written.Clear();
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= Changed;
-        EditorApplication.playModeStateChanged += Changed;
+        GymChaosVerifierHooks.Hook(Tick, Changed);
     }
 
     private static void Changed(PlayModeStateChange change)

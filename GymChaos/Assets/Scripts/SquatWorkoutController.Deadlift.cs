@@ -45,11 +45,31 @@ public sealed partial class SquatWorkoutController
     private Mesh deadliftClearanceMesh;
     private readonly float[] deadliftPushTable = new float[DeadliftPushSamples + 1];
 
+    // The clearance plan bakes the full skin once per sample (~110 ms per
+    // set start). A member back on the same platform plans the same stance
+    // again (to within float noise: about 1e-6 m, which already moves a fresh
+    // plan by about 0.05 mm), so its result is reused within 1 mm.
+    private sealed class ClearancePlan
+    {
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public float StartPhase;
+        public float Lift;
+        public readonly float[] Raw = new float[DeadliftPushSamples + 1];
+        public float Worst;
+        public string WorstBlocker;
+    }
+    private static readonly System.Collections.Generic.Dictionary<
+        (EnemyFighter, GymExerciseStation), ClearancePlan> clearancePlans =
+        new System.Collections.Generic.Dictionary<(EnemyFighter, GymExerciseStation), ClearancePlan>();
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetClearancePlans() => clearancePlans.Clear();
+
     public bool IsDeadliftActive => running && deadliftMode;
     public float DeadliftPhase => deadliftPhase;
     public float DeadliftStartPhase => deadliftStartPhase;
     public int DeadliftRepsDone => deadliftRepsDone;
-    public int DeadliftRepsTarget => deadliftRepsTarget;
     public float DeadliftGroundLift => deadliftGroundLift;
     public float DeadliftStanceStepBack { get; private set; }
     public string DeadliftSegment { get; private set; } = string.Empty;
@@ -224,9 +244,29 @@ public sealed partial class SquatWorkoutController
     {
         Vector3 rest = station.DeadliftBarRestPosition;
         Vector3 forward = station.DeadliftEnemyFacing;
+        var key = (owner, station);
+        if (clearancePlans.TryGetValue(key, out ClearancePlan plan) &&
+            (plan.Position - owner.transform.position).sqrMagnitude <= 0.001f * 0.001f &&
+            Quaternion.Angle(plan.Rotation, owner.transform.rotation) <= 0.05f &&
+            Mathf.Abs(plan.StartPhase - deadliftStartPhase) <= 0.0001f &&
+            Mathf.Abs(plan.Lift - lift) <= 0.001f)
+        {
+            // Leave the rig in the pose the sampling loop ends on (phase 1):
+            // the stance snap after this regrounds from the current pose.
+            deadliftAnimator.SampleDeadliftPoseNow(1f);
+            ApplyClearancePlan(plan);
+            return;
+        }
+        plan = new ClearancePlan
+        {
+            Position = owner.transform.position,
+            Rotation = owner.transform.rotation,
+            StartPhase = deadliftStartPhase,
+            Lift = lift
+        };
         deadliftAnimator.SampleDeadliftPoseNow(deadliftStartPhase);
         Vector3 startMid = GetGripMid();
-        float[] raw = new float[DeadliftPushSamples + 1];
+        float[] raw = plan.Raw;
         string worstBlocker = "none";
         float worst = 0f;
         for (int i = 0; i <= DeadliftPushSamples; i++)
@@ -245,6 +285,15 @@ public sealed partial class SquatWorkoutController
                 worstBlocker = blocker;
             }
         }
+        plan.Worst = worst;
+        plan.WorstBlocker = worstBlocker;
+        clearancePlans[key] = plan;
+        ApplyClearancePlan(plan);
+    }
+
+    private void ApplyClearancePlan(ClearancePlan plan)
+    {
+        float[] raw = plan.Raw;
         // Between samples the body moves on: keep the larger neighbour.
         for (int i = 0; i <= DeadliftPushSamples; i++)
         {
@@ -253,7 +302,7 @@ public sealed partial class SquatWorkoutController
         }
         Debug.Log(
             $"GYMCHAOS_DEADLIFT_MEMBER_CLEARANCE enemy={owner.Identity} stepBack={deadliftPushTable[0]:0.000} " +
-            $"maxPush={worst:0.000} blocker={worstBlocker}", this);
+            $"maxPush={plan.Worst:0.000} blocker={plan.WorstBlocker}", this);
     }
 
     // Extra forward reach of the bar at this phase, relative to the start.
@@ -597,27 +646,39 @@ public sealed partial class SquatWorkoutController
             Vector3[] vertices = GymSkinSampler.BakeWorld(skin, deadliftClearanceMesh);
             int[] dominant = GymSkinSampler.GetDominantBones(skin.sharedMesh);
             Transform[] bones = skin.bones;
+            bool[] inLeftArm = GymSkinSampler.ChainMask(bones, leftUpperArm);
+            bool[] inRightArm = GymSkinSampler.ChainMask(bones, rightUpperArm);
+            // Plain float maths in the same operation order as the Vector3
+            // operators (offset = vertex + up * lift - bar, Dot = xx + yy + zz):
+            // identical results, several times faster per vertex.
+            float bx = bar.x, by = bar.y, bz = bar.z;
+            float ax = axis.x, ay = axis.y, az = axis.z;
+            float cx = across.x, cy = across.y, cz = across.z;
             for (int i = 0; i < vertices.Length; i++)
             {
-                Vector3 offset = vertices[i] + Vector3.up * lift - bar;
-                float along = Vector3.Dot(offset, axis);
-                if (Mathf.Abs(along) > span)
+                Vector3 v = vertices[i];
+                float ox = (v.x + 0f) - bx;
+                float oy = (v.y + lift) - by;
+                float oz = (v.z + 0f) - bz;
+                float along = ox * ax + oy * ay + oz * az;
+                // |along| > span and |h| >= radius without the Mathf.Abs calls.
+                if (along > span || along < -span)
                 {
                     continue;
                 }
-                float h = Vector3.Dot(offset, across);
-                if (Mathf.Abs(h) >= radius)
+                float h = ox * cx + oy * cy + oz * cz;
+                if (h >= radius || h <= -radius)
                 {
                     continue;
                 }
                 int bone = i < dominant.Length ? dominant[i] : -1;
-                Transform boneTransform = bone >= 0 && bone < bones.Length ? bones[bone] : null;
-                if (GymSkinSampler.IsInChain(boneTransform, leftUpperArm) ||
-                    GymSkinSampler.IsInChain(boneTransform, rightUpperArm))
+                bool boneValid = bone >= 0 && bone < bones.Length;
+                Transform boneTransform = boneValid ? bones[bone] : null;
+                if (boneValid && (inLeftArm[bone] || inRightArm[bone]))
                 {
                     continue;
                 }
-                float f = Vector3.Dot(offset, forward);
+                float f = ox * forward.x + oy * forward.y + oz * forward.z;
                 float need = f + Mathf.Sqrt(radius * radius - h * h);
                 if (need > push)
                 {

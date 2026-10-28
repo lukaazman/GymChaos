@@ -23,10 +23,7 @@ public static class GymChaosDropdownVerifier
 
     static GymChaosDropdownVerifier()
     {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= OnPlayModeChanged;
-        EditorApplication.playModeStateChanged += OnPlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, OnPlayModeChanged);
     }
 
     [MenuItem("Tools/GymChaos/Run Dropdown Verification")]

@@ -12,13 +12,6 @@ public partial class EnemyFighter
         isAggressive = false;
         ClearGrudges();
     }
-    public void DetachVisitorAgent(GymVisitorAgent agent)
-    {
-        if (visitorAgent == agent)
-        {
-            visitorAgent = null;
-        }
-    }
     public void PrepareVisitorWorkoutPose()
     {
         if (externalBodyAnimator == null)
@@ -216,25 +209,6 @@ public partial class EnemyFighter
     {
         return MoveVisitorAlongExteriorRoute(
             destination, speed, null, -1f, true, true);
-    }
-    public bool MoveVisitorAlongExteriorRoute(
-        Vector3 destination, float speed, Vector3? nextWaypoint,
-        float requestedCompletionRadius = -1f)
-    {
-        // Preserve the legacy contract: a call without a next waypoint is a
-        // terminal route point, while callers that provide one continue
-        // steering through the point.
-        return MoveVisitorAlongExteriorRoute(
-            destination, speed, nextWaypoint, requestedCompletionRadius,
-            true, !nextWaypoint.HasValue);
-    }
-    public bool MoveVisitorAlongExteriorRoute(
-        Vector3 destination, float speed, Vector3? nextWaypoint,
-        float requestedCompletionRadius, bool allowWaypointPlaneCrossing)
-    {
-        return MoveVisitorAlongExteriorRoute(
-            destination, speed, nextWaypoint, requestedCompletionRadius,
-            allowWaypointPlaneCrossing, !nextWaypoint.HasValue);
     }
     public bool IsVisitorExternalPathClear(Vector3 direction, float distance)
     {
@@ -1132,7 +1106,6 @@ public partial class EnemyFighter
     private float visitorPushesLooseItemsUntil = -1f;
     internal void SetVisitorPushesLooseItems(bool value) =>
         visitorPushesLooseItemsUntil = value ? Time.time + VisitorLooseItemPushSeconds : -1f;
-    public bool VisitorPushesLooseItemsForVerification => Time.time < visitorPushesLooseItemsUntil;
 
     // A visitor that keeps failing to get past a standing, non-hostile member
     // (seen: Ronnie idling in a gap between equipment) walks through that

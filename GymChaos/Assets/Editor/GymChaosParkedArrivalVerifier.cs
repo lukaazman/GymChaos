@@ -95,13 +95,7 @@ public static class GymChaosParkedArrivalVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void PlayModeChanged(PlayModeStateChange change)
     {

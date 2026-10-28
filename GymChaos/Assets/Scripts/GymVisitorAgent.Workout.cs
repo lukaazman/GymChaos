@@ -201,7 +201,7 @@ public sealed partial class GymVisitorAgent
 		if (!workoutReleaseProgressLogged)
 		{
 			workoutReleaseProgressLogged = true;
-			Debug.Log((object)($"GYMCHAOS_SQUAT_RELEASE_WALK_TICK enemy={fighter.Identity} " + $"station={station?.EquipmentName} position={((Component)fighter).transform.position} " + $"target={workoutReleaseTarget} distance={releaseDistance:0.00} " + "blocker=" + fighter.LastVisitorRouteBlocker), (UnityEngine.Object)(object)this);
+			GymLog.Diag(($"GYMCHAOS_SQUAT_RELEASE_WALK_TICK enemy={fighter.Identity} " + $"station={station?.EquipmentName} position={((Component)fighter).transform.position} " + $"target={workoutReleaseTarget} distance={releaseDistance:0.00} " + "blocker=" + fighter.LastVisitorRouteBlocker), (UnityEngine.Object)(object)this);
 		}
 		if (fighter.MoveVisitorTo(workoutReleaseTarget, 2.1f, allowOutsideRoom: false, station))
 		{

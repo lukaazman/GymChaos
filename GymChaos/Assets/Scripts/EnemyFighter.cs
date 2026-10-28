@@ -75,7 +75,6 @@ public partial class EnemyFighter : MonoBehaviour
     [SerializeField] private float attackImpulse = 9f;
     [SerializeField] private float attackCooldown = 1.05f;
     [SerializeField] private float lightStunDuration = 0.3f;
-    [SerializeField] private float heavyStunDuration = 1.15f;
     [SerializeField] private float throwPushbackDuration = 0.28f;
     [SerializeField] private float throwPushbackMinSpeed = 2.3f;
     [SerializeField] private float throwPushbackMaxSpeed = 4.2f;
@@ -390,18 +389,14 @@ public partial class EnemyFighter : MonoBehaviour
     public bool HasPlayerRoamInterest => collectedPlayerInterest;
     public bool IsOnTreadmill => treadmillStation != null;
     public GymExerciseStation CurrentTreadmill => treadmillStation;
-    public TreadmillMovementMode CurrentTreadmillMovementMode => treadmillMovementMode;
     public bool IsTreadmillRunning => treadmillStation != null &&
         treadmillMovementMode == TreadmillMovementMode.Running;
     public string TreadmillMovementModeForVerification =>
         treadmillMovementMode == TreadmillMovementMode.Running ? "running" : "walking";
     public Transform CurrentTarget => currentTarget;
     public EnemyFighter CurrentFighterTarget => currentFighterTarget;
-    public Transform LastDamageSource => lastDamageSource;
-    public bool IsPoliceRangedMode => policeRangedMode;
     public float CurrentAttackRange => GetCurrentAttackRange();
     public BodybuilderIdentity Identity => identity;
-    public bool HasVisitorAgent => visitorAgent != null;
     public bool IsFlying => gokuFlightState == GokuFlightState.Flying;
     public int AttackStartsForVerification => attackStartsForVerification;
     private int attackStartsForVerification;
@@ -434,11 +429,11 @@ public partial class EnemyFighter : MonoBehaviour
             switch (gokuFlightState)
             {
                 case GokuFlightState.TakingOff:
-                    return SmoothStep(gokuFlightTransition);
+                    return GymShared.Ease01(gokuFlightTransition);
                 case GokuFlightState.Flying:
                     return 1f;
                 case GokuFlightState.Landing:
-                    return 1f - SmoothStep(gokuFlightTransition);
+                    return 1f - GymShared.Ease01(gokuFlightTransition);
                 default:
                     return 0f;
             }

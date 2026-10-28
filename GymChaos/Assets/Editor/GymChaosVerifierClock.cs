@@ -16,6 +16,12 @@ public static class GymChaosVerifierClock
     // fewer rendered/Update frames are spent per simulated second.
     public const float ScenarioTimeScale = 2f;
 
+    // Game seconds at the scenario's 1x pace, for verifiers that run at
+    // ScenarioTimeScale. Use game time for deadlines, never wall clock: a slow
+    // runner caps each frame at Time.maximumDeltaTime, so wall-clock budgets
+    // ran out while the simulation was still on its way.
+    public static double ScenarioNow => Time.timeAsDouble / ScenarioTimeScale;
+
     public static void BeginFixedStep() => Time.captureFramerate = FrameRate;
 
     public static void EndFixedStep() => Time.captureFramerate = 0;

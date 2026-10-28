@@ -245,6 +245,7 @@ public static class GymRuntimeSettings
         if (Application.platform == RuntimePlatform.WebGLPlayer)
         {
             Debug.Log("GYMCHAOS_WEBGL_RETURN_TO_START");
+            GymSessionService.MarkSceneReload();
             SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
             return;
         }

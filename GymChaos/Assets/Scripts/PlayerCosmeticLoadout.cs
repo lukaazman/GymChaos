@@ -39,7 +39,6 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     public SkinnedMeshRenderer TopShellRenderer =>
         shellRenderer != null && shellRenderer.gameObject.activeInHierarchy ? shellRenderer : null;
     public GymHeadwear CurrentHeadwear => currentHeadwear;
-    public Color CurrentShirtMaterialColor => GetShirtColor(currentShirt);
     public Color RenderedShirtColor => visualReady ? GetShirtColor(currentShirt) : Color.clear;
     public bool IsShirtVisualReady => visualReady;
     public bool IsHeadwearVisualReady =>
@@ -481,32 +480,6 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                 return new HeadwearFit { Width = 1.12f, BottomOffset = 0.54f,
                     ForwardOffset = 0.20f, EulerAngles = Vector3.zero };
         }
-    }
-
-    private static bool TryGetRendererBounds(
-        Renderer[] renderers, out Bounds bounds)
-    {
-        bounds = default;
-        bool found = false;
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            Renderer renderer = renderers[i];
-            if (renderer == null || !renderer.enabled)
-            {
-                continue;
-            }
-
-            if (!found)
-            {
-                bounds = renderer.bounds;
-                found = true;
-            }
-            else
-            {
-                bounds.Encapsulate(renderer.bounds);
-            }
-        }
-        return found;
     }
 
     private static string GetHeadwearAssetPath(GymHeadwear headwear)

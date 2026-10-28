@@ -56,13 +56,7 @@ public static class GymChaosParkingTrafficScenarioVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
-        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, OnPlayModeStateChanged);
 
     private static void OnPlayModeStateChanged(PlayModeStateChange state)
     {

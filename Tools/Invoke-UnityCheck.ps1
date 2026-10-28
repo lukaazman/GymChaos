@@ -83,6 +83,9 @@ if ($liveEditor -and -not $SummaryOnly -and $isMainProject)
 $arguments = @('-batchmode', '-projectPath', $projectPath, '-logFile', $logFile)
 if (-not $Graphics) { $arguments = @('-nographics') + $arguments }
 if ($Method) { $arguments += @('-executeMethod', $Method) } else { $arguments += '-quit' }
+# A WebGL build leaves its project on the WebGL target, whose quality level
+# uses WebGL_RPAsset; verifiers and compiles always run on Windows standalone.
+if ($Method -notlike '*WebGLBuild*') { $arguments += @('-buildTarget', 'Win64') }
 
 # Batch runs must stay silent: GymChaosBatchAudioMute mutes the editor's
 # audio output in the child Unity process (lanes inherit it through this script).

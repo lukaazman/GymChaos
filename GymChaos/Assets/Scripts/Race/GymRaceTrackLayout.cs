@@ -120,12 +120,6 @@ public sealed class GymRaceTrackPath
         halfWidth = Mathf.Lerp(HalfWidths[a], HalfWidths[b], t);
     }
 
-    public Vector3 PositionAt(float s)
-    {
-        Sample(s, out Vector3 position, out _, out _, out _);
-        return position;
-    }
-
     /// <summary>
     /// Closest centre-line distance to <paramref name="point"/>. With a hint,
     /// only a window around it is searched so a racer on the spiral does not
@@ -497,24 +491,5 @@ public static class GymRaceTrackLayout
         {
             best = distance;
         }
-    }
-
-    /// <summary>Distance in XZ from a point to the nearest road centre line minus half width, for one path.</summary>
-    public static float FlatDistanceToRoad(GymRaceTrackPath path, Vector2 xz)
-    {
-        Vector3 point = new Vector3(xz.x, FloorY, xz.y);
-        float best = float.MaxValue;
-        for (int i = 0; i < path.Count; i++)
-        {
-            Vector3 p = path.Points[i];
-            float dx = p.x - point.x;
-            float dz = p.z - point.z;
-            float distance = Mathf.Sqrt(dx * dx + dz * dz) - path.HalfWidths[i];
-            if (distance < best)
-            {
-                best = distance;
-            }
-        }
-        return best;
     }
 }

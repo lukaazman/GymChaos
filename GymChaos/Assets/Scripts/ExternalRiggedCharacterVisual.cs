@@ -24,7 +24,6 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     public Transform RuntimeModelRoot => runtimeModelRoot;
     public SkinnedMeshRenderer RuntimeRenderer => runtimeRenderer;
     public BodybuilderEnemyVisual.Rig RuntimeRig => runtimeRig;
-    public BodybuilderIdentity RuntimeIdentity => runtimeIdentity;
     public string RuntimeResourcePath => runtimeResourcePath;
     public float RuntimeAuthoredHeight => runtimeAuthoredHeight;
 
@@ -42,13 +41,8 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     private Transform groundedRightFoot;
     private float groundedFootToMeshOffset;
     private bool hasGroundedFootReference;
-    private int groundingSettleFrames;
-    private bool groundingSettled;
-    private bool initialGroundingCorrectionApplied;
     private bool workoutGroundingCorrected;
     private int heightCorrectionFrames;
-    private bool dynamicHeightCorrection;
-    private bool heightCorrectionLogged;
 
     private static readonly Dictionary<BodybuilderIdentity, string> ResourcePaths =
         new Dictionary<BodybuilderIdentity, string>
@@ -189,13 +183,6 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // import/posture setup. Stop correcting before locomotion starts so a
         // stride can never make a character grow or shrink over time.
         heightCorrectionFrames = 0;
-        // Leave the authored child scale alone after the initial fit. The
-        // owner Rigidbody is floor-locked while alive.
-        dynamicHeightCorrection = false;
-        heightCorrectionLogged = false;
-        groundingSettleFrames = 0;
-        groundingSettled = true;
-        initialGroundingCorrectionApplied = true;
 
         Bounds verifiedBounds = CalculateBakedWorldBounds(renderer);
         runtimeAuthoredHeight = verifiedBounds.size.y;
@@ -223,7 +210,15 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         return true;
     }
 
+    private static readonly Unity.Profiling.ProfilerMarker LateUpdateMarker =
+        new Unity.Profiling.ProfilerMarker("GymChaos.Late.ExternalRiggedVisual");
+
     private void LateUpdate()
+    {
+        using (LateUpdateMarker.Auto()) LateUpdateBody();
+    }
+
+    private void LateUpdateBody()
     {
         if (runtimeModelRoot == null || runtimeRenderer == null)
         {
@@ -276,16 +271,6 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
                 }
             }
         }
-
-        // Every grounded pose can change the skinned AABB. The run clip is
-        // allowed to animate the legs, but it must not lift the whole visible
-        // character off the enemy root's floor while the visitor is walking.
-        // Goku is the only intentional airborne exception.
-        // The authored child transform stays fixed after its hidden preload
-        // fit. Foot/mesh AABB changes are pose data, not corrections to apply
-        // back onto the model root every frame.
-
-        heightCorrectionLogged = true;
 
         // The face shell is parented to the imported head bone, so animation
         // already carries it with the eyes. Re-baking the full 140k+ triangle
@@ -359,57 +344,6 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         }
     }
 
-    private void KeepVisibleModelOnFloor()
-    {
-        if (runtimeRenderer == null || runtimeRenderer.bounds.size.y < 0.1f)
-        {
-            return;
-        }
-
-        // Only settle the imported child once, while its first idle pose and
-        // height correction are becoming authoritative. After that initial
-        // pass, only a clear airborne offset is corrected; lifting the model
-        // back up on every stride would recreate the walking shake.
-        if (groundingSettled)
-        {
-            float settledFloorY = transform.position.y + EnemyFighter.GroundedVisualClearance;
-            float settledFloorOffset = settledFloorY - GetGroundContactY();
-            if (settledFloorOffset < -0.12f)
-            {
-                // Correct the visual child, not the enemy root, so navigation
-                // and Rigidbody movement remain stable while the visible rig
-                // cannot continue walking above the floor.
-                runtimeModelRoot.position += Vector3.up * settledFloorOffset;
-                Physics.SyncTransforms();
-            }
-            return;
-        }
-
-        float floorY = transform.position.y + EnemyFighter.GroundedVisualClearance;
-        float floorOffset = floorY - GetGroundContactY();
-        const float correctionThreshold = 0.18f;
-        if (!initialGroundingCorrectionApplied &&
-            Mathf.Abs(floorOffset) > correctionThreshold)
-        {
-            runtimeModelRoot.position += Vector3.up * floorOffset;
-            initialGroundingCorrectionApplied = true;
-            Physics.SyncTransforms();
-            if (Mathf.Abs(floorOffset) > 0.08f)
-            {
-                Debug.Log(
-                    $"GYMCHAOS_GROUNDING_CORRECTED identity={runtimeIdentity} " +
-                    $"offset={floorOffset:0.000} floorY={floorY:0.000}",
-                    this);
-            }
-        }
-
-        groundingSettleFrames--;
-        if (groundingSettleFrames <= 0)
-        {
-            groundingSettled = true;
-        }
-    }
-
     private float GetGroundContactY()
     {
         if (runtimeRenderer == null)
@@ -460,78 +394,6 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             }
         }
         return best;
-    }
-
-    private static void ApplyUprightRestPosture(
-        Transform modelRoot, BodybuilderEnemyVisual.Rig rig,
-        BodybuilderIdentity identity)
-    {
-        if (modelRoot == null || rig == null || rig.Hips == null ||
-            rig.Spine == null || rig.Chest == null || rig.Head == null)
-        {
-            return;
-        }
-
-        Vector3 up = modelRoot.up;
-        Vector3 faceForward = Vector3.ProjectOnPlane(rig.Head.forward, up);
-        if (faceForward.sqrMagnitude < 0.0001f)
-        {
-            faceForward = Vector3.ProjectOnPlane(modelRoot.forward, up);
-        }
-        if (faceForward.sqrMagnitude < 0.0001f)
-        {
-            return;
-        }
-
-        faceForward.Normalize();
-        Vector3 correctionAxis = Vector3.Cross(up, faceForward).normalized;
-        Vector3 headFromHips = rig.Head.position - rig.Hips.position;
-        float forwardOffset = Vector3.Dot(headFromHips, faceForward);
-        float verticalOffset = Mathf.Max(0.01f, Vector3.Dot(headFromHips, up));
-        float forwardLeanDegrees = Mathf.Atan2(forwardOffset, verticalOffset) * Mathf.Rad2Deg;
-        float correctionDegrees = -Mathf.Clamp(forwardLeanDegrees, 0f, 18f);
-        if (Mathf.Abs(correctionDegrees) < 0.1f)
-        {
-            return;
-        }
-
-        // Correct the complete upper-body chain around its own joints. Hips,
-        // legs and authored foot contacts stay planted; distributing the
-        // correction through spine, chest, neck and head avoids a sharp neck
-        // bend and pulls the shoulders back with the chest.
-        RotateBoneAroundAxis(rig.Spine, correctionAxis, correctionDegrees * 0.45f);
-        RotateBoneAroundAxis(rig.Chest, correctionAxis, correctionDegrees * 0.30f);
-        RotateBoneAroundAxis(rig.Neck, correctionAxis, correctionDegrees * 0.15f);
-        RotateBoneAroundAxis(rig.Head, correctionAxis, correctionDegrees * 0.10f);
-
-        // The imported scans also carry a downward-facing head orientation.
-        // Level the neck/head after the torso correction so the whole upper
-        // body reads upright instead of leaving the chin tucked forward.
-        float headPitchDegrees = Mathf.Atan2(
-            Vector3.Dot(rig.Head.forward, up),
-            Mathf.Max(0.01f, Vector3.Dot(rig.Head.forward, faceForward))) *
-            Mathf.Rad2Deg;
-        float levelCorrectionDegrees = Mathf.Clamp(headPitchDegrees, -14f, 14f);
-        RotateBoneAroundAxis(rig.Neck, correctionAxis, levelCorrectionDegrees * 0.45f);
-        RotateBoneAroundAxis(rig.Head, correctionAxis, levelCorrectionDegrees * 0.55f);
-        Debug.Log(
-            "GYMCHAOS_UPRIGHT_POSTURE identity=" + identity +
-            " forwardLean=" + forwardLeanDegrees.ToString("F2") +
-            " correction=" + correctionDegrees.ToString("F2") +
-            " headLevel=" + levelCorrectionDegrees.ToString("F2"),
-            modelRoot);
-    }
-
-    private static void RotateBoneAroundAxis(
-        Transform bone, Vector3 axis, float degrees)
-    {
-        if (bone == null || axis.sqrMagnitude < 0.0001f ||
-            Mathf.Abs(degrees) < 0.0001f)
-        {
-            return;
-        }
-
-        bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation;
     }
     // Height of the real soles above the skinned renderer's (loose) box
     // floor in the fitted pose; contact checks use box floor + this.
@@ -626,11 +488,11 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         Shader shader = Shader.Find("GymChaos/BodybuilderUnlit");
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Lit");
+            shader = GymMaterialLibrary.LitShader;
         }
         if (shader == null)
         {

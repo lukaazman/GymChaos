@@ -94,20 +94,17 @@ public sealed class GymExperienceService : MonoBehaviour
         EnemyFighter.IsFightActive || GymDialogueDirector.IsDialogueActive || GymRaceDirector.IsRaceActive;
     public int Level => state != null ? state.level : 1;
     public int Experience => state != null ? state.experience : 0;
-    public int ExperienceToNextLevel => GetExperienceToNextLevel(Level);
     public int SkillPoints => state != null ? state.skillPoints : 0;
     public int Reputation => state != null ? state.reputation : 0;
     public int MasteryRank => state != null ? state.masteryRank : 0;
     public int LoyaltyStamps => state != null ? state.loyaltyStamps : 0;
     public int LoyaltyStampsEarnedToday =>
         state != null && state.loyaltyStampDay == state.gymDay ? state.loyaltyStampsToday : 0;
-    public float TemporaryFatigue => temporaryFatigue;
     public bool AllStatsMaxed =>
         GetStatRank(GymStat.Strength) >= MaxStatRank &&
         GetStatRank(GymStat.Endurance) >= MaxStatRank &&
         GetStatRank(GymStat.Technique) >= MaxStatRank &&
         GetStatRank(GymStat.Reputation) >= MaxStatRank;
-    public string MasteryTitle => GetMasteryTitle(MasteryRank);
     public string MasteryChallengeLabel => GetMasteryChallengeLabel(MasteryRank);
 
     public static GymExperienceService CreateForScene(PlayerMovement targetPlayer)
@@ -1020,17 +1017,6 @@ public sealed class GymExperienceService : MonoBehaviour
         RegisterDailyGoal(2);
     }
 
-    public void RegisterFriendlyAction(string reason)
-    {
-        if (state == null)
-        {
-            return;
-        }
-
-        AwardExperience(5, "social action", "social-" + state.gymDay + "-" + reason, false);
-        ChangeReputation(3, reason);
-    }
-
     public void RegisterDialogueChoice(int reputationDelta, string sourceKey = null)
     {
         if (state == null)
@@ -1478,9 +1464,6 @@ public sealed class GymExperienceService : MonoBehaviour
             NoticeRaised?.Invoke(text, seconds, 1);
         }
     }
-
-    public string GetDailyGoalLabel(int index) =>
-        index >= 0 && index < DailyGoalLabels.Length ? DailyGoalLabels[index] : string.Empty;
     public int GetDailyGoalTarget(int index) =>
         index >= 0 && index < DailyGoalTargets.Length ? DailyGoalTargets[index] : 1;
     public int DailyGoalCount => DailyGoalTargets.Length;

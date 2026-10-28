@@ -43,7 +43,6 @@ public sealed class GymDialogueUI : MonoBehaviour
     public string SpeakerTextForVerification => speakerLabel != null ? speakerLabel.text : string.Empty;
     public Button[] ChoiceButtonsForVerification => choiceButtons;
     public Button ContinueButtonForVerification => continueButton;
-    public RectTransform PanelForVerification => panel;
 
     public void Bind(GymDialogueDirector owner)
     {
@@ -179,8 +178,8 @@ public sealed class GymDialogueUI : MonoBehaviour
             Present(node);
         }
 
-        float reveal = Ease01((now - presentationStartedAt) / PresentationDuration);
-        float beat = beatStartedAt >= 0f ? 1f - Ease01((now - beatStartedAt) / BeatDuration) : 0f;
+        float reveal = GymShared.Ease01((now - presentationStartedAt) / PresentationDuration);
+        float beat = beatStartedAt >= 0f ? 1f - GymShared.Ease01((now - beatStartedAt) / BeatDuration) : 0f;
         float barHeight = Mathf.Lerp(0f, 86f, director.LetterboxBlend);
         topBar.sizeDelta = new Vector2(0f, barHeight);
         bottomBar.sizeDelta = new Vector2(0f, barHeight);
@@ -291,12 +290,6 @@ public sealed class GymDialogueUI : MonoBehaviour
         {
             EventSystem.current.SetSelectedGameObject(null);
         }
-    }
-
-    private static float Ease01(float value)
-    {
-        value = Mathf.Clamp01(value);
-        return value * value * (3f - 2f * value);
     }
 
     private void OnDisable()

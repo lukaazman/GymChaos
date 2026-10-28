@@ -35,7 +35,6 @@ public static class GymChaosBatch1022Verifier
     private static Bounds floor;
     private static Vector3 lastPos;
     private static float maxJump;
-    private static int xpBefore;
     private static float healthBefore;
     private static float worstGrip;
     private static int gripSamples;
@@ -57,13 +56,7 @@ public static class GymChaosBatch1022Verifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void ResetState()
     {

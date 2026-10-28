@@ -121,7 +121,7 @@ public sealed class GymRaceKartEffects : MonoBehaviour
 
     private void CreateMaterials()
     {
-        Shader unlit = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+        Shader unlit = GymMaterialLibrary.UnlitShader;
         sparkMaterial = Additive(unlit, "Race Drift Spark");
         flameMaterial = Additive(unlit, "Race Exhaust Flame");
         skidMaterial = new Material(unlit) { name = "Race Skid", color = new Color(0.02f, 0.02f, 0.02f) };
@@ -245,7 +245,7 @@ public sealed class GymRaceKartEffects : MonoBehaviour
         // Drift sparks: colour by charged tier, flicker each frame.
         bool sparking = kart.IsDrifting && kart.Grounded;
         Color sparkColor = TierColors[Mathf.Clamp(kart.DriftTier, 0, TierColors.Length - 1)];
-        SetColor(sparkMaterial, sparkColor * (1.2f + Random.value * 0.6f));
+        SetColor(sparkMaterial, sparkColor * (1f + Random.value * 0.3f));
         Transform view = UnityEngine.Camera.main != null ? UnityEngine.Camera.main.transform : null;
         for (int i = 0; i < sparks.Length; i++)
         {
@@ -274,7 +274,7 @@ public sealed class GymRaceKartEffects : MonoBehaviour
         // Exhaust flames: orange mini-turbo, blue-white boost.
         bool flaming = kart.IsBoosting || kart.MiniTurboTime > 0f;
         Color flameColor = kart.IsBoosting ? new Color(0.45f, 0.8f, 1f) : new Color(1f, 0.55f, 0.12f);
-        SetColor(flameMaterial, flameColor * (1.1f + Random.value * 0.4f));
+        SetColor(flameMaterial, flameColor * (0.9f + Random.value * 0.3f));
         for (int i = 0; i < flames.Length; i++)
         {
             flames[i].gameObject.SetActive(flaming);

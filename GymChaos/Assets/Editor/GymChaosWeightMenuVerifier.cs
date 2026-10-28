@@ -22,10 +22,7 @@ public static class GymChaosWeightMenuVerifier
 
     static GymChaosWeightMenuVerifier()
     {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= OnPlayModeChanged;
-        EditorApplication.playModeStateChanged += OnPlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, OnPlayModeChanged);
     }
 
     [MenuItem("Tools/GymChaos/Run Weight Menu Verification")]

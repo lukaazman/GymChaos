@@ -7,7 +7,7 @@ Shader "GymChaos/GokuAura"
     {
         _AuraBlend ("Aura Blend", Range(0, 1)) = 0
         _Front ("Front Tint Sheet", Float) = 0
-        _OuterColor ("Outer Color", Color) = (1, 0.80, 0.12, 1)
+        _OuterColor ("Outer Color", Color) = (1, 0.78, 0.3, 1)
         _MidColor ("Mid Color", Color) = (1, 0.93, 0.42, 1)
         _CoreColor ("Core Color", Color) = (1, 1, 0.88, 1)
         // Placement, set per camera by GokuAura.cs.
@@ -155,11 +155,11 @@ Shader "GymChaos/GokuAura"
                 // Thin bright streaks rising through the aura.
                 float streak = smoothstep(0.86, 1.0,
                     Noise(float2(p.x * 26.0, p.y * 1.8 - t * 7.0)));
-                color += streak * 0.35 * inside;
+                color += streak * 0.2 * inside;
 
-                float alpha = inside * lerp(0.62, 0.95, saturate(1.0 - e));
+                float alpha = inside * lerp(0.38, 0.6, saturate(1.0 - e));
                 // Soft halo outside the hard edge.
-                float halo = exp(-max(d - thickness, 0.0) * 7.0) * (1.0 - inside) * 0.2;
+                float halo = exp(-max(d - thickness, 0.0) * 7.0) * (1.0 - inside) * 0.1;
 
                 // Never let the halo show the sheet's rectangle.
                 float2 uv = (p - _Rect.xy) / max(_Rect.zw - _Rect.xy, 1e-3);

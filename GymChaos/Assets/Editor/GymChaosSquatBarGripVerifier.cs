@@ -45,20 +45,14 @@ public static class GymChaosSquatBarGripVerifier
     private static void ResumeAfterReload()
     {
         if (!SessionState.GetBool(RequestedKey, false)) return;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
     }
 
     public static void Run()
     {
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         SessionState.SetBool(RequestedKey, true);
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
         EditorApplication.isPlaying = true;
     }
 

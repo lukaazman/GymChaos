@@ -162,7 +162,7 @@ public partial class EnemyFighter
         {
             gokuFlightTransition = Mathf.Min(
                 1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
-            float eased = SmoothStep(gokuFlightTransition);
+            float eased = GymShared.Ease01(gokuFlightTransition);
             Vector3 horizontalTarget = currentTarget != null
                 ? new Vector3(currentTarget.position.x, body.position.y, currentTarget.position.z)
                 : body.position;
@@ -217,7 +217,7 @@ public partial class EnemyFighter
         {
             gokuFlightTransition = Mathf.Min(
                 1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
-            float eased = SmoothStep(gokuFlightTransition);
+            float eased = GymShared.Ease01(gokuFlightTransition);
             body.position = new Vector3(
                 body.position.x,
                 Mathf.Lerp(gokuFlightStartY, floorRootY, eased),
@@ -546,10 +546,5 @@ public partial class EnemyFighter
             : RigidbodyConstraints.FreezePositionY |
               RigidbodyConstraints.FreezeRotationX |
               RigidbodyConstraints.FreezeRotationZ;
-    }
-    private static float SmoothStep(float value)
-    {
-        value = Mathf.Clamp01(value);
-        return value * value * (3f - 2f * value);
     }
 }

@@ -13,8 +13,8 @@ public sealed class GokuAura : MonoBehaviour
     // Body capsule radius around the head-feet line (shoulders inside).
     private const float BodyRadius = 0.36f;
     // Aura thickness around the body and length of the long flame tongues.
-    private const float BaseThickness = 0.24f;
-    private const float FlameLength = 1.15f;
+    private const float BaseThickness = 0.17f;
+    private const float FlameLength = 0.85f;
     // The back sheet sits behind the body so the body draws over it; the
     // front tint sheet sits just in front of it.
     private const float BackOffset = 0.45f;
@@ -52,7 +52,6 @@ public sealed class GokuAura : MonoBehaviour
     // World direction the flame tongues stream towards.
     public Vector3 FlameDirection => flameDirection;
     public Vector3 SmoothedVelocity => smoothedVelocity;
-    public Renderer BackRenderer => backRenderer;
     public Vector3 HeadPoint => head;
     public Vector3 FeetPoint => feet;
     public string BoneNames =>

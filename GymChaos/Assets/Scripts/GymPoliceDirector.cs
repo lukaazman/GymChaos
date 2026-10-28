@@ -66,8 +66,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private Vector3 officerExitPosition;
     private float policeCarSupportY;
     private float maxMeasuredCarSpeed;
-    private float lastCarSampleTime;
-    private Vector3 lastCarSamplePosition;
     private bool officerExited;
     private BoxCollider policeCarCollider;
     private bool policeCarRouteBoundsClear;
@@ -91,7 +89,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
     public Vector3 PoliceCarSpawnPointForVerification => policeCarSpawnPoint;
     public Vector3 PoliceCarStopPointForVerification => policeCarStopPoint;
     public float PoliceCarSpeedForVerification => PoliceCarSpeed;
-    public float PoliceCarSupportYForVerification => policeCarSupportY;
     public Vector3 OfficerExitPositionForVerification => officerExitPosition;
     public bool OfficerExitedForVerification => officerExited;
     public float MaxMeasuredCarSpeedForVerification => maxMeasuredCarSpeed;
@@ -133,7 +130,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
                 Mathf.Abs(currentRoute[3].x - currentRoute[4].x) < 0.01f;
         }
     }
-    public bool PoliceCarPresentForVerification => policeCar != null;
     public bool PoliceCarParkedByGymForVerification =>
         policeCar != null &&
         !policeCarMoving &&
@@ -240,7 +236,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
         policeCarRouteOverlapCount = 0;
         maxRouteDeviation = 0f;
         maxMeasuredCarSpeed = 0f;
-        lastCarSampleTime = 0f;
         Vector3 direction = Vector3.ProjectOnPlane(currentRoute[1] - spawn, Vector3.up);
         Quaternion rotation = direction.sqrMagnitude > 0.01f
             ? Quaternion.LookRotation(direction.normalized, Vector3.up)
@@ -356,7 +351,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
     // and the car leaves along its arrival route without the siren.
     private bool calmDeparture;
     private Transform officerReturnPoint;
-    public bool IsCalmDepartureActiveForVerification => calmDeparture;
 
     public static bool BeginOfficerReturn(EnemyFighter officer)
     {
@@ -804,7 +798,7 @@ public sealed class GymPoliceDirector : MonoBehaviour
 
     private IEnumerator LoadPoliceSiren()
     {
-        string path = JoinStreamingAssetsPath(PoliceSirenAsset);
+        string path = GymShared.JoinStreamingAssetsPath(PoliceSirenAsset);
         AudioClip clip = null;
         using (UnityWebRequest request =
             UnityWebRequestMultimedia.GetAudioClip(path, AudioType.MPEG))
@@ -888,10 +882,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
     }
 
     private GymEngineAudioFader policeEngineFader;
-    public bool IsPoliceEnginePlayingForVerification =>
-        policeEngine != null && policeEngine.isPlaying &&
-        (policeEngineFader == null || policeEngineFader.IsDriving);
-    public bool HasPoliceEngineForVerification => policeEngine != null;
 
     private void SetPoliceCarMoving(bool moving)
     {
@@ -951,19 +941,6 @@ public sealed class GymPoliceDirector : MonoBehaviour
                 $"loop={policeSiren.loop} moving=True",
                 policeCar);
         }
-    }
-
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path =
-            Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" +
-            relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
 
     private void ResetPoliceSirenState()

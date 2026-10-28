@@ -29,11 +29,6 @@ public class GymExerciseStation : MonoBehaviour
     private const int DeadliftBarWeight = 20;
     private const int DeadliftStartingLoad = 60;
     public const float DeadliftBarVisualMajorSize = 4.15f;
-    // The 4.15 m normalized bar has its loading sleeve in the outer quarter
-    // of each half. The old .98 value landed on the grip/inner shaft instead
-    // of the sleeve shown by the incline-bar reference. Keep the 20 kg pair
-    // on the sleeve's inner edge and append selected plates outward from it.
-    public const float DeadliftLoadingSleeveInset = 0.16f;
     // Inner loading position on the sleeve, measured from the authored bar
     // visual (its own 20 kg discs sat here before they were stripped).
     public const float DeadliftLoadedPlateCenter = 1.45f;
@@ -350,7 +345,7 @@ public class GymExerciseStation : MonoBehaviour
             }
 
             Renderer[] renderers = sceneBar.GetComponentsInChildren<Renderer>(true);
-            return renderers.Length > 0 ? GetCombinedBounds(renderers).center : sceneBar.position;
+            return renderers.Length > 0 ? GymShared.CombinedBounds(renderers).center : sceneBar.position;
         }
     }
     public float EnemySquatBarAxisError
@@ -389,7 +384,6 @@ public class GymExerciseStation : MonoBehaviour
                 : float.PositiveInfinity;
         }
     }
-    public Vector3 SquatStagingCenter => IsSquat ? playerPosition : Vector3.zero;
     public float TreadmillSpeed01(float speed)
     {
         return Mathf.InverseLerp(1f, 18f, Mathf.Clamp(speed, 1f, 18f));
@@ -404,7 +398,6 @@ public class GymExerciseStation : MonoBehaviour
     public int SelectedWeight => selectedWeight;
     public int Repetitions => repetitions;
     public float CardioDistanceMetres => distance;
-    public float SessionElapsed => sessionElapsed;
     public TechniqueSkillCheck TechniqueCheck => techniqueSkillCheck;
     public WorkoutResult LastWorkoutResult => lastWorkoutResult;
     public int ComboMultiplier => comboMultiplier;
@@ -495,7 +488,7 @@ public class GymExerciseStation : MonoBehaviour
                 continue;
             }
 
-            Bounds bounds = GetCombinedBounds(renderers);
+            Bounds bounds = GymShared.CombinedBounds(renderers);
             if ((type == GymExerciseType.FlatBenchPress || type == GymExerciseType.InclineBenchPress) &&
                 FindNearestSceneWeight(candidate, bounds, "barbell") == null)
             {
@@ -805,7 +798,6 @@ public class GymExerciseStation : MonoBehaviour
     }
 
     public Transform DeadliftBar => IsDeadlift ? sceneBar : null;
-    public bool IsEnemyDeadliftActive => IsDeadlift && enemyOccupant != null;
     public float DeadliftPlatformTopY => DeadliftMarker != null ? DeadliftMarker.PlatformTopY : playerPosition.y;
     public Vector3 DeadliftBarRestPosition => DeadliftMarker != null && DeadliftMarker.HasLoadedBarRest
         ? DeadliftMarker.LoadedBarRestPosition
@@ -1023,14 +1015,6 @@ public class GymExerciseStation : MonoBehaviour
         currentSpeed = 0f;
         distance = 0f;
         cardioPhase = 0f;
-    }
-
-    public bool TryBeginEnemySquat(EnemyFighter enemy, Transform traps)
-    {
-        Vector3 target = traps != null && enemy != null
-            ? traps.position + enemy.transform.TransformVector(enemySquatBarOffset)
-            : Vector3.zero;
-        return TryBeginEnemySquat(enemy, traps, target);
     }
 
     public bool TryBeginEnemySquat(
@@ -1539,7 +1523,7 @@ public class GymExerciseStation : MonoBehaviour
                     cableMachineRoot.GetComponentsInChildren<Renderer>(true);
                 if (machineRenderers.Length > 0)
                 {
-                    floorBounds = GetCombinedBounds(machineRenderers);
+                    floorBounds = GymShared.CombinedBounds(machineRenderers);
                 }
             }
         }
@@ -1589,7 +1573,7 @@ public class GymExerciseStation : MonoBehaviour
             }
 
             Vector3 barCenter = sceneBar != null
-                ? GetCombinedBounds(sceneBar.GetComponentsInChildren<Renderer>(true)).center
+                ? GymShared.CombinedBounds(sceneBar.GetComponentsInChildren<Renderer>(true)).center
                 : stagingBounds.center;
             playerPosition = new Vector3(
                 barCenter.x - cameraDirection.x * 0.92f,
@@ -1625,7 +1609,7 @@ public class GymExerciseStation : MonoBehaviour
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
-            Vector3 barCenter = barRenderers.Length > 0 ? GetCombinedBounds(barRenderers).center : sceneBar.position;
+            Vector3 barCenter = barRenderers.Length > 0 ? GymShared.CombinedBounds(barRenderers).center : sceneBar.position;
             Vector3 approach = Vector3.ProjectOnPlane(barCenter - bounds.center, Vector3.up);
             if (approach.sqrMagnitude < 0.01f) approach = forward;
             approach.Normalize();
@@ -1661,7 +1645,7 @@ public class GymExerciseStation : MonoBehaviour
         if (type == GymExerciseType.InclineBenchPress && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
-            Vector3 barCenter = barRenderers.Length > 0 ? GetCombinedBounds(barRenderers).center : sceneBar.position;
+            Vector3 barCenter = barRenderers.Length > 0 ? GymShared.CombinedBounds(barRenderers).center : sceneBar.position;
             Vector3 barLook = Vector3.ProjectOnPlane(barCenter - playerPosition, Vector3.up);
             if (barLook.sqrMagnitude > 0.01f)
             {
@@ -1674,7 +1658,7 @@ public class GymExerciseStation : MonoBehaviour
         if (type == GymExerciseType.PreacherCurl && sceneBar != null)
         {
             Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
-            Vector3 barCenter = barRenderers.Length > 0 ? GetCombinedBounds(barRenderers).center : sceneBar.position;
+            Vector3 barCenter = barRenderers.Length > 0 ? GymShared.CombinedBounds(barRenderers).center : sceneBar.position;
             Vector3 seatedLook = Vector3.ProjectOnPlane(barCenter - playerPosition, Vector3.up);
             if (seatedLook.sqrMagnitude > 0.01f)
             {
@@ -1900,7 +1884,7 @@ public class GymExerciseStation : MonoBehaviour
             // root pivot. Correct the pivot-independent offset after the
             // attachment rotation so the bar itself, not its root, sits on
             // the traps.
-            Vector3 actualCenter = GetCombinedBounds(attachedRenderers).center;
+            Vector3 actualCenter = GymShared.CombinedBounds(attachedRenderers).center;
             sceneBar.position += targetBarCenter - actualCenter;
         }
     }
@@ -2430,7 +2414,6 @@ public class GymExerciseStation : MonoBehaviour
     }
 
     public float CardioUnlockedSpeed => cardioUnlockedSpeed;
-    public int CardioGatesCleared => cardioGatesCleared;
     internal void UnlockCardioPaceForVerification() => cardioUnlockedSpeed = 1000f;
 
     private void ConfigureActualCardioParts(Transform equipment)
@@ -2463,7 +2446,7 @@ public class GymExerciseStation : MonoBehaviour
         {
             Transform[] parts = equipment.GetComponentsInChildren<Transform>(true);
             Renderer[] equipmentRenderers = equipment.GetComponentsInChildren<Renderer>(true);
-            Bounds equipmentBounds = GetCombinedBounds(equipmentRenderers);
+            Bounds equipmentBounds = GymShared.CombinedBounds(equipmentRenderers);
             for (int i = 0; i < parts.Length; i++)
             {
                 string lower = parts[i].name.ToLowerInvariant();
@@ -2583,7 +2566,7 @@ public class GymExerciseStation : MonoBehaviour
             sceneBarExerciseRotation = sceneBar.rotation;
             Renderer[] sceneBarRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
             sceneBarRendererCenterOffset = sceneBarRenderers.Length > 0
-                ? sceneBar.position - GetCombinedBounds(sceneBarRenderers).center
+                ? sceneBar.position - GymShared.CombinedBounds(sceneBarRenderers).center
                 : Vector3.zero;
             sceneBarBody = sceneBar.GetComponent<Rigidbody>();
             if (sceneBarBody == null) sceneBarBody = sceneBar.GetComponentInChildren<Rigidbody>();
@@ -2796,7 +2779,7 @@ public class GymExerciseStation : MonoBehaviour
 
         Renderer[] barRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
         if (barRenderers.Length == 0) return;
-        Bounds barBounds = GetCombinedBounds(barRenderers);
+        Bounds barBounds = GymShared.CombinedBounds(barRenderers);
         Vector3 size = barBounds.size;
         Vector3 worldAxis = size.x >= size.y && size.x >= size.z ? Vector3.right : (size.y >= size.z ? Vector3.up : Vector3.forward);
         float halfLength = worldAxis == Vector3.right ? size.x * 0.5f : (worldAxis == Vector3.up ? size.y * 0.5f : size.z * 0.5f);
@@ -2855,7 +2838,7 @@ public class GymExerciseStation : MonoBehaviour
                     Renderer[] plateRenderers = plate.GetComponentsInChildren<Renderer>(true);
                     if (plateRenderers.Length > 0)
                     {
-                        Bounds plateBounds = GetBoundsRelativeTo(
+                        Bounds plateBounds = GymShared.GetBoundsRelativeTo(
                             loadedPlatesRoot, plateRenderers);
                         float halfThickness = Mathf.Max(
                             0.012f, plateBounds.extents.x);
@@ -2950,23 +2933,6 @@ public class GymExerciseStation : MonoBehaviour
         deadliftLoosePlateStates.Clear();
     }
 
-    private void BuildLoadedAssetBar(Transform parent, string barAssetName, Vector3 position, float barWidth, float plateEdge)
-    {
-        CreateNormalizedAssetVisual(barAssetName, parent, position, barWidth, true, $"Asset {barAssetName} Visual");
-        List<int> platesPerSide = GetPlatesPerSide();
-        const float stackSpacing = 0.055f;
-        for (int side = -1; side <= 1; side += 2)
-        {
-            for (int i = 0; i < platesPerSide.Count; i++)
-            {
-                int plateWeight = platesPerSide[i];
-                float diameter = plateWeight == 20 ? 0.34f : (plateWeight == 10 ? 0.3f : 0.26f);
-                Vector3 platePosition = position + Vector3.right * side * (plateEdge + i * stackSpacing);
-                CreateNormalizedAssetVisual($"Plate{plateWeight}", parent, platePosition, diameter, false, $"Asset Plate {plateWeight}kg Visual");
-            }
-        }
-    }
-
     private List<int> GetPlatesPerSide()
     {
         List<int> plates = new List<int>();
@@ -3017,7 +2983,7 @@ public class GymExerciseStation : MonoBehaviour
             return null;
         }
 
-        Bounds localBounds = GetBoundsRelativeTo(wrapper, renderers);
+        Bounds localBounds = GymShared.GetBoundsRelativeTo(wrapper, renderers);
         clone.transform.localPosition -= localBounds.center;
         Vector3 size = localBounds.size;
         Quaternion alignment = Quaternion.identity;
@@ -3084,32 +3050,6 @@ public class GymExerciseStation : MonoBehaviour
         }
     }
 
-    private static Bounds GetBoundsRelativeTo(Transform relativeTo, Renderer[] renderers)
-    {
-        Bounds result = new Bounds(relativeTo.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
-        for (int i = 0; i < renderers.Length; i++)
-        {
-            Bounds bounds = renderers[i].bounds;
-            Vector3 min = bounds.min;
-            Vector3 max = bounds.max;
-            for (int x = 0; x <= 1; x++)
-            for (int y = 0; y <= 1; y++)
-            for (int z = 0; z <= 1; z++)
-            {
-                result.Encapsulate(relativeTo.InverseTransformPoint(new Vector3(x == 0 ? min.x : max.x, y == 0 ? min.y : max.y, z == 0 ? min.z : max.z)));
-            }
-        }
-
-        return result;
-    }
-
-    private static Bounds GetCombinedBounds(Renderer[] renderers)
-    {
-        Bounds bounds = renderers[0].bounds;
-        for (int i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
-        return bounds;
-    }
-
     private float GetInteractionRange()
     {
         return IsCardio ? 3.15f : 2.35f;
@@ -3173,7 +3113,7 @@ public class GymExerciseStation : MonoBehaviour
 
         Transform[] parts = equipment.GetComponentsInChildren<Transform>(true);
         Renderer[] equipmentRenderers = equipment.GetComponentsInChildren<Renderer>(true);
-        Bounds equipmentBounds = GetCombinedBounds(equipmentRenderers);
+        Bounds equipmentBounds = GymShared.CombinedBounds(equipmentRenderers);
         float bestBarScore = float.MinValue;
         float bestCableScore = float.MinValue;
         for (int i = 0; i < parts.Length; i++)

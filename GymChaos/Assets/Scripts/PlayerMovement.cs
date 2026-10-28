@@ -193,7 +193,6 @@ public partial class PlayerMovement : MonoBehaviour
     public float CurrentHealth => currentHealth;
     public float PerfectRepHealAmount => perfectRepHeal;
     public bool IsHealthRegenerating { get; private set; }
-    public bool IsCombatThreatActive => combatThreatActive;
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
     public float SprintEnergy => sprintEnergy;
     public bool IsDead { get; private set; }
@@ -3210,12 +3209,6 @@ public partial class PlayerMovement : MonoBehaviour
 #else
         return Input.GetKeyDown(KeyCode.E);
 #endif
-    }
-
-    private bool ReadRadioTogglePressed()
-    {
-        // Radio uses the same contextual interaction key as exercise stations.
-        return ReadExerciseStartPressed();
     }
 
     private bool ReadJumpPressed()

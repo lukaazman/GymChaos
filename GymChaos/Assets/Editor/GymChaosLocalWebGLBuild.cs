@@ -8,6 +8,9 @@ using UnityEngine;
 /// that CI uses, then exits, so Tools/Invoke-UnityCheck.ps1 returns
 /// (BuildWebGL itself leaves batch Unity running, which CI's runner expects).
 /// Set UNITY_BUILD_PATH to choose the output folder.
+/// The project stays on the WebGL target (Tools/Invoke-WebGLSmoke.ps1 builds
+/// in .lanes/lane5 for a warm cache); Invoke-UnityCheck.ps1 starts every
+/// other run with -buildTarget Win64.
 /// </summary>
 public static class GymChaosLocalWebGLBuild
 {

@@ -15,6 +15,8 @@ public static class GymChaosEnemyBehaviorVerifier
         "GymChaos.EnemyBehaviorVerificationOriginalSavePresent";
     private const string ProgressionSaveKey = "GymChaos.Progression.v1";
 
+    // All windows and deadlines count game time: a slow CI runner caps each
+    // frame at Time.maximumDeltaTime, so wall-clock deadlines ran out early.
     private static double enteredPlayTime;
     private static bool behaviorSetup;
     private static bool verificationCompleted;
@@ -140,7 +142,7 @@ public static class GymChaosEnemyBehaviorVerifier
     {
         if (EditorApplication.isPlaying)
         {
-            enteredPlayTime = EditorApplication.timeSinceStartup;
+            enteredPlayTime = Time.timeAsDouble;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
@@ -150,7 +152,7 @@ public static class GymChaosEnemyBehaviorVerifier
     {
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
-            enteredPlayTime = EditorApplication.timeSinceStartup;
+            enteredPlayTime = Time.timeAsDouble;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
@@ -171,7 +173,7 @@ public static class GymChaosEnemyBehaviorVerifier
     {
         try
         {
-            double elapsed = EditorApplication.timeSinceStartup - enteredPlayTime;
+            double elapsed = Time.timeAsDouble - enteredPlayTime;
             player = UnityEngine.Object.FindFirstObjectByType<PlayerMovement>();
             EnemyFighter[] fighters =
                 UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
@@ -337,7 +339,7 @@ public static class GymChaosEnemyBehaviorVerifier
         // Walking is intentionally slow and the authored treadmill point can
         // sit behind several equipment rows, so allow the real route enough
         // time to complete instead of mistaking a valid detour for a failure.
-        treadmillDeadline = EditorApplication.timeSinceStartup + 20d;
+        treadmillDeadline = Time.timeAsDouble + 20d;
         Debug.Log(
             $"GYMCHAOS_ENEMY_TREADMILL_QUEUE identity={treadmillUser.Identity} " +
             $"start={treadmillUser.transform.position} target={treadmillUser.CurrentRoamTarget} " +
@@ -438,7 +440,39 @@ public static class GymChaosEnemyBehaviorVerifier
                 : "0";
         }
         return $"measured={fighter.MeasuredPlanarSpeedForVerification:0.000} actual={displacement} " +
-            $"blocked={fighter.CurrentRoamBlockedTime:0.00}";
+            $"blocked={fighter.CurrentRoamBlockedTime:0.00} contacts={DescribeContacts(fighter)}";
+    }
+
+    private static readonly Collider[] contactBuffer = new Collider[32];
+
+    // Own solid collider > foreign collider it penetrates, deepest first.
+    private static string DescribeContacts(EnemyFighter fighter)
+    {
+        List<KeyValuePair<float, string>> contacts = new List<KeyValuePair<float, string>>();
+        foreach (Collider own in fighter.GetComponentsInChildren<Collider>())
+        {
+            if (!own.enabled || own.isTrigger) continue;
+            Bounds bounds = own.bounds;
+            int count = Physics.OverlapBoxNonAlloc(bounds.center, bounds.extents, contactBuffer,
+                Quaternion.identity, ~0, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < count; i++)
+            {
+                Collider other = contactBuffer[i];
+                if (other.transform.IsChildOf(fighter.transform) ||
+                    !Physics.ComputePenetration(own, own.transform.position, own.transform.rotation,
+                        other, other.transform.position, other.transform.rotation,
+                        out Vector3 direction, out float depth))
+                {
+                    continue;
+                }
+                contacts.Add(new KeyValuePair<float, string>(depth,
+                    $"{own.name}>{other.name}:{depth:0.000}@({direction.x:0.0},{direction.y:0.0},{direction.z:0.0})"));
+            }
+        }
+        contacts.Sort((a, b) => b.Key.CompareTo(a.Key));
+        List<string> top = new List<string>();
+        for (int i = 0; i < contacts.Count && i < 6; i++) top.Add(contacts[i].Value);
+        return top.Count > 0 ? string.Join("|", top) : "none";
     }
 
     private static void ObserveIndependentRoaming(EnemyFighter[] fighters)
@@ -616,11 +650,11 @@ public static class GymChaosEnemyBehaviorVerifier
         {
             if (ronnieMismatchSince < 0d)
             {
-                ronnieMismatchSince = EditorApplication.timeSinceStartup;
+                ronnieMismatchSince = Time.timeAsDouble;
                 return;
             }
 
-            if (EditorApplication.timeSinceStartup - ronnieMismatchSince <= 0.35d)
+            if (Time.timeAsDouble - ronnieMismatchSince <= 0.35d)
             {
                 return;
             }
@@ -660,7 +694,7 @@ public static class GymChaosEnemyBehaviorVerifier
             treadmillSecondSessionSeed = selectedSeed;
             treadmillSecondSessionStarted = true;
             treadmillGaitObserved = false;
-            treadmillDeadline = EditorApplication.timeSinceStartup + 60d;
+            treadmillDeadline = Time.timeAsDouble + 60d;
             Debug.Log(
                 $"GYMCHAOS_ENEMY_TREADMILL_SECOND_BRANCH_REQUESTED " +
                 $"identity={treadmillUser.Identity} expected={oppositeGait} " +
@@ -681,7 +715,7 @@ public static class GymChaosEnemyBehaviorVerifier
         if (!treadmillStation.IsOccupiedByEnemy ||
             treadmillUser.CurrentTreadmill != treadmillStation)
         {
-            if (EditorApplication.timeSinceStartup < treadmillDeadline)
+            if (Time.timeAsDouble < treadmillDeadline)
             {
                 return;
             }
@@ -736,7 +770,7 @@ public static class GymChaosEnemyBehaviorVerifier
 
         if (!treadmillGaitObserved)
         {
-            if (EditorApplication.timeSinceStartup >= treadmillDeadline)
+            if (Time.timeAsDouble >= treadmillDeadline)
             {
                 throw new InvalidOperationException(
                     $"Treadmill gait clip did not match: expected={expectedGait} " +

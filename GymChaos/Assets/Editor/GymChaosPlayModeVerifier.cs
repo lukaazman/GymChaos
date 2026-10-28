@@ -16,6 +16,9 @@ public static class GymChaosPlayModeVerifier
     private const string OriginalProgressionSavePresentKey =
         "GymChaos.PlayerMirrorVerificationOriginalSavePresent";
     private const string ProgressionSaveKey = "GymChaos.Progression.v1";
+    // Game time, not wall clock: slow runners cap each frame at
+    // Time.maximumDeltaTime, so short wall-clock windows (punch hit 2 s)
+    // closed before the game reached them.
     private static double enteredPlayTime;
     private static bool positioned;
     private static bool skyRenderVerified;
@@ -30,7 +33,6 @@ public static class GymChaosPlayModeVerifier
     private static bool throwCaptured;
     private static bool visitorSimulationSuspended;
     private static bool gokuFlightVerificationStarted;
-    private static bool gokuFlightVerified;
     private static bool gokuRunBandLogged;
     private static EnemyFighter gokuForVerification;
     private static double gokuFlightVerificationStartedAt;
@@ -84,7 +86,6 @@ public static class GymChaosPlayModeVerifier
         throwCaptured = false;
         visitorSimulationSuspended = false;
         gokuFlightVerificationStarted = false;
-        gokuFlightVerified = false;
         gokuRunBandLogged = false;
         gokuForVerification = null;
         gokuFlightVerificationStartedAt = 0d;
@@ -115,7 +116,7 @@ public static class GymChaosPlayModeVerifier
         if (EditorApplication.isPlaying)
         {
             AudioListener.pause = true;
-            enteredPlayTime = EditorApplication.timeSinceStartup;
+            enteredPlayTime = Time.timeAsDouble;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
@@ -131,7 +132,7 @@ public static class GymChaosPlayModeVerifier
                 audioPauseCaptured = true;
             }
             AudioListener.pause = true;
-            enteredPlayTime = EditorApplication.timeSinceStartup;
+            enteredPlayTime = Time.timeAsDouble;
             EditorApplication.update += Tick;
         }
         else if (state == PlayModeStateChange.EnteredEditMode)
@@ -159,7 +160,7 @@ public static class GymChaosPlayModeVerifier
     {
         try
         {
-            double elapsed = EditorApplication.timeSinceStartup - enteredPlayTime;
+            double elapsed = Time.timeAsDouble - enteredPlayTime;
             PlayerMovement player = UnityEngine.Object.FindFirstObjectByType<PlayerMovement>();
             if (!visitorSimulationSuspended)
             {
@@ -190,13 +191,15 @@ public static class GymChaosPlayModeVerifier
             if (!radioPopupVerified && elapsed > 10d)
             {
                 GymRadio radio = UnityEngine.Object.FindFirstObjectByType<GymRadio>();
-                if (radio != null && radio.HasPhysicalModel)
+                // The attack stages move the player around; the radio only
+                // accepts the menu action while the player is in the gym.
+                if (radio != null && radio.HasPhysicalModel && radio.CanInteractWithPlayer)
                 {
                     ValidateRadioPopupAndModel(radio, player);
                     ValidatePullUpCameraVariants();
                     radioPopupVerified = true;
                 }
-                else if (elapsed > 30d)
+                else if (elapsed > 30d && (radio == null || !radio.HasPhysicalModel))
                 {
                     throw new InvalidOperationException(
                         "Reception radio did not retain a physical model for popup verification.");
@@ -313,7 +316,6 @@ public static class GymChaosPlayModeVerifier
                 if (gokuForVerification != null && gokuForVerification.IsFlying &&
                     gokuForVerification.AnimationState == MixamoScanRetargetAnimator.MotionState.Flying)
                 {
-                    gokuFlightVerified = true;
                     Debug.Log(
                         $"GYMCHAOS_GOKU_FLY_OK state={gokuForVerification.AnimationState} " +
                         $"flying={gokuForVerification.IsFlying} " +
@@ -331,11 +333,11 @@ public static class GymChaosPlayModeVerifier
                     MovePlayerForVerification(
                         player,
                         ClearGokuRunSpot(gokuApproachDirection, 4.5f));
-                    gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+                    gokuFlightVerificationStartedAt = Time.timeAsDouble;
                     attackStage = 7;
                     return;
                 }
-                if (EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 6d)
+                if (Time.timeAsDouble - gokuFlightVerificationStartedAt > 6d)
                 {
                     throw new InvalidOperationException(
                         $"Goku did not reach runtime Fly: state={gokuForVerification?.AnimationState}, " +
@@ -397,11 +399,11 @@ public static class GymChaosPlayModeVerifier
                         player,
                         gokuForVerification.transform.position +
                         gokuForVerification.transform.forward * 1.05f);
-                    gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+                    gokuFlightVerificationStartedAt = Time.timeAsDouble;
                     attackStage = 8;
                     return;
                 }
-                if (EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 6d)
+                if (Time.timeAsDouble - gokuFlightVerificationStartedAt > 6d)
                 {
                     throw new InvalidOperationException(
                         $"Goku did not transition from Fly to grounded Run: state={gokuForVerification?.AnimationState}, " +
@@ -423,7 +425,7 @@ public static class GymChaosPlayModeVerifier
                     attackStage = 9;
                     return;
                 }
-                if (EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 4d)
+                if (Time.timeAsDouble - gokuFlightVerificationStartedAt > 4d)
                 {
                     throw new InvalidOperationException(
                         $"Goku did not transition from grounded Run to Punch: state={gokuForVerification?.AnimationState}, " +
@@ -434,7 +436,7 @@ public static class GymChaosPlayModeVerifier
 
             if (attackStage == 9)
             {
-                if (EditorApplication.timeSinceStartup - contactVerificationStartedAt < 1.35d)
+                if (Time.timeAsDouble - contactVerificationStartedAt < 1.35d)
                 {
                     return;
                 }
@@ -492,7 +494,7 @@ public static class GymChaosPlayModeVerifier
                     $"distanceAfter={distanceAfter:F3}");
                 contactHealthBefore = player.CurrentHealth;
                 contactKiller.BeginPunchForVerification(player.transform);
-                contactVerificationStartedAt = EditorApplication.timeSinceStartup;
+                contactVerificationStartedAt = Time.timeAsDouble;
                 attackStage = 10;
                 return;
             }
@@ -513,11 +515,11 @@ public static class GymChaosPlayModeVerifier
                     SetContactCollisionIgnored(false, player);
                     MovePlayerForVerification(player, contactOriginalPosition);
                     player.transform.rotation = contactOriginalRotation;
-                    gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+                    gokuFlightVerificationStartedAt = Time.timeAsDouble;
                     attackStage = 11;
                     return;
                 }
-                if (EditorApplication.timeSinceStartup - contactVerificationStartedAt > 2d)
+                if (Time.timeAsDouble - contactVerificationStartedAt > 2d)
                 {
                     throw new InvalidOperationException(
                         $"Animated enemy punch never hit the player: attacker={contactKiller?.Identity}, " +
@@ -527,29 +529,29 @@ public static class GymChaosPlayModeVerifier
                 return;
             }
 
-            if (attackStage == 11 && EditorApplication.timeSinceStartup - gokuFlightVerificationStartedAt > 0.2d)
+            if (attackStage == 11 && Time.timeAsDouble - gokuFlightVerificationStartedAt > 0.2d)
             {
                 ValidateAndCapture(player, rig);
-                deathScreenCaptureStartedAt = EditorApplication.timeSinceStartup;
+                deathScreenCaptureStartedAt = Time.timeAsDouble;
                 attackStage = 12;
                 return;
             }
 
             if (attackStage == 12 &&
-                EditorApplication.timeSinceStartup - deathScreenCaptureStartedAt > 0.25d)
+                Time.timeAsDouble - deathScreenCaptureStartedAt > 0.25d)
             {
                 if (string.IsNullOrEmpty(deathScreenCapturePath))
                 {
                     throw new InvalidOperationException("Death screen capture path was not prepared.");
                 }
                 CaptureDeathScreenEvidence(player.playerCamera, deathScreenCapturePath);
-                deathScreenCaptureStartedAt = EditorApplication.timeSinceStartup;
+                deathScreenCaptureStartedAt = Time.timeAsDouble;
                 attackStage = 13;
                 return;
             }
 
             if (attackStage == 13 &&
-                EditorApplication.timeSinceStartup - deathScreenCaptureStartedAt > 1.0d)
+                Time.timeAsDouble - deathScreenCaptureStartedAt > 1.0d)
             {
                 if (!File.Exists(deathScreenCapturePath) ||
                     new FileInfo(deathScreenCapturePath).Length <= 0L)
@@ -560,6 +562,11 @@ public static class GymChaosPlayModeVerifier
                 Debug.Log(
                     $"GYMCHAOS_PLAYER_DEATH_SCREEN_OK screenshot={deathScreenCapturePath} " +
                     "text=YOU DIED overlay=translucent celebrationVisible=true");
+                if (!radioPopupVerified)
+                {
+                    throw new InvalidOperationException(
+                        "Radio popup check never ran: the player was never inside the gym after 10 s.");
+                }
                 EditorApplication.update -= Tick;
                 EditorApplication.isPlaying = false;
             }
@@ -1047,7 +1054,7 @@ public static class GymChaosPlayModeVerifier
         savedMaximumDeltaTime = Time.maximumDeltaTime;
         Time.maximumDeltaTime = GokuSampleMaximumDeltaTime;
         gokuFlightVerificationStarted = true;
-        gokuFlightVerificationStartedAt = EditorApplication.timeSinceStartup;
+        gokuFlightVerificationStartedAt = Time.timeAsDouble;
         gokuFlightVerificationStartedGameTime = Time.time;
     }
 
@@ -1060,7 +1067,10 @@ public static class GymChaosPlayModeVerifier
             if (candidate != null && !candidate.IsDead &&
                 candidate.Identity != BodybuilderIdentity.Goku &&
                 candidate.Identity != BodybuilderIdentity.Manwithsuit1 &&
-                candidate.Identity != BodybuilderIdentity.Mark)
+                candidate.Identity != BodybuilderIdentity.Mark &&
+                // Ronnie only targets aggressive fighters (police targeting) and
+                // retargets away from a calm player mid-punch, so it never lands.
+                candidate.Identity != BodybuilderIdentity.Ronnie)
             {
                 contactKiller = candidate;
                 break;
@@ -1069,6 +1079,18 @@ public static class GymChaosPlayModeVerifier
         if (contactKiller == null)
         {
             throw new InvalidOperationException("No non-Goku enemy was available for animated punch contact verification.");
+        }
+
+        // Goku is still chasing the player from the previous stage and flies
+        // the 10 m to the miss spot inside the window; the contact stages
+        // measure only contactKiller's punches.
+        for (int i = 0; i < fighters.Length; i++)
+        {
+            if (fighters[i] != null && fighters[i] != contactKiller && !fighters[i].IsDead &&
+                fighters[i].IsAggressive)
+            {
+                fighters[i].ResetAggressionForVerification();
+            }
         }
 
         contactOriginalPosition = player.transform.position;
@@ -1109,7 +1131,7 @@ public static class GymChaosPlayModeVerifier
         MovePlayerForVerification(player, bestSpot);
         contactHealthBefore = player.CurrentHealth;
         contactKiller.BeginPunchForVerification(player.transform);
-        contactVerificationStartedAt = EditorApplication.timeSinceStartup;
+        contactVerificationStartedAt = Time.timeAsDouble;
     }
 
     private static void SetContactCollisionIgnored(bool ignored, PlayerMovement player)

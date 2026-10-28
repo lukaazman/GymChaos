@@ -61,8 +61,6 @@ public sealed class GymVisitorDirector : MonoBehaviour
     [SerializeField, Range(0f, 1f)] private float secondScheduleStart = 0.62f;
     [SerializeField, Range(0f, 1f)] private float minimumWorkoutDelay = 0.06f;
     [SerializeField, Range(0f, 1f)] private float maximumWorkoutDelay = 0.13f;
-    // Retained for scene and prefab compatibility; locker selection is cohort-based.
-    [SerializeField, Range(0f, 1f)] private float lockerVisitChance = 0.34f;
     // Chance that an arriving member leaves a gym bag on a locker bench.
     [SerializeField, Range(0f, 1f)] private float memberBagChance = 0.75f;
     [SerializeField, Range(0f, 1f)] private float proteinStoreVisitChance = 0.08f;
@@ -134,21 +132,6 @@ public sealed class GymVisitorDirector : MonoBehaviour
         }
         director.Initialize(targetPlayer);
         return director;
-    }
-
-    public void SetDeterministicSeed(int seed)
-    {
-        deterministicSeed = seed;
-        random = new System.Random(seed);
-        lockerCohortRandom = new System.Random(seed ^ LockerCohortSeedSalt);
-        if (initialized)
-        {
-            BuildDaySchedule();
-        }
-        else
-        {
-            ResetLockerCohortSelection();
-        }
     }
 
     public int GetVisitCount(BodybuilderIdentity identity)
@@ -236,7 +219,10 @@ public sealed class GymVisitorDirector : MonoBehaviour
             if (record == null || record.fighter == null || record.agent == null ||
                 record.fighter.IsDead || record.fighter.IsAggressive ||
                 IsLockerCohortMember(record.fighter.Identity) ||
-                record.fighter.Identity == BodybuilderIdentity.Davie)
+                record.fighter.Identity == BodybuilderIdentity.Davie ||
+                // Mid vehicle arrival: BeginVisitorEntryAfterArrival would
+                // later restart the gym entry and overwrite the store visit.
+                record.waitingForVehicle)
             {
                 continue;
             }
@@ -664,6 +650,25 @@ public bool BeginDepartureForVerification(
 
     /// <summary>Sends one visitor (already arrived) out to its parked car.</summary>
     public bool BeginIdentityDepartureForVerification(BodybuilderIdentity identity,
+        out EnemyFighter fighter, out GymVisitorVehicle vehicle) =>
+        BeginDepartureForVerification(identity, true, out fighter, out vehicle);
+
+    public bool BeginCbumDepartureForVerification(out EnemyFighter fighter, out GymVisitorVehicle vehicle) =>
+        BeginDepartureForVerification(BodybuilderIdentity.Cbum, true, out fighter, out vehicle);
+
+    public bool BeginArnoldDepartureForVerification(out EnemyFighter fighter, out GymVisitorVehicle vehicle) =>
+        BeginDepartureForVerification(BodybuilderIdentity.Arnold, false, out fighter, out vehicle);
+
+    public bool BeginZyzzDepartureForVerification(out EnemyFighter fighter, out GymVisitorVehicle vehicle) =>
+        BeginDepartureForVerification(BodybuilderIdentity.Zyzz, false, out fighter, out vehicle);
+
+    public bool BeginGokuDepartureForVerification(out EnemyFighter fighter, out GymVisitorVehicle vehicle) =>
+        BeginDepartureForVerification(BodybuilderIdentity.Goku, false, out fighter, out vehicle);
+
+    // Puts one visitor inside and starts its exit. preparePose first stands it
+    // in the main gym facing the door (the vehicle-only departure checks start
+    // the walk from wherever the visitor already is).
+    private bool BeginDepartureForVerification(BodybuilderIdentity identity, bool preparePose,
         out EnemyFighter fighter, out GymVisitorVehicle vehicle)
     {
         fighter = null;
@@ -675,33 +680,7 @@ public bool BeginDepartureForVerification(
         EnsureVehicle(record, true);
         record.fighter.gameObject.SetActive(true);
         record.agent.MarkInitialInside();
-        PrepareVerificationDeparturePose(record);
-        record.active = true;
-        record.suspendedForCombat = false;
-        record.visitInProgress = false;
-        record.workoutInProgress = false;
-        record.waitingForVehicle = false;
-        record.walkingToVehicle = false;
-        record.vehicleDepartureStarted = false;
-        fighter = record.fighter;
-        vehicle = record.vehicle;
-        record.agent.BeginExit(doorway);
-        return true;
-    }
-
-    public bool BeginCbumDepartureForVerification(
-        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
-    {
-        fighter = null;
-        vehicle = null;
-        if (doorway == null) return false;
-        departureDrainMode = true;
-        VisitorRecord record = FindRecord(BodybuilderIdentity.Cbum);
-        if (record == null || record.fighter == null || record.agent == null) return false;
-        EnsureVehicle(record, true);
-        record.fighter.gameObject.SetActive(true);
-        record.agent.MarkInitialInside();
-        PrepareVerificationDeparturePose(record);
+        if (preparePose) PrepareVerificationDeparturePose(record);
         record.active = true;
         record.suspendedForCombat = false;
         record.visitInProgress = false;
@@ -738,81 +717,6 @@ public bool BeginDepartureForVerification(
             $"GYMCHAOS_VISITOR_VERIFICATION_DEPARTURE_POSE " +
             $"enemy={record.fighter.Identity} position={position} " +
             $"mainGymBounds={mainGymBounds}", this);
-    }
-
-    public bool BeginArnoldDepartureForVerification(
-        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
-    {
-        fighter = null;
-        vehicle = null;
-        if (doorway == null) return false;
-        departureDrainMode = true;
-        VisitorRecord record = FindRecord(BodybuilderIdentity.Arnold);
-        if (record == null || record.fighter == null || record.agent == null) return false;
-        EnsureVehicle(record, true);
-        record.fighter.gameObject.SetActive(true);
-        record.agent.MarkInitialInside();
-        record.active = true;
-        record.suspendedForCombat = false;
-        record.visitInProgress = false;
-        record.workoutInProgress = false;
-        record.waitingForVehicle = false;
-        record.walkingToVehicle = false;
-        record.vehicleDepartureStarted = false;
-        fighter = record.fighter;
-        vehicle = record.vehicle;
-        record.agent.BeginExit(doorway);
-        return true;
-    }
-
-    public bool BeginZyzzDepartureForVerification(
-        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
-    {
-        fighter = null;
-        vehicle = null;
-        if (doorway == null) return false;
-        departureDrainMode = true;
-        VisitorRecord record = FindRecord(BodybuilderIdentity.Zyzz);
-        if (record == null || record.fighter == null || record.agent == null) return false;
-        EnsureVehicle(record, true);
-        record.fighter.gameObject.SetActive(true);
-        record.agent.MarkInitialInside();
-        record.active = true;
-        record.suspendedForCombat = false;
-        record.visitInProgress = false;
-        record.workoutInProgress = false;
-        record.waitingForVehicle = false;
-        record.walkingToVehicle = false;
-        record.vehicleDepartureStarted = false;
-        fighter = record.fighter;
-        vehicle = record.vehicle;
-        record.agent.BeginExit(doorway);
-        return true;
-    }
-
-    public bool BeginGokuDepartureForVerification(
-        out EnemyFighter fighter, out GymVisitorVehicle vehicle)
-    {
-        fighter = null;
-        vehicle = null;
-        if (doorway == null) return false;
-        departureDrainMode = true;
-        VisitorRecord record = FindRecord(BodybuilderIdentity.Goku);
-        if (record == null || record.fighter == null || record.agent == null) return false;
-        EnsureVehicle(record, true);
-        record.fighter.gameObject.SetActive(true);
-        record.agent.MarkInitialInside();
-        record.active = true;
-        record.suspendedForCombat = false;
-        record.visitInProgress = false;
-        record.workoutInProgress = false;
-        record.waitingForVehicle = false;
-        record.walkingToVehicle = false;
-        record.vehicleDepartureStarted = false;
-        fighter = record.fighter;
-        vehicle = record.vehicle;
-        record.agent.BeginExit(doorway);
-        return true;
     }
 
     public int BeginAllDeparturesForVerification(
@@ -1456,26 +1360,6 @@ public bool BeginDepartureForVerification(
         }
 
         return count;
-    }
-
-    private bool IsArrivalSequenceBusy(VisitorRecord ignoredRecord = null)
-    {
-        for (int i = 0; i < records.Count; i++)
-        {
-            VisitorRecord other = records[i];
-            if (other == null || other == ignoredRecord || !other.active)
-            {
-                continue;
-            }
-
-            if (other.waitingForVehicle ||
-                (other.agent != null && other.agent.IsEntryPending))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private bool IsDoorTraversalBusy(VisitorRecord ignoredRecord = null)
