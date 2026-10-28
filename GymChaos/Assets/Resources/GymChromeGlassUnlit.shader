@@ -12,7 +12,7 @@ Shader "GymChaos/Unlit Chrome Glass"
     Properties
     {
         _BaseMap ("Facade Pattern", 2D) = "white" {}
-        _BaseColor ("Steel Tint", Color) = (0.15, 0.2, 0.27, 1)
+        _BaseColor ("Steel Tint", Color) = (0.19, 0.2, 0.21, 1)
         _BodyBrightness ("Body Brightness", Range(0, 2)) = 1
         _PatternContrast ("Pattern Contrast", Range(0, 3)) = 1.9
         _Reflectivity ("Reflectivity", Range(0, 1)) = 0.9
@@ -24,11 +24,11 @@ Shader "GymChaos/Unlit Chrome Glass"
         _FogStrength ("Fog Strength", Range(0, 1)) = 0.55
         _TowerHeight ("Tower Height", Float) = 70
         _FresnelPower ("Fresnel Power", Range(0.5, 8)) = 3
-        _DayHorizon ("Day Horizon", Color) = (0.42, 0.68, 0.95, 1)
-        _DayZenith ("Day Zenith", Color) = (0.07, 0.24, 0.62, 1)
-        _NightHorizon ("Night Horizon", Color) = (0.05, 0.11, 0.24, 1)
-        _NightZenith ("Night Zenith", Color) = (0.004, 0.01, 0.035, 1)
-        _GroundReflection ("Ground Reflection", Color) = (0.03, 0.045, 0.065, 1)
+        _DayHorizon ("Day Horizon", Color) = (0.6, 0.71, 0.84, 1)
+        _DayZenith ("Day Zenith", Color) = (0.2, 0.37, 0.64, 1)
+        _NightHorizon ("Night Horizon", Color) = (0.04, 0.055, 0.1, 1)
+        _NightZenith ("Night Zenith", Color) = (0.005, 0.008, 0.02, 1)
+        _GroundReflection ("Ground Reflection", Color) = (0.05, 0.05, 0.05, 1)
     }
 
     SubShader

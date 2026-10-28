@@ -30,6 +30,9 @@ public static class GymChaosClassSessionPlay
     private static double started;
     private static int resultCode = 1;
     private static bool capture;
+    // Return-to-menu reloads the scene; a visitor disabled by that reload is not
+    // "disabled inside the gym" and must not log that error.
+    private static int reloadDisableErrors;
 
     static GymChaosClassSessionPlay()
     {
@@ -62,13 +65,7 @@ public static class GymChaosClassSessionPlay
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void PlayModeChanged(PlayModeStateChange change)
     {
@@ -78,6 +75,9 @@ public static class GymChaosClassSessionPlay
             started = EditorApplication.timeSinceStartup;
             resumeAt = started;
             capture = SystemInfo.graphicsDeviceType != UnityEngine.Rendering.GraphicsDeviceType.Null;
+            reloadDisableErrors = 0;
+            Application.logMessageReceived -= CountReloadDisableErrors;
+            Application.logMessageReceived += CountReloadDisableErrors;
             string scenario = SessionState.GetString(ScenarioKey, string.Empty);
             routine = scenario == "classes" ? ClassScenario()
                 : scenario == "death" ? DeathScenario() : RuntimeScenario();
@@ -85,6 +85,7 @@ public static class GymChaosClassSessionPlay
         if (change != PlayModeStateChange.EnteredEditMode) return;
         EditorApplication.update -= Tick;
         EditorApplication.playModeStateChanged -= PlayModeChanged;
+        Application.logMessageReceived -= CountReloadDisableErrors;
         Cleanup();
         if (Application.isBatchMode) GymChaosVerifierExit.Exit(resultCode);
     }
@@ -112,6 +113,11 @@ public static class GymChaosClassSessionPlay
         }
     }
 
+    private static void CountReloadDisableErrors(string message, string stackTrace, LogType type)
+    {
+        if (type == LogType.Error && message.StartsWith("GYMCHAOS_VISITOR_DISABLED_INSIDE")) reloadDisableErrors++;
+    }
+
     private static void Tick()
     {
         if (!EditorApplication.isPlaying || routine == null) return;
@@ -122,6 +128,9 @@ public static class GymChaosClassSessionPlay
             if (now < resumeAt) return;
             if (!routine.MoveNext())
             {
+                if (reloadDisableErrors > 0)
+                    throw new InvalidOperationException(
+                        $"Scene reload logged GYMCHAOS_VISITOR_DISABLED_INSIDE {reloadDisableErrors} times.");
                 routine = null;
                 resultCode = 0;
                 GymChaosVerifierExit.Record(0);
@@ -1041,8 +1050,6 @@ public static class GymChaosClassSessionPlay
         rect.GetWorldCorners(corners);
         return Rect.MinMaxRect(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
     }
-
-    private static bool Overlaps(RectTransform a, RectTransform b) => WorldRect(a).Overlaps(WorldRect(b));
     private static bool Overlaps(Rect a, Rect b) => a.Overlaps(b);
 
     // The prompt shadow must use the label font, or the text shows twice.

@@ -84,7 +84,6 @@ public static class GymRaceCityCarver
     public static int RemovedLooseTriangleCount { get; private set; }
     public static int CityCopyCount { get; private set; }
     public static IReadOnlyList<Vector3> RemovedBuildingCenters => removedBuildingCenters;
-    public static IReadOnlyList<Vector3> RemovedBuildingSizes => removedBuildingSizes;
 
     /// <summary>All city renderers of the runtime ring (empty until the GLB copies load).</summary>
     public static List<MeshFilter> FindCityFilters(out List<Transform> contents)

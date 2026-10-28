@@ -18,7 +18,6 @@ public partial class EnemyFighter
     private static readonly Collider[] corpseThrowOverlap = new Collider[24];
 
     public bool IsCarriedByPlayer => carriedByPlayer;
-    public bool IsThrownCorpse => isDead && Time.time < thrownCorpseUntil;
 
     public bool BeginCarriedByPlayer(Collider[] playerColliders)
     {

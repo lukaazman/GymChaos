@@ -64,8 +64,8 @@ public sealed class GymRaceSign : MonoBehaviour
 
     private void Build()
     {
-        Shader lit = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-        Shader unlit = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+        Shader lit = GymMaterialLibrary.LitShader;
+        Shader unlit = GymMaterialLibrary.UnlitShader;
         Material metal = new Material(lit) { name = "Race Sign Metal", color = new Color(0.08f, 0.09f, 0.1f) };
         Material face = new Material(lit) { name = "Race Sign Face", color = new Color(0.03f, 0.03f, 0.05f) };
         Material white = new Material(unlit) { name = "Race Sign White", color = new Color(0.95f, 0.95f, 0.95f) };

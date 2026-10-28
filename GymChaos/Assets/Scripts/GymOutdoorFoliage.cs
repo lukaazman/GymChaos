@@ -31,6 +31,7 @@ public static class GymOutdoorFoliage
     public const string GroundName = "Outdoor Planting Ground";
     public const string DetailsRootName = "Outdoor Park Details (Runtime)";
     private const string AssetFolder = "BodyBuilders/outside/foliage/";
+    private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
     private const int Seed = 4127;
     private const float Cell = 0.5f;
     // Park ground top, just below every built surface (floorY) and the
@@ -47,7 +48,7 @@ public static class GymOutdoorFoliage
 
     // The paving colour of the city ring around the towers. The park ground
     // fades into it at its outer edge.
-    public static readonly Color CityPavingColor = new Color(0.075f, 0.085f, 0.09f);
+    public static readonly Color CityPavingColor = new Color(0.09f, 0.09f, 0.088f);
 
     private sealed class Species
     {
@@ -1070,11 +1071,6 @@ public static class GymOutdoorFoliage
 
     private static void PlaceBenchesAndLamps(Transform root, float floorY)
     {
-        List<CombineInstance> wood = new List<CombineInstance>();
-        List<CombineInstance> metal = new List<CombineInstance>();
-        List<CombineInstance> glow = new List<CombineInstance>();
-        Mesh cube = PrimitiveMesh(PrimitiveType.Cube);
-        Mesh sphere = PrimitiveMesh(PrimitiveType.Sphere);
         List<Vector3> placedProps = new List<Vector3>();
         bool bench = true;
         for (int z = 1; z < nz - 1; z++)
@@ -1111,14 +1107,14 @@ public static class GymOutdoorFoliage
                 Vector3 baseY = new Vector3(spot.x, floorY + GroundTopOffset, spot.z);
                 if (bench)
                 {
-                    AddBench(wood, metal, cube, baseY, facing);
+                    RequestProp(root, "park_bench.glb", "Park Bench", baseY, facing, BenchScale);
                     Benches.Add(new ParkBench { Position = baseY, Facing = facing * Vector3.forward });
                     GymParkAccess.AddPropCollider(root, baseY, facing, true);
                     BenchCount++;
                 }
                 else
                 {
-                    AddLamp(metal, glow, cube, sphere, baseY);
+                    RequestProp(root, "park_lamp.glb", "Park Lamp", baseY, facing, 1f);
                     GymParkAccess.AddPropCollider(root, baseY, facing, false);
                     LampCount++;
                 }
@@ -1126,90 +1122,31 @@ public static class GymOutdoorFoliage
                 placedProps.Add(spot);
             }
         }
-
-        CreateCombined(root, "Park Benches Wood", wood,
-            CreateLitMaterial("Park bench wood", new Color(0.32f, 0.2f, 0.11f), 0f, 0.3f));
-        CreateCombined(root, "Park Benches And Lamps Metal", metal,
-            CreateLitMaterial("Park cast iron", new Color(0.05f, 0.06f, 0.06f), 0.6f, 0.4f));
-        Material glowMaterial = CreateLitMaterial(
-            "Park lamp glow", new Color(1f, 0.86f, 0.6f), 0f, 0.6f);
-        glowMaterial.EnableKeyword("_EMISSION");
-        glowMaterial.globalIlluminationFlags = MaterialGlobalIlluminationFlags.None;
-        if (glowMaterial.HasProperty("_EmissionColor"))
-        {
-            glowMaterial.SetColor("_EmissionColor", new Color(2.4f, 1.8f, 1.05f));
-        }
-        CreateCombined(root, "Park Lamp Globes", glow, glowMaterial);
     }
 
-    private static void AddBench(
-        List<CombineInstance> wood, List<CombineInstance> metal, Mesh cube,
-        Vector3 basePosition, Quaternion facing)
+    private static void RequestProp(Transform root, string file, string name, Vector3 position, Quaternion facing, float scale)
     {
-        // Facing = the direction a seated person looks (towards the path).
-        const float s = BenchScale;
-        AddBox(wood, cube, basePosition, facing, new Vector3(0f, 0.46f, 0f) * s, new Vector3(1.7f, 0.06f, 0.46f) * s);
-        AddBox(wood, cube, basePosition, facing, new Vector3(0f, 0.78f, -0.24f) * s, new Vector3(1.7f, 0.34f, 0.05f) * s);
-        for (int side = -1; side <= 1; side += 2)
-        {
-            AddBox(metal, cube, basePosition, facing, new Vector3(side * 0.74f, 0.23f, 0f) * s, new Vector3(0.06f, 0.46f, 0.44f) * s);
-            AddBox(metal, cube, basePosition, facing, new Vector3(side * 0.74f, 0.66f, -0.24f) * s, new Vector3(0.06f, 0.46f, 0.06f) * s);
-        }
+        RuntimeGlbSceneLoader.Request(AssetFolder + file, root, position, facing, Vector3.one * scale, name,
+            onLoaded: OnPropLoaded);
     }
 
-    private static void AddLamp(
-        List<CombineInstance> metal, List<CombineInstance> glow, Mesh cube, Mesh sphere,
-        Vector3 basePosition)
+    private static void OnPropLoaded(GameObject prop)
     {
-        AddBox(metal, cube, basePosition, Quaternion.identity, new Vector3(0f, 0.15f, 0f), new Vector3(0.3f, 0.3f, 0.3f));
-        AddBox(metal, cube, basePosition, Quaternion.identity, new Vector3(0f, 1.8f, 0f), new Vector3(0.09f, 3.3f, 0.09f));
-        AddBox(metal, cube, basePosition, Quaternion.identity, new Vector3(0f, 3.48f, 0f), new Vector3(0.26f, 0.06f, 0.26f));
-        glow.Add(new CombineInstance
+        if (prop == null)
         {
-            mesh = sphere,
-            transform = Matrix4x4.TRS(basePosition + new Vector3(0f, 3.72f, 0f),
-                Quaternion.identity, Vector3.one * 0.42f)
-        });
-    }
-
-    private static void AddBox(
-        List<CombineInstance> list, Mesh cube, Vector3 basePosition, Quaternion rotation,
-        Vector3 localCenter, Vector3 size)
-    {
-        list.Add(new CombineInstance
-        {
-            mesh = cube,
-            transform = Matrix4x4.TRS(basePosition + rotation * localCenter, rotation, size)
-        });
-    }
-
-    private static void CreateCombined(
-        Transform root, string name, List<CombineInstance> parts, Material material)
-    {
-        if (parts.Count == 0)
-        {
+            Debug.LogError("GYMCHAOS_PARK_PROP_LOAD_FAIL");
             return;
         }
-        Mesh mesh = new Mesh { name = name, indexFormat = IndexFormat.UInt32 };
-        mesh.CombineMeshes(parts.ToArray(), true, true);
-        mesh.RecalculateBounds();
-        GameObject holder = new GameObject(name);
-        holder.transform.SetParent(root, false);
-        holder.AddComponent<MeshFilter>().sharedMesh = mesh;
-        MeshRenderer renderer = holder.AddComponent<MeshRenderer>();
-        renderer.sharedMaterial = material;
-        renderer.shadowCastingMode = ShadowCastingMode.Off;
-        renderer.lightProbeUsage = LightProbeUsage.Off;
-        renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
-    }
-
-    private static Mesh PrimitiveMesh(PrimitiveType type)
-    {
-        GameObject temporary = GameObject.CreatePrimitive(type);
-        Mesh mesh = temporary.GetComponent<MeshFilter>().sharedMesh;
-        // Immediate: its collider must not linger for the clearance queries.
-        Object.DestroyImmediate(temporary);
-        return mesh;
+        // GymParkAccess owns the prop colliders.
+        foreach (Collider collider in prop.GetComponentsInChildren<Collider>(true))
+        {
+            Object.Destroy(collider);
+        }
+        foreach (MeshRenderer renderer in prop.GetComponentsInChildren<MeshRenderer>(true))
+        {
+            renderer.lightProbeUsage = LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+        }
     }
 
     // ---- ground ----
@@ -1247,7 +1184,6 @@ public static class GymOutdoorFoliage
             grassMaterial.SetColor("_BaseColor", Color.white);
         }
         GroundMaterial = grassMaterial;
-        GymVegetationNightTint.Register(grassMaterial, texture);
 
         // One flat quad out to the city ring, whose top it matches exactly.
         float y = floorY + GroundTopOffset;
@@ -1351,8 +1287,8 @@ public static class GymOutdoorFoliage
         }
 
         Color32[] pixels = new Color32[width * height];
-        Color lawnDark = new Color(0.13f, 0.32f, 0.07f);
-        Color lawnLight = new Color(0.23f, 0.45f, 0.11f);
+        Color lawnDark = GymPalette.LawnDark;
+        Color lawnLight = GymPalette.LawnLight;
         Color gravel = new Color(0.44f, 0.41f, 0.35f);
         Color edging = new Color(0.2f, 0.2f, 0.19f);
         Color mulch = new Color(0.11f, 0.08f, 0.055f);
@@ -1536,11 +1472,11 @@ public static class GymOutdoorFoliage
             wrapMode = TextureWrapMode.Clamp,
             filterMode = FilterMode.Bilinear
         };
-        Color root = new Color(0.09f, 0.22f, 0.05f);
+        Color root = GymPalette.GrassRoot;
         for (int x = 0; x < columns; x++)
         {
             float t = x / (float)(columns - 1);
-            Color tip = Color.Lerp(new Color(0.28f, 0.52f, 0.11f), new Color(0.42f, 0.6f, 0.16f), t);
+            Color tip = Color.Lerp(GymPalette.GrassTipShort, GymPalette.GrassTipLong, t);
             for (int y = 0; y < rows; y++)
             {
                 float v = y / (float)(rows - 1);
@@ -1548,7 +1484,7 @@ public static class GymOutdoorFoliage
             }
         }
         gradient.Apply(false, true);
-        Material material = CreateLitMaterial("Park grass blades", Color.white, 0f, 0.15f);
+        Material material = GymMaterialLibrary.NewLit("Park grass blades", Color.white, 0f, 0.15f);
         material.SetTexture("_BaseMap", gradient);
         // Blades are single triangles: render both faces.
         if (material.HasProperty("_Cull"))
@@ -1557,18 +1493,6 @@ public static class GymOutdoorFoliage
         }
         material.doubleSidedGI = true;
         material.enableInstancing = true;
-        GymVegetationNightTint.Register(material, gradient);
-        return material;
-    }
-
-    private static Material CreateLitMaterial(string name, Color color, float metallic, float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-        Material material = new Material(shader) { name = name };
-        if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
-        material.color = color;
-        material.SetFloat("_Metallic", metallic);
-        material.SetFloat("_Smoothness", smoothness);
         return material;
     }
 
@@ -1662,10 +1586,23 @@ public static class GymOutdoorFoliage
         }
 
         LoadedPlants++;
+        // Each plant a slight hue (about +-3 %) and value shift, like real foliage,
+        // from 3 x 3 noise buckets of shared materials: a per-plant property
+        // block would take every plant out of the SRP Batcher.
+        Vector3 p = plant.transform.position;
+        int hueBucket = Mathf.Min(2, (int)(Mathf.PerlinNoise(p.x * 0.37f, p.z * 0.37f) * 3f));
+        int valueBucket = Mathf.Min(2, (int)(Mathf.PerlinNoise(p.z * 0.29f + 11f, p.x * 0.29f) * 3f));
+        float hueShift = (hueBucket - 1) * 0.033f;
+        float value = 0.9f + valueBucket * 0.08f;
+        Color tint = new Color(value * (1f + hueShift), value, value * (1f - hueShift), 1f);
         MeshRenderer[] renderers = plant.GetComponentsInChildren<MeshRenderer>(true);
         for (int i = 0; i < renderers.Length; i++)
         {
             MeshRenderer renderer = renderers[i];
+            Material[] materials = renderer.sharedMaterials;
+            for (int m = 0; m < materials.Length; m++)
+                materials[m] = TintedPlantMaterial(materials[m], hueBucket * 3 + valueBucket, tint);
+            renderer.sharedMaterials = materials;
             renderer.shadowCastingMode = ShadowCastingMode.Off;
             renderer.receiveShadows = true;
             renderer.lightProbeUsage = LightProbeUsage.Off;
@@ -1686,6 +1623,23 @@ public static class GymOutdoorFoliage
                 $"plants={RequestedPlants} loaded={LoadedPlants} failed={FailedPlants} " +
                 $"trees={TreeCount} bushes={BushCount}");
         }
+    }
+
+    private static readonly Dictionary<(Material, int), Material> TintedPlantMaterials =
+        new Dictionary<(Material, int), Material>();
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetTintedPlantMaterials() => TintedPlantMaterials.Clear();
+
+    private static Material TintedPlantMaterial(Material source, int bucket, Color tint)
+    {
+        if (source == null || !source.HasProperty(BaseColorId)) return source;
+        if (TintedPlantMaterials.TryGetValue((source, bucket), out Material tinted) && tinted != null)
+            return tinted;
+        tinted = new Material(source) { name = source.name + " tint " + bucket };
+        tinted.SetColor(BaseColorId, tint);
+        TintedPlantMaterials[(source, bucket)] = tinted;
+        return tinted;
     }
 
     private static Transform FindChild(Transform root, string name)

@@ -314,11 +314,6 @@ public sealed class GymRaceHud : MonoBehaviour
         return text;
     }
 
-    public void SetVisible(bool visible)
-    {
-        group.alpha = visible ? 1f : 0f;
-    }
-
     public void SetRaceWidgetsVisible(bool visible)
     {
         placeText.transform.parent.gameObject.SetActive(visible);

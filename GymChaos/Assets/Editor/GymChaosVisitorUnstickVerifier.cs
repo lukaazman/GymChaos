@@ -32,7 +32,7 @@ public static class GymChaosVisitorUnstickVerifier
         Hook();
         EditorApplication.delayCall += () =>
         {
-            if (EditorApplication.isPlaying) startedAt = EditorApplication.timeSinceStartup;
+            if (EditorApplication.isPlaying) startedAt = Time.timeAsDouble;
         };
     }
 
@@ -49,19 +49,13 @@ public static class GymChaosVisitorUnstickVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
-        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, OnPlayModeStateChanged);
 
     private static void OnPlayModeStateChanged(PlayModeStateChange state)
     {
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
-            startedAt = EditorApplication.timeSinceStartup;
+            startedAt = Time.timeAsDouble;
             return;
         }
         if (state != PlayModeStateChange.EnteredEditMode) return;
@@ -74,7 +68,7 @@ public static class GymChaosVisitorUnstickVerifier
     private static void Tick()
     {
         if (finished || !EditorApplication.isPlaying) return;
-        double elapsed = EditorApplication.timeSinceStartup - startedAt;
+        double elapsed = Time.timeAsDouble - startedAt;
         try
         {
             if (autoEndVisitor != null)
@@ -88,7 +82,7 @@ public static class GymChaosVisitorUnstickVerifier
                         $"member={autoEndMember.Identity} autoEnd=True");
                     Finish(0);
                 }
-                else if (EditorApplication.timeSinceStartup - autoEndStartedAt > 5d)
+                else if (Time.timeAsDouble - autoEndStartedAt > 5d)
                 {
                     throw new InvalidOperationException("crowd pass did not end after the member moved away");
                 }
@@ -192,7 +186,7 @@ public static class GymChaosVisitorUnstickVerifier
             Place(member.transform, origin + direction * 6f);
             autoEndVisitor = visitor;
             autoEndMember = member;
-            autoEndStartedAt = EditorApplication.timeSinceStartup;
+            autoEndStartedAt = Time.timeAsDouble;
         }
         catch (Exception exception)
         {

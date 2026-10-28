@@ -97,7 +97,7 @@ public sealed class FaceCensorSettings : MonoBehaviour
         Shader shader = Shader.Find("GymChaos/FaceCensor");
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
 
         Material material = new Material(shader) { name = name + " Material" };
@@ -164,7 +164,7 @@ public sealed class FaceCensorSettings : MonoBehaviour
         Shader shader = Shader.Find("GymChaos/FaceCensor");
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
         Material material = new Material(shader) { name = "Dead Eye X Material" };
         material.SetTexture("_BaseMap", CreateSolidTexture(Color.red, "Dead Eye X Texture"));

@@ -175,7 +175,7 @@ public sealed class GymLockerMenuUI : MonoBehaviour
 
         // LateUpdate runs after PlayerMovement, so this ESC can never also open
         // the pause menu in the same frame.
-        if (ReadEscape())
+        if (GymShared.ReadEscape())
         {
             GymAudio.Play2D(GymSoundEffect.UiBack, 0.55f);
             service.CloseLockerMenuFromUi();
@@ -307,15 +307,6 @@ public sealed class GymLockerMenuUI : MonoBehaviour
         button.GetComponentInChildren<Text>().text = label;
         PersonaMenuStyle.FitLabelToButton(button, 32);
         button.GetComponent<PersonaMenuButton>().SetSelected(worn);
-    }
-
-    private static bool ReadEscape()
-    {
-#if ENABLE_INPUT_SYSTEM
-        return Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.Escape);
-#endif
     }
 
     // Disabled buttons still receive pointer events; this only reports hover

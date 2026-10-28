@@ -97,11 +97,11 @@ public sealed class GymPlayerRaceCar : MonoBehaviour
     {
         Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0) return;
-        Bounds bounds = WorldBounds(renderers);
+        Bounds bounds = GymShared.CombinedBounds(renderers);
         float horizontal = Mathf.Max(bounds.size.x, bounds.size.z);
         if (horizontal > 0.001f) visual.transform.localScale *= TargetLength / horizontal;
         Physics.SyncTransforms();
-        bounds = WorldBounds(renderers);
+        bounds = GymShared.CombinedBounds(renderers);
         visual.transform.position += Vector3.up * (groundY - bounds.min.y);
         Physics.SyncTransforms();
     }
@@ -128,12 +128,5 @@ public sealed class GymPlayerRaceCar : MonoBehaviour
             }
         }
         return local;
-    }
-
-    private static Bounds WorldBounds(Renderer[] renderers)
-    {
-        Bounds bounds = renderers[0].bounds;
-        for (int i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
-        return bounds;
     }
 }

@@ -90,7 +90,7 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
             PersonaMenuStyle.Accent, PersonaMenuStyle.Ink);
         Text slabText = PersonaMenuStyle.CreateLabel(titleSlab, "Title", title, "LEVEL UP!",
             0f, 0f, 480f, 128f, 104, PersonaMenuStyle.Ink, TextAnchor.MiddleCenter);
-        CenterInParent(slabText.rectTransform, 480f, 128f);
+        GymShared.Center(slabText.rectTransform, 480f, 128f);
         slabText.horizontalOverflow = HorizontalWrapMode.Overflow;
         levelLabel = PersonaMenuStyle.CreateLabel(transform, "Level", body, string.Empty,
             360f, 248f, 560f, 52f, 46, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
@@ -150,15 +150,6 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
         rect.pivot = new Vector2(0f, 1f);
         rect.anchoredPosition = new Vector2(44f * scale, -top * scale);
         return text;
-    }
-
-    private static void CenterInParent(RectTransform rect, float width, float height)
-    {
-        float scale = 1080f / PersonaMenuStyle.ArtHeight;
-        rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
-        rect.pivot = new Vector2(0.5f, 0.5f);
-        rect.anchoredPosition = Vector2.zero;
-        rect.sizeDelta = new Vector2(width * scale, height * scale);
     }
 
     private static void LinkVertical(Button[] buttons)

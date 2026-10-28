@@ -39,8 +39,6 @@ public sealed class GymVehicleCabin : MonoBehaviour
     public float DoorOpenSign => doorSign;
     // Lowest point of the driver door skin: the top of the sill under it.
     public float DoorSillLocalY { get; private set; }
-    public Transform DoorPivot => doorPivot;
-    public Transform SeatPivot => seatPivot;
     public Transform WheelPivot => wheelPivot;
     public int GlassRendererCount { get; private set; }
     public int InteriorRendererCount { get; private set; }
@@ -237,11 +235,6 @@ public sealed class GymVehicleCabin : MonoBehaviour
         seatPivot.localPosition = new Vector3(seatRestLocal.x, cushionLocalY, seatRestLocal.z);
     }
 
-    public void ResetSeat()
-    {
-        if (seatPivot != null) seatPivot.localPosition = seatRestLocal;
-    }
-
     /// <summary>
     /// Puts the rim through both hands (vehicle-local points) and turns it
     /// with them; the wheel keeps its authored tilt.
@@ -267,14 +260,6 @@ public sealed class GymVehicleCabin : MonoBehaviour
             Vector3.ProjectOnPlane(rightLocal - leftLocal, normal), normal);
     }
 
-    public void ResetSteeringWheel()
-    {
-        if (wheelPivot == null) return;
-        wheelPivot.localPosition = wheelRestLocal;
-        wheelPivot.localRotation = wheelRestLocalRotation;
-        wheelPivot.localScale = Vector3.one;
-    }
-
     // The authored rim faces the driver: from the wheel toward the seat,
     // tilted 24 degrees up.
     private Vector3 WheelNormalLocal
@@ -298,7 +283,7 @@ public sealed class GymVehicleCabin : MonoBehaviour
         Material template = Resources.Load<Material>("GymLitTransparentVariant");
         glassMaterial = template != null
             ? new Material(template)
-            : new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            : new Material(GymMaterialLibrary.LitShader);
         glassMaterial.name = "Vehicle Cabin Glass";
         Color tint = new Color(0.10f, 0.14f, 0.17f, 0.26f);
         glassMaterial.SetColor("_BaseColor", tint);
@@ -324,7 +309,7 @@ public sealed class GymVehicleCabin : MonoBehaviour
         string key = hex + "/" + role;
         if (colourMaterials.TryGetValue(key, out Material cached)) return cached;
         if (!ColorUtility.TryParseHtmlString("#" + hex, out Color colour)) colour = Color.gray;
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        Shader shader = GymMaterialLibrary.LitShader;
         Material material = new Material(shader) { name = "Vehicle Cabin " + role + " " + hex };
         material.SetColor("_BaseColor", colour);
         material.color = colour;

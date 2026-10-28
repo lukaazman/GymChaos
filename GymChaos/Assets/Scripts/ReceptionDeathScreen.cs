@@ -99,11 +99,11 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         Shader shader = Shader.Find("GymChaos/BodybuilderUnlit");
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Lit");
+            shader = GymMaterialLibrary.LitShader;
         }
         if (shader == null)
         {
@@ -143,7 +143,7 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         videoPlayer.waitForFirstFrame = true;
         videoPlayer.skipOnDrop = true;
         videoPlayer.source = VideoSource.Url;
-        videoPlayer.url = JoinStreamingAssetsPath(VideoRelativePath);
+        videoPlayer.url = GymShared.JoinStreamingAssetsPath(VideoRelativePath);
         videoPlayer.renderMode = VideoRenderMode.MaterialOverride;
         videoPlayer.targetMaterialRenderer = screenRenderer;
         videoPlayer.targetMaterialProperty = "_BaseMap";
@@ -185,16 +185,6 @@ public sealed class ReceptionDeathScreen : MonoBehaviour
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
         return mesh;
-    }
-
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
 
     private void OnDestroy()

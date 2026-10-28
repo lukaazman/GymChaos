@@ -36,10 +36,7 @@ public static class GymChaosProteinShopVerifier
     private static void ResumeAfterReload()
     {
         if (!SessionState.GetBool(RequestedKey, false)) return;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
     }
 
     public static void Run()
@@ -58,10 +55,7 @@ public static class GymChaosProteinShopVerifier
         }
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         SessionState.SetBool(RequestedKey, true);
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
         EditorApplication.isPlaying = true;
     }
 

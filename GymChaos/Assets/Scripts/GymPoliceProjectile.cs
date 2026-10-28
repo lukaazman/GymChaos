@@ -41,7 +41,6 @@ public sealed class GymPoliceProjectile : MonoBehaviour
     public static float LastVisualWorldLength { get; private set; }
     public static float LastVisualTipAlignment { get; private set; }
     public static float LastSpawnMuzzleDistance { get; private set; } = -1f;
-    public static bool IsTemplateReady => template != null;
 
     /// <summary>Loads the bullet model once; every shot clones the hidden template.</summary>
     public static void Preload()

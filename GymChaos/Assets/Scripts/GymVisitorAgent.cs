@@ -25,37 +25,9 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		ApproachingVehicle
 	}
 
-	private const float WorkoutApproachStallTimeout = 2.4f;
-
-	private const float WorkoutApproachTimeout = 18f;
-
-	private const float FailedWorkoutFreeRoamSeconds = 3f;
-
-	private const float WorkoutReleaseStallTimeout = 2.4f;
-
-	private const float WorkoutReleaseTimeout = 8f;
-
-	private const float WorkoutReleaseDistance = 3.35f;
-
 	private const float DoorwayClearance = 1.35f;
 
 	private const float DoorwayBodyRadius = 0.6235f;
-
-	private const float DoorwayExitStallTimeout = 0.75f;
-
-	private const float VehicleRouteStallTimeout = 2.4f;
-
-	private const float VehicleYieldSideStep = 3.2f;
-
-	private const float VehicleYieldBackwardOffset = 0.6f;
-
-	private const float VehicleYieldSpeed = 3.2f;
-
-	private const float VehicleYieldHoldSeconds = 0.25f;
-
-	private const float VehicleYieldTimeout = 8f;
-
-	private const int MaxVehicleRouteReroutes = 4;
 
 	private static GymVisitorAgent activeVehicleApproachAgent;
 	private static readonly List<GymVisitorAgent> activeAgents =
@@ -200,8 +172,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 	private float vehicleYieldReachedAt = -1f;
 
 	private int vehicleYieldCount;
-
-	private bool entryRoomClearPointPending;
 	private Vector3[] entryRoomWaypoints;
 	private int entryRoomWaypointIndex;
 	private int entryRoomRecoveryCount;
@@ -636,9 +606,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 	public int VehicleRouteDetourWaypointCountForVerification =>
 		vehicleDetourWaypoints != null ? vehicleDetourWaypoints.Length : 0;
 
-	public int VehicleRouteDetourWaypointIndexForVerification =>
-		vehicleDetourWaypointIndex;
-
 	public Vector3[] VehicleRouteDetourWaypointsForVerification =>
 		vehicleDetourWaypoints != null ? (Vector3[])vehicleDetourWaypoints.Clone() : Array.Empty<Vector3>();
 
@@ -680,7 +647,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		hasDoorwayClearPoint = false;
 		pendingStation = null;
 		squatStartPending = false;
-		entryRoomClearPointPending = false;
 						exitRoomClearPointPending = false;
 		doorwayExitRecoveryCount = 0;
 		fighter?.ClearVisitorStuckRecovery();
@@ -725,7 +691,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			hasSuccessfulEntry = false;
 			completedDoorExit = false;
 			reachedVehicle = false;
-			entryRoomClearPointPending = false;
 			entryRoomWaypoints = null;
 			entryRoomWaypointIndex = 0;
 			entryRoomRecoveryCount = 0;
@@ -1011,7 +976,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		HoldDoorOpenRequest();
 		SetDoorwayWallCollisionsIgnored(ignored: true);
 		pendingStation = null;
-		entryRoomClearPointPending = false;
 		entryRoomWaypoints = null;
 		entryRoomWaypointIndex = 0;
 						exitRoomClearPointPending = false;
@@ -1076,7 +1040,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			hasSuccessfulEntry = false;
 			completedDoorExit = false;
 			pendingStation = null;
-			entryRoomClearPointPending = false;
 							exitRoomClearPointPending = false;
 			ResetDoorwayExitTracking();
 			postWorkoutFreeRoamUntil = 0f;
@@ -1112,7 +1075,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		leftGym = true;
 		completedDoorExit = completedDoorExit || hasSuccessfulEntry;
 		pendingStation = null;
-		entryRoomClearPointPending = false;
 						exitRoomClearPointPending = false;
 		ResetDoorwayExitTracking();
 		postWorkoutFreeRoamUntil = 0f;
@@ -1147,7 +1109,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		ReleasePendingStationApproach();
 		state = (enteredGym ? VisitorState.FreeRoaming : VisitorState.Dormant);
 		pendingStation = null;
-		entryRoomClearPointPending = false;
 						exitRoomClearPointPending = false;
 		ResetDoorwayExitTracking();
 		postWorkoutFreeRoamUntil = 0f;
@@ -1839,7 +1800,6 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 					ReleaseVehicleApproachReservation();
 					state = VisitorState.EnteringDoor;
 					travelTarget = (((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null) ? doorway.InteriorPoint : travelTarget);
-					entryRoomClearPointPending = true;
 					ResetDoorwayExitTracking();
 					Debug.Log((object)$"GYMCHAOS_VISITOR_STORE_RETURN_DOOR enemy={fighter.Identity}", (UnityEngine.Object)(object)this);
 				}
@@ -2024,7 +1984,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		RestoreDoorwayWallCollisions();
 		ReleaseDoorOpenRequest();
 		squatStartPending = false;
-		if (Application.isPlaying && !applicationQuitting && enteredGym && !completedDoorExit)
+		if (Application.isPlaying && !applicationQuitting && !GymSessionService.IsReturningToMenu && enteredGym && !completedDoorExit)
 		{
 			Debug.LogError((object)($"GYMCHAOS_VISITOR_DISABLED_INSIDE enemy={fighter?.Identity} " + $"state={state} reason=external_disable"), (UnityEngine.Object)(object)this);
 		}

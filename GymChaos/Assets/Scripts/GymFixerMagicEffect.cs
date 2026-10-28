@@ -116,12 +116,12 @@ public sealed class GymFixerMagicEffect : MonoBehaviour
         if (shell != null)
         {
             shell.enabled = visible;
-            shellMaterial.SetFloat(IntensityId, eased * 2.4f);
+            shellMaterial.SetFloat(IntensityId, eased * 1.6f);
         }
         if (halo != null)
         {
             halo.gameObject.SetActive(visible);
-            haloMaterial.SetFloat(IntensityId, eased * 1.1f);
+            haloMaterial.SetFloat(IntensityId, eased * 0.7f);
         }
         if (glowLight != null)
         {
@@ -131,7 +131,7 @@ public sealed class GymFixerMagicEffect : MonoBehaviour
         if (sparkles != null)
         {
             ParticleSystem.EmissionModule emission = sparkles.emission;
-            emission.rateOverTime = eased * 90f;
+            emission.rateOverTime = eased * 50f;
         }
     }
 
@@ -190,7 +190,7 @@ public sealed class GymFixerMagicEffect : MonoBehaviour
         main.startSpeed = new ParticleSystem.MinMaxCurve(0.15f, 0.6f);
         main.startSize = new ParticleSystem.MinMaxCurve(0.018f, 0.05f);
         main.startColor = new ParticleSystem.MinMaxGradient(
-            new Color(1f, 0.88f, 0.55f), new Color(0.75f, 0.9f, 1f));
+            new Color(1f, 0.88f, 0.6f), new Color(1f, 0.8f, 0.5f));
         main.gravityModifier = -0.04f;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
         main.maxParticles = maxParticles;
@@ -203,8 +203,8 @@ public sealed class GymFixerMagicEffect : MonoBehaviour
             new[]
             {
                 new GradientColorKey(Color.white, 0f),
-                new GradientColorKey(new Color(1f, 0.7f, 0.9f), 0.55f),
-                new GradientColorKey(new Color(0.6f, 0.85f, 1f), 1f)
+                new GradientColorKey(new Color(1f, 0.86f, 0.62f), 0.55f),
+                new GradientColorKey(new Color(1f, 0.78f, 0.5f), 1f)
             },
             new[]
             {
@@ -241,6 +241,8 @@ public sealed class GymFixerMagicEffect : MonoBehaviour
         renderer.renderMode = ParticleSystemRenderMode.Billboard;
         renderer.shadowCastingMode = ShadowCastingMode.Off;
         renderer.receiveShadows = false;
+        // Batch -nographics: billboard particles in offscreen cameras crash the null device.
+        renderer.enabled = SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null;
         return particles;
     }
 

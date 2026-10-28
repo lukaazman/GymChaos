@@ -100,7 +100,6 @@ public static class GymProteinStoreEnvironment
     public static float InnerFenceStartZ { get; private set; }
     public static int RuntimeInteriorLightCount { get; private set; }
     public static Transform RuntimeRoot { get; private set; }
-    public static string RuntimeAssetPath => AssetPath;
 
     /// <summary>True inside the store's walls (flat test against the shell footprint).</summary>
     public static bool IsInsideStore(Vector3 position)
@@ -650,7 +649,7 @@ public static class GymProteinStoreEnvironment
         LoadFailed = !IsLoaded;
         if (LoadedRendererCount > 0)
         {
-            StoreBounds = CalculateRendererBounds(loaded);
+            StoreBounds = GymShared.CalculateRendererBounds(loaded);
             CreateRuntimeInteriorLights(loaded);
         }
 
@@ -695,7 +694,8 @@ public static class GymProteinStoreEnvironment
             Light light = lightObject.AddComponent<Light>();
             light.type = LightType.Point;
             light.color = new Color(1f, 0.97f, 0.9f);
-            light.intensity = 24f;
+            // 24 over-exposed the shelves under ACES and post exposure 0.35.
+            light.intensity = 17f;
             light.range = 11.5f;
             light.shadows = LightShadows.None;
         }
@@ -887,23 +887,6 @@ public static class GymProteinStoreEnvironment
         }
     }
 
-    private static void AddCollider(
-        Transform parent,
-        string name,
-        Vector3 localPosition,
-        Vector3 size,
-        bool isTrigger = false)
-    {
-        GameObject shell = new GameObject(name);
-        shell.transform.SetParent(parent, false);
-        shell.transform.localPosition = localPosition;
-        shell.transform.localRotation = Quaternion.identity;
-        shell.transform.localScale = Vector3.one;
-        BoxCollider collider = shell.AddComponent<BoxCollider>();
-        collider.size = size;
-        collider.isTrigger = isTrigger;
-    }
-
     // The walled site: one paved ground over the whole square plus its
     // south, east and west-return low walls (the path wall and the road
     // wall close the other sides).
@@ -1014,32 +997,6 @@ public static class GymProteinStoreEnvironment
         collision.isTrigger = false;
     }
 
-    private static void CreateBoxBetween(
-        string name,
-        Transform parent,
-        Vector3 start,
-        Vector3 end,
-        float thickness,
-        Material material)
-    {
-        Vector3 delta = end - start;
-        float length = delta.magnitude;
-        if (length < 0.01f)
-        {
-            return;
-        }
-
-        GameObject rail = CreateVisualBox(
-            name,
-            parent,
-            (start + end) * 0.5f,
-            new Vector3(thickness, thickness, length),
-            material);
-        rail.transform.rotation = Quaternion.LookRotation(
-            delta.normalized,
-            Vector3.up);
-    }
-
     private static GameObject CreateGroundBox(
         string name,
         Transform parent,
@@ -1107,13 +1064,13 @@ public static class GymProteinStoreEnvironment
         // Each leaf parks fully behind the fixed glass beside the opening.
         const float travel = DoorWidth * 0.5f + 0.04f;
         float innerX = FacadeX + ModuleWall + 0.04f;
-        Material frame = CreateMaterial("Store door black frame", new Color(0.035f, 0.035f, 0.04f), 0.6f, 0.55f);
-        Material glass = CreateMaterial("Store door glass", new Color(0.8f, 0.9f, 0.93f, 0.13f), 0f, 0.96f);
-        MakeTransparent(glass);
-        Material frost = CreateMaterial("Store door frosted dots", new Color(0.95f, 0.96f, 0.97f, 0.75f), 0f, 0.3f);
-        MakeTransparent(frost);
-        Material sensor = CreateMaterial("Store door sensor", new Color(0.06f, 0.06f, 0.07f), 0.2f, 0.7f);
-        Material led = CreateMaterial("Store door sensor LED", new Color(0.9f, 0.1f, 0.05f), 0f, 0.8f);
+        Material frame = GymMaterialLibrary.Lit("Store door black frame", new Color(0.035f, 0.035f, 0.04f), 0.6f, 0.55f);
+        Material glass = GymMaterialLibrary.NewLit("Store door glass", new Color(0.8f, 0.9f, 0.93f, 0.13f), 0f, 0.96f);
+        GymMaterialLibrary.MakeTransparent(glass);
+        Material frost = GymMaterialLibrary.NewLit("Store door frosted dots", new Color(0.95f, 0.96f, 0.97f, 0.75f), 0f, 0.3f);
+        GymMaterialLibrary.MakeTransparent(frost);
+        Material sensor = GymMaterialLibrary.Lit("Store door sensor", new Color(0.06f, 0.06f, 0.07f), 0.2f, 0.7f);
+        Material led = GymMaterialLibrary.NewLit("Store door sensor LED", new Color(0.9f, 0.1f, 0.05f), 0f, 0.8f);
         led.EnableKeyword("_EMISSION");
         led.SetColor("_EmissionColor", new Color(2.2f, 0.25f, 0.1f));
 
@@ -1183,58 +1140,5 @@ public static class GymProteinStoreEnvironment
             Part("Leaf Frost Dot", 1.12f, z, new Vector3(0.016f, 0.07f, 0.07f), frost);
         }
         Part("Leaf Frost Band", 1.36f, 0f, new Vector3(0.016f, 0.012f, width - rail * 2f), frost);
-    }
-
-    private static void MakeTransparent(Material material)
-    {
-        material.SetFloat("_Surface", 1f);
-        material.SetFloat("_Blend", 0f);
-        material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
-        material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
-        material.SetFloat("_ZWrite", 0f);
-        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-        material.renderQueue = (int)RenderQueue.Transparent;
-    }
-
-    private static Material CreateMaterial(
-        string name,
-        Color color,
-        float metallic,
-        float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ??
-            Shader.Find("Standard");
-        Material material = new Material(shader)
-        {
-            name = name,
-            color = color
-        };
-        if (material.HasProperty("_Metallic"))
-        {
-            material.SetFloat("_Metallic", metallic);
-        }
-        if (material.HasProperty("_Smoothness"))
-        {
-            material.SetFloat("_Smoothness", smoothness);
-        }
-        return material;
-    }
-
-    private static Bounds CalculateRendererBounds(GameObject target)
-    {
-        MeshRenderer[] renderers =
-            target.GetComponentsInChildren<MeshRenderer>(true);
-        if (renderers.Length == 0)
-        {
-            return new Bounds(target.transform.position, Vector3.zero);
-        }
-
-        Bounds bounds = renderers[0].bounds;
-        for (int index = 1; index < renderers.Length; index++)
-        {
-            bounds.Encapsulate(renderers[index].bounds);
-        }
-
-        return bounds;
     }
 }

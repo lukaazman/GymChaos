@@ -43,10 +43,7 @@ public static class GymChaosRaceKartVerifier
     {
         routine = null;
         report.Length = 0;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= Changed;
-        EditorApplication.playModeStateChanged += Changed;
+        GymChaosVerifierHooks.Hook(Tick, Changed);
     }
 
     private static void Changed(PlayModeStateChange change)

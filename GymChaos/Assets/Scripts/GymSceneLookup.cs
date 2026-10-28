@@ -13,11 +13,14 @@ public static class GymSceneLookup
 {
     private static readonly Dictionary<string, GameObject> cache =
         new Dictionary<string, GameObject>(System.StringComparer.Ordinal);
+    private static readonly Dictionary<string[], Collider[]> colliderCache =
+        new Dictionary<string[], Collider[]>();
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics()
     {
         cache.Clear();
+        colliderCache.Clear();
     }
 
     public static GameObject Find(string name)
@@ -37,5 +40,51 @@ public static class GymSceneLookup
             cache.Remove(name);
         }
         return found;
+    }
+
+    /// <summary>
+    /// Colliders, inactive included, whose GameObject name is one of
+    /// <paramref name="names"/>: the result of a name-filtered
+    /// FindObjectsByType scan. Cached per names array (pass a static array);
+    /// rescanned when a cached collider was destroyed or renamed. An empty
+    /// result is not cached, so colliders built later are still found.
+    /// </summary>
+    public static Collider[] FindCollidersNamed(string[] names)
+    {
+        if (colliderCache.TryGetValue(names, out Collider[] cached) && AllStillNamed(cached, names))
+        {
+            return cached;
+        }
+        var found = new List<Collider>();
+        foreach (Collider collider in Object.FindObjectsByType<Collider>(
+            FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (System.Array.IndexOf(names, collider.gameObject.name) >= 0)
+            {
+                found.Add(collider);
+            }
+        }
+        Collider[] result = found.ToArray();
+        if (result.Length > 0)
+        {
+            colliderCache[names] = result;
+        }
+        else
+        {
+            colliderCache.Remove(names);
+        }
+        return result;
+    }
+
+    private static bool AllStillNamed(Collider[] colliders, string[] names)
+    {
+        foreach (Collider collider in colliders)
+        {
+            if (collider == null || System.Array.IndexOf(names, collider.gameObject.name) < 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 }

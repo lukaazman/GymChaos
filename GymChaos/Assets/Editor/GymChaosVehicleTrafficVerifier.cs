@@ -6,6 +6,11 @@ using UnityEngine;
 public static class GymChaosVehicleTrafficVerifier
 {
     private const string RequestedKey = "GymChaos.VehicleTrafficVerificationRequested";
+    private const float TimeScale = 3f;
+    // Game time in 1x seconds (the scenario runs at TimeScale from play
+    // start). Wall-clock budgets ran out on slow runners, where each frame is
+    // capped at Time.maximumDeltaTime.
+    private static double Now => Time.timeAsDouble / TimeScale;
     private static double started;
     private static double phaseStarted;
     private static int phase;
@@ -31,10 +36,7 @@ public static class GymChaosVehicleTrafficVerifier
     private static void ResumeAfterReload()
     {
         if (!SessionState.GetBool(RequestedKey, false)) return;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
     }
 
     public static void Run()
@@ -42,17 +44,14 @@ public static class GymChaosVehicleTrafficVerifier
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         SessionState.SetBool(RequestedKey, true);
         ResetState();
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
         Debug.Log("GYMCHAOS_VEHICLE_TRAFFIC_STARTED");
         EditorApplication.isPlaying = true;
     }
 
     private static void ResetState()
     {
-        started = EditorApplication.timeSinceStartup;
+        started = Now;
         phaseStarted = started;
         phase = 0;
         first = null;
@@ -79,7 +78,7 @@ public static class GymChaosVehicleTrafficVerifier
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
             ResetState();
-            Time.timeScale = 3f;
+            Time.timeScale = TimeScale;
             AudioListener.pause = true;
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
@@ -107,7 +106,7 @@ public static class GymChaosVehicleTrafficVerifier
                 case 4: BeginPedestrianYield(); break;
                 case 5: TickPedestrianYield(); break;
             }
-            if (EditorApplication.timeSinceStartup - started > 90d)
+            if (Now - started > 90d)
                 throw new InvalidOperationException("Vehicle traffic verification timed out at phase " + phase + ".");
         }
         catch (Exception exception)
@@ -126,7 +125,7 @@ public static class GymChaosVehicleTrafficVerifier
         first.DriveIn(() => firstDone = true);
         second.DriveIn(() => secondDone = true);
         phase = 1;
-        phaseStarted = EditorApplication.timeSinceStartup;
+        phaseStarted = Now;
     }
 
     private static void TickArrivalConvoy()
@@ -140,9 +139,9 @@ public static class GymChaosVehicleTrafficVerifier
                     $"firstAtMinimum={minimumFirstPosition} secondAtMinimum={minimumSecondPosition}.");
             CleanupVehicles();
             phase = 2;
-            phaseStarted = EditorApplication.timeSinceStartup;
+            phaseStarted = Now;
         }
-        else if (EditorApplication.timeSinceStartup - phaseStarted > 28d)
+        else if (Now - phaseStarted > 28d)
             throw new InvalidOperationException(
                 $"Arrival convoy did not park smoothly firstDone={firstDone} " +
                 $"firstPos={first?.transform.position} firstSpeed={first?.CurrentDriveSpeedForVerification:F2} " +
@@ -162,7 +161,7 @@ public static class GymChaosVehicleTrafficVerifier
         first.DriveOut(() => firstDone = true);
         second.DriveIn(() => secondDone = true);
         phase = 3;
-        phaseStarted = EditorApplication.timeSinceStartup;
+        phaseStarted = Now;
     }
 
     private static void TickBidirectionalTraffic()
@@ -177,9 +176,9 @@ public static class GymChaosVehicleTrafficVerifier
                     $"Opposite lane vehicles overlapped at {minimumSeparation:F2}m.");
             CleanupVehicles();
             phase = 4;
-            phaseStarted = EditorApplication.timeSinceStartup;
+            phaseStarted = Now;
         }
-        else if (EditorApplication.timeSinceStartup - phaseStarted > 28d)
+        else if (Now - phaseStarted > 28d)
             throw new InvalidOperationException(
                 $"Bidirectional traffic stalled outgoing={firstDone} incoming={secondDone} " +
                 $"firstBlocker={first?.LastTrafficBlockerForVerification} " +
@@ -232,7 +231,7 @@ public static class GymChaosVehicleTrafficVerifier
         Physics.SyncTransforms();
         first.DriveIn(() => firstDone = true);
         phase = 5;
-        phaseStarted = EditorApplication.timeSinceStartup;
+        phaseStarted = Now;
     }
 
     private static void TickPedestrianYield()
@@ -241,9 +240,9 @@ public static class GymChaosVehicleTrafficVerifier
             pedestrianAgent.VehicleYieldCountForVerification > 0;
         audioMutedInsideObserved |= first != null &&
             first.IsEngineMutedForVerification && first.IsHornMutedForVerification;
-        if (EditorApplication.timeSinceStartup >= nextPedestrianSampleAt)
+        if (Now >= nextPedestrianSampleAt)
         {
-            nextPedestrianSampleAt = EditorApplication.timeSinceStartup + 1d;
+            nextPedestrianSampleAt = Now + 1d;
             Debug.Log($"GYMCHAOS_VEHICLE_PEDESTRIAN_SAMPLE state={pedestrianAgent?.State} pos={pedestrianFighter?.VisitorPhysicsPosition} target={pedestrianAgent?.TravelTargetForVerification} waypoint={pedestrianAgent?.VehicleExitWaypointForVerification} blocker={pedestrianFighter?.LastVisitorRouteBlocker} yielding={pedestrianAgent?.IsYieldingToVehicle} reached={pedestrianAgent?.HasReachedVehicle}");
         }
         stoppedObserved |= yieldingObserved && first != null &&
@@ -274,7 +273,7 @@ public static class GymChaosVehicleTrafficVerifier
             SessionState.EraseBool(RequestedKey);
             EditorApplication.Exit(0);
         }
-        else if (EditorApplication.timeSinceStartup - phaseStarted > 55d)
+        else if (Now - phaseStarted > 55d)
             throw new InvalidOperationException(
                 $"Pedestrian yield timed out after 55s yield={yieldingObserved} " +
                 $"stopped={stoppedObserved} resumed={resumedObserved} " +

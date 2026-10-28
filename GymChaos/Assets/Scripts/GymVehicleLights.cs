@@ -117,7 +117,6 @@ public sealed class GymVehicleLights : MonoBehaviour
     public static IReadOnlyList<GymVehicleLights> All => all;
     /// <summary>The textured body mesh the lamps were cut from (null for named lamp parts).</summary>
     public MeshFilter BodyFilter { get; private set; }
-    public bool IsBuilt => built;
     public bool IsLit => lit && built;
     /// <summary>Verification: glowing lamp pieces taken from the car's own model.</summary>
     public int LampPieceCount => lampObjects.Count;

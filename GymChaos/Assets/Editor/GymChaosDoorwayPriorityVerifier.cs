@@ -41,13 +41,7 @@ public static class GymChaosDoorwayPriorityVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void ResumeAfterReload()
     {
@@ -56,7 +50,7 @@ public static class GymChaosDoorwayPriorityVerifier
 
     private static void StartTimer()
     {
-        startedAt = EditorApplication.timeSinceStartup;
+        startedAt = GymChaosVerifierClock.ScenarioNow;
         Time.timeScale = 1f;
         AudioListener.pause = true;
     }
@@ -125,7 +119,7 @@ public static class GymChaosDoorwayPriorityVerifier
         Time.timeScale = GymChaosVerifierClock.ScenarioTimeScale;
         AudioListener.pause = true;
         if (startedAt <= 0d) StartTimer();
-        double elapsed = EditorApplication.timeSinceStartup - startedAt;
+        double elapsed = GymChaosVerifierClock.ScenarioNow - startedAt;
         try
         {
             GymVisitorDirector director = UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>();
@@ -213,7 +207,7 @@ public static class GymChaosDoorwayPriorityVerifier
         catch (Exception exception)
         {
             Debug.LogException(exception);
-            SessionState.EraseBool(RequestedKey);
+            // Keep RequestedKey: the edit-mode handler needs it to exit 1 instead of hanging.
             EditorApplication.isPlaying = false;
         }
     }

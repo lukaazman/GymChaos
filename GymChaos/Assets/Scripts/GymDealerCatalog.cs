@@ -116,16 +116,4 @@ public static class GymDealerCatalog
             product.instantHarm * 0.08f + product.crashSeconds / 120f;
         return UnityEngine.Mathf.Clamp(1 + UnityEngine.Mathf.FloorToInt(score), 1, 5);
     }
-
-    public static GymProteinProduct Find(string id)
-    {
-        for (int i = 0; i < Products.Length; i++)
-        {
-            if (Products[i].id == id)
-            {
-                return Products[i];
-            }
-        }
-        return null;
-    }
 }

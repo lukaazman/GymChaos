@@ -14,6 +14,8 @@ public static class GymChaosLockerVisitVerifier
     private const string OriginalSavePresentKey =
         "GymChaos.LockerVisitVerificationOriginalSavePresent";
     private const string ProgressionSaveKey = "GymChaos.Progression.v1";
+    // Game time: on a slow CI runner each frame is capped at
+    // Time.maximumDeltaTime, so a wall-clock timeout ended the locker dwell.
     private static double startedAt;
     private static bool requested;
     private static bool completed;
@@ -92,7 +94,7 @@ public static class GymChaosLockerVisitVerifier
             return;
         }
 
-        startedAt = EditorApplication.timeSinceStartup;
+        startedAt = Time.timeAsDouble;
         EditorApplication.update -= Tick;
         EditorApplication.update += Tick;
     }
@@ -102,7 +104,7 @@ public static class GymChaosLockerVisitVerifier
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
             Time.timeScale = 1f;
-            startedAt = EditorApplication.timeSinceStartup;
+            startedAt = Time.timeAsDouble;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
@@ -125,7 +127,7 @@ public static class GymChaosLockerVisitVerifier
             return;
         }
 
-        double elapsed = EditorApplication.timeSinceStartup - startedAt;
+        double elapsed = Time.timeAsDouble - startedAt;
         GymVisitorDirector director =
             UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>();
         if (director == null)

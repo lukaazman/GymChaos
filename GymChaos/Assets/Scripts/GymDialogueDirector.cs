@@ -124,11 +124,6 @@ public sealed class GymDialogueDirector : MonoBehaviour
         }
     }
 
-    public EnemyFighter FindNearbyTalkTarget(Vector3 position)
-    {
-        return FindNearbyTalkTarget(player, position);
-    }
-
     public bool HasAuthoredOpeningForVerification(EnemyFighter fighter, string requiredText)
     {
         if (fighter == null || string.IsNullOrEmpty(requiredText)) return false;

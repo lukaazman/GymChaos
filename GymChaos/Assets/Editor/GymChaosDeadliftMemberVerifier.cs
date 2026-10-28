@@ -73,10 +73,7 @@ public static class GymChaosDeadliftMemberVerifier
     private static void ResumeAfterReload()
     {
         if (!SessionState.GetBool(RequestedKey, false)) return;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
     }
 
     public static void Run()
@@ -100,10 +97,7 @@ public static class GymChaosDeadliftMemberVerifier
     {
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         SessionState.SetBool(RequestedKey, true);
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
         EditorApplication.isPlaying = true;
     }
 
@@ -320,6 +314,12 @@ public static class GymChaosDeadliftMemberVerifier
     }
 
     private static EnemyFighter cancelSubject;
+    // The cancel stage re-plans the first member on the same platform; the
+    // cached clearance plan must give the same stance (a fresh plan already
+    // varies by about 0.05 mm between runs).
+    private static float firstStart, firstStep, firstLift;
+    private static Vector3 firstPosition;
+    private static double firstBeginMs;
 
     private static bool AnyBarItemPickable()
     {
@@ -337,8 +337,22 @@ public static class GymChaosDeadliftMemberVerifier
         fighter.gameObject.SetActive(true);
         fighter.SetVisitorSpawnPose(station.EnemyPosition, station.EnemyRotation, true);
         Physics.SyncTransforms();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         if (!controller.BeginDeadlift(station, fighter, 3))
             throw new InvalidOperationException($"{fighter.Identity} cancel-stage deadlift did not start");
+        double replanMs = watch.Elapsed.TotalMilliseconds;
+        float stanceDelta = Mathf.Max(
+            Mathf.Abs(controller.DeadliftStanceStepBack - firstStep),
+            Mathf.Abs(controller.DeadliftGroundLift - firstLift),
+            Vector3.Distance(fighter.transform.position, firstPosition));
+        // The replay must reuse the cached clearance plan, not bake it again.
+        if (replanMs > firstBeginMs * 0.25d)
+            failures.Add($"{fighter.Identity}:replan_not_cached first={firstBeginMs:0.0}ms again={replanMs:0.0}ms");
+        if (stanceDelta > 0.001f || Mathf.Abs(controller.DeadliftStartPhase - firstStart) > 0.0001f)
+            failures.Add($"{fighter.Identity}:replan_differs stanceDelta={stanceDelta:0.000000} " +
+                $"start={firstStart:0.0000}->{controller.DeadliftStartPhase:0.0000}");
+        Debug.Log($"GYMCHAOS_DEADLIFT_MEMBER_REPLAN enemy={fighter.Identity} stanceDelta={stanceDelta:0.000000} " +
+            $"firstBeginMs={firstBeginMs:0.0} replanBeginMs={replanMs:0.0}");
         phase = 5;
         phaseStarted = EditorApplication.timeSinceStartup;
     }
@@ -400,8 +414,17 @@ public static class GymChaosDeadliftMemberVerifier
         fighter.gameObject.SetActive(true);
         fighter.SetVisitorSpawnPose(station.EnemyPosition, station.EnemyRotation, true);
         Physics.SyncTransforms();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         if (!controller.BeginDeadlift(station, fighter, 3))
             throw new InvalidOperationException($"{fighter.Identity} deadlift did not start");
+        if (cancelSubject == null)
+        {
+            firstBeginMs = watch.Elapsed.TotalMilliseconds;
+            firstStart = controller.DeadliftStartPhase;
+            firstStep = controller.DeadliftStanceStepBack;
+            firstLift = controller.DeadliftGroundLift;
+            firstPosition = fighter.transform.position;
+        }
         foreach (SkinnedMeshRenderer skin in fighter.GetComponentsInChildren<SkinnedMeshRenderer>())
             skin.updateWhenOffscreen = true;
 

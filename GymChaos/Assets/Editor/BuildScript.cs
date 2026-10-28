@@ -9,9 +9,14 @@ public static class BuildScript
 {
     public static void BuildWebGL()
     {
-        // GitHub Pages does not add Content-Encoding: br for Unity's .br files.
-        // Emit uncompressed files so the browser can load the build directly.
-        PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
+        // Brotli cuts the download; GitHub Pages does not add Content-Encoding: br
+        // for Unity's .br files, so the loader decompresses them itself.
+        // Local smoke builds set GYMCHAOS_WEBGL_COMPRESSION=none to skip the
+        // Brotli pass over the data file (about 8 of 13 build minutes).
+        bool uncompressed = Environment.GetEnvironmentVariable("GYMCHAOS_WEBGL_COMPRESSION") == "none";
+        PlayerSettings.WebGL.compressionFormat =
+            uncompressed ? WebGLCompressionFormat.Disabled : WebGLCompressionFormat.Brotli;
+        PlayerSettings.WebGL.decompressionFallback = true;
 
         var outputPath = Environment.GetEnvironmentVariable("UNITY_BUILD_PATH");
         if (string.IsNullOrWhiteSpace(outputPath))

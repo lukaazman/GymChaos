@@ -446,7 +446,7 @@ public sealed partial class GymVisitorAgent
 			ResetVehicleRouteProgress();
 		}
 		doorwayEntryYieldingForExit = true;
-		Debug.Log(
+		GymLog.Diag(
 			$"GYMCHAOS_VISITOR_DOOR_ENTRY_YIELD enemy={fighter?.Identity} target={travelTarget}",
 			this);
 	}
@@ -457,12 +457,16 @@ public sealed partial class GymVisitorAgent
 			return false;
 		}
 
+		// A departure still walking to the doorway reads clear too (its hold is
+		// not latched yet); resuming on that flipped the entry between yield and
+		// resume every tick. Resume once the departure is through the doorway.
 		GymVisitorAgent exitAgent = activeDoorwayExitAgent;
 		if ((UnityEngine.Object)(object)exitAgent == (UnityEngine.Object)null ||
-			!exitAgent.isActiveAndEnabled || exitAgent.IsDoorwayExitAreaClearForReservation())
+			!exitAgent.isActiveAndEnabled ||
+			(exitAgent.state != VisitorState.ExitingDoor && exitAgent.IsDoorwayExitAreaClearForReservation()))
 		{
 			doorwayEntryYieldingForExit = false;
-			Debug.Log($"GYMCHAOS_VISITOR_DOOR_ENTRY_RESUME enemy={fighter?.Identity}", this);
+			GymLog.Diag($"GYMCHAOS_VISITOR_DOOR_ENTRY_RESUME enemy={fighter?.Identity}", this);
 			return false;
 		}
 
@@ -537,7 +541,6 @@ public sealed partial class GymVisitorAgent
 		leftGym = false;
 		hasSuccessfulEntry = false;
 		completedDoorExit = false;
-		entryRoomClearPointPending = false;
 		entryRoomWaypoints = null;
 		entryRoomWaypointIndex = 0;
 		returningToVehicleAfterEntryAbort = returnToVehicle;
@@ -606,36 +609,6 @@ public sealed partial class GymVisitorAgent
 			$"points={waypoints.Count} finalSegmentClear=" +
 			$"{IsVisitorStaticRouteSegmentClear(clearPoint, doorway.InteriorPoint)}", this);
 		return waypoints.ToArray();
-	}
-	private Vector3 GetDoorwayRoomStagingTarget(Vector3 requestedTarget)
-	{
-		//IL_0016: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0021: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0026: Unknown result type (might be due to invalid IL or missing references)
-		//IL_002b: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0030: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0035: Unknown result type (might be due to invalid IL or missing references)
-		//IL_000e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0047: Unknown result type (might be due to invalid IL or missing references)
-		//IL_004e: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0058: Unknown result type (might be due to invalid IL or missing references)
-		//IL_005d: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0062: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0065: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0070: Unknown result type (might be due to invalid IL or missing references)
-		//IL_0044: Unknown result type (might be due to invalid IL or missing references)
-		if ((UnityEngine.Object)(object)doorway == (UnityEngine.Object)null)
-		{
-			return requestedTarget;
-		}
-		Vector3 inward = Vector3.ProjectOnPlane(doorway.InteriorPoint - doorway.ExteriorPoint, Vector3.up);
-		if (inward.sqrMagnitude < 0.01f)
-		{
-			return requestedTarget;
-		}
-		Vector3 stagingTarget = GetDoorwayClearPoint() + inward.normalized * 3.6f;
-		stagingTarget.y = requestedTarget.y;
-		return stagingTarget;
 	}
 	private Vector3 GetDoorwayClearPoint()
 	{
@@ -814,13 +787,9 @@ public sealed partial class GymVisitorAgent
 			return;
 		}
 		Collider[] visitorColliders = ((Component)fighter).GetComponentsInChildren<Collider>(true);
-		Collider[] array = UnityEngine.Object.FindObjectsByType<Collider>((FindObjectsInactive)1, (FindObjectsSortMode)0);
+		Collider[] array = GymSceneLookup.FindCollidersNamed(DoorwayWallNames);
 		foreach (Collider wall in array)
 		{
-			if (!IsDoorwayWallColliderForRouting(wall))
-			{
-				continue;
-			}
 			Collider[] array2 = visitorColliders;
 			foreach (Collider visitor in array2)
 			{
@@ -845,13 +814,9 @@ public sealed partial class GymVisitorAgent
 		{
 			return false;
 		}
-		string name = ((UnityEngine.Object)((Component)collider).gameObject).name;
-		if (!(name == "East Wall South") && !(name == "East Wall North"))
-		{
-			return name == "East Wall Above Visitor Door";
-		}
-		return true;
+		return Array.IndexOf(DoorwayWallNames, ((UnityEngine.Object)((Component)collider).gameObject).name) >= 0;
 	}
+	private static readonly string[] DoorwayWallNames = { "East Wall South", "East Wall North", "East Wall Above Visitor Door" };
 	private void HoldDoorOpenRequest()
 	{
 		if ((UnityEngine.Object)(object)doorway != (UnityEngine.Object)null && !doorOpenRequestHeld)
@@ -971,7 +936,7 @@ public sealed partial class GymVisitorAgent
 				fighter.StopVisitorMovement();
 				lastDoorwayExitDistance = distance;
 				doorwayExitStalledSeconds = 0f;
-				Debug.Log((object)($"GYMCHAOS_VISITOR_EXIT_WAITING_FOR_CHARACTER enemy={fighter.Identity} " + $"state={state} position={fighter.VisitorPhysicsPosition} " + $"blocker={stalledRouteBlocker} distance={distance:0.00}"), (UnityEngine.Object)(object)this);
+				GymLog.Diag(($"GYMCHAOS_VISITOR_EXIT_WAITING_FOR_CHARACTER enemy={fighter.Identity} " + $"state={state} position={fighter.VisitorPhysicsPosition} " + $"blocker={stalledRouteBlocker} distance={distance:0.00}"), (UnityEngine.Object)(object)this);
 				return;
 			}
 		}

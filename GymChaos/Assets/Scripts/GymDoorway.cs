@@ -21,7 +21,6 @@ public sealed class GymDoorway : MonoBehaviour
     public Vector3 InteriorPoint { get; private set; }
     public Vector3 ExteriorPoint { get; private set; }
     public Vector3 DoorCenter { get; private set; }
-    public bool IsOpen => autoDoor == null || autoDoor.IsFullyOpen;
     /// <summary>Root of the door leaves (no colliders; route grids ignore it).</summary>
     public Transform DoorPanel => doorPanel;
     public GymAutoDoor AutoDoor => autoDoor;

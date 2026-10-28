@@ -97,7 +97,6 @@ public sealed class GymHud : MonoBehaviour
     public int QueuedNoticeCount => notices.Count;
     public string TopNoticeText => notices.Count > 0 ? notices[0].text : string.Empty;
     public float StaminaMaximumShown => stamina != null ? stamina.shownMaximum : 0f;
-    public float HealthFillShown => health != null ? health.shown : 0f;
     public string SaveIndicatorText => saveLabel != null ? saveLabel.text : string.Empty;
 
     public static GymHud CreateForScene(PlayerMovement targetPlayer)

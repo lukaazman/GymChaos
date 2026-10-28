@@ -18,8 +18,6 @@ public static class GymShadowProxy
 
     private static readonly Dictionary<(Mesh, int), Mesh> proxies = new Dictionary<(Mesh, int), Mesh>();
     private static Material shadowMaterial;
-
-    public static int ProxyMeshCount => proxies.Count;
     public static int TotalProxyTriangles { get; private set; }
     public static int TotalSourceTriangles { get; private set; }
 
@@ -104,8 +102,8 @@ public static class GymShadowProxy
     private static Material GetMaterial()
     {
         if (shadowMaterial != null) return shadowMaterial;
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ??
-            Shader.Find("Universal Render Pipeline/Lit");
+        Shader shader = GymMaterialLibrary.UnlitShader ??
+            GymMaterialLibrary.LitShader;
         shadowMaterial = new Material(shader) { name = "Shadow Proxy", hideFlags = HideFlags.DontSave };
         return shadowMaterial;
     }

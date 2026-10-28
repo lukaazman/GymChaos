@@ -3,31 +3,6 @@ using UnityEngine;
 
 public partial class EnemyFighter
 {
-    public static void ReleaseNonCombatTargetLocks(PlayerMovement target)
-    {
-        if (target == null)
-        {
-            return;
-        }
-
-        for (int i = 0; i < Fighters.Count; i++)
-        {
-            EnemyFighter fighter = Fighters[i];
-            if (fighter == null || fighter.isDead || fighter.isAggressive)
-            {
-                continue;
-            }
-
-            if (fighter.currentTarget == target.transform ||
-                fighter.currentTarget == null)
-            {
-                fighter.currentTarget = null;
-                fighter.currentFighterTarget = null;
-                fighter.targetLockedUntil = 0f;
-                fighter.nextTargetRefreshTime = Time.time + 1.25f;
-            }
-        }
-    }
     public static void CelebrateAllLivingEnemies()
     {
         // The receptionist also uses EnemyFighter for damage/death markers,
@@ -41,15 +16,6 @@ public partial class EnemyFighter
             }
 
             fighter.CelebratePlayerKill();
-        }
-    }
-    public void SetTarget(PlayerMovement player)
-    {
-        playerTarget = player;
-        if (!isPolice && isAggressive)
-        {
-            currentTarget = player != null ? player.transform : null;
-            currentFighterTarget = null;
         }
     }
     public void BecomeAggressive(PlayerMovement source = null)
@@ -513,24 +479,38 @@ public partial class EnemyFighter
             // a permanent AI freeze.
             if (stalledRoamTime >= roamBlockedRetargetDelay)
             {
-                if (roamTargetPurposeful &&
-                    BuildRoamRouteToTarget(ShouldAllowTargetEquipment()))
-                {
-                    stalledRoamTime = 0f;
-                    return;
-                }
-
-                hasRoamTarget = false;
-                pendingTreadmillStation = null;
-                ClearRoamRoute();
-                roamDirection = Vector3.zero;
-                SelectRoamDestination();
+                RecoverBlockedRoam();
             }
             return;
         }
 
-        stalledRoamTime = 0f;
         ApplyRoamMovement(direction);
+        // The probe can report a clear lane while the body is held (another
+        // body, an edge of the compound hitbox collider); the gait then idles
+        // after PushingIdleSeconds. Count that as blocked so the recovery
+        // runs instead of idling in place with a zero blocked timer.
+        stalledRoamTime = pushingWithoutProgressSeconds;
+        if (stalledRoamTime >= roamBlockedRetargetDelay)
+        {
+            RecoverBlockedRoam();
+        }
+    }
+
+    private void RecoverBlockedRoam()
+    {
+        pushingWithoutProgressSeconds = 0f;
+        if (roamTargetPurposeful &&
+            BuildRoamRouteToTarget(ShouldAllowTargetEquipment()))
+        {
+            stalledRoamTime = 0f;
+            return;
+        }
+
+        hasRoamTarget = false;
+        pendingTreadmillStation = null;
+        ClearRoamRoute();
+        roamDirection = Vector3.zero;
+        SelectRoamDestination();
     }
     private void StopForAttack(Vector3 planarToTarget)
     {

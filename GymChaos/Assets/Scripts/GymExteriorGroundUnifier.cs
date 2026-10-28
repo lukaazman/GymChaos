@@ -84,17 +84,6 @@ public static class GymExteriorGroundUnifier
         return unified;
     }
 
-    // Gives one renderer world-space XZ UVs (and flat, top-only faces) without
-    // touching its material; used for surfaces outside the unified slab.
-    public static void ApplyWorldUv(MeshRenderer renderer)
-    {
-        MeshFilter filter = renderer != null ? renderer.GetComponent<MeshFilter>() : null;
-        if (filter != null && filter.sharedMesh != null && filter.sharedMesh.isReadable)
-        {
-            filter.sharedMesh = BuildWorldUvMesh(filter.sharedMesh, renderer.transform);
-        }
-    }
-
     private static bool IsGroundSurface(
         MeshRenderer renderer, float floorY, ICollection<Material> groundMaterials)
     {

@@ -42,10 +42,7 @@ public static class GymChaosVehicleDetourVerifier
     static GymChaosVehicleDetourVerifier()
     {
         if (!SessionState.GetBool(RequestedKey, false)) return;
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
     }
 
     [MenuItem("Tools/GymChaos/Run Two-Point Visitor Detour Verification")]
@@ -55,10 +52,7 @@ public static class GymChaosVehicleDetourVerifier
         EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
         startedAt = EditorApplication.timeSinceStartup;
         SessionState.SetBool(RequestedKey, true);
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
+        GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
         EditorApplication.isPlaying = true;
     }
 

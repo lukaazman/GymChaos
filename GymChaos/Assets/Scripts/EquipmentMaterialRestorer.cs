@@ -114,11 +114,7 @@ public static class EquipmentMaterialRestorer
             return cached;
         }
 
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null)
-        {
-            shader = Shader.Find("Standard");
-        }
+        Shader shader = GymMaterialLibrary.LitShader;
 
         Material material = new Material(shader)
         {

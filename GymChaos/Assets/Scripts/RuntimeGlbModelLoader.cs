@@ -15,9 +15,6 @@ using UnityEngine.Rendering;
 public sealed class RuntimeGlbModelLoader : MonoBehaviour
 {
     private const string HostName = "Gym Runtime GLB Models";
-    private const uint GlbMagic = 0x46546C67;
-    private const uint JsonChunk = 0x4E4F534A;
-    private const uint BinaryChunk = 0x004E4942;
 
     private static RuntimeGlbModelLoader instance;
     private readonly Dictionary<string, RuntimeAsset> cache =
@@ -30,60 +27,6 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
         public Mesh Mesh;
         public Material Material;
         public Bounds LocalBounds;
-    }
-
-    [Serializable]
-    private sealed class GltfRoot
-    {
-        public GltfBufferView[] bufferViews;
-        public GltfAccessor[] accessors;
-        public GltfMesh[] meshes;
-        public GltfImage[] images;
-    }
-
-    [Serializable]
-    private sealed class GltfBufferView
-    {
-        public int byteOffset;
-        public int byteLength;
-        public int byteStride;
-    }
-
-    [Serializable]
-    private sealed class GltfAccessor
-    {
-        public int bufferView = -1;
-        public int byteOffset;
-        public int componentType;
-        public int count;
-    }
-
-    [Serializable]
-    private sealed class GltfMesh
-    {
-        public GltfPrimitive[] primitives;
-    }
-
-    [Serializable]
-    private sealed class GltfPrimitive
-    {
-        public GltfAttributes attributes;
-        public int indices = -1;
-    }
-
-    [Serializable]
-    private sealed class GltfAttributes
-    {
-        public int POSITION = -1;
-        public int NORMAL = -1;
-        public int TEXCOORD_0 = -1;
-    }
-
-    [Serializable]
-    private sealed class GltfImage
-    {
-        public int bufferView = -1;
-        public string mimeType;
     }
 
     /// <summary>
@@ -183,7 +126,7 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
         {
             if (root != null)
             {
-                DestroyRuntimeObject(root);
+                GymShared.DestroyRuntimeObject(root);
             }
 
             // Always complete the request contract. Cosmetic callers use the
@@ -238,7 +181,7 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
         }
         else
         {
-            string path = JoinStreamingAssetsPath(relativePath);
+            string path = GymShared.JoinStreamingAssetsPath(relativePath);
             using (UnityWebRequest request = UnityWebRequest.Get(path))
             {
                 request.downloadHandler = new DownloadHandlerBuffer();
@@ -256,7 +199,7 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
             }
         }
 
-        if (!TryReadGlb(bytes, out GltfRoot gltf, out byte[] binary))
+        if (!GymGlb.TryReadGlb(bytes, out GltfRoot gltf, out byte[] binary))
         {
             Debug.LogError($"GYMCHAOS_RUNTIME_GLB_PARSE_ERROR path={relativePath}", this);
             cache[relativePath] = null;
@@ -286,13 +229,13 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
             return null;
         }
 
-        Vector3[] sourcePositions = ReadVector3Accessor(
+        Vector3[] sourcePositions = GymGlb.ReadVector3Accessor(
             gltf, binary, primitive.attributes.POSITION);
-        Vector3[] sourceNormals = ReadVector3Accessor(
+        Vector3[] sourceNormals = GymGlb.ReadVector3Accessor(
             gltf, binary, primitive.attributes.NORMAL);
-        Vector2[] sourceUvs = ReadVector2Accessor(
+        Vector2[] sourceUvs = GymGlb.ReadVector2Accessor(
             gltf, binary, primitive.attributes.TEXCOORD_0);
-        int[] triangles = ReadIndexAccessor(gltf, binary, primitive.indices);
+        int[] triangles = GymGlb.ReadIndexAccessor(gltf, binary, primitive.indices);
         if (sourcePositions.Length == 0 || triangles.Length < 3)
         {
             Debug.LogError($"Runtime GLB has empty geometry: {relativePath}");
@@ -362,8 +305,7 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
     private static Material CreateMaterial(
         string relativePath, GltfRoot gltf, byte[] binary)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ??
-            Shader.Find("Standard") ?? Shader.Find("Universal Render Pipeline/Unlit");
+        Shader shader = GymMaterialLibrary.LitShader ?? GymMaterialLibrary.UnlitShader;
         if (shader == null)
         {
             Debug.LogError($"No shader available for runtime GLB: {relativePath}");
@@ -425,160 +367,10 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
         }
         else
         {
-            DestroyRuntimeObject(texture);
+            GymShared.DestroyRuntimeObject(texture);
         }
 
         return material;
-    }
-
-    private static bool TryReadGlb(
-        byte[] bytes, out GltfRoot gltf, out byte[] binary)
-    {
-        gltf = null;
-        binary = null;
-        if (bytes == null || bytes.Length < 20 ||
-            BitConverter.ToUInt32(bytes, 0) != GlbMagic)
-        {
-            return false;
-        }
-
-        int offset = 12;
-        string json = null;
-        while (offset + 8 <= bytes.Length)
-        {
-            int length = (int)BitConverter.ToUInt32(bytes, offset);
-            uint type = BitConverter.ToUInt32(bytes, offset + 4);
-            offset += 8;
-            if (length < 0 || offset + length > bytes.Length)
-            {
-                return false;
-            }
-
-            if (type == JsonChunk)
-            {
-                json = Encoding.UTF8.GetString(bytes, offset, length)
-                    .TrimEnd('\0', ' ', '\n', '\r', '\t');
-            }
-            else if (type == BinaryChunk)
-            {
-                binary = new byte[length];
-                Buffer.BlockCopy(bytes, offset, binary, 0, length);
-            }
-
-            offset += length;
-        }
-
-        if (string.IsNullOrEmpty(json) || binary == null)
-        {
-            return false;
-        }
-
-        gltf = JsonUtility.FromJson<GltfRoot>(json);
-        return gltf != null && gltf.meshes != null && gltf.meshes.Length > 0 &&
-            gltf.accessors != null && gltf.bufferViews != null;
-    }
-
-    private static Vector3[] ReadVector3Accessor(
-        GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        if (accessorIndex < 0 || accessorIndex >= gltf.accessors.Length)
-        {
-            return Array.Empty<Vector3>();
-        }
-
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        if (accessor.bufferView < 0 || accessor.bufferView >= gltf.bufferViews.Length)
-        {
-            return Array.Empty<Vector3>();
-        }
-
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 12;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector3[] result = new Vector3[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector3(
-                BitConverter.ToSingle(binary, offset),
-                BitConverter.ToSingle(binary, offset + 4),
-                BitConverter.ToSingle(binary, offset + 8));
-        }
-
-        return result;
-    }
-
-    private static Vector2[] ReadVector2Accessor(
-        GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        if (accessorIndex < 0 || accessorIndex >= gltf.accessors.Length)
-        {
-            return Array.Empty<Vector2>();
-        }
-
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        if (accessor.bufferView < 0 || accessor.bufferView >= gltf.bufferViews.Length)
-        {
-            return Array.Empty<Vector2>();
-        }
-
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 8;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector2[] result = new Vector2[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector2(
-                BitConverter.ToSingle(binary, offset),
-                BitConverter.ToSingle(binary, offset + 4));
-        }
-
-        return result;
-    }
-
-    private static int[] ReadIndexAccessor(
-        GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        if (accessorIndex < 0 || accessorIndex >= gltf.accessors.Length)
-        {
-            return Array.Empty<int>();
-        }
-
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        if (accessor.bufferView < 0 || accessor.bufferView >= gltf.bufferViews.Length)
-        {
-            return Array.Empty<int>();
-        }
-
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int componentSize = accessor.componentType == 5125 ? 4 :
-            accessor.componentType == 5123 ? 2 : 1;
-        int stride = view.byteStride > 0 ? view.byteStride : componentSize;
-        int start = view.byteOffset + accessor.byteOffset;
-        int[] result = new int[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = accessor.componentType == 5125
-                ? (int)BitConverter.ToUInt32(binary, offset)
-                : accessor.componentType == 5123
-                    ? BitConverter.ToUInt16(binary, offset)
-                    : binary[offset];
-        }
-
-        return result;
-    }
-
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
 
     private static void SetLayerRecursively(Transform root, int layer)
@@ -587,23 +379,6 @@ public sealed class RuntimeGlbModelLoader : MonoBehaviour
         for (int i = 0; i < root.childCount; i++)
         {
             SetLayerRecursively(root.GetChild(i), layer);
-        }
-    }
-
-    private static void DestroyRuntimeObject(UnityEngine.Object target)
-    {
-        if (target == null)
-        {
-            return;
-        }
-
-        if (Application.isPlaying)
-        {
-            Destroy(target);
-        }
-        else
-        {
-            DestroyImmediate(target);
         }
     }
 }

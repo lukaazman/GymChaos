@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public enum GymSurfaceKind
@@ -21,16 +22,11 @@ public static class GymSurfaceMaterialFactory
     private static bool pathReady;
     private static bool exteriorReady;
     private static bool markerLogged;
+    // Texture mean albedo by material name (_BaseColor is white), for GymChaosPaletteVerifier.
+    private static readonly Dictionary<string, Color> meanAlbedo = new Dictionary<string, Color>();
 
-    public static Material CreateGymFloor(string name, Color baseColor)
-    {
-        return Create(name, baseColor, GymSurfaceKind.GymRubber, new Vector2(7f, 7f));
-    }
-
-    public static Material CreateLockerFloor(string name, Color baseColor)
-    {
-        return Create(name, baseColor, GymSurfaceKind.LockerRubber, new Vector2(5f, 5f));
-    }
+    public static bool TryGetMeanAlbedo(string materialName, out Color color) =>
+        meanAlbedo.TryGetValue(materialName, out color);
 
     // Detailed floors: one texture repeat covers this many metres.
     private const int DetailTextureSize = 512;
@@ -75,6 +71,7 @@ public static class GymSurfaceMaterialFactory
             ? BuildCoinRubber(baseColor, seed)
             : BuildTileRubber(baseColor, seed);
         texture.SetPixels32(pixels);
+        meanAlbedo[name] = Mean(pixels);
         texture.Apply(true, true);
         if (material.HasProperty("_BaseMap"))
         {
@@ -99,7 +96,7 @@ public static class GymSurfaceMaterialFactory
         const int tile = size / 2;
         Color32[] pixels = new Color32[size * size];
         Color fleckGrey = new Color(0.42f, 0.45f, 0.5f);
-        Color fleckBlue = new Color(0.12f, 0.27f, 0.62f);
+        Color fleckWhite = new Color(0.78f, 0.78f, 0.74f);
         Color fleckRed = new Color(0.62f, 0.12f, 0.07f);
         for (int y = 0; y < size; y++)
         {
@@ -121,7 +118,7 @@ public static class GymSurfaceMaterialFactory
                 {
                     float pick = Hash01(x >> 1, y >> 1, seed ^ 0x77f);
                     Color fleckColor = pick < 0.62f ? fleckGrey
-                        : pick < 0.93f ? fleckBlue : fleckRed;
+                        : pick < 0.93f ? fleckWhite : fleckRed;
                     color = Color.Lerp(color, fleckColor, 0.32f + (fleck - 0.955f) * 6f);
                 }
 
@@ -208,6 +205,14 @@ public static class GymSurfaceMaterialFactory
         return Mathf.Lerp(Mathf.Lerp(a, b, tx), Mathf.Lerp(c, d, tx), ty);
     }
 
+    private static Color Mean(Color32[] pixels)
+    {
+        long r = 0, g = 0, b = 0;
+        foreach (Color32 p in pixels) { r += p.r; g += p.g; b += p.b; }
+        float n = pixels.Length * 255f;
+        return new Color(r / n, g / n, b / n);
+    }
+
     private static Color32 ToColor32(Color color)
     {
         return new Color32(
@@ -245,16 +250,9 @@ public static class GymSurfaceMaterialFactory
     private static Material Create(
         string name, Color baseColor, GymSurfaceKind kind, Vector2 tiling)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null)
-        {
-            shader = Shader.Find("Standard");
-        }
-
-        Material material = new Material(shader);
-        material.name = name;
-        material.SetFloat("_Metallic", kind == GymSurfaceKind.Asphalt ? 0.08f : 0.02f);
-        material.SetFloat("_Smoothness", kind == GymSurfaceKind.BathroomTile ? 0.46f : 0.25f);
+        Material material = GymMaterialLibrary.NewLit(name, Color.white,
+            kind == GymSurfaceKind.Asphalt ? 0.08f : 0.02f,
+            kind == GymSurfaceKind.BathroomTile ? 0.46f : 0.25f);
 
         Texture2D texture = new Texture2D(
             TextureSize, TextureSize, TextureFormat.RGBA32, false, false);
@@ -280,6 +278,7 @@ public static class GymSurfaceMaterialFactory
             }
         }
         texture.SetPixels(pixels);
+        meanAlbedo[name] = Mean(System.Array.ConvertAll(pixels, p => (Color32)p));
         texture.Apply(false, true);
 
         if (material.HasProperty("_BaseMap"))
@@ -292,15 +291,6 @@ public static class GymSurfaceMaterialFactory
             material.SetTexture("_MainTex", texture);
             material.SetTextureScale("_MainTex", tiling);
         }
-        if (material.HasProperty("_BaseColor"))
-        {
-            material.SetColor("_BaseColor", Color.white);
-        }
-        if (material.HasProperty("_Color"))
-        {
-            material.SetColor("_Color", Color.white);
-        }
-
         Register(kind, texture);
         return material;
     }

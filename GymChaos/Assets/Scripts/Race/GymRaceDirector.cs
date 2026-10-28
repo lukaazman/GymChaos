@@ -42,7 +42,6 @@ public sealed class GymRaceDirector : MonoBehaviour
     public const int FirstWinBonus = 250;
     public const int BestLapBonus = 40;
     public const int WinReputation = 3;
-    private const float CountdownSeconds = 3f;
     private const float FlyoverSeconds = 2.6f;
     private const float FinishGraceSeconds = 8f;
     private const float ChoiceInputDelay = 1f;

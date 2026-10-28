@@ -74,16 +74,15 @@ public static class GymInteriorBuilder
         mainGymBoundsReady = true;
 
         GameObject root = new GameObject(RootName);
-        Material floor = GymSurfaceMaterialFactory.CreateGymFloor("Dark navy gym rubber floor", new Color(0.012f, 0.026f, 0.082f), new Vector2(width, depth));
-        Material wall = CreateMaterial("Warm concrete walls", new Color(0.36f, 0.39f, 0.41f), 0f, 0.25f);
-        Material ceiling = CreateMaterial("Ceiling", new Color(0.07f, 0.075f, 0.08f), 0.3f, 0.24f);
-        Material accent = CreateMaterial("Gym accent", new Color(0.78f, 0.13f, 0.07f), 0.05f, 0.45f);
-        Material trim = CreateMaterial("Dark trim", new Color(0.025f, 0.03f, 0.035f), 0.4f, 0.68f);
-        Material mirror = CreateMaterial("Mirror", new Color(0.62f, 0.7f, 0.74f), 1f, 1f);
-        Material glass = CreateTransparentMaterial(
-            "Sunlit window glass", new Color(0.62f, 0.82f, 0.98f, 0.16f), 0.94f);
-        Material lightMaterial = CreateMaterial("Ceiling light", new Color(0.92f, 0.96f, 1f), 0f, 0.9f);
-        SetEmission(lightMaterial, new Color(3.8f, 4.2f, 4.8f));
+        Material floor = GymSurfaceMaterialFactory.CreateGymFloor("Gym rubber floor", GymPalette.GymRubber, new Vector2(width, depth));
+        Material wall = GymMaterialLibrary.Lit("Warm concrete walls", new Color(0.36f, 0.39f, 0.41f), 0f, 0.25f);
+        Material ceiling = GymMaterialLibrary.Lit("Ceiling", new Color(0.07f, 0.075f, 0.08f), 0.3f, 0.24f);
+        Material accent = GymMaterialLibrary.Lit("Gym accent", new Color(0.78f, 0.13f, 0.07f), 0.05f, 0.45f);
+        Material trim = GymMaterialLibrary.Lit("Dark trim", new Color(0.025f, 0.03f, 0.035f), 0.4f, 0.68f);
+        Material mirror = GymMaterialLibrary.Lit("Mirror", new Color(0.62f, 0.7f, 0.74f), 1f, 1f);
+        Material glass = GymMaterialLibrary.MakeTransparent(GymMaterialLibrary.NewLit(
+            "Sunlit window glass", new Color(0.7f, 0.76f, 0.8f, 0.16f), 0f, 0.94f));
+        Material lightMaterial = GymMaterialLibrary.Lit("Ceiling light", new Color(0.92f, 0.96f, 1f), 0f, 0.9f, emission: new Color(1.7f, 1.75f, 1.8f));
 
         CreateBox("Rubber Floor", root.transform, center + Vector3.down * 0.12f, new Vector3(width, 0.24f, depth), floor, true);
         CreateBox("Ceiling", root.transform, center + Vector3.up * height, new Vector3(width, 0.24f, depth), ceiling, true);
@@ -105,7 +104,6 @@ public static class GymInteriorBuilder
         CreateLighting(root.transform, center, width, depth, height, lightMaterial);
         CreateRoomDetails(root.transform, center, width, depth, height, accent, trim, wall);
         GymBackRoomBuilder.Build(root.transform, center, width, depth, height, player);
-        ConfigureAmbientLighting(center, width, depth, height);
         GymTimeOfDay.CreateForScene(root.transform, center, width, depth, 2.05f, 7.05f);
     }
 
@@ -318,12 +316,12 @@ public static class GymInteriorBuilder
         // Satin aluminium frame and clear glass, like a commercial gym
         // entrance: two double-acting glass leaves under a glazed transom,
         // overhead closers on the inside and a green exit sign above.
-        Material aluminium = CreateMaterial(
+        Material aluminium = GymMaterialLibrary.Lit(
             "Door satin aluminium", new Color(0.56f, 0.58f, 0.6f), 0.85f, 0.52f);
-        Material darkSeal = CreateMaterial(
+        Material darkSeal = GymMaterialLibrary.Lit(
             "Door rubber seal", new Color(0.03f, 0.03f, 0.035f), 0f, 0.3f);
-        Material doorGlass = CreateTransparentMaterial(
-            "Door clear glass", new Color(0.78f, 0.88f, 0.92f, 0.14f), 0.96f);
+        Material doorGlass = GymMaterialLibrary.MakeTransparent(GymMaterialLibrary.NewLit(
+            "Door clear glass", new Color(0.78f, 0.88f, 0.92f, 0.14f), 0f, 0.96f));
 
         const float frameWidth = 0.1f;
         const float leafHeight = 2.62f;
@@ -381,10 +379,8 @@ public static class GymInteriorBuilder
         }
 
         // Green running-man exit sign on the gym side above the door.
-        Material exitGreen = CreateMaterial("Exit sign green", new Color(0.02f, 0.55f, 0.2f), 0f, 0.6f);
-        SetEmission(exitGreen, new Color(0.05f, 1.6f, 0.5f));
-        Material exitWhite = CreateMaterial("Exit sign white", Color.white, 0f, 0.6f);
-        SetEmission(exitWhite, new Color(1.6f, 1.6f, 1.6f));
+        Material exitGreen = GymMaterialLibrary.Lit("Exit sign green", new Color(0.02f, 0.55f, 0.2f), 0f, 0.6f, emission: new Color(0.05f, 1.6f, 0.5f));
+        Material exitWhite = GymMaterialLibrary.Lit("Exit sign white", Color.white, 0f, 0.6f, emission: new Color(1.6f, 1.6f, 1.6f));
         float signY = floorY + doorHeight + 0.32f;
         float signX = wallX - 0.2f;
         DisableShadows(CreateBox("Visitor Door Exit Sign", doorwayObject.transform,
@@ -547,12 +543,9 @@ public static class GymInteriorBuilder
         Transform parent, Vector3 center, float width, float depth, float openingBottom, float openingTop)
     {
         float exteriorZ = center.z + depth * 0.5f + 8f;
-        Material sunMaterial = CreateMaterial(
-            "Visible sun singular yellow glow", new Color(1f, 0.84f, 0.12f), 0f, 0.08f);
-        SetEmission(sunMaterial, new Color(10f, 7.2f, 0.8f));
-        Material moonMaterial = CreateMaterial(
-            "Visible moon singular white glow", Color.white, 0f, 0.12f);
-        SetEmission(moonMaterial, new Color(8f, 8f, 8f));
+        // GymTimeOfDay drives the disc colours and emission every frame.
+        Material sunMaterial = GymMaterialLibrary.Lit("Visible sun glow", Color.white, 0f, 0.08f);
+        Material moonMaterial = GymMaterialLibrary.Lit("Visible moon glow", Color.white, 0f, 0.12f);
 
         Vector3 moonStart = new Vector3(
             center.x - Mathf.Min(width * 0.24f, 8f),
@@ -565,7 +558,7 @@ public static class GymInteriorBuilder
         CreateCelestialSphere(parent, "Exterior visible sun", sunStart, 7.4f, sunMaterial);
         CreateCelestialSphere(parent, "Exterior visible moon", moonStart, 7.8f, moonMaterial);
         CreateCelestialGlowLight(
-            parent, "Exterior sun glow", sunStart, new Color(1f, 0.84f, 0.12f), 11f, 46f);
+            parent, "Exterior sun glow", sunStart, Color.white, 11f, 46f);
         CreateCelestialGlowLight(
             parent, "Exterior moon glow", moonStart, Color.white, 6.5f, 42f);
 
@@ -578,7 +571,6 @@ public static class GymInteriorBuilder
             beamObject.transform.rotation = Quaternion.LookRotation(target - beamObject.transform.position, Vector3.up);
             Light beam = beamObject.AddComponent<Light>();
             beam.type = LightType.Spot;
-            beam.color = new Color(0.68f, 0.84f, 1f);
             beam.intensity = 1450f;
             beam.range = 18f;
             beam.spotAngle = 38f;
@@ -771,47 +763,6 @@ public static class GymInteriorBuilder
 
     private static void CreateLighting(Transform parent, Vector3 center, float width, float depth, float height, Material lightMaterial)
     {
-        Light[] existingLights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None);
-        bool foundDirectional = false;
-        for (int i = 0; i < existingLights.Length; i++)
-        {
-            if (existingLights[i] == null || existingLights[i].type != LightType.Directional)
-            {
-                continue;
-            }
-
-            if (foundDirectional)
-            {
-                // Keep exactly one directional sun. A second authored
-                // directional light creates a second sky disk and flattens
-                // the blue exterior lighting.
-                existingLights[i].enabled = false;
-                existingLights[i].name = "Disabled duplicate exterior sun";
-                continue;
-            }
-
-            foundDirectional = true;
-            existingLights[i].name = "Warm exterior sun";
-            existingLights[i].intensity = 1.15f;
-            existingLights[i].color = new Color(1f, 0.84f, 0.12f);
-            existingLights[i].transform.rotation = Quaternion.Euler(42f, -32f, 0f);
-            existingLights[i].shadows = LightShadows.Soft;
-            existingLights[i].shadowStrength = 0.78f;
-        }
-
-        if (!foundDirectional)
-        {
-            GameObject sunObject = new GameObject("Warm exterior sun");
-            sunObject.transform.SetParent(parent, false);
-            sunObject.transform.rotation = Quaternion.Euler(42f, -32f, 0f);
-            Light sun = sunObject.AddComponent<Light>();
-            sun.type = LightType.Directional;
-            sun.color = new Color(1f, 0.84f, 0.12f);
-            sun.intensity = 1.15f;
-            sun.shadows = LightShadows.Soft;
-            sun.shadowStrength = 0.78f;
-        }
-
         int xCount = Mathf.Max(3, Mathf.RoundToInt(width / 10f));
         int zCount = Mathf.Max(3, Mathf.RoundToInt(depth / 10f));
         for (int x = 0; x < xCount; x++)
@@ -829,7 +780,7 @@ public static class GymInteriorBuilder
                 lightObject.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
                 Light light = lightObject.AddComponent<Light>();
                 light.type = LightType.Spot;
-                light.color = new Color(0.86f, 0.92f, 1f);
+                light.color = new Color(0.96f, 0.97f, 1f);
                 light.intensity = 440f;
                 light.range = 13f;
                 light.spotAngle = 105f;
@@ -922,9 +873,9 @@ public static class GymInteriorBuilder
         float eastMinX = doorMaxX + wallInset;
         float eastMaxX = wallMaxX;
 
-        Material yellow = CreateMaterial(
+        Material yellow = GymMaterialLibrary.Lit(
             "Mecca mustard yellow wall", new Color(0.82f, 0.61f, 0.035f), 0.02f, 0.3f);
-        Material cream = CreateMaterial(
+        Material cream = GymMaterialLibrary.Lit(
             "Mecca warm white header", new Color(0.9f, 0.88f, 0.77f), 0f, 0.24f);
 
         float lowerHeight = Mathf.Min(5.45f, Mathf.Max(4.2f, height - 2.1f));
@@ -1011,35 +962,9 @@ public static class GymInteriorBuilder
             new Vector3(width, height, 0.025f), poster, false);
     }
 
-    private static void ConfigureAmbientLighting(Vector3 center, float width, float depth, float height)
-    {
-        RenderSettings.ambientMode = AmbientMode.Trilight;
-        RenderSettings.ambientSkyColor = new Color(0.32f, 0.4f, 0.54f);
-        RenderSettings.ambientEquatorColor = new Color(0.18f, 0.2f, 0.25f);
-        RenderSettings.ambientGroundColor = new Color(0.035f, 0.045f, 0.075f);
-        RenderSettings.ambientIntensity = 1.12f;
-        RenderSettings.fog = false;
-    }
-
-    private static Material CreateMaterial(string name, Color color, float metallic, float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null)
-        {
-            shader = Shader.Find("Standard");
-        }
-
-        Material material = new Material(shader);
-        material.name = name;
-        material.color = color;
-        material.SetFloat("_Metallic", metallic);
-        material.SetFloat("_Smoothness", smoothness);
-        return material;
-    }
-
     private static Material CreatePosterMaterial(string resourcePath, int index)
     {
-        Material material = CreateMaterial(
+        Material material = GymMaterialLibrary.NewLit(
             $"Golden era poster {index + 1}", Color.white, 0f, 0.3f);
         if (string.IsNullOrWhiteSpace(resourcePath))
         {
@@ -1128,27 +1053,6 @@ public static class GymInteriorBuilder
         glow.range = range;
         glow.shadows = LightShadows.None;
         return glow;
-    }
-
-    private static Material CreateTransparentMaterial(
-        string name, Color color, float smoothness)
-    {
-        Material material = CreateMaterial(name, color, 0f, smoothness);
-        material.SetFloat("_Surface", 1f);
-        material.SetFloat("_Blend", 0f);
-        material.SetFloat("_SrcBlend", (float)BlendMode.SrcAlpha);
-        material.SetFloat("_DstBlend", (float)BlendMode.OneMinusSrcAlpha);
-        material.SetFloat("_ZWrite", 0f);
-        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-        material.DisableKeyword("_ALPHATEST_ON");
-        material.renderQueue = (int)RenderQueue.Transparent;
-        return material;
-    }
-
-    private static void SetEmission(Material material, Color emission)
-    {
-        material.EnableKeyword("_EMISSION");
-        material.SetColor("_EmissionColor", emission);
     }
 
     private static GameObject CreateBox(string name, Transform parent, Vector3 position, Vector3 scale, Material material, bool keepCollider)

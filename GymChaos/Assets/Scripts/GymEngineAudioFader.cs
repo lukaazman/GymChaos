@@ -14,10 +14,9 @@ public sealed class GymEngineAudioFader : MonoBehaviour
     private AudioSource source;
     private float baseVolume;
     private bool driving;
+    private float nextStartTry;
 
     public bool IsDriving => driving;
-    public bool IsSilentOrFadingOut => source == null || !source.isPlaying || !driving;
-    public float CurrentVolume => source != null ? source.volume : 0f;
     public static int CompletedFadeInsForVerification { get; private set; }
     public static int CompletedFadeOutsForVerification { get; private set; }
     public static int DespawnTailsForVerification { get; private set; }
@@ -38,11 +37,18 @@ public sealed class GymEngineAudioFader : MonoBehaviour
     public void SetDriving(bool value)
     {
         driving = value;
-        if (driving && source != null && !source.isPlaying)
-        {
-            source.volume = 0f;
-            source.Play();
-        }
+        if (driving && source != null && !source.isPlaying) TryStart();
+    }
+
+    // Visitor vehicles call SetDriving every frame. WebGL decodes clips
+    // asynchronously and logs a warning for every Play() before that, so a
+    // start that did not take is retried twice a second, not every frame.
+    private void TryStart()
+    {
+        if (Time.unscaledTime < nextStartTry) return;
+        nextStartTry = Time.unscaledTime + 0.5f;
+        source.volume = 0f;
+        source.Play();
     }
 
     private void Update()
@@ -51,6 +57,7 @@ public sealed class GymEngineAudioFader : MonoBehaviour
         {
             return;
         }
+        if (driving && !source.isPlaying) TryStart();
 
         float target = driving ? baseVolume : 0f;
         if (Mathf.Approximately(source.volume, target))

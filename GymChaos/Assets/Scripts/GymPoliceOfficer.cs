@@ -63,17 +63,12 @@ public sealed class GymPoliceOfficer : MonoBehaviour
     private bool gunDrawingClipObserved;
     private bool gunShootingClipObserved;
     private bool shotAnimationObserved;
-
-    public bool IsArmed => armed;
-    public Transform KillerTarget => killerTarget;
     public float HandAttackRange => handAttackRange;
     public int GunDrawingCount { get; private set; }
     public int GunShotCount { get; private set; }
     public bool HasObservedHandToHand => handToHandObserved;
     public bool HasObservedRangedMode => rangedModeObserved;
     public bool HasPlayerKillCelebration => playerKillCelebrationSent;
-    public bool IsWeaponVisibleForVerification => weapon != null &&
-        weapon.IsVisible;
     public bool HasObservedPreDrawWeaponHidden => preDrawWeaponHiddenObserved;
     public bool HasObservedGunDrawingClip => gunDrawingClipObserved;
     public bool HasObservedGunShootingClip => gunShootingClipObserved;

@@ -434,7 +434,7 @@ public sealed class GymAudio : MonoBehaviour
         }
 
         string relativePath = SfxRelativePath + "/" + definition.FileName;
-        string path = JoinStreamingAssetsPath(relativePath);
+        string path = GymShared.JoinStreamingAssetsPath(relativePath);
         AudioClip clip = null;
         using (UnityWebRequest request = UnityWebRequestMultimedia.GetAudioClip(
             path, definition.AudioType))
@@ -509,16 +509,5 @@ public sealed class GymAudio : MonoBehaviour
         Debug.Log(
             $"GYMCHAOS_SFX_PLAY effect={effect} position={position} volume={volume:0.00}",
             oneShotObject);
-    }
-
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
 }

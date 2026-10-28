@@ -8,7 +8,6 @@ using UnityEngine;
 /// </summary>
 public static class GymMemberRoster
 {
-    public const float BoundaryRefreshSeconds = 0.10f;
 
     public static int GetDisplayCount(PlayerMovement player)
     {

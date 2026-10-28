@@ -62,14 +62,7 @@ public static class GymChaosProteinStoreVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void ResumeAfterReload()
     {
@@ -78,7 +71,7 @@ public static class GymChaosProteinStoreVerifier
 
     private static void StartTimer()
     {
-        startedAt = EditorApplication.timeSinceStartup;
+        startedAt = GymChaosVerifierClock.ScenarioNow;
         Time.timeScale = 1f;
         AudioListener.pause = true;
     }
@@ -134,7 +127,7 @@ public static class GymChaosProteinStoreVerifier
         Time.timeScale = GymChaosVerifierClock.ScenarioTimeScale;
         AudioListener.pause = true;
         if (startedAt <= 0d) StartTimer();
-        double elapsed = EditorApplication.timeSinceStartup - startedAt;
+        double elapsed = GymChaosVerifierClock.ScenarioNow - startedAt;
         try
         {
             GymVisitorDirector director = UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>();
@@ -211,7 +204,7 @@ public static class GymChaosProteinStoreVerifier
                 visitorAgent = visitor.GetComponent<GymVisitorAgent>();
                 if (visitorAgent == null) throw new InvalidOperationException("Store visitor agent is missing.");
                 initialized = true;
-                routeStartedAt = EditorApplication.timeSinceStartup;
+                routeStartedAt = GymChaosVerifierClock.ScenarioNow;
                 Debug.Log(
                     $"GYMCHAOS_STORE_ROUTE_TEST_STARTED enemy={visitor.Identity} " +
                     $"rareChance={director.ProteinStoreVisitChanceForVerification:F2}");
@@ -225,19 +218,19 @@ public static class GymChaosProteinStoreVerifier
                 // used to start at the request, so under parallel regression
                 // load the walk out of the gym alone could use up the 35 s.
                 if (storeRouteReachedAt < 0d)
-                    storeRouteReachedAt = EditorApplication.timeSinceStartup;
+                    storeRouteReachedAt = GymChaosVerifierClock.ScenarioNow;
                 if (!obstaclePathBlocked)
                     TryPlaceRouteObstacle();
                 if (routeObstacle != null)
                     ObserveRouteObstacleDetour();
             }
             if (!obstaclePathBlocked &&
-                ((storeRouteReachedAt > 0d && EditorApplication.timeSinceStartup - storeRouteReachedAt > 35d) ||
-                 (routeStartedAt > 0d && EditorApplication.timeSinceStartup - routeStartedAt > 120d)))
+                ((storeRouteReachedAt > 0d && GymChaosVerifierClock.ScenarioNow - storeRouteReachedAt > 35d) ||
+                 (routeStartedAt > 0d && GymChaosVerifierClock.ScenarioNow - routeStartedAt > 120d)))
                 throw new TimeoutException(
                     "Could not place a collision-check obstacle on a clear store route segment: " +
                     $"state={visitorAgent.State} onRouteFor=" +
-                    $"{(storeRouteReachedAt > 0d ? EditorApplication.timeSinceStartup - storeRouteReachedAt : -1d):F1}s.");
+                    $"{(storeRouteReachedAt > 0d ? GymChaosVerifierClock.ScenarioNow - storeRouteReachedAt : -1d):F1}s.");
             storeReached |= visitorAgent.State == GymVisitorAgent.VisitorState.ProteinStoreDwell ||
                 visitorAgent.State == GymVisitorAgent.VisitorState.ReturningFromProteinStore;
             if (storeReached && visitorAgent.HasEnteredGym && visitorAgent.IsInsideGym &&
@@ -264,7 +257,7 @@ public static class GymChaosProteinStoreVerifier
                 return;
             }
             if (routeStartedAt > 0d &&
-                EditorApplication.timeSinceStartup - routeStartedAt > 150d)
+                GymChaosVerifierClock.ScenarioNow - routeStartedAt > 150d)
             {
                 throw new TimeoutException(
                     $"Protein.com visitor route timed out: reached={storeReached} " +

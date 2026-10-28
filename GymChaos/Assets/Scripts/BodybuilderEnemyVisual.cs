@@ -26,10 +26,6 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
     // asset offsets below remain relative to this common baseline.
     private const float ImportedEyeLineBaseOffset = 0.06f;
 
-    private const uint GlbMagic = 0x46546C67;
-    private const uint JsonChunk = 0x4E4F534A;
-    private const uint BinaryChunk = 0x004E4942;
-
     private readonly struct RigProfile
     {
         public readonly Vector2 LeftShoulder;
@@ -92,61 +88,6 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             RightKneeZ = rightKneeZ;
             RightFootZ = rightFootZ;
         }
-    }
-
-    [Serializable]
-    private sealed class GltfRoot
-    {
-        public GltfBufferView[] bufferViews;
-        public GltfAccessor[] accessors;
-        public GltfMesh[] meshes;
-        public GltfImage[] images;
-    }
-
-    [Serializable]
-    private sealed class GltfBufferView
-    {
-        public int byteOffset;
-        public int byteLength;
-        public int byteStride;
-    }
-
-    [Serializable]
-    private sealed class GltfAccessor
-    {
-        public int bufferView;
-        public int byteOffset;
-        public int componentType;
-        public int count;
-        public string type;
-    }
-
-    [Serializable]
-    private sealed class GltfMesh
-    {
-        public GltfPrimitive[] primitives;
-    }
-
-    [Serializable]
-    private sealed class GltfPrimitive
-    {
-        public GltfAttributes attributes;
-        public int indices;
-    }
-
-    [Serializable]
-    private sealed class GltfAttributes
-    {
-        public int POSITION;
-        public int NORMAL;
-        public int TEXCOORD_0;
-    }
-
-    [Serializable]
-    private sealed class GltfImage
-    {
-        public int bufferView;
-        public string mimeType;
     }
 
     public sealed class Rig
@@ -887,7 +828,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         }
 
         string fileName = GetModelFileName(identity);
-        string path = JoinStreamingAssetsPath("BodyBuilders/" + fileName);
+        string path = GymShared.JoinStreamingAssetsPath("BodyBuilders/" + fileName);
         byte[] glbBytes;
         using (UnityWebRequest request = UnityWebRequest.Get(path))
         {
@@ -903,7 +844,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
             glbBytes = request.downloadHandler.data;
         }
 
-        if (!TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary))
+        if (!GymGlb.TryReadGlb(glbBytes, out GltfRoot gltf, out byte[] binary))
         {
             Debug.LogError($"Could not read bodybuilder model: {fileName}", this);
             yield break;
@@ -912,10 +853,10 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         yield return null;
 
         GltfPrimitive primitive = gltf.meshes[0].primitives[0];
-        Vector3[] sourcePositions = ReadVector3Accessor(gltf, binary, primitive.attributes.POSITION);
-        Vector3[] sourceNormals = ReadVector3Accessor(gltf, binary, primitive.attributes.NORMAL);
-        Vector2[] sourceUvs = ReadVector2Accessor(gltf, binary, primitive.attributes.TEXCOORD_0);
-        int[] triangles = ReadIndexAccessor(gltf, binary, primitive.indices);
+        Vector3[] sourcePositions = GymGlb.ReadVector3Accessor(gltf, binary, primitive.attributes.POSITION);
+        Vector3[] sourceNormals = GymGlb.ReadVector3Accessor(gltf, binary, primitive.attributes.NORMAL);
+        Vector2[] sourceUvs = GymGlb.ReadVector2Accessor(gltf, binary, primitive.attributes.TEXCOORD_0);
+        int[] triangles = GymGlb.ReadIndexAccessor(gltf, binary, primitive.indices);
 
         float sourceMinY = float.PositiveInfinity;
         float sourceMaxY = float.NegativeInfinity;
@@ -1044,119 +985,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         }
     }
 
-    private static string JoinStreamingAssetsPath(string relativePath)
-    {
-        string path = Application.streamingAssetsPath.TrimEnd('/', '\\') + "/" + relativePath;
-        if (path.Contains("://"))
-        {
-            return path;
-        }
-        return "file:///" + path.Replace('\\', '/').TrimStart('/');
-    }
-
     private static string GetModelFileName(BodybuilderIdentity identity)
     {
         return identity == BodybuilderIdentity.JayCutler
             ? "jay.glb"
             : identity.ToString().ToLowerInvariant() + ".glb";
-    }
-
-    private static void SimplifyRuntimeMesh(
-        ref Vector3[] positions, ref Vector3[] normals, ref Vector2[] uvs,
-        ref BoneWeight[] boneWeights, ref int[] triangles, Bounds bounds, int targetTriangleCount)
-    {
-        if (triangles.Length / 3 <= targetTriangleCount || positions.Length == 0)
-        {
-            return;
-        }
-
-        float cellSize = Mathf.Max(0.001f, bounds.size.y / 650f);
-        Vector3[] bestPositions = positions;
-        Vector3[] bestNormals = normals;
-        Vector2[] bestUvs = uvs;
-        BoneWeight[] bestWeights = boneWeights;
-        int[] bestTriangles = triangles;
-
-        for (int attempt = 0; attempt < 8; attempt++)
-        {
-            ClusterMesh(
-                positions, normals, uvs, boneWeights, triangles,
-                bounds.min, cellSize,
-                out Vector3[] reducedPositions, out Vector3[] reducedNormals,
-                out Vector2[] reducedUvs, out BoneWeight[] reducedWeights,
-                out int[] reducedTriangles);
-
-            bestPositions = reducedPositions;
-            bestNormals = reducedNormals;
-            bestUvs = reducedUvs;
-            bestWeights = reducedWeights;
-            bestTriangles = reducedTriangles;
-            if (reducedTriangles.Length / 3 <= targetTriangleCount)
-            {
-                break;
-            }
-            cellSize *= 1.35f;
-        }
-
-        positions = bestPositions;
-        normals = bestNormals;
-        uvs = bestUvs;
-        boneWeights = bestWeights;
-        triangles = bestTriangles;
-    }
-
-    private static void ClusterMesh(
-        Vector3[] positions, Vector3[] normals, Vector2[] uvs, BoneWeight[] weights,
-        int[] triangles, Vector3 minimum, float cellSize,
-        out Vector3[] reducedPositions, out Vector3[] reducedNormals,
-        out Vector2[] reducedUvs, out BoneWeight[] reducedWeights, out int[] reducedTriangles)
-    {
-        Dictionary<Vector3Int, int> clusters = new Dictionary<Vector3Int, int>(positions.Length / 2);
-        List<Vector3> positionList = new List<Vector3>(positions.Length / 2);
-        List<Vector3> normalList = new List<Vector3>(positions.Length / 2);
-        List<Vector2> uvList = new List<Vector2>(positions.Length / 2);
-        List<BoneWeight> weightList = new List<BoneWeight>(positions.Length / 2);
-        int[] remap = new int[positions.Length];
-
-        for (int i = 0; i < positions.Length; i++)
-        {
-            Vector3 relative = (positions[i] - minimum) / cellSize;
-            Vector3Int key = new Vector3Int(
-                Mathf.FloorToInt(relative.x),
-                Mathf.FloorToInt(relative.y),
-                Mathf.FloorToInt(relative.z));
-            if (!clusters.TryGetValue(key, out int reducedIndex))
-            {
-                reducedIndex = positionList.Count;
-                clusters.Add(key, reducedIndex);
-                positionList.Add(positions[i]);
-                normalList.Add(i < normals.Length ? normals[i] : Vector3.up);
-                uvList.Add(i < uvs.Length ? uvs[i] : Vector2.zero);
-                weightList.Add(i < weights.Length ? weights[i] : default);
-            }
-            remap[i] = reducedIndex;
-        }
-
-        List<int> triangleList = new List<int>(triangles.Length);
-        for (int i = 0; i + 2 < triangles.Length; i += 3)
-        {
-            int a = remap[triangles[i]];
-            int b = remap[triangles[i + 1]];
-            int c = remap[triangles[i + 2]];
-            if (a == b || b == c || c == a)
-            {
-                continue;
-            }
-            triangleList.Add(a);
-            triangleList.Add(b);
-            triangleList.Add(c);
-        }
-
-        reducedPositions = positionList.ToArray();
-        reducedNormals = normalList.ToArray();
-        reducedUvs = uvList.ToArray();
-        reducedWeights = weightList.ToArray();
-        reducedTriangles = triangleList.ToArray();
     }
 
     private static RigProfile GetRigProfile(BodybuilderIdentity identity)
@@ -1793,29 +1626,6 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         };
     }
 
-    private static BoneWeight ZyzzArmWeight(
-        Vector3 point, Vector3 shoulder, Vector3 elbow, Vector3 hand,
-        int upperBone, int lowerBone, float height)
-    {
-        float upperDistance = DistanceToSegment(point, shoulder, elbow);
-        float lowerDistance = DistanceToSegment(point, elbow, hand);
-        float shoulderInfluence = Mathf.SmoothStep(
-            0f, 1f, Vector3.Distance(point, shoulder) / Mathf.Max(0.0001f, height * 0.09f));
-        float armInfluence = Mathf.Clamp01(shoulderInfluence);
-
-        float totalDistance = Mathf.Max(0.0001f, upperDistance + lowerDistance);
-        float upperShare = Mathf.Clamp01(lowerDistance / totalDistance);
-        return new BoneWeight
-        {
-            boneIndex0 = upperBone,
-            weight0 = armInfluence * upperShare,
-            boneIndex1 = lowerBone,
-            weight1 = armInfluence * (1f - upperShare),
-            boneIndex2 = 3,
-            weight2 = 1f - armInfluence
-        };
-    }
-
     private static Vector2 ToPlanePoint(Bounds bounds, Vector2 normalizedPoint)
     {
         Vector3 point = ToModelPoint(bounds, normalizedPoint);
@@ -1825,34 +1635,6 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
     private static BoneWeight SingleBone(int boneIndex)
     {
         return new BoneWeight { boneIndex0 = boneIndex, weight0 = 1f };
-    }
-
-    private static BoneWeight SegmentWeight(Vector2 point, Vector2 start, Vector2 joint, Vector2 end, int firstBone, int secondBone)
-    {
-        float firstDistance = DistanceToSegment(point, start, joint);
-        float secondDistance = DistanceToSegment(point, joint, end);
-        float total = Mathf.Max(0.0001f, firstDistance + secondDistance);
-        float firstWeight = Mathf.Clamp01(secondDistance / total);
-        return new BoneWeight
-        {
-            boneIndex0 = firstBone,
-            weight0 = firstWeight,
-            boneIndex1 = secondBone,
-            weight1 = 1f - firstWeight
-        };
-    }
-
-    private static float DistanceToSegment(Vector2 point, Vector2 start, Vector2 end)
-    {
-        Vector2 segment = end - start;
-        float lengthSquared = segment.sqrMagnitude;
-        if (lengthSquared < 0.000001f)
-        {
-            return Vector2.Distance(point, start);
-        }
-
-        float t = Mathf.Clamp01(Vector2.Dot(point - start, segment) / lengthSquared);
-        return Vector2.Distance(point, start + segment * t);
     }
 
     private static BoneWeight SegmentWeight(Vector3 point, Vector3 start, Vector3 joint, Vector3 end, int firstBone, int secondBone)
@@ -1888,11 +1670,11 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Shader shader = Shader.Find("GymChaos/BodybuilderUnlit");
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = GymMaterialLibrary.UnlitShader;
         }
         if (shader == null)
         {
-            shader = Shader.Find("Universal Render Pipeline/Lit");
+            shader = GymMaterialLibrary.LitShader;
         }
         if (shader == null)
         {
@@ -1950,15 +1732,6 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         RenderTexture.ReleaseTemporary(temporary);
         Destroy(source);
         return reduced;
-    }
-
-    private static void RemoveCollider(GameObject target)
-    {
-        Collider collider = target.GetComponent<Collider>();
-        if (collider != null)
-        {
-            DestroyImmediate(collider);
-        }
     }
 
     private static void CreateFaceCensorAndName(
@@ -2526,97 +2299,5 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 : identity.ToString();
         ScreenSpaceCharacterLabel label = visualRoot.gameObject.AddComponent<ScreenSpaceCharacterLabel>();
         label.Configure(bodyRenderer, displayName, heightOffset);
-    }
-
-    private static bool TryReadGlb(byte[] bytes, out GltfRoot gltf, out byte[] binary)
-    {
-        gltf = null;
-        binary = null;
-        if (bytes == null || bytes.Length < 20 || BitConverter.ToUInt32(bytes, 0) != GlbMagic)
-        {
-            return false;
-        }
-
-        int offset = 12;
-        string json = null;
-        while (offset + 8 <= bytes.Length)
-        {
-            int length = (int)BitConverter.ToUInt32(bytes, offset);
-            uint type = BitConverter.ToUInt32(bytes, offset + 4);
-            offset += 8;
-            if (length < 0 || offset + length > bytes.Length)
-            {
-                return false;
-            }
-
-            if (type == JsonChunk)
-            {
-                json = Encoding.UTF8.GetString(bytes, offset, length).TrimEnd('\0', ' ', '\n', '\r', '\t');
-            }
-            else if (type == BinaryChunk)
-            {
-                binary = new byte[length];
-                Buffer.BlockCopy(bytes, offset, binary, 0, length);
-            }
-            offset += length;
-        }
-
-        if (string.IsNullOrEmpty(json) || binary == null)
-        {
-            return false;
-        }
-
-        gltf = JsonUtility.FromJson<GltfRoot>(json);
-        return gltf != null && gltf.meshes != null && gltf.meshes.Length > 0;
-    }
-
-    private static Vector3[] ReadVector3Accessor(GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 12;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector3[] result = new Vector3[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector3(BitConverter.ToSingle(binary, offset), BitConverter.ToSingle(binary, offset + 4), BitConverter.ToSingle(binary, offset + 8));
-        }
-        return result;
-    }
-
-    private static Vector2[] ReadVector2Accessor(GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int stride = view.byteStride > 0 ? view.byteStride : 8;
-        int start = view.byteOffset + accessor.byteOffset;
-        Vector2[] result = new Vector2[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = new Vector2(BitConverter.ToSingle(binary, offset), BitConverter.ToSingle(binary, offset + 4));
-        }
-        return result;
-    }
-
-    private static int[] ReadIndexAccessor(GltfRoot gltf, byte[] binary, int accessorIndex)
-    {
-        GltfAccessor accessor = gltf.accessors[accessorIndex];
-        GltfBufferView view = gltf.bufferViews[accessor.bufferView];
-        int componentSize = accessor.componentType == 5125 ? 4 : accessor.componentType == 5123 ? 2 : 1;
-        int stride = view.byteStride > 0 ? view.byteStride : componentSize;
-        int start = view.byteOffset + accessor.byteOffset;
-        int[] result = new int[accessor.count];
-        for (int i = 0; i < result.Length; i++)
-        {
-            int offset = start + i * stride;
-            result[i] = accessor.componentType == 5125
-                ? (int)BitConverter.ToUInt32(binary, offset)
-                : accessor.componentType == 5123
-                    ? BitConverter.ToUInt16(binary, offset)
-                    : binary[offset];
-        }
-        return result;
     }
 }

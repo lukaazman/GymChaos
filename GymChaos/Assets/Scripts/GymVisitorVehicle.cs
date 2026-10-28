@@ -95,28 +95,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public bool IsParked { get; private set; }
     public bool IsDriving => driveRoutine != null && !waitingForRuntimeVisual;
     public bool IsLeaving => IsDriving && !drivingIntoParking;
-    public static bool HasActiveParkingArrival =>
-        HasActiveParkingArrivalExcept(null);
-
-    public static bool HasActiveParkingArrivalExcept(
-        GymVisitorVehicle ignoredVehicle)
-    {
-        for (int i = activeGroundTraffic.Count - 1; i >= 0; i--)
-        {
-            GymVisitorVehicle other = activeGroundTraffic[i];
-            if (other == null)
-            {
-                activeGroundTraffic.RemoveAt(i);
-                continue;
-            }
-            if (other != ignoredVehicle && other.IsDriving &&
-                other.drivingIntoParking)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
     // A passenger stops for an arriving car only once the car is actually in
     // its vicinity and heading its way, like real parking-lot traffic. Farther
     // cars do not freeze every passenger; the car itself still slows for and
@@ -248,8 +226,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     }
     public Vector3 AislePassengerPoint => aislePoint;
     public float BoardingReachDistance => IsCloud || IsBus ? 0.8f : 0.65f;
+
 #if UNITY_EDITOR
-    public static float NormalDriveSpeedForVerification => DriveSpeed;
     public bool IsDrivingIntoParkingForVerification =>
         IsDriving && drivingIntoParking && !UsesRoadsideBusRoute && !IsCloud;
     public Vector3 ParkingPointForVerification => parkingPoint;
@@ -279,7 +257,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public float CurrentRouteClearanceForVerification => currentRouteClearance;
     public float CurrentRouteActualTravelForVerification => currentRouteActualTravel;
     public string CurrentRouteClearanceSourceForVerification => currentRouteClearanceSource;
-    public int HornPlayCountForVerification => hornPlayCount;
     public Vector3 ArrivalRoadTurnPointForVerification => roadTurnPoint;
     public Vector3 DepartureRoadTurnPointForVerification => departureRoadTurnPoint;
     public Vector3 AislePointForVerification => aislePoint;
@@ -296,7 +273,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             }
 
             Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
-            return renderers.Length > 0 ? CombinedBounds(renderers) : default;
+            return renderers.Length > 0 ? GymShared.CombinedBounds(renderers) : default;
         }
     }
     public Bounds PhysicalBodyBoundsForVerification
@@ -447,7 +424,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     /// <summary>Height of a race car root above the road: tyres touch the road this far below it.</summary>
     public static float RaceGroundOffset => RouteHeightAboveFloor + TyreContactSink;
     public bool RaceVisualReady => runtimeVisualReady || runtimeVisualLoadFailed;
-    public bool RaceVisualFailed => runtimeVisualLoadFailed;
 
     public void DriveIn(Action onParked)
     {
@@ -1088,9 +1064,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     }
 
     public bool HasSeatedDriver => driverSeat != null && driverSeat.Driver != null;
-    public bool IsDriverSeatBusy => driverSeat != null && driverSeat.IsBusy;
     public GymVehicleDriverSeat DriverSeat => driverSeat;
-    public GymVehicleCabin Cabin => cabin;
 
     private void AttachCabin(GameObject visual)
     {
@@ -1381,7 +1355,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 currentRouteClearanceSource = lastTrafficClearanceSource;
                 if (!IsCloud && Time.realtimeSinceStartup >= nextRouteProgressLogTime)
                 {
-                    Debug.Log(
+                    GymLog.Diag(
                         $"GYMCHAOS_VEHICLE_ROUTE_SAMPLE identity={identity} " +
                         $"waypoint={i}/{points.Length - 1} park={park} " +
                         $"position={transform.position} target={target} " +
@@ -1863,20 +1837,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         horn.PlayOneShot(hornClip);
     }
 
-    public static bool IsPedestrianUsingParkingConnector()
-    {
-        IReadOnlyList<GymVisitorAgent> agents = GymVisitorAgent.ActiveAgents;
-        for (int i = 0; i < agents.Count; i++)
-        {
-            if (agents[i] != null && agents[i].State ==
-                GymVisitorAgent.VisitorState.ApproachingVehicle)
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private void OnDestroy()
     {
         if (hornClip != null) Destroy(hornClip);
@@ -2087,14 +2047,14 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0) return;
-        Bounds bounds = CombinedBounds(renderers);
+        Bounds bounds = GymShared.CombinedBounds(renderers);
         float largestHorizontal = Mathf.Max(bounds.size.x, bounds.size.z);
         if (largestHorizontal > 0.001f)
         {
             visual.transform.localScale *= targetLength / largestHorizontal;
         }
         Physics.SyncTransforms();
-        bounds = CombinedBounds(renderers);
+        bounds = GymShared.CombinedBounds(renderers);
         if (centerHorizontally)
         {
             Vector3 horizontalOffset = new Vector3(
@@ -2103,7 +2063,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 transform.position.z - bounds.center.z);
             visual.transform.position += horizontalOffset;
             Physics.SyncTransforms();
-            bounds = CombinedBounds(renderers);
+            bounds = GymShared.CombinedBounds(renderers);
         }
         // Relative to the vehicle root: the old absolute y=0 target left the
         // body floating above the lowered asphalt.
@@ -2127,7 +2087,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0) return;
-        Bounds bounds = CombinedBounds(renderers);
+        Bounds bounds = GymShared.CombinedBounds(renderers);
         BuildCloudTop(visual);
         AddCloudSurface(visual);
         riderAnchor = new GameObject("Goku Rider Anchor").transform;
@@ -2287,7 +2247,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Debug.LogError($"GYMCHAOS_VEHICLE_TEXTURE_MISSING identity={identity}", this);
             return;
         }
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+        Shader shader = GymMaterialLibrary.LitShader;
         Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
         var replacements = new Dictionary<Material, Material>();
         for (int r = 0; r < renderers.Length; r++)
@@ -2409,12 +2369,6 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             }
         }
         return hasBounds;
-    }
-    private static Bounds CombinedBounds(Renderer[] renderers)
-    {
-        Bounds bounds = renderers[0].bounds;
-        for (int i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
-        return bounds;
     }
 
     private void CreateEngineAudio()

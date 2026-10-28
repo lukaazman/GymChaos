@@ -195,8 +195,11 @@ Shader "GymChaos/GymGradientSky"
 
                 color *= 1.0 - alexander * 0.08 * visibility;
                 color += inside * 0.035 * visibility;
-                color += Spectral(primary) * primaryMask * 0.62 * visibility;
-                color += Spectral(1.0 - secondary) * secondaryMask * 0.22 * visibility;
+                // Muted: half-saturated bands, a faint shimmer rather than a neon arc.
+                float3 bow = lerp(float3(0.45, 0.45, 0.45), Spectral(primary), 0.55);
+                float3 bow2 = lerp(float3(0.45, 0.45, 0.45), Spectral(1.0 - secondary), 0.55);
+                color += bow * primaryMask * 0.34 * visibility;
+                color += bow2 * secondaryMask * 0.1 * visibility;
                 return color;
             }
 

@@ -467,19 +467,19 @@ public partial class EnemyFighter
             Vector3 currentPoint = points[current];
             float goalDistance = Vector3.ProjectOnPlane(
                 goal - currentPoint, Vector3.up).magnitude;
-            if (goalDistance <= cellSize * 3.4f &&
+            // Score checks run before the capsule casts: a cast cannot change
+            // the outcome of an edge that would not improve its node, and the
+            // casts were thousands per route (up to 250 ms).
+            float goalScore = gScores[current] + goalDistance;
+            if (goalDistance <= cellSize * 3.4f && goalScore < gScores[goalIndex] &&
                 IsNavigationSegmentClear(currentPoint, goal, allowTargetEquipment))
             {
-                float goalScore = gScores[current] + goalDistance;
-                if (goalScore < gScores[goalIndex])
+                cameFrom[goalIndex] = current;
+                gScores[goalIndex] = goalScore;
+                fScores[goalIndex] = goalScore;
+                if (!open.Contains(goalIndex))
                 {
-                    cameFrom[goalIndex] = current;
-                    gScores[goalIndex] = goalScore;
-                    fScores[goalIndex] = goalScore;
-                    if (!open.Contains(goalIndex))
-                    {
-                        open.Add(goalIndex);
-                    }
+                    open.Add(goalIndex);
                 }
             }
 
@@ -497,16 +497,15 @@ public partial class EnemyFighter
                 }
 
                 int next = nextZ * width + nextX;
-                if (closed[next] || !IsNodeNavigable(next) ||
-                    !IsNavigationSegmentClear(currentPoint, points[next], false))
+                if (closed[next])
                 {
                     continue;
                 }
-
                 float stepDistance = Vector3.ProjectOnPlane(
                     points[next] - currentPoint, Vector3.up).magnitude;
                 float tentativeScore = gScores[current] + stepDistance;
-                if (tentativeScore >= gScores[next])
+                if (tentativeScore >= gScores[next] || !IsNodeNavigable(next) ||
+                    !IsNavigationSegmentClear(currentPoint, points[next], false))
                 {
                     continue;
                 }
@@ -1443,7 +1442,7 @@ public partial class EnemyFighter
         float progress = Mathf.Clamp01(
             (Time.time - treadmillEntryStarted) /
             Mathf.Max(0.01f, treadmillEntryDuration));
-        float eased = SmoothStep(progress);
+        float eased = GymShared.Ease01(progress);
         Vector3 targetPosition = treadmillStation.EnemyPosition;
         body.position = Vector3.Lerp(
             treadmillEntryStartPosition, targetPosition, eased);
@@ -1542,7 +1541,7 @@ public partial class EnemyFighter
         float progress = Mathf.Clamp01(
             (Time.time - treadmillExitStarted) /
             Mathf.Max(0.01f, treadmillExitDuration));
-        float eased = SmoothStep(progress);
+        float eased = GymShared.Ease01(progress);
         Vector3 startPosition = treadmillStation.EnemyPosition;
         body.position = Vector3.Lerp(
             startPosition, treadmillExitTargetPosition, eased);

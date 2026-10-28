@@ -84,7 +84,7 @@ public static class GymChaosDeadliftPathVerifier
             return;
         }
 
-        startedAt = EditorApplication.timeSinceStartup;
+        startedAt = Time.timeAsDouble;
         EditorApplication.update -= Tick;
         EditorApplication.update += Tick;
     }
@@ -94,7 +94,7 @@ public static class GymChaosDeadliftPathVerifier
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
             Time.timeScale = 1f;
-            startedAt = EditorApplication.timeSinceStartup;
+            startedAt = Time.timeAsDouble;
             EditorApplication.update -= Tick;
             EditorApplication.update += Tick;
         }
@@ -116,7 +116,7 @@ public static class GymChaosDeadliftPathVerifier
             return;
         }
 
-        double elapsed = EditorApplication.timeSinceStartup - startedAt;
+        double elapsed = Time.timeAsDouble - startedAt;
         if (!routeStarted)
         {
             if (elapsed < 2d)
@@ -194,7 +194,7 @@ public static class GymChaosDeadliftPathVerifier
         if (progress > 0.18f)
         {
             furthestPosition = position;
-            lastProgressAt = EditorApplication.timeSinceStartup;
+            lastProgressAt = Time.timeAsDouble;
         }
 
         float remaining = Vector3.ProjectOnPlane(
@@ -224,7 +224,7 @@ public static class GymChaosDeadliftPathVerifier
             return;
         }
 
-        if (EditorApplication.timeSinceStartup - lastProgressAt > 4.2d)
+        if (Time.timeAsDouble - lastProgressAt > 4.2d)
         {
             LogNearbyColliders(position);
             Fail(
@@ -280,7 +280,7 @@ public static class GymChaosDeadliftPathVerifier
             Object.FindAnyObjectByType<GymVisitorDirector>();
         if (director == null)
         {
-            if (EditorApplication.timeSinceStartup - startedAt > 24d)
+            if (Time.timeAsDouble - startedAt > 24d)
             {
                 Fail("director_not_ready");
             }
@@ -291,7 +291,7 @@ public static class GymChaosDeadliftPathVerifier
         // before they exist runs into them later and reads as a stall.
         if (!GymLooseItemSpawner.IsReady)
         {
-            if (EditorApplication.timeSinceStartup - startedAt > 24d)
+            if (Time.timeAsDouble - startedAt > 24d)
             {
                 Fail("loose_items_not_ready");
             }
@@ -319,7 +319,7 @@ public static class GymChaosDeadliftPathVerifier
             : null;
         if (fighter == null || station == null || floorRenderer == null)
         {
-            if (EditorApplication.timeSinceStartup - startedAt > 15d)
+            if (Time.timeAsDouble - startedAt > 15d)
             {
                 Fail(
                     $"scene_contract_missing fighter={fighter != null} " +
@@ -405,7 +405,7 @@ public static class GymChaosDeadliftPathVerifier
         lastObservedPosition = start;
         maximumFrameStep = 0f;
         furthestPosition = start;
-        lastProgressAt = EditorApplication.timeSinceStartup;
+        lastProgressAt = Time.timeAsDouble;
         Debug.Log(
             $"GYMCHAOS_DEADLIFT_PATH_TEST_STARTED enemy={fighter.Identity} " +
             $"routePoints={route.Count} start={start} target={destination} " +
@@ -506,7 +506,7 @@ public static class GymChaosDeadliftPathVerifier
 
         lastObservedPosition = egressStartPosition;
         furthestPosition = egressStartPosition;
-        lastProgressAt = EditorApplication.timeSinceStartup;
+        lastProgressAt = Time.timeAsDouble;
         Debug.Log(
             $"GYMCHAOS_DEADLIFT_EGRESS_STARTED enemy={fighter.Identity} " +
             $"start={egressStartPosition} target={destination} " +

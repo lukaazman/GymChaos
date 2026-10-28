@@ -108,7 +108,7 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         {
             SetVisible(true);
             RefreshFromRadio();
-            Select(localButton != null ? localButton : closeButton);
+            GymShared.Select(localButton != null ? localButton : closeButton);
             return;
         }
 
@@ -123,7 +123,7 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         player?.SetCursorCaptured(false);
         SetVisible(true);
         RefreshFromRadio();
-        Select(localButton != null ? localButton : closeButton);
+        GymShared.Select(localButton != null ? localButton : closeButton);
     }
 
     public void Close()
@@ -167,8 +167,8 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
             : "SOURCE  //  LOCAL PLAYLIST";
         statusText.text = radio.GetSoundCloudUiStatus();
         statusText.color = radio.IsSoundCloudError
-            ? new Color(1f, 0.43f, 0.31f, 1f)
-            : new Color(0.61f, 0.69f, 0.78f, 1f);
+            ? PersonaMenuStyle.Accent
+            : PersonaMenuStyle.Muted;
         localLabel.text = radio.IsLocalMusicEnabled
             ? "LOCAL PLAYLIST  //  ON"
             : "LOCAL PLAYLIST  //  OFF";
@@ -196,7 +196,7 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         }
 
         GymRuntimeSettings.EnsureEventSystem();
-        font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        font = PersonaMenuStyle.LoadButtonFont(PersonaMenuStyle.BuiltinFont);
 
         Canvas canvas = gameObject.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -214,7 +214,7 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         GymRuntimeSettings.Stretch(page.GetComponent<RectTransform>());
         Image veil = GymRuntimeSettings.CreateImage(
             "Radio Popup Veil", page.transform,
-            new Color(0.008f, 0.018f, 0.038f, 0.90f));
+            PersonaMenuStyle.Veil);
         GymRuntimeSettings.Stretch(veil.rectTransform);
 
         GameObject surface = new GameObject(
@@ -225,40 +225,40 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
             surfaceRect, new Vector2(0.23f, 0.08f), new Vector2(0.77f, 0.92f));
         Image surfaceImage = GymRuntimeSettings.CreateImage(
             "Radio Popup Surface Ink", surface.transform,
-            new Color(0.035f, 0.065f, 0.10f, 0.99f));
+            PersonaMenuStyle.PlateBlack);
         GymRuntimeSettings.Stretch(surfaceImage.rectTransform);
 
         Image rule = GymRuntimeSettings.CreateImage(
             "Radio Popup Rule", surface.transform,
-            new Color(0.98f, 0.34f, 0.13f, 1f));
+            PersonaMenuStyle.Accent);
         GymRuntimeSettings.SetAnchors(
             rule.rectTransform, new Vector2(0.12f, 0.92f),
             new Vector2(0.88f, 0.92f), 0f, -1f, 0f, -1f);
         rule.raycastTarget = false;
 
         GymRuntimeSettings.CreateText(
-            "Radio Popup Heading", surface.transform, font,
+            "Radio Popup Heading", surface.transform, PersonaMenuStyle.LoadTitleFont(font),
             "RADIO", 28,
-            new Color(0.91f, 0.94f, 0.98f, 1f), FontStyle.Bold,
+            PersonaMenuStyle.Ink, FontStyle.Bold,
             TextAnchor.MiddleCenter, new Vector2(0.10f, 0.84f),
             new Vector2(0.90f, 0.91f));
         sourceText = GymRuntimeSettings.CreateText(
             "Radio Popup Source", surface.transform, font,
             "SOURCE  //  LOCAL PLAYLIST", 14,
-            new Color(0.98f, 0.34f, 0.13f, 1f), FontStyle.Bold,
+            PersonaMenuStyle.Accent, FontStyle.Bold,
             TextAnchor.MiddleCenter, new Vector2(0.10f, 0.77f),
             new Vector2(0.90f, 0.83f));
         statusText = GymRuntimeSettings.CreateText(
             "Radio Popup Status", surface.transform, font,
             "Paste a SoundCloud playlist URL", 14,
-            new Color(0.61f, 0.69f, 0.78f, 1f), FontStyle.Normal,
+            PersonaMenuStyle.Muted, FontStyle.Normal,
             TextAnchor.MiddleCenter, new Vector2(0.08f, 0.66f),
             new Vector2(0.92f, 0.75f));
 
         GymRuntimeSettings.CreateText(
             "Radio Playlist URL Heading", surface.transform, font,
             "SOUNDCLOUD PLAYLIST LINK", 12,
-            new Color(0.98f, 0.34f, 0.13f, 1f), FontStyle.Bold,
+            PersonaMenuStyle.Accent, FontStyle.Bold,
             TextAnchor.MiddleLeft, new Vector2(0.12f, 0.59f),
             new Vector2(0.88f, 0.64f));
 
@@ -270,7 +270,7 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
             inputObject.GetComponent<RectTransform>(),
             new Vector2(0.12f, 0.51f), new Vector2(0.88f, 0.58f));
         Image inputImage = inputObject.GetComponent<Image>();
-        inputImage.color = new Color(0.015f, 0.03f, 0.055f, 1f);
+        inputImage.color = PersonaMenuStyle.ButtonIdle;
         playlistUrlInput = inputObject.GetComponent<InputField>();
         playlistUrlInput.lineType = InputField.LineType.SingleLine;
         playlistUrlInput.characterLimit = 512;
@@ -278,12 +278,12 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         Text placeholder = GymRuntimeSettings.CreateText(
             "Radio SoundCloud URL Placeholder", inputObject.transform, font,
             "Paste playlist, share or short link", 13,
-            new Color(0.43f, 0.50f, 0.60f, 1f), FontStyle.Italic,
+            PersonaMenuStyle.Muted, FontStyle.Italic,
             TextAnchor.MiddleLeft, new Vector2(0.025f, 0f),
             new Vector2(0.975f, 1f));
         Text inputText = GymRuntimeSettings.CreateText(
             "Radio SoundCloud URL Text", inputObject.transform, font,
-            string.Empty, 13, new Color(0.91f, 0.94f, 0.98f, 1f),
+            string.Empty, 13, PersonaMenuStyle.Ink,
             FontStyle.Normal, TextAnchor.MiddleLeft,
             new Vector2(0.025f, 0f), new Vector2(0.975f, 1f));
         inputText.supportRichText = false;
@@ -292,42 +292,42 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
 
         openSoundCloudButton = GymRuntimeSettings.CreateButton(
             "Radio Open SoundCloud Button", surface.transform, font,
-            "BROWSE", new Color(0.07f, 0.105f, 0.15f, 1f),
+            "BROWSE", PersonaMenuStyle.ButtonIdle,
             new Vector2(0.12f, 0.42f), new Vector2(0.49f, 0.48f),
             OpenSoundCloudFromUi);
         loadPlaylistButton = GymRuntimeSettings.CreateButton(
             "Radio Load Playlist Button", surface.transform, font,
-            "CONNECT", new Color(0.98f, 0.34f, 0.13f, 1f),
+            "CONNECT", PersonaMenuStyle.Accent,
             new Vector2(0.51f, 0.42f), new Vector2(0.88f, 0.48f),
             LoadSoundCloudPlaylistFromUi);
         playPauseButton = GymRuntimeSettings.CreateButton(
             "Radio Widget Play Pause Button", surface.transform, font,
-            "PLAY", new Color(0.98f, 0.34f, 0.13f, 1f),
+            "PLAY", PersonaMenuStyle.Accent,
             new Vector2(0.12f, 0.34f), new Vector2(0.49f, 0.40f),
             ToggleSoundCloudPlaybackFromUi);
         playPauseLabel = playPauseButton.GetComponentInChildren<Text>(true);
         nextButton = GymRuntimeSettings.CreateButton(
             "Radio Widget Next Button", surface.transform, font,
-            "NEXT", new Color(0.07f, 0.105f, 0.15f, 1f),
+            "NEXT", PersonaMenuStyle.ButtonIdle,
             new Vector2(0.51f, 0.34f), new Vector2(0.88f, 0.40f),
             NextSoundCloudTrackFromUi);
 
         localButton = GymRuntimeSettings.CreateButton(
             "Radio Local Button", surface.transform, font,
             "LOCAL PLAYLIST  //  ON",
-            new Color(0.07f, 0.105f, 0.15f, 1f),
+            PersonaMenuStyle.ButtonIdle,
             new Vector2(0.14f, 0.25f), new Vector2(0.86f, 0.31f),
             ToggleLocalPlaybackFromUi);
         localLabel = localButton.GetComponentInChildren<Text>(true);
         musicButton = GymRuntimeSettings.CreateButton(
             "Radio Music Toggle Button", surface.transform, font,
-            "TURN MUSIC OFF", new Color(0.98f, 0.34f, 0.13f, 1f),
+            "TURN MUSIC OFF", PersonaMenuStyle.Accent,
             new Vector2(0.14f, 0.16f), new Vector2(0.86f, 0.22f),
             ToggleMusicPlaybackFromUi);
         musicLabel = musicButton.GetComponentInChildren<Text>(true);
         closeButton = GymRuntimeSettings.CreateButton(
             "Radio Close Button", surface.transform, font, "CLOSE",
-            new Color(0.07f, 0.105f, 0.15f, 1f),
+            PersonaMenuStyle.ButtonIdle,
             new Vector2(0.36f, 0.065f), new Vector2(0.64f, 0.125f), Close);
         built = true;
     }
@@ -436,14 +436,6 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         canvasGroup.blocksRaycasts = false;
     }
 
-    private static void Select(Selectable selectable)
-    {
-        if (EventSystem.current != null && selectable != null)
-        {
-            EventSystem.current.SetSelectedGameObject(selectable.gameObject);
-        }
-    }
-
     private void Update()
     {
         if (!IsVisible)
@@ -461,20 +453,11 @@ public sealed class GymRadioSoundCloudPopup : MonoBehaviour
         // requested cursor capture in the same frame as a UI click.
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
-        if (ReadEscapePressed())
+        if (GymShared.ReadEscape())
         {
             GymAudio.Play2D(GymSoundEffect.UiBack, 0.55f);
             Close();
         }
-    }
-
-    private static bool ReadEscapePressed()
-    {
-#if ENABLE_INPUT_SYSTEM
-        return Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.Escape);
-#endif
     }
 
     private void RestorePopupState()

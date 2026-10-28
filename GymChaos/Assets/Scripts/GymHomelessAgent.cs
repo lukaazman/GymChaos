@@ -268,15 +268,10 @@ public sealed class GymHomelessAgent : MonoBehaviour
     public Vector3 BenchFacing { get; private set; }
     public Vector3 BedRoot => bedRoot;
     public Vector3 DoorRoot => doorRoot;
-    public Vector3 BenchRoot => benchRoot;
-    public Quaternion DoorFacing => doorFacing;
-    public Quaternion BenchFacingRotation => benchFacing;
-    public float SeatLift => seatLift;
     public float WalkSpeed => walkSpeed;
     public float LeaveBench01 => ComputeLeave01();
     public Transform HipsBone => hips;
     public Transform HeadBone => head;
-    public SkinnedMeshRenderer Body => bodyRenderer;
     public float TargetWeight => targetClip >= 0 ? weights[targetClip] : 0f;
     // Blend weight of the in-bag sleeping pose (1 = fully asleep in the bag).
     public float SleepWeight => weights[ClipSleeping];
@@ -443,7 +438,7 @@ public sealed class GymHomelessAgent : MonoBehaviour
     private void ApplyBodyMaterial()
     {
         Shader shader = Shader.Find("GymChaos/BodybuilderUnlit") ??
-            Shader.Find("Universal Render Pipeline/Unlit");
+            GymMaterialLibrary.UnlitShader;
         Texture2D texture = Resources.Load<Texture2D>(TexturePath);
         Material material = new Material(shader) { name = "Homeless Guy Body" };
         material.SetColor("_BaseColor", Color.white);
@@ -708,8 +703,8 @@ public sealed class GymHomelessAgent : MonoBehaviour
             }
         }
         candidates.Sort((a, b) =>
-            FlatDistance(GymOutdoorFoliage.Benches[a].Position, doorRoot).CompareTo(
-                FlatDistance(GymOutdoorFoliage.Benches[b].Position, doorRoot)));
+            GymShared.FlatDistance(GymOutdoorFoliage.Benches[a].Position, doorRoot).CompareTo(
+                GymShared.FlatDistance(GymOutdoorFoliage.Benches[b].Position, doorRoot)));
         float bestLength = float.MaxValue;
         for (int c = 0; c < candidates.Count && c < 4; c++)
         {
@@ -1458,17 +1453,10 @@ public sealed class GymHomelessAgent : MonoBehaviour
         Vector3 previous = from;
         for (int i = 0; i < path.Count; i++)
         {
-            length += FlatDistance(previous, path[i]);
+            length += GymShared.FlatDistance(previous, path[i]);
             previous = path[i];
         }
-        return length + FlatDistance(previous, to);
-    }
-
-    private static float FlatDistance(Vector3 a, Vector3 b)
-    {
-        a.y = 0f;
-        b.y = 0f;
-        return Vector3.Distance(a, b);
+        return length + GymShared.FlatDistance(previous, to);
     }
 
     private static Transform FindBone(Transform[] bones, string name)

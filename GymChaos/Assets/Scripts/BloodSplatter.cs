@@ -85,11 +85,7 @@ public static class BloodSplatter
         {
             return;
         }
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null)
-        {
-            shader = Shader.Find("Unlit/Color");
-        }
+        Shader shader = GymMaterialLibrary.UnlitShader;
         bloodMaterial = new Material(shader)
         {
             name = "Blood Splatter Material",
@@ -134,6 +130,9 @@ public static class BloodSplatter
         renderer.renderMode = ParticleSystemRenderMode.Billboard;
         renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         renderer.receiveShadows = false;
+        // Without a GPU (batch -nographics) URP still renders offscreen cameras,
+        // and drawing billboard particles there crashes the null device.
+        renderer.enabled = SystemInfo.graphicsDeviceType != UnityEngine.Rendering.GraphicsDeviceType.Null;
 
         particles.Emit(Mathf.RoundToInt(Mathf.Lerp(10f, 42f, Mathf.Clamp01(scale / 2.5f))));
         Object.Destroy(burstObject, 2.2f);

@@ -6,7 +6,7 @@ import bpy
 from mathutils import Vector
 
 
-ROOT = Path("D:/GitHub/GymChaos")
+ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL = ROOT / "GymChaos/Assets/Assets"
 REIMPORTED = ROOT / ".tools/static-reimport/Assets"
 MARKERS = {"Cylinder.028", "Cylinder.029", "Cube.013", "Cylinder.024", "Circle"}

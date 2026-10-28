@@ -48,19 +48,14 @@ public static class GymChaosOverhaulVerifier
         EditorApplication.isPlaying = true;
     }
 
-    private static void Hook()
-    {
-        EditorApplication.update -= Tick;
-        EditorApplication.update += Tick;
-        EditorApplication.playModeStateChanged -= PlayModeChanged;
-        EditorApplication.playModeStateChanged += PlayModeChanged;
-    }
+    private static void Hook() => GymChaosVerifierHooks.Hook(Tick, PlayModeChanged);
 
     private static void PlayModeChanged(PlayModeStateChange change)
     {
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
-            started = EditorApplication.timeSinceStartup;
+            // Unscaled: stage 1 waits inside the pause menu (timeScale 0).
+            started = Time.unscaledTimeAsDouble;
             Application.runInBackground = true;
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
@@ -72,6 +67,11 @@ public static class GymChaosOverhaulVerifier
 
     private static void Finish(bool passed, string message)
     {
+        if (passed && !DynamicResolutionStepsHold(out string steps))
+        {
+            passed = false;
+            message = steps;
+        }
         if (passed)
         {
             Debug.Log("GYMCHAOS_OVERHAUL_OK " + message);
@@ -89,10 +89,23 @@ public static class GymChaosOverhaulVerifier
         EditorApplication.isPlaying = false;
     }
 
+    // GymDynamicResolution runs only in WebGL players; its step rule is checked here.
+    private static bool DynamicResolutionStepsHold(out string why)
+    {
+        float drop = GymDynamicResolution.NextScale(1f, 30f);
+        float floor = GymDynamicResolution.NextScale(0.7f, 20f);
+        float rise = GymDynamicResolution.NextScale(0.8f, 60f);
+        float cap = GymDynamicResolution.NextScale(1f, 60f);
+        float hold = GymDynamicResolution.NextScale(0.9f, 50f);
+        why = $"dynamic resolution steps drop={drop} floor={floor} rise={rise} cap={cap} hold={hold}";
+        return Mathf.Approximately(drop, 0.9f) && Mathf.Approximately(floor, 0.7f) &&
+            Mathf.Approximately(rise, 0.9f) && Mathf.Approximately(cap, 1f) && Mathf.Approximately(hold, 0.9f);
+    }
+
     private static void Tick()
     {
         if (!EditorApplication.isPlaying) return;
-        double now = EditorApplication.timeSinceStartup;
+        double now = Time.unscaledTimeAsDouble;
         try
         {
             if (now - started > 240d)
@@ -137,8 +150,25 @@ public static class GymChaosOverhaulVerifier
                 case 2:
                     if (TickMovementCheck())
                     {
-                        Finish(true, "all stages passed");
+                        MovePlayerForExteriorCheck(outside: true);
+                        stage = 3;
+                        stageFrames = Time.frameCount;
                     }
+                    return;
+                case 3:
+                    // Player frames, not editor ticks: LateUpdate must have run.
+                    if (Time.frameCount - stageFrames < 3) return;
+                    int shown = CountExteriorOnlyRenderers(expectEnabled: true);
+                    MovePlayerForExteriorCheck(outside: false);
+                    stage = 4;
+                    stageFrames = Time.frameCount;
+                    Debug.Log($"GYMCHAOS_EXTERIOR_ONLY_SHOWN_OUTSIDE renderers={shown}");
+                    return;
+                case 4:
+                    if (Time.frameCount - stageFrames < 3) return;
+                    int hidden = CountExteriorOnlyRenderers(expectEnabled: false);
+                    Debug.Log($"GYMCHAOS_EXTERIOR_ONLY_VISIBILITY_OK hiddenInside={hidden}");
+                    Finish(true, "all stages passed");
                     return;
             }
         }
@@ -377,6 +407,53 @@ public static class GymChaosOverhaulVerifier
 
     private static MethodInfo handleMovement;
     private static PlayerMovement movementPlayer;
+
+    // Exterior-only fence walls and ribs: shown when the player is outside,
+    // hidden from deep inside the gym (away from the glass door).
+    private static void MovePlayerForExteriorCheck(bool outside)
+    {
+        GymDoorway doorway = GymDoorway.Instance;
+        Renderer floor = FindRenderer("Rubber Floor");
+        if (doorway == null || floor == null)
+            throw new InvalidOperationException("doorway or gym floor missing");
+        Vector3 target = doorway.ExteriorPoint;
+        if (!outside)
+        {
+            // The floor corner farthest from the door, 2 m in from the edge.
+            Bounds b = floor.bounds;
+            Vector3 door = doorway.DoorCenter;
+            target = new Vector3(
+                door.x > b.center.x ? b.min.x + 2f : b.max.x - 2f, b.max.y + 0.1f,
+                door.z > b.center.z ? b.min.z + 2f : b.max.z - 2f);
+            if (Vector3.ProjectOnPlane(target - door, Vector3.up).magnitude < 17f)
+                throw new InvalidOperationException($"no inside point away from the door: {target}");
+        }
+        CharacterController controller = movementPlayer.GetComponent<CharacterController>();
+        if (controller != null) controller.enabled = false;
+        movementPlayer.transform.position = target;
+        Physics.SyncTransforms();
+    }
+
+    private static int CountExteriorOnlyRenderers(bool expectEnabled)
+    {
+        int count = 0;
+        foreach (GymExteriorOnlyVisual visual in UnityEngine.Object.FindObjectsByType<GymExteriorOnlyVisual>(
+            FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+        {
+            if (!visual.isActiveAndEnabled) continue;
+            foreach (Renderer renderer in visual.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer.enabled != expectEnabled)
+                    throw new InvalidOperationException(
+                        $"exterior-only renderer '{renderer.name}' enabled={renderer.enabled}, expected {expectEnabled} " +
+                        $"(player={movementPlayer.transform.position})");
+                count++;
+            }
+        }
+        if (count < 50)
+            throw new InvalidOperationException($"only {count} exterior-only renderers found");
+        return count;
+    }
 
     private static void BeginMovementCheck()
     {

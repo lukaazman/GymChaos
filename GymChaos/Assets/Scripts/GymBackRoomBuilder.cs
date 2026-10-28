@@ -83,17 +83,6 @@ public static class GymBackRoomBuilder
         return visible;
     }
     public static bool HasActiveBagVisitor => activeBagVisitors.Count > 0;
-    public static BodybuilderIdentity ActiveBagVisitor
-    {
-        get
-        {
-            foreach (BodybuilderIdentity identity in activeBagVisitors)
-            {
-                return identity;
-            }
-            return BodybuilderIdentity.Mark;
-        }
-    }
 
     public static bool TryGetRoomBounds(out Bounds bounds)
     {
@@ -154,14 +143,13 @@ public static class GymBackRoomBuilder
         GameObject rootObject = new GameObject(RootName);
         rootObject.transform.SetParent(parent, true);
 
-        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", new Color(0.025f, 0.04f, 0.075f), new Vector2(BackWidth, BackDepth));
-        Material wallMaterial = CreateMaterial("Locker room wall", new Color(0.22f, 0.25f, 0.29f), 0f, 0.28f);
-        Material trimMaterial = CreateMaterial("Locker room trim", new Color(0.035f, 0.045f, 0.06f), 0.35f, 0.64f);
-        Material accentMaterial = CreateMaterial("Locker room accent", new Color(0.82f, 0.13f, 0.08f), 0.05f, 0.42f);
-        Material tileMaterial = GymSurfaceMaterialFactory.CreateBathroomTile("Bathroom tile", new Color(0.26f, 0.33f, 0.41f));
-        Material mirrorMaterial = CreateMaterial("Locker room mirror", new Color(0.58f, 0.68f, 0.76f), 0.9f, 0.95f);
-        Material metalMaterial = CreateMaterial("Locker metal", new Color(0.12f, 0.15f, 0.19f), 0.72f, 0.48f);
-        SetEmission(accentMaterial, new Color(0.55f, 0.025f, 0.01f));
+        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", GymPalette.LockerRubber, new Vector2(BackWidth, BackDepth));
+        Material wallMaterial = GymMaterialLibrary.Lit("Locker room wall", GymPalette.PaintedWall, 0f, 0.28f);
+        Material trimMaterial = GymMaterialLibrary.Lit("Locker room trim", GymPalette.DarkMetal, 0.35f, 0.6f);
+        Material accentMaterial = GymMaterialLibrary.NewLit("Locker room accent", new Color(0.82f, 0.13f, 0.08f), 0.05f, 0.42f);
+        Material tileMaterial = GymSurfaceMaterialFactory.CreateBathroomTile("Bathroom tile", GymPalette.Tile);
+        Material mirrorMaterial = GymMaterialLibrary.Lit("Locker room mirror", new Color(0.64f, 0.67f, 0.68f), 0.9f, 0.95f);
+        Material metalMaterial = GymMaterialLibrary.Lit("Locker metal", GymPalette.LockerMetal, 0.72f, 0.48f);
 
         CreateBox("Locker Room Floor", rootObject.transform,
             roomCenter + Vector3.down * 0.12f, new Vector3(BackWidth, 0.24f, BackDepth), floorMaterial, true);
@@ -1093,9 +1081,9 @@ public static class GymBackRoomBuilder
     {
         side = side < 0 ? -1 : 1;
         count = Mathf.Max(1, count);
-        Material door = CreateMaterial(
+        Material door = GymMaterialLibrary.Lit(
             "Locker enamel", new Color(0.19f, 0.24f, 0.25f), 0.45f, 0.32f);
-        Material recess = CreateMaterial(
+        Material recess = GymMaterialLibrary.Lit(
             "Locker vents", new Color(0.022f, 0.029f, 0.03f), 0.1f, 0.2f);
         float firstOffset = (count - 1) * 0.5f;
         for (int i = 0; i < count; i++)
@@ -1457,9 +1445,9 @@ public static class GymBackRoomBuilder
         float stallWestX, float stallSouthZ, float doorMinX, float doorMaxX,
         float northZ, Material metal)
     {
-        Material paper = CreateMaterial("Toilet paper", new Color(0.95f, 0.94f, 0.9f), 0f, 0.1f);
-        Material core = CreateMaterial("Toilet paper core", new Color(0.55f, 0.42f, 0.3f), 0f, 0.1f);
-        Material door = CreateMaterial("Stall door", new Color(0.16f, 0.2f, 0.26f), 0.25f, 0.55f);
+        Material paper = GymMaterialLibrary.Lit("Toilet paper", new Color(0.95f, 0.94f, 0.9f), 0f, 0.1f);
+        Material core = GymMaterialLibrary.Lit("Toilet paper core", new Color(0.55f, 0.42f, 0.3f), 0f, 0.1f);
+        Material door = GymMaterialLibrary.Lit("Stall door", new Color(0.24f, 0.25f, 0.26f), 0.25f, 0.55f);
 
         // Paper roll on a wall holder beside the tank, at hand height.
         float rollZ = toiletZ - 0.66f;
@@ -1589,25 +1577,6 @@ public static class GymBackRoomBuilder
         GymBackRoomInteractable interactable = objectRoot.AddComponent<GymBackRoomInteractable>();
         interactable.Configure(type, displayName, interactionRange);
         return interactable;
-    }
-
-    private static Material CreateMaterial(string name, Color color, float metallic, float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
-        Material material = new Material(shader)
-        {
-            name = name,
-            color = color
-        };
-        material.SetFloat("_Metallic", metallic);
-        material.SetFloat("_Smoothness", smoothness);
-        return material;
-    }
-
-    private static void SetEmission(Material material, Color emission)
-    {
-        material.EnableKeyword("_EMISSION");
-        material.SetColor("_EmissionColor", emission);
     }
 
     private static GameObject CreateBox(

@@ -31,7 +31,6 @@ public partial class PlayerMovement
 
     public bool IsSeatedOnBench => seatedBenchIndex >= 0;
     public bool IsSeatedBesideHomeless => IsSeatedOnBench && seatedBesideHomeless;
-    public int SeatedBenchIndex => seatedBenchIndex;
     public Vector3 SeatedHipsPosition => seatedHipsPosition;
 
     /// <summary>Closest open-park bench the player can sit on, or -1.</summary>

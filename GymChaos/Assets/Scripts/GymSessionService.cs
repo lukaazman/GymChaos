@@ -28,6 +28,11 @@ public sealed class GymSessionService : MonoBehaviour
     private static GymCharacterSave active;
     private static bool activeIsNew;
     private static bool returningToMenu;
+    /// <summary>True from return-to-menu until the reloaded scene is up.</summary>
+    public static bool IsReturningToMenu => returningToMenu;
+
+    /// <summary>Marks a scene reload that does not go through ReturnToMenu (WebGL exit).</summary>
+    public static void MarkSceneReload() => returningToMenu = true;
 
     private Task writeTask;
     private bool dirty;

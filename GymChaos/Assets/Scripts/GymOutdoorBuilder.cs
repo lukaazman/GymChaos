@@ -53,8 +53,6 @@ public static class GymOutdoorBuilder
     private const float VehicleRoadHiddenContinuation = 24f * VehicleScale;
     private const float RoadLineWidth = 0.09f * VehicleScale;
     private const float ParkingSurfaceOffset = 0.01f;
-    private const float ParkingLightBaseHeight = 0.22f;
-    private const float ParkingLightPoleHeight = 5.4f;
 
     public static bool IsBuilt { get; private set; }
     public static Bounds ParkingBounds { get; private set; }
@@ -111,7 +109,6 @@ public static class GymOutdoorBuilder
     public static float ParkingVehicleTargetLength => 4.0f * VehicleScale * CarSizeBoost;
 
     public static float VehicleRoadWidthForVerification => VehicleRoadWidth;
-    public static float VehicleLaneOffsetForVerification => VehicleLaneOffset;
     public static float TrafficLaneCenterZ { get; private set; }
     public static float TrafficLaneOffset { get; private set; }
     public static float TrafficSouthEdgeZ { get; private set; }
@@ -212,67 +209,33 @@ public static class GymOutdoorBuilder
 
         GameObject root = new GameObject(RootName);
         Material courtyardMaterial = GymSurfaceMaterialFactory.CreateCourtyard(
-            "Exterior courtyard foundation", new Color(0.045f, 0.09f, 0.14f));
+            "Exterior courtyard foundation", GymPalette.Concrete);
         Material asphalt = GymSurfaceMaterialFactory.CreateAsphalt(
-            "Outdoor parking asphalt", new Color(0.045f, 0.065f, 0.1f));
+            "Outdoor parking asphalt", GymPalette.Asphalt);
         Material landscape = GymSurfaceMaterialFactory.CreateLandscape(
-            "Outdoor park ground", new Color(0.11f, 0.26f, 0.08f));
+            "Outdoor park ground", GymPalette.LawnDark);
         Material pathMaterial = GymSurfaceMaterialFactory.CreateConcretePath(
-            "Outdoor concrete path", new Color(0.13f, 0.2f, 0.28f));
-        Material curbMaterial = CreateMaterial(
-            "Outdoor curb",
-            new Color(0.16f, 0.22f, 0.29f),
-            0.1f,
-            0.4f);
-        Material boundaryMaterial = CreateMaterial(
-            "Exterior boundary wall",
-            new Color(0.07f, 0.13f, 0.21f),
-            0.35f,
-            0.42f);
-        Material boundaryTrimMaterial = CreateMaterial(
-            "Exterior boundary coping",
-            new Color(0.16f, 0.29f, 0.42f),
-            0.55f,
-            0.5f);
-        SetEmission(boundaryTrimMaterial, new Color(0.025f, 0.08f, 0.16f));
-        Material boundaryRibMaterial = CreateMaterial(
-            "Exterior boundary ribs",
-            new Color(0.02f, 0.05f, 0.09f),
-            0.75f,
-            0.3f);
-        Material planterMaterial = CreateMaterial(
-            "Exterior planter concrete",
-            new Color(0.1f, 0.19f, 0.26f),
-            0.12f,
-            0.34f);
-        Material foliageMaterial = CreateMaterial(
-            "Exterior cool foliage",
-            new Color(0.035f, 0.18f, 0.16f),
-            0f,
-            0.22f);
-        Material signMaterial = CreateMaterial(
-            "Parking wayfinding sign",
-            new Color(0.025f, 0.18f, 0.48f),
-            0.05f,
-            0.28f);
-        SetEmission(signMaterial, new Color(0.03f, 0.14f, 0.45f));
-        Material markingMaterial = CreateMaterial(
-            "Parking line paint",
-            new Color(0.96f, 0.98f, 0.94f),
-            0.02f,
-            0.42f);
-        SetEmission(markingMaterial, new Color(1.15f, 1.25f, 1.05f));
-        Material lampMaterial = CreateMaterial(
-            "Parking light pole",
-            new Color(0.035f, 0.045f, 0.055f),
-            0.72f,
-            0.28f);
-        Material lampFixtureMaterial = CreateMaterial(
-            "Parking light fixture",
-            new Color(0.62f, 0.82f, 1f),
-            0.02f,
-            0.16f);
-        SetEmission(lampFixtureMaterial, new Color(1.4f, 4.2f, 9f));
+            "Outdoor concrete path", GymPalette.Concrete);
+        Material curbMaterial = GymMaterialLibrary.Lit(
+            "Outdoor curb", GymPalette.ConcreteDark, 0f, 0.3f);
+        Material boundaryMaterial = GymMaterialLibrary.Lit(
+            "Exterior boundary wall", GymPalette.ConcreteDark, 0f, 0.25f);
+        Material boundaryTrimMaterial = GymMaterialLibrary.Lit(
+            "Exterior boundary coping", GymPalette.Steel, 0.55f, 0.45f);
+        Material boundaryRibMaterial = GymMaterialLibrary.Lit(
+            "Exterior boundary ribs", GymPalette.DarkMetal, 0.75f, 0.3f);
+        Material planterMaterial = GymMaterialLibrary.Lit(
+            "Exterior planter concrete", GymPalette.Concrete, 0f, 0.25f);
+        Material foliageMaterial = GymMaterialLibrary.Lit(
+            "Exterior foliage", GymPalette.Foliage, 0f, 0.22f);
+        Material signMaterial = GymMaterialLibrary.Lit(
+            "Parking wayfinding sign", GymPalette.SignBlue, 0.05f, 0.35f);
+        Material markingMaterial = GymMaterialLibrary.Lit(
+            "Parking line paint", GymPalette.LinePaint, 0f, 0.35f);
+        Material lampMaterial = GymMaterialLibrary.Lit(
+            "Parking light pole", GymPalette.DarkMetal, 0.72f, 0.35f);
+        Material lampFixtureMaterial = GymMaterialLibrary.Lit(
+            "Parking light fixture", GymPalette.LampWarm, 0f, 0.6f, emission: new Color(2.6f, 2.3f, 1.8f));
 
         // The protein.com mall module occupies the clear strip between the
         // gym wall and the existing shared path. Its storefront apron opens
@@ -985,33 +948,6 @@ public static class GymOutdoorBuilder
             false);
     }
 
-    private static void CreatePathEdge(
-        Transform parent,
-        float floorY,
-        float pathCenterX,
-        float doorZ,
-        float parkingCenterZ,
-        Material markingMaterial)
-    {
-        float offset = PathWidth * 0.5f - 0.22f;
-        float pathCenterZ = (doorZ + parkingCenterZ) * 0.5f;
-        float pathLength = Mathf.Abs(parkingCenterZ - doorZ) + 0.6f;
-        CreateBox(
-            "Path Edge Marking",
-            parent,
-            new Vector3(pathCenterX - offset, floorY + 0.026f, pathCenterZ),
-            new Vector3(0.08f, 0.035f, pathLength),
-            markingMaterial,
-            false);
-        CreateBox(
-            "Path Edge Marking",
-            parent,
-            new Vector3(pathCenterX + offset, floorY + 0.026f, pathCenterZ),
-            new Vector3(0.08f, 0.035f, pathLength),
-            markingMaterial,
-            false);
-    }
-
     private static void RemoveLegacyExitDecorations(GameObject root)
     {
         string[] legacyNames =
@@ -1137,7 +1073,7 @@ public static class GymOutdoorBuilder
                         lightObject.transform.position = bounds.center + Vector3.up * 0.35f;
                         Light parkingLight = lightObject.AddComponent<Light>();
                         parkingLight.type = LightType.Point;
-                        parkingLight.color = new Color(0.68f, 0.84f, 1f);
+                        parkingLight.color = GymPalette.LampWarm;
                         parkingLight.intensity = 7.5f;
                         parkingLight.range = 12f;
                         parkingLight.shadows = LightShadows.None;
@@ -1203,317 +1139,6 @@ public static class GymOutdoorBuilder
                 false);
         }
 
-    }
-
-    private static void CreateNeighbourhood(Transform parent, float centerX, float floorY,
-        float parkingZ, float width, float vehicleRouteEndX,
-        Material ground, Material leaves, Material concrete,
-        Material facade, Material dark)
-    {
-        float vergeZ = parkingZ + ParkingDepth * 0.5f + 3.5f;
-        CreateBox("Neighbourhood ground", parent, new Vector3(centerX, floorY - 0.12f, vergeZ + 36f),
-            new Vector3(width + 160f, 0.2f, 130f), ground, false);
-        CreateBox("Public pavement", parent, new Vector3(centerX, floorY + 0.02f, vergeZ),
-            new Vector3(width + 12f, 0.12f, 2.4f), concrete, false);
-        string[] treeAssets =
-        {
-            "BodyBuilders/outside/tree1.glb",
-            "BodyBuilders/outside/tree2.glb"
-        };
-        // Mixed vegetation is placed only on a remote north-side landscape
-        // strip. The near tree row was too close to the fence: the imported
-        // crowns reached into the parking and the player's open space.
-        float halfWidth = width * 0.5f;
-        float halfParkingDepth = ParkingDepth * 0.5f;
-        for (int ring = 0; ring < 2; ring++)
-        {
-            float northZ = parkingZ + halfParkingDepth + 24f + ring * 16f;
-            for (int i = -4; i <= 4; i++)
-            {
-                float x = centerX + i * 5.2f + (ring == 1 ? 2.6f : 0f);
-                SpawnOuterNature(treeAssets, parent, new Vector3(x, floorY, northZ),
-                    i + ring, leaves, "Outer Nature North");
-            }
-
-            // Side rows are kept beyond the gym/fence and, on the east, past
-            // the full vehicle-road extension. They frame the exterior view
-            // without ever entering the player or car corridor.
-            float westX = centerX - (halfWidth + 24f + ring * 14f);
-            float eastX = vehicleRouteEndX + 18f + ring * 14f;
-            for (int i = -3; i <= 3; i++)
-            {
-                float z = parkingZ + i * 5.4f;
-                SpawnOuterNature(treeAssets, parent,
-                    new Vector3(westX, floorY, z),
-                    i + ring + 2, leaves, "Outer Nature West");
-                SpawnOuterNature(treeAssets, parent,
-                    new Vector3(eastX, floorY, z),
-                    i + ring + 3, leaves, "Outer Nature East");
-            }
-        }
-
-        Material windows = CreateMaterial("Neighbourhood windows", new Color(0.22f, 0.32f, 0.36f), 0.25f, 0.6f);
-        for (int building = -2; building <= 2; building++)
-        {
-            float x = centerX + building * 15f;
-            float h = 7f + (building + 3) % 3 * 2.6f;
-            float z = vergeZ + 19f + (building % 2) * 4f;
-            CreateBox("Neighbourhood workshop", parent, new Vector3(x, floorY + h * 0.5f, z),
-                new Vector3(11f, h, 9f), facade, false);
-            CreateBox("Workshop roof coping", parent, new Vector3(x, floorY + h + 0.1f, z),
-                new Vector3(11.4f, 0.2f, 9.4f), dark, false);
-            for (int row = 0; row < (int)(h / 2.8f); row++)
-            for (int col = -2; col <= 2; col++)
-                CreateBox("Workshop window", parent, new Vector3(x + col * 1.9f, floorY + 1.7f + row * 2.6f, z - 4.52f),
-                    new Vector3(1.25f, 1.45f, 0.045f), windows, false);
-        }
-        // Add a second staggered row of low-rise blocks beyond the first
-        // façade. No supplied building meshes exist, so these simple shells
-        // provide the distant skyline without reintroducing temporary trees.
-        for (int row = 0; row < 2; row++)
-        {
-            for (int building = -4; building <= 4; building++)
-            {
-                float x = centerX + building * 11.5f + (row == 1 ? 5.75f : 0f);
-                float h = 5.5f + ((building + row + 8) % 3) * 2.1f;
-                float z = vergeZ + 31f + row * 10f;
-                CreateBox("Distant background block", parent,
-                    new Vector3(x, floorY + h * 0.5f, z),
-                    new Vector3(9.2f, h, 7.2f), facade, false);
-                CreateBox("Distant background block roof", parent,
-                    new Vector3(x, floorY + h + 0.12f, z),
-                    new Vector3(9.5f, 0.24f, 7.5f), dark, false);
-            }
-        }
-
-        // Close all four horizons with spaced houses and taller blocks. The
-        // staggered distances avoid a flat repeated wall around the player.
-        for (int side = -1; side <= 1; side += 2)
-        {
-            for (int building = -3; building <= 3; building++)
-            {
-                float h = 9f + ((building + side + 8) % 4) * 4.2f;
-                // West is outside the gym; east is beyond the complete car
-                // route, not merely beyond the parking rectangle.
-                float x = side < 0
-                    ? centerX - (halfWidth + 27f + Mathf.Abs(building) * 4.5f)
-                    : vehicleRouteEndX + 18f + Mathf.Abs(building) * 4.5f;
-                float z = parkingZ + building * 15f + 12f;
-                CreateBox("Perimeter tower", parent,
-                    new Vector3(x, floorY + h * 0.5f, z),
-                    new Vector3(10f, h, 10f), facade, false);
-                CreateBox("Perimeter tower roof", parent,
-                    new Vector3(x, floorY + h + 0.16f, z),
-                    new Vector3(10.4f, 0.32f, 10.4f), dark, false);
-            }
-        }
-
-        for (int edge = 1; edge <= 1; edge++)
-        {
-            for (int building = -4; building <= 4; building++)
-            {
-                float h = 6.5f + ((building + edge + 9) % 4) * 2.8f;
-                float x = centerX + building * 12.5f +
-                    (edge < 0 ? 3.2f : -2.4f);
-                float z = parkingZ + edge * (halfParkingDepth + 18f) +
-                    (building & 1) * 2.5f;
-                CreateBox("Perimeter house", parent,
-                    new Vector3(x, floorY + h * 0.5f, z),
-                    new Vector3(9.6f, h, 8.4f), facade, false);
-                CreateBox("Perimeter house roof", parent,
-                    new Vector3(x, floorY + h + 0.14f, z),
-                    new Vector3(10f, 0.28f, 8.8f), dark, false);
-            }
-        }
-
-        // Edge furniture stays outside stalls and vehicle swept paths.
-        for (int side = -1; side <= 1; side += 2)
-        {
-            float x = centerX + side * (width * 0.5f - 2f);
-            CreateBox("Courtyard bench seat", parent, new Vector3(x, floorY + 0.48f, vergeZ - 1.5f),
-                new Vector3(2.2f, 0.1f, 0.52f), dark, false);
-            for (int leg = -1; leg <= 1; leg += 2)
-                CreateBox("Courtyard bench leg", parent, new Vector3(x + leg * 0.8f, floorY + 0.22f, vergeZ - 1.5f),
-                    new Vector3(0.12f, 0.44f, 0.42f), concrete, false);
-        }
-    }
-
-    private static void CreateFoliageCluster(
-        Transform parent,
-        Vector3 center,
-        Material foliageMaterial,
-        string name)
-    {
-        float[] offsets = { -1.15f, 0f, 1.15f };
-        string[] bushAssets =
-        {
-            "BodyBuilders/outside/bush1.glb",
-            "BodyBuilders/outside/bush2.glb"
-        };
-        for (int i = 0; i < offsets.Length; i++)
-        {
-            RuntimeGlbModelLoader.Request(
-                bushAssets[i & 1],
-                parent,
-                center + new Vector3(offsets[i], 0f, 0f),
-                Quaternion.Euler(0f, 23f * i, 0f),
-                Vector3.one * (i == 1 ? 2.55f : 2.35f),
-                name + " Asset",
-                0,
-                settleOnSupport: true,
-                supportY: center.y);
-        }
-    }
-
-    private static void SpawnOuterNature(
-        string[] treeAssets,
-        Transform parent,
-        Vector3 position,
-        int variation,
-        Material leaves,
-        string name)
-    {
-        int index = Mathf.Abs(variation) & 1;
-        RuntimeGlbModelLoader.Request(
-            treeAssets[index], parent, position,
-            Quaternion.Euler(0f, 19f * variation, 0f),
-            Vector3.one * (4.7f + (Mathf.Abs(variation) % 4) * 0.5f),
-            name + " Tree Asset", 0,
-            settleOnSupport: true, supportY: position.y);
-        CreateFoliageCluster(
-            parent,
-            position + new Vector3(1.75f, 0.12f, -1.1f),
-            leaves,
-            name + " Shrub Asset");
-    }
-    private static void CreateParkingSign(
-        Transform parent,
-        Vector3 basePosition,
-        Material signMaterial,
-        Material letteringMaterial)
-    {
-        GameObject signRoot = new GameObject("Parking Sign - Exterior Only");
-        signRoot.transform.SetParent(parent, true);
-        signRoot.transform.position = basePosition;
-
-        CreateCylinder(
-            "Parking Sign Post",
-            signRoot.transform,
-            basePosition + Vector3.up * 1.05f,
-            new Vector3(0.06f, 1.05f, 0.06f),
-            signMaterial);
-        CreateBox(
-            "Parking Sign Face",
-            signRoot.transform,
-            basePosition + Vector3.up * 2.2f,
-            new Vector3(1.05f, 0.82f, 0.08f),
-            signMaterial,
-            false);
-        CreateBox(
-            "Parking Sign Border",
-            signRoot.transform,
-            basePosition + new Vector3(0f, 2.2f, -0.045f),
-            new Vector3(0.82f, 0.58f, 0.025f),
-            letteringMaterial,
-            false);
-
-        GameObject labelObject = new GameObject("Parking Sign Letter P");
-        labelObject.transform.SetParent(signRoot.transform, true);
-        labelObject.transform.position = basePosition + new Vector3(0f, 2.2f, -0.055f);
-        labelObject.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
-        TextMesh label = labelObject.AddComponent<TextMesh>();
-        Font legacyFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        if (legacyFont != null)
-        {
-            label.font = legacyFont;
-        }
-        label.text = "P";
-        label.anchor = TextAnchor.MiddleCenter;
-        label.alignment = TextAlignment.Center;
-        label.fontSize = 96;
-        label.characterSize = 0.62f;
-        label.color = Color.white;
-
-        signRoot.AddComponent<GymExteriorOnlyVisual>();
-    }
-
-    private static void CreateDrainGrate(
-        Transform parent,
-        Vector3 center,
-        Material metalMaterial,
-        string name)
-    {
-        CreateBox(
-            name,
-            parent,
-            center,
-            new Vector3(PathWidth - 0.7f, 0.035f, 0.62f),
-            metalMaterial,
-            false);
-        for (int i = -3; i <= 3; i++)
-        {
-            CreateBox(
-                name + " Bar",
-                parent,
-                center + new Vector3(i * 0.38f, 0.025f, 0f),
-                new Vector3(0.06f, 0.055f, 0.7f),
-                metalMaterial,
-                false);
-        }
-    }
-
-    private static void CreateBollard(
-        Transform parent,
-        Vector3 basePosition,
-        Material material,
-        string name)
-    {
-        CreateCylinder(
-            name + " Base",
-            parent,
-            basePosition + Vector3.up * 0.08f,
-            new Vector3(0.24f, 0.08f, 0.24f),
-            material);
-        CreateCylinder(
-            name,
-            parent,
-            basePosition + Vector3.up * 0.62f,
-            new Vector3(0.1f, 0.54f, 0.1f),
-            material);
-    }
-
-    private static void CreateGroundArrow(
-        Transform parent,
-        Vector3 position,
-        Vector3 direction,
-        float length,
-        float width,
-        Material material,
-        string name)
-    {
-        GameObject arrow = new GameObject(name);
-        arrow.transform.SetParent(parent, true);
-        arrow.transform.position = position;
-        arrow.transform.rotation = Quaternion.LookRotation(direction, Vector3.up);
-        MeshFilter filter = arrow.AddComponent<MeshFilter>();
-        MeshRenderer renderer = arrow.AddComponent<MeshRenderer>();
-        renderer.sharedMaterial = material;
-        renderer.shadowCastingMode = ShadowCastingMode.Off;
-        renderer.receiveShadows = false;
-        float halfWidth = width * 0.5f;
-        float stemWidth = width * 0.18f;
-        float halfLength = length * 0.5f;
-        Vector3[] vertices =
-        {
-            new Vector3(-stemWidth, 0f, -halfLength),
-            new Vector3(stemWidth, 0f, -halfLength),
-            new Vector3(stemWidth, 0f, 0.03f),
-            new Vector3(halfWidth, 0f, 0.03f),
-            new Vector3(0f, 0f, halfLength),
-            new Vector3(-halfWidth, 0f, 0.03f),
-            new Vector3(-stemWidth, 0f, 0.03f)
-        };
-        filter.sharedMesh = CreateFlatPolygonMesh(vertices, name + " Mesh");
     }
 
     private static GameObject CreateCompositeGroundSurface(
@@ -1628,23 +1253,6 @@ public static class GymOutdoorBuilder
         MeshCollider groundCollider = surface.AddComponent<MeshCollider>();
         groundCollider.sharedMesh = colliderMesh;
         return surface;
-    }
-
-    private static Mesh CreateFlatPolygonMesh(Vector3[] vertices, string name)
-    {
-        Mesh mesh = new Mesh { name = name };
-        mesh.vertices = vertices;
-        int[] triangles = new int[(vertices.Length - 2) * 3];
-        for (int i = 0; i < vertices.Length - 2; i++)
-        {
-            triangles[i * 3] = 0;
-            triangles[i * 3 + 1] = i + 2;
-            triangles[i * 3 + 2] = i + 1;
-        }
-        mesh.triangles = triangles;
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-        return mesh;
     }
 
     private static void CreateBoundaryVisuals(
@@ -2349,17 +1957,6 @@ public static class GymOutdoorBuilder
         return regionCount;
     }
 
-    private static void DisableRenderer(GameObject gameObject)
-    {
-        Renderer renderer = gameObject != null
-            ? gameObject.GetComponent<Renderer>()
-            : null;
-        if (renderer != null)
-        {
-            renderer.enabled = false;
-        }
-    }
-
     private static Renderer GetPrimaryRenderer(GameObject root, string name)
     {
         Transform child = root.transform.Find(name);
@@ -2457,71 +2054,6 @@ public static class GymOutdoorBuilder
         BoxCollider collider = boundary.AddComponent<BoxCollider>();
         collider.size = size;
         collider.isTrigger = false;
-    }
-
-    private static GameObject CreateCylinder(
-        string name,
-        Transform parent,
-        Vector3 position,
-        Vector3 scale,
-        Material material)
-    {
-        GameObject cylinder = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        cylinder.name = name;
-        cylinder.transform.SetParent(parent, true);
-        cylinder.transform.position = position;
-        cylinder.transform.localScale = scale;
-        Renderer renderer = cylinder.GetComponent<Renderer>();
-        if (renderer != null)
-        {
-            renderer.sharedMaterial = material;
-        }
-        Object.Destroy(cylinder.GetComponent<Collider>());
-        return cylinder;
-    }
-
-    private static GameObject CreateCylinderBetween(
-        string name,
-        Transform parent,
-        Vector3 start,
-        Vector3 end,
-        float radius,
-        Material material)
-    {
-        Vector3 delta = end - start;
-        GameObject cylinder = CreateCylinder(
-            name,
-            parent,
-            (start + end) * 0.5f,
-            new Vector3(radius, delta.magnitude * 0.5f, radius),
-            material);
-        if (delta.sqrMagnitude > 0.0001f)
-        {
-            cylinder.transform.rotation = Quaternion.FromToRotation(Vector3.up, delta.normalized);
-        }
-        return cylinder;
-    }
-
-    private static Material CreateMaterial(string name, Color color, float metallic, float smoothness)
-    {
-        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null)
-        {
-            shader = Shader.Find("Standard");
-        }
-
-        Material material = new Material(shader);
-        material.name = name;
-        material.color = color;
-        material.SetFloat("_Metallic", metallic);
-        material.SetFloat("_Smoothness", smoothness);
-        return material;
-    }
-
-    private static void SetEmission(Material material, Color emission)
-    {
-        material.EnableKeyword("_EMISSION");
-        material.SetColor("_EmissionColor", emission);
     }
 
     // The pull-off sits north of the road wall line. The ground west of it
@@ -2656,7 +2188,6 @@ public static class GymOutdoorBuilder
 /// marker through the gym while keeping the same marker available in the
 /// reachable courtyard.
 /// </summary>
-[DefaultExecutionOrder(100)]
 public sealed class GymExteriorOnlyVisual : MonoBehaviour
 {
     private const float GlassDoorViewRadius = 16f;
@@ -2668,15 +2199,63 @@ public sealed class GymExteriorOnlyVisual : MonoBehaviour
     private bool visibilityApplied;
     private bool visible;
 
+    // Some 200 fence walls and ribs carry this component. One driver applies
+    // the shared visibility to all enabled ones instead of 200 LateUpdate calls.
+    private static readonly List<GymExteriorOnlyVisual> Enabled = new List<GymExteriorOnlyVisual>();
+    private static readonly Unity.Profiling.ProfilerMarker DriverMarker =
+        new Unity.Profiling.ProfilerMarker("GymChaos.Late.ExteriorVisibility");
+    private static Driver driver;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        Enabled.Clear();
+        driver = null;
+        sharedPlayer = null;
+        sharedVisibilityFrame = -1;
+    }
+
     private void Awake()
     {
         gatedRenderers = GetComponentsInChildren<Renderer>(true);
         ApplyVisibility(false);
     }
 
-    private void LateUpdate()
+    private void OnEnable()
     {
-        ApplyVisibility(GetSharedOutsideVisibility());
+        if (!Application.isPlaying) return;
+        Enabled.Add(this);
+        if (driver == null)
+        {
+            // Survives scene reloads: a scene-owned driver could be destroyed
+            // after the reloaded scene's walls already registered.
+            var host = new GameObject("Exterior Visibility Driver");
+            DontDestroyOnLoad(host);
+            driver = host.AddComponent<Driver>();
+        }
+    }
+
+    private void OnDisable() => Enabled.Remove(this);
+
+    [DefaultExecutionOrder(100)]
+    private sealed class Driver : MonoBehaviour
+    {
+        private void LateUpdate()
+        {
+            using (DriverMarker.Auto())
+            {
+                bool shouldBeVisible = GetSharedOutsideVisibility();
+                for (int i = Enabled.Count - 1; i >= 0; i--)
+                {
+                    Enabled[i].ApplyVisibility(shouldBeVisible);
+                }
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (driver == this) driver = null;
+        }
     }
 
     private static bool GetSharedOutsideVisibility()

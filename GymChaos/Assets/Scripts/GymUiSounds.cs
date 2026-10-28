@@ -7,8 +7,7 @@ using UnityEngine.UI;
 /// Interface sounds for every menu without touching each menu: a scanner
 /// attaches <see cref="GymUiSoundHook"/> to every live uGUI Selectable
 /// (start screen, settings, pause, session/class/save menus, dialogue
-/// choices, locker outfits, dropdown items). IMGUI choice buttons call
-/// <see cref="ImGuiButton"/> instead of GUI.Button.
+/// choices, locker outfits, dropdown items).
 /// </summary>
 public sealed class GymUiSounds : MonoBehaviour
 {
@@ -16,8 +15,6 @@ public sealed class GymUiSounds : MonoBehaviour
     private static GymUiSounds instance;
     private Selectable[] buffer = new Selectable[64];
     private float nextScan;
-    private static readonly Dictionary<string, bool> ImGuiHover =
-        new Dictionary<string, bool>();
 
     public static int HookCountForVerification { get; private set; }
 
@@ -124,34 +121,6 @@ public sealed class GymUiSounds : MonoBehaviour
             Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.RightArrow) ||
             Input.GetKeyDown(KeyCode.Tab);
 #endif
-    }
-
-    /// <summary>GUI.Button with hover and click sounds.</summary>
-    public static bool ImGuiButton(Rect rect, string label, GUIStyle style)
-    {
-        Event current = Event.current;
-        if (current != null && current.type == EventType.Repaint)
-        {
-            string key = label + "@" + (int)rect.x + "," + (int)rect.y;
-            bool hovered = rect.Contains(current.mousePosition);
-            ImGuiHover.TryGetValue(key, out bool wasHovered);
-            if (hovered && !wasHovered)
-            {
-                GymAudio.Play2D(GymSoundEffect.UiHover, 0.35f);
-            }
-            ImGuiHover[key] = hovered;
-            if (ImGuiHover.Count > 256)
-            {
-                ImGuiHover.Clear();
-            }
-        }
-
-        bool clicked = GUI.Button(rect, label, style);
-        if (clicked)
-        {
-            GymAudio.Play2D(GymSoundEffect.UiConfirm, 0.6f);
-        }
-        return clicked;
     }
 
     /// <summary>Picks the click cue from what the control does.</summary>

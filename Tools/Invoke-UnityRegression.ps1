@@ -19,7 +19,10 @@ param(
     [ValidateRange(0, 2)]
     [int]$Retries = 1,
     # Print only failed or flaky runs plus the summary line.
-    [switch]$Quiet
+    [switch]$Quiet,
+    # CI has no retry: a run that only passes on retry still counts as
+    # failed (the retry runs for diagnosis only).
+    [switch]$Strict
 )
 
 # Prints one "REGRESSION <index> <verifier> exit=<n> seconds=<s> <first error>"
@@ -151,7 +154,8 @@ foreach ($result in ($results | Sort-Object Index))
         {
             $status = "exit=$($result.Exit) retry$attempt=0 FLAKY"
             $flaky++
-            $result.Exit = 0
+            if (-not $Strict) { $result.Exit = 0 }
+            break
         }
         else
         {

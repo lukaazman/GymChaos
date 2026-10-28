@@ -390,21 +390,6 @@ public class GymArenaBootstrap : MonoBehaviour
         return target.GetComponent<ParticleSystemRenderer>() != null;
     }
 
-    private static bool IsRoomFloorCollider(Transform target)
-    {
-        for (Transform current = target; current != null; current = current.parent)
-        {
-            string lowerName = current.name.ToLowerInvariant();
-            if (lowerName.Contains("rubber floor") ||
-                lowerName == "plane" || lowerName.StartsWith("plane("))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static bool IsVisitorDoorTreadmillRail(Transform target)
     {
         if (target == null || GymDoorway.Instance == null)
@@ -519,11 +504,6 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         return null;
-    }
-
-    private static bool IsPlateType(WeightType type)
-    {
-        return type == WeightType.Plate || type == WeightType.Plate5 || type == WeightType.Plate10 || type == WeightType.Plate20;
     }
 
     private void StabilizeMountedEquipment(Transform equipmentRoot)
@@ -695,7 +675,7 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         BoxCollider boxCollider = target.AddComponent<BoxCollider>();
-        ApplyRendererBoundsToBox(target.transform, renderer, boxCollider);
+        GymShared.ApplyRendererBoundsToBox(target.transform, renderer, boxCollider);
         if (IsWebGlPlayer)
         {
             webGlBoundsFallbackCount++;
@@ -806,7 +786,7 @@ public class GymArenaBootstrap : MonoBehaviour
         }
 
         boxCollider.enabled = true;
-        ApplyRendererBoundsToBox(target.transform, renderer, boxCollider);
+        GymShared.ApplyRendererBoundsToBox(target.transform, renderer, boxCollider);
     }
 
     private void AddFallbackCollider(Transform target, Renderer renderer, WeightType type)
@@ -832,17 +812,6 @@ public class GymArenaBootstrap : MonoBehaviour
                 break;
             }
         }
-    }
-
-    private static void ApplyRendererBoundsToBox(Transform target, Renderer renderer, BoxCollider boxCollider)
-    {
-        Vector3 localCenter = target.InverseTransformPoint(renderer.bounds.center);
-        Vector3 lossy = target.lossyScale;
-        boxCollider.center = localCenter;
-        boxCollider.size = new Vector3(
-            renderer.bounds.size.x / Mathf.Max(Mathf.Abs(lossy.x), 0.0001f),
-            renderer.bounds.size.y / Mathf.Max(Mathf.Abs(lossy.y), 0.0001f),
-            renderer.bounds.size.z / Mathf.Max(Mathf.Abs(lossy.z), 0.0001f));
     }
 
     private static WeightType TryGetWeightType(string objectName)
@@ -887,7 +856,7 @@ public class GymArenaBootstrap : MonoBehaviour
 
     private static bool IsWeightType(WeightType type)
     {
-        return type == WeightType.Barbell || type == WeightType.EzBar || IsPlateType(type);
+        return type == WeightType.Barbell || type == WeightType.EzBar || GymShared.IsPlateType(type);
     }
 
     private void SpawnEnemies()
@@ -1365,7 +1334,7 @@ public class GymArenaBootstrap : MonoBehaviour
         for (int i = 0; i < count; i++)
         {
             Collider hit = enemySpawnOverlap[i];
-            if (hit == null || IsRoomFloorCollider(hit.transform))
+            if (hit == null || GymShared.ComputeRoomFloorInHierarchy(hit.transform))
             {
                 continue;
             }
@@ -1463,7 +1432,7 @@ public class GymArenaBootstrap : MonoBehaviour
         for (int i = 0; i < count; i++)
         {
             Collider hit = enemySpawnPathHits[i].collider;
-            if (hit == null || IsRoomFloorCollider(hit.transform))
+            if (hit == null || GymShared.ComputeRoomFloorInHierarchy(hit.transform))
             {
                 continue;
             }
