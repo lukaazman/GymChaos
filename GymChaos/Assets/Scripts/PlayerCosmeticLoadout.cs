@@ -143,8 +143,9 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         Color color = GetShirtColor(currentBottomColor);
         Color tint = color / PlayerTopShell.BottomsFabricLevel;
         tint.a = 1f;
+        string fabric = currentBottom == GymBottomStyle.Pants ? PantsFabricTexture : BottomsFabricTexture;
         return PlayerTopShell.Attach(body, CurrentBottomStyle,
-            ScanTextureMips.Limit(Resources.Load<Texture2D>(BottomsFabricTexture)), color * 0.85f, tint);
+            ScanTextureMips.Limit(Resources.Load<Texture2D>(fabric)), color * 0.85f, tint);
     }
 
     private void LateUpdate()
@@ -550,6 +551,8 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     // skin (build_player_tops.py), worn by the body under a cloth shell.
     public const string UnderShellBodyTexture = "Player/Outfits/under_shell_body";
     public const string BottomsFabricTexture = "Player/Outfits/bottoms_fabric";
+    // Pants are lofted with their own UVs onto this seamless tile.
+    public const string PantsFabricTexture = "Player/Outfits/pants_fabric";
 
     public static string GetBottomDisplayName(GymBottomStyle bottom) =>
         bottom == GymBottomStyle.Pants ? "PANTS" : "SHORTS";

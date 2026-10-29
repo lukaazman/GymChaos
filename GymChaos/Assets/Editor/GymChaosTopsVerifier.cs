@@ -270,7 +270,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         {
             rig.HoldStablePoseForVerification(clip, 0.45f, out _);
             yield return null;
-            MeasureFit(legs, loadout.BottomShellRenderer, "pants_" + clip, 0.002f, 0.05f);
+            MeasureFit(legs, loadout.BottomShellRenderer, "pants_" + clip, 0.006f, 0.03f);
         }
         service.EquipBottom(GymBottomStyle.Shorts);
         yield return WaitBottom(loadout);

@@ -7,8 +7,9 @@ Same atlas pipeline as build_player_tops.py (rest-pose position per texel):
 
 - Shorts: athletic shorts over the scan's own shorts, waistband to just
   above the knee, a few mm off the skin.
-- Pants: baggy sweatpants from the waistband to the ankle, loose over the
-  thigh and knee and gathered into a ribbed cuff.
+- Pants: wide straight-leg track pants. PlayerTopShell lofts them from the
+  body inside this mask (straight leg tubes, a seat yoke); the mask only
+  marks the region to measure.
 
 bottoms_fabric.png is neutral light-grey cotton for both; PlayerTopShell
 tints it with the chosen bottoms colour at runtime, so one texture serves
@@ -35,10 +36,42 @@ EDGE_RANGE = tops.EDGE_RANGE
 # Rest-mesh height fractions (the scan's shorts run 0.335-0.52).
 WAIST = 0.522
 SHORTS_HEM = 0.33
-ANKLE = 0.062
-CUFF = 0.035
+ANKLE = 0.055
+# Straight leg: tube round a vertical axis per leg (x = +-LEG_AXIS_X,
+# y = LEG_AXIS_Y), radius from HEM_RADIUS at the hem to THIGH_RADIUS at the
+# crotch, always clear of the calf/knee (max 0.052) by TUBE_CLEARANCE.
+LEG_AXIS_X = 0.088
+LEG_AXIS_Y = 0.02
+HEM_RADIUS = 0.062
+THIGH_RADIUS = 0.077
+CROTCH = 0.33
+TUBE_CLEARANCE = 0.006
 # Fabric base the runtime tint multiplies (PlayerTopShell.BottomsFabricLevel).
 FABRIC_LEVEL = 0.8
+
+
+def periodic_noise(size, sigma, seed):
+    """Gaussian-blurred noise that tiles: blurred in the frequency domain."""
+    rng = np.random.default_rng(seed)
+    noise = rng.normal(0, 1, (size, size))
+    fy = np.fft.fftfreq(size)[:, None]
+    fx = np.fft.fftfreq(size)[None, :]
+    kernel = np.exp(-2 * (np.pi * sigma) ** 2 * (fx ** 2 + fy ** 2))
+    out = np.real(np.fft.ifft2(np.fft.fft2(noise) * kernel))
+    return (out / max(out.std(), 1e-6)).astype(np.float32)
+
+
+def write_pants_fabric(size=512):
+    """Seamless cotton tricot tile for the lofted pants (PlayerTopShell
+    FabricTile = one tile): fine vertical knit wales, a soft heather and a few
+    slubs, around FABRIC_LEVEL so the runtime tint keeps the chosen colour."""
+    x = np.arange(size)[None, :].repeat(size, 0)
+    wales = np.sin(x * 2 * np.pi * 96 / size) * 0.5 + 0.5
+    heather = periodic_noise(size, 6, 31)
+    fine = periodic_noise(size, 0.8, 32)
+    slubs = np.clip(periodic_noise(size, 2.5, 33) * np.array(periodic_noise(size, 18, 34) > 1.2, np.float32), -2, 2)
+    shade = FABRIC_LEVEL * (1 + 0.035 * (wales - 0.5) + 0.02 * heather + 0.015 * fine + 0.02 * slubs)
+    Image.fromarray(np.uint8(np.clip(np.repeat(shade[..., None], 3, 2), 0, 1) * 255)).save(OUT / 'pants_fabric.png')
 
 
 def main():
@@ -62,20 +95,22 @@ def main():
     shorts_paint = shorts_edge >= -0.02
     pants_paint = pants_edge >= -0.02
 
-    # Neutral cotton: soft heather, vertical drape folds on the pants, knee
-    # creases, a waistband and ribbed cuffs a touch darker.
+    # Neutral track-pants tricot: smooth, faint heather, long straight fall,
+    # a waistband and a plain hem a touch darker (the sheen is the material's).
     rng = np.random.default_rng(23)
     heather = cv2.GaussianBlur(rng.normal(0, 1, z.shape).astype(np.float32), (0, 0), 3.0)
     heather /= max(heather.std(), 1e-6)
     fine = cv2.GaussianBlur(rng.normal(0, 1, z.shape).astype(np.float32), (0, 0), 1.0)
     fine /= max(fine.std(), 1e-6)
-    folds = 1 + 0.03 * np.sin(x * 120 + 3.0 * np.sin(z * 26)) + 0.02 * np.sin((x + y) * 75 - z * 14)
-    knee = 0.04 * tops.smoothstep(0.03, 0.0, np.abs(z - 0.27)) * np.sin(z * 900 + x * 40)
+    around = np.arctan2(y - LEG_AXIS_Y, ax - LEG_AXIS_X)
+    # Tricot falls straight: faint long folds, and a soft break over the shoe.
+    fall = 0.015 * np.sin(around * 5 + 0.4 * np.sin(z * 14)) * tops.smoothstep(CROTCH + 0.02, CROTCH - 0.04, z)
+    fall += 0.035 * np.sin(z * 260 + around * 2) * tops.smoothstep(ANKLE + 0.07, ANKLE + 0.01, z)
+    seat = 0.02 * np.sin(x * 70 + 2.0 * np.sin(z * 22)) * tops.smoothstep(CROTCH - 0.02, CROTCH + 0.04, z)
+    folds = 1 + fall + seat
     waistband = 1 - 0.07 * tops.smoothstep(WAIST - 0.03, WAIST - 0.022, z)
-    rib = np.where(z < ANKLE + CUFF, 1 - 0.05 * (0.5 + 0.5 * np.sin(x * 1800 + y * 1800)), 1.0)
-    cuff_band = 1 - 0.06 * tops.smoothstep(ANKLE + CUFF - 0.004, ANKLE + CUFF + 0.004, z) * (z < ANKLE + CUFF + 0.01)
-    shade = FABRIC_LEVEL * (1 + 0.02 * heather + 0.015 * fine) * folds * (1 + knee) * waistband * rib
-    shade = np.clip(shade * np.where(z < ANKLE + CUFF + 0.01, cuff_band, 1.0), 0, 1)
+    hem = 1 - 0.06 * tops.smoothstep(ANKLE + 0.012, ANKLE + 0.004, z)
+    shade = np.clip(FABRIC_LEVEL * (1 + 0.012 * heather + 0.006 * fine) * folds * waistband * hem, 0, 1)
 
     painted = shorts_paint | pants_paint
     out = src.copy()
@@ -85,6 +120,8 @@ def main():
     grown = cv2.dilate(painted.astype(np.uint8), np.ones((3, 3), np.uint8), iterations=6) > 0
     out[grown & ~valid] = FABRIC_LEVEL
     Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / 'bottoms_fabric.png')
+
+    write_pants_fabric()
 
     def write_mask(name, cover, amount, paint, edge):
         shell = np.zeros((size, size, 4), np.uint8)
@@ -102,11 +139,15 @@ def main():
     # Shorts: close at the waistband and hem, a little loose over the thigh.
     shorts_inflate = 0.002 + 0.006 * tops.smoothstep(0.0, 0.03, shorts_edge)
     write_mask('shorts_shell.bytes', shorts_cover, shorts_inflate, shorts_paint, shorts_edge)
-    # Sweatpants: snug waist, baggy thigh to shin, gathered into the cuff.
-    leg_room = 0.013 + 0.008 * tops.smoothstep(0.46, 0.22, z)
-    cuff_taper = tops.smoothstep(ANKLE + 0.005, ANKLE + CUFF + 0.03, z)
-    pants_inflate = 0.003 + (leg_room - 0.003) * tops.smoothstep(0.0, 0.025, WAIST - z) * cuff_taper
-    pants_inflate = np.maximum(pants_inflate, 0.003)
+    # Straight leg: push every leg texel out to its tube, so the silhouette
+    # is two straight lines from hip to hem whatever the muscles do; above
+    # the crotch a relaxed seat and a snug waistband.
+    tube_radius = HEM_RADIUS + (THIGH_RADIUS - HEM_RADIUS) * tops.smoothstep(ANKLE, CROTCH, z)
+    leg_distance = np.hypot(ax - LEG_AXIS_X, y - LEG_AXIS_Y)
+    leg = np.clip(tube_radius - leg_distance, TUBE_CLEARANCE, INFLATE_RANGE * 0.98)
+    hips = 0.004 + 0.012 * tops.smoothstep(0.0, 0.03, WAIST - z)
+    blend = tops.smoothstep(CROTCH - 0.03, CROTCH + 0.04, z)
+    pants_inflate = leg * (1 - blend) + hips * blend
     write_mask('pants_shell.bytes', pants_cover, pants_inflate, pants_paint, pants_edge)
 
     DEBUG.mkdir(parents=True, exist_ok=True)

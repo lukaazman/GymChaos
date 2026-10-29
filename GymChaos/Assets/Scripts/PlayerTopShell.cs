@@ -30,6 +30,10 @@ public static class PlayerTopShell
         public float DrapeRadius;
         // Bottoms (shorts, pants) swap only with each other, never with a top.
         public bool Bottom;
+        // Pants: built as straight leg tubes and a seat yoke (BuildStraightPants).
+        public bool StraightLegs;
+        // Cloth smoothness: matte cotton by default; track-pants tricot shines a little.
+        public float Smoothness = 0.06f;
         internal Color32[] MaskPixels;
         internal int MaskWidth;
         internal int MaskHeight;
@@ -63,13 +67,13 @@ public static class PlayerTopShell
         SmoothIterations = 24, Lambda = 0.5f, EdgeOverhang = 0.004f,
         DrapeSmoothing = 90f, Bottom = true
     };
-    // Baggy sweatpants: smoothed hard and draped like the oversized top, so
-    // the cloth hangs off the thighs and calves instead of tracing them.
+    // Straight wide-leg track pants: lofted from the body's measurements
+    // (BuildStraightPants), not copied from the scan; only the mask is used.
     public static readonly Style Pants = new Style
     {
         Name = PantsObjectName, MaskResource = "Player/Outfits/pants_shell",
         SmoothIterations = 60, Lambda = 0.6f, EdgeOverhang = 0.006f,
-        DrapeSmoothing = 450f, DrapeRadius = 0.04f, Bottom = true
+        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.22f
     };
     private static readonly Style[] AllStyles = { Oversized, Onyx, Shorts, Pants };
 
@@ -233,8 +237,8 @@ public static class PlayerTopShell
         for (int m = 0; m < materials.Length; m++)
         {
             Material material = materials[m];
-            if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", 0.06f);
-            if (material.HasProperty("_Glossiness")) material.SetFloat("_Glossiness", 0.06f);
+            if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", style.Smoothness);
+            if (material.HasProperty("_Glossiness")) material.SetFloat("_Glossiness", style.Smoothness);
             if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", 0f);
             if (material.HasProperty("_SpecularHighlights")) material.SetFloat("_SpecularHighlights", 0f);
             if (material.HasProperty("_EnvironmentReflections")) material.SetFloat("_EnvironmentReflections", 0f);
@@ -438,6 +442,10 @@ public static class PlayerTopShell
             weldedInflate[w] = Mathf.Max(weldedInflate[w], inflate[sourceIndex[i]]);
         }
         int n = welded.Count;
+        if (style.StraightLegs)
+        {
+            return BuildStraightPants(welded, weld, sourceIndex, uvs, weights, scale);
+        }
         Dictionary<long, int> edgeUse = new Dictionary<long, int>(kept.Count, EdgeKeyComparer.Instance);
         long EdgeKey(int a, int b) => a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
         void CountEdges()
@@ -760,6 +768,395 @@ public static class PlayerTopShell
             Log = $"vertices={count} triangles={triCount} welded={n} scale={scale:F4} " +
                 $"meanInflate={inflateSum / n:F5} meanMove={moveSum / n:F5} ms={watch.ElapsedMilliseconds} {laps}"
         };
+    }
+
+    // ---- straight-leg pants (built, not copied from the scan) ----------
+    // Rest units (body height 1, as build_player_bottoms.py). The scan's
+    // shorts are a layered rim round the thigh: a copied shell stacked it into
+    // rings and tore at the crotch, so the pants are lofted instead: two
+    // straight leg tubes and a seat yoke round both, sized from the body.
+    private const float PantsHem = 0.055f;
+    private const float PantsWaist = 0.522f;
+    // Legs run up into the yoke; the yoke reaches down over the leg tops.
+    private const float LegTop = 0.37f;
+    private const float YokeBottom = 0.35f;
+    private const float RingStep = 0.01f;
+    private const int LegSides = 48;
+    private const int YokeSides = 56;
+    // Straight-leg cotton track pants: the upper thigh sets the leg's shape
+    // and the leg runs in one straight taper to 80 % at the hem, with a
+    // pressed front crease, a few long drape lines and a soft break over the
+    // shoe. Not tight, not a balloon.
+    private const float ThighEase = 0.01f;
+    private const float HemEase = 0.016f;
+    private const float ThighCap = 0.31f;
+    private const float HemTaper = 0.8f;
+    private const float HemFlare = 0.002f;
+    private const float HemBreak = 0.003f;
+    private const float CreaseDepth = 0.0025f;
+    private const float DrapeDepth = 0.01f;
+    // Fabric texture tile (pants_fabric.png) in rest units.
+    private const float FabricTile = 0.06f;
+    private const float Clearance = 0.008f;
+
+    private static ShellData BuildStraightPants(List<Vector3> body, int[] weld, List<int> sourceIndex,
+        Vector2[] uvs, BoneWeight[] weights, float scale)
+    {
+        int n = body.Count;
+        if (n < 100) return null;
+        int[] firstSource = new int[n];
+        for (int i = 0; i < n; i++) firstSource[i] = -1;
+        for (int i = 0; i < weld.Length; i++) if (firstSource[weld[i]] < 0) firstSource[weld[i]] = sourceIndex[i];
+
+        // Frame: the region is taller than wide. The waist end has cloth on
+        // the body's centre line; between the ankles there is none.
+        Vector3 min = body[0], max = body[0];
+        for (int i = 1; i < n; i++) { min = Vector3.Min(min, body[i]); max = Vector3.Max(max, body[i]); }
+        Vector3 size = max - min;
+        int up = size.x >= size.y && size.x >= size.z ? 0 : (size.y >= size.z ? 1 : 2);
+        int a = (up + 1) % 3, b = (up + 2) % 3;
+        int lateral = size[a] >= size[b] ? a : b;
+        int depth = lateral == a ? b : a;
+        float centre = (min[lateral] + max[lateral]) * 0.5f;
+        float cut = size[up] * 0.08f;
+        int lowCentre = 0, highCentre = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (Mathf.Abs(body[i][lateral] - centre) > size[lateral] * 0.08f) continue;
+            float h = body[i][up];
+            if (h < min[up] + cut) lowCentre++;
+            if (h > max[up] - cut) highCentre++;
+        }
+        bool upPositive = highCentre >= lowCentre;
+        float bottom = upPositive ? min[up] : max[up];
+        float sign = upPositive ? 1f : -1f;
+        float RestZ(Vector3 p) => PantsHem + (p[up] - bottom) * sign;
+        Vector3 Point(float z, Vector2 flat)
+        {
+            Vector3 p = Vector3.zero;
+            p[up] = bottom + (z - PantsHem) * sign;
+            p[lateral] = flat.x;
+            p[depth] = flat.y;
+            return p;
+        }
+
+        // Leg axes from the shin-to-thigh band.
+        Vector2[] axis = new Vector2[2];
+        int[] axisCount = new int[2];
+        for (int i = 0; i < n; i++)
+        {
+            float z = RestZ(body[i]);
+            if (z < 0.1f || z > 0.3f) continue;
+            int leg = body[i][lateral] >= centre ? 1 : 0;
+            axis[leg] += new Vector2(body[i][lateral], body[i][depth]);
+            axisCount[leg]++;
+        }
+        if (axisCount[0] == 0 || axisCount[1] == 0) return null;
+        axis[0] /= axisCount[0];
+        axis[1] /= axisCount[1];
+        Vector2 pelvis = (axis[0] + axis[1]) * 0.5f;
+        // Front: the calf sits behind the shin, so the ankle's centre is in
+        // front of the calf's.
+        float ankleDepth = 0f, calfDepth = 0f;
+        int ankleCount = 0, calfCount = 0;
+        for (int i = 0; i < n; i++)
+        {
+            float z = RestZ(body[i]);
+            if (z < 0.1f) { ankleDepth += body[i][depth]; ankleCount++; }
+            else if (z > 0.16f && z < 0.22f) { calfDepth += body[i][depth]; calfCount++; }
+        }
+        float frontSign = ankleCount > 0 && calfCount > 0 && ankleDepth / ankleCount < calfDepth / calfCount ? -1f : 1f;
+        float frontAngle = Mathf.Atan2(frontSign, 0f);
+
+        // Body reach per direction and ring height, for legs and yoke.
+        int legRings = Mathf.CeilToInt((LegTop - PantsHem) / RingStep) + 1;
+        float[,,] legReach = new float[2, legRings, LegSides];
+        int yokeRings = Mathf.CeilToInt((PantsWaist - YokeBottom) / RingStep) + 1;
+        float[,] yokeReach = new float[yokeRings, YokeSides];
+        for (int i = 0; i < n; i++)
+        {
+            float z = RestZ(body[i]);
+            Vector2 flat = new Vector2(body[i][lateral], body[i][depth]);
+            if (z < LegTop)
+            {
+                int leg = flat.x >= centre ? 1 : 0;
+                Vector2 d = flat - axis[leg];
+                int r = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
+                int s = Sector(d, LegSides);
+                legReach[leg, r, s] = Mathf.Max(legReach[leg, r, s], d.magnitude);
+            }
+            if (z >= YokeBottom - RingStep)
+            {
+                Vector2 d = flat - pelvis;
+                int r = Mathf.Clamp(Mathf.RoundToInt((z - YokeBottom) / RingStep), 0, yokeRings - 1);
+                int s = Sector(d, YokeSides);
+                yokeReach[r, s] = Mathf.Max(yokeReach[r, s], d.magnitude);
+            }
+        }
+
+        List<Vector3> verts = new List<Vector3>();
+        List<Vector2> uvList = new List<Vector2>();
+        List<int> fabric = new List<int>();
+        List<int> band = new List<int>();
+        int capRing = Mathf.RoundToInt((ThighCap - PantsHem) / RingStep);
+        float[] row = new float[LegSides];
+        float[] top = new float[LegSides];
+        float[,] legRadius = new float[legRings, LegSides];
+        float[,,] legOutline = new float[2, legRings, LegSides];
+        for (int leg = 0; leg < 2; leg++)
+        {
+            // Body + ease per ring (above the cap the thigh's width holds).
+            for (int r = 0; r < legRings; r++)
+            {
+                float z = PantsHem + r * RingStep;
+                float ease = Mathf.Lerp(HemEase, ThighEase, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(PantsHem, ThighCap, z)));
+                int source = Mathf.Min(r, capRing);
+                float filled = 0f;
+                for (int s = 0; s < LegSides; s++) filled = Mathf.Max(filled, legReach[leg, source, s]);
+                for (int s = 0; s < LegSides; s++)
+                {
+                    float reach = legReach[leg, source, s];
+                    row[s] = (reach > 0f ? reach : filled * 0.8f) + ease;
+                }
+                SmoothRing(row, 3);
+                for (int s = 0; s < LegSides; s++) legRadius[r, s] = row[s];
+            }
+            // The upper thigh (over the scan's old shorts rim) sets the shape;
+            // below it the leg is that shape scaled down in one straight line.
+            for (int s = 0; s < LegSides; s++)
+            {
+                top[s] = legRadius[capRing, s];
+                for (int r = capRing - 3; r < legRings; r++) top[s] = Mathf.Max(top[s], legReach[leg, r, s] + Clearance);
+            }
+            SmoothRing(top, 6);
+            for (int r = 0; r < legRings; r++)
+            {
+                float z = PantsHem + r * RingStep;
+                float taper = Mathf.Lerp(HemTaper, 1f, Mathf.Clamp01((z - PantsHem) / (ThighCap - PantsHem)));
+                for (int s = 0; s < LegSides; s++)
+                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper);
+            }
+            for (int pass = 0; pass < 4; pass++)
+                for (int r = 1; r < legRings - 1; r++)
+                    for (int s = 0; s < LegSides; s++)
+                        legRadius[r, s] = Mathf.Max(legRadius[r, s],
+                            (legRadius[r - 1, s] + legRadius[r, s] * 2f + legRadius[r + 1, s]) * 0.25f);
+            for (int r = 0; r < legRings; r++)
+                for (int s = 0; s < LegSides; s++) legOutline[leg, r, s] = legRadius[r, s];
+            int start = verts.Count;
+            float circumference = 0f;
+            for (int s = 0; s < LegSides; s++) circumference += legRadius[legRings / 2, s] * Mathf.PI * 2f / LegSides;
+            for (int r = 0; r < legRings; r++)
+            {
+                float z = PantsHem + r * RingStep;
+                float hem = 1f - Mathf.Clamp01((z - PantsHem) / 0.06f);
+                float drapeFade = 1f - Mathf.Clamp01((z - (ThighCap - 0.06f)) / 0.08f);
+                for (int s = 0; s <= LegSides; s++)
+                {
+                    float angle = s * Mathf.PI * 2f / LegSides;
+                    Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                    float front = Mathf.Cos(angle - frontAngle);
+                    // Pressed crease down the front, a few long drape lines
+                    // and a soft break over the shoe.
+                    float crease = CreaseDepth * Mathf.Pow(Mathf.Max(0f, front), 40f);
+                    float drape = DrapeDepth * drapeFade * Mathf.Sin(angle * 5f + leg * 1.3f) * (1f - Mathf.Max(0f, front));
+                    float radius = legRadius[r, s % LegSides] * (1f + drape) + crease +
+                        hem * (HemFlare + HemBreak * Mathf.Sin(angle * 3f + z * 120f));
+                    verts.Add(Point(z, axis[leg] + dir * radius));
+                    uvList.Add(new Vector2(s / (float)LegSides * circumference / FabricTile, z / FabricTile));
+                }
+            }
+            Loft(start, legRings, LegSides, fabric, band, 1, 0);
+        }
+
+        // Yoke: covers the leg tops at the crotch, then follows the hips with
+        // a little ease up to the waistband.
+        float[] ring = new float[YokeSides];
+        int yokeStart = verts.Count;
+        float[,] yokeRadius = new float[yokeRings, YokeSides];
+        for (int r = 0; r < yokeRings; r++)
+        {
+            float z = YokeBottom + r * RingStep;
+            float wrap = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(LegTop, LegTop + 0.05f, z));
+            // The bottom edge tucks just inside the legs (no ledge); above it
+            // the yoke covers the leg tops.
+            float overLegs = r == 0 ? -0.004f : r == 1 ? 0f : 0.002f;
+            for (int s = 0; s < YokeSides; s++)
+            {
+                float angle = s * Mathf.PI * 2f / YokeSides;
+                Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
+                float legs = Mathf.Max(RayToLeg(pelvis, dir, axis[0], legOutline, 0, legRing, overLegs),
+                    RayToLeg(pelvis, dir, axis[1], legOutline, 1, legRing, overLegs));
+                // The bottom edge follows the legs only (they already clear the body).
+                // Over the leg tops the yoke follows the legs only (they clear the
+                // body and the old shorts rim); above, the hips with a little ease.
+                ring[s] = z < LegTop ? legs : Mathf.Max(yokeReach[r, s] + Clearance, legs * wrap);
+            }
+            if (r > 0) SmoothRing(ring, 6);
+            for (int s = 0; s < YokeSides; s++) yokeRadius[r, s] = ring[s];
+        }
+        // Even out ring to ring, so the seat drapes instead of tracing the hips.
+        for (int pass = 0; pass < 8; pass++)
+        {
+            for (int r = 1; r < yokeRings - 1; r++)
+                for (int s = 0; s < YokeSides; s++)
+                    yokeRadius[r, s] = Mathf.Max(yokeRadius[r, s],
+                        (yokeRadius[r - 1, s] + yokeRadius[r, s] * 2f + yokeRadius[r + 1, s]) * 0.25f);
+        }
+        float yokeCircumference = 0f;
+        for (int s = 0; s < YokeSides; s++) yokeCircumference += yokeRadius[0, s] * Mathf.PI * 2f / YokeSides;
+        for (int r = 0; r < yokeRings; r++)
+        {
+            float z = YokeBottom + r * RingStep;
+            for (int s = 0; s <= YokeSides; s++)
+            {
+                float angle = s * Mathf.PI * 2f / YokeSides;
+                verts.Add(Point(z, pelvis + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * yokeRadius[r, s % YokeSides]));
+                uvList.Add(new Vector2(s / (float)YokeSides * yokeCircumference / FabricTile, z / FabricTile));
+            }
+        }
+        Loft(yokeStart, yokeRings, YokeSides, fabric, band, 0, 2);
+
+        // Outward winding: flip if the first leg's faces point inward.
+        Vector3 face = Vector3.Cross(verts[fabric[1]] - verts[fabric[0]], verts[fabric[2]] - verts[fabric[0]]);
+        Vector3 outwardDir = verts[fabric[0]] - Point(RestZ(verts[fabric[0]]), axis[0]);
+        if (Vector3.Dot(face, outwardDir) < 0f)
+        {
+            Flip(fabric);
+            Flip(band);
+        }
+
+        // Skin and UV from the nearest body vertex (grid search).
+        Dictionary<Vector3Int, List<int>> grid = new Dictionary<Vector3Int, List<int>>();
+        const float cell = 0.03f;
+        Vector3Int Cell(Vector3 p) => new Vector3Int(Mathf.FloorToInt(p.x / cell), Mathf.FloorToInt(p.y / cell), Mathf.FloorToInt(p.z / cell));
+        for (int i = 0; i < n; i++)
+        {
+            Vector3Int key = Cell(body[i]);
+            if (!grid.TryGetValue(key, out List<int> list)) grid[key] = list = new List<int>();
+            list.Add(i);
+        }
+        int count = verts.Count;
+        Vector3[] outVertices = new Vector3[count];
+        Vector2[] outUv = new Vector2[count];
+        BoneWeight[] outWeights = weights != null ? new BoneWeight[count] : null;
+        for (int v = 0; v < count; v++)
+        {
+            Vector3 p = verts[v];
+            Vector3Int c = Cell(p);
+            int best = -1;
+            float bestDistance = float.MaxValue;
+            for (int radius = 1; radius <= 4 && best < 0; radius++)
+            {
+                for (int x = -radius; x <= radius; x++)
+                    for (int y = -radius; y <= radius; y++)
+                        for (int z = -radius; z <= radius; z++)
+                        {
+                            if (!grid.TryGetValue(new Vector3Int(c.x + x, c.y + y, c.z + z), out List<int> list)) continue;
+                            for (int k = 0; k < list.Count; k++)
+                            {
+                                float d = (body[list[k]] - p).sqrMagnitude;
+                                if (d < bestDistance) { bestDistance = d; best = list[k]; }
+                            }
+                        }
+            }
+            int source = best >= 0 ? firstSource[best] : -1;
+            outVertices[v] = p * scale;
+            outUv[v] = source >= 0 ? uvs[source] : Vector2.zero;
+            if (outWeights != null && source >= 0) outWeights[v] = weights[source];
+        }
+        // Own UVs on the tiling fabric (pants_fabric.png), not the body atlas.
+        for (int v = 0; v < count; v++) outUv[v] = uvList[v];
+
+        // Normals in rest units: the imported scale is too small for normalize().
+        Vector3[] rest = verts.ToArray();
+        Vector3[] outNormals = new Vector3[count];
+        AddFaceNormals(rest, fabric, outNormals);
+        AddFaceNormals(rest, band, outNormals);
+        for (int v = 0; v < count; v++) outNormals[v] = outNormals[v].normalized;
+        return new ShellData
+        {
+            Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,
+            Fabric = fabric, Band = band,
+            Log = $"straightPants vertices={count} legRings={legRings} yokeRings={yokeRings} axis={axis[0]}/{axis[1]}"
+        };
+    }
+
+    private static int Sector(Vector2 d, int sides)
+    {
+        float angle = Mathf.Atan2(d.y, d.x);
+        if (angle < 0f) angle += Mathf.PI * 2f;
+        return Mathf.Clamp(Mathf.RoundToInt(angle / (Mathf.PI * 2f) * sides), 0, sides) % sides;
+    }
+
+    private static void SmoothRing(float[] values, int passes)
+    {
+        int count = values.Length;
+        float[] copy = new float[count];
+        for (int p = 0; p < passes; p++)
+        {
+            for (int i = 0; i < count; i++)
+                copy[i] = (values[(i + count - 1) % count] + values[i] * 2f + values[(i + 1) % count]) * 0.25f;
+            // Never pull the cloth inside the body: keep the larger value.
+            for (int i = 0; i < count; i++) values[i] = Mathf.Max(values[i] * 0.98f, copy[i]);
+        }
+    }
+
+    // Farthest point along a ray from origin that lies inside a leg ring
+    // (its per-direction radii, grown by extra); 0 when the ray misses it.
+    private static float RayToLeg(Vector2 origin, Vector2 dir, Vector2 centre, float[,,] outline, int leg, int ring,
+        float extra)
+    {
+        const float reach = 0.3f;
+        const int steps = 90;
+        for (int i = steps; i > 0; i--)
+        {
+            float t = reach * i / steps;
+            Vector2 d = origin + dir * t - centre;
+            float radius = outline[leg, ring, Sector(d, LegSides)] + extra;
+            if (d.magnitude <= radius) return t;
+        }
+        return 0f;
+    }
+
+    // Quads between consecutive rings of sides + 1 vertices (the last one
+    // repeats the first, so the fabric UVs do not wrap); the first hemBand
+    // and last topBand rows (hem, waistband) go to the band submesh.
+    private static void Loft(int start, int rings, int sides, List<int> fabric, List<int> band, int hemBand, int topBand)
+    {
+        int columns = sides + 1;
+        for (int r = 0; r < rings - 1; r++)
+        {
+            List<int> target = r < hemBand || r >= rings - 1 - topBand ? band : fabric;
+            for (int s = 0; s < sides; s++)
+            {
+                int i0 = start + r * columns + s;
+                int i1 = i0 + 1;
+                int i2 = i0 + columns;
+                int i3 = i1 + columns;
+                target.Add(i0); target.Add(i2); target.Add(i1);
+                target.Add(i1); target.Add(i2); target.Add(i3);
+            }
+        }
+    }
+
+    private static void Flip(List<int> triangles)
+    {
+        for (int t = 0; t < triangles.Count; t += 3)
+        {
+            (triangles[t + 1], triangles[t + 2]) = (triangles[t + 2], triangles[t + 1]);
+        }
+    }
+
+    private static void AddFaceNormals(Vector3[] vertices, List<int> triangles, Vector3[] normals)
+    {
+        for (int t = 0; t < triangles.Count; t += 3)
+        {
+            int a = triangles[t], b = triangles[t + 1], c = triangles[t + 2];
+            Vector3 face = Vector3.Cross(vertices[b] - vertices[a], vertices[c] - vertices[a]);
+            normals[a] += face; normals[b] += face; normals[c] += face;
+        }
     }
 
     // Mask A: signed distance to the garment's open edges (build_player_tops.py EDGE_RANGE).

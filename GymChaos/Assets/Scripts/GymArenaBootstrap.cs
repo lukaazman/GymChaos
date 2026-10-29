@@ -1515,15 +1515,8 @@ public class GymArenaBootstrap : MonoBehaviour
             Debug.LogWarning($"GYMCHAOS_BIKE_BLOCKER_SKIPPED bounds={bikes}");
             return;
         }
-        // The aisle to the treadmill block is a slot of the same width.
-        if (TryGetNamedBounds("treadmill", out Bounds treadmills))
-        {
-            float gap = treadmills.min.x - bikes.max.x;
-            if (gap > 0f && gap < 1.2f)
-            {
-                bikes.Encapsulate(new Vector3(treadmills.min.x, bikes.center.y, bikes.center.z));
-            }
-        }
+        // The aisle to the treadmills stays open: closing it made the aisle
+        // between the treadmill rows a dead end that visitors wedged in.
         GameObject blocker = new GameObject("Bike Block Slot Blocker") { layer = 2 };
         blocker.transform.position = new Vector3(bikes.center.x, bikes.min.y + 0.9f, bikes.center.z);
         blocker.AddComponent<BoxCollider>().size = new Vector3(bikes.size.x, 1.8f, bikes.size.z);

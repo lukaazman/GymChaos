@@ -372,12 +372,13 @@ public static class GymChaosPlayModeVerifier
                     {
                         runBandDirection = Vector3.forward;
                     }
-                    // 4.4 m keeps a metre of margin over attack range for one bounded
-                    // frame (GokuSampleMaximumDeltaTime); still below 5.2 m flight.
+                    // Airborne Goku lands only under 3 m (flight hysteresis);
+                    // 2.7 m still keeps a metre over attack range for one
+                    // bounded frame (GokuSampleMaximumDeltaTime).
                     MovePlayerForVerification(
                         player,
                         gokuForVerification.transform.position +
-                        runBandDirection.normalized * 4.4f);
+                        runBandDirection.normalized * 2.7f);
                 }
                 float gokuDistance = gokuForVerification != null
                     ? Vector3.ProjectOnPlane(
