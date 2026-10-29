@@ -17,6 +17,7 @@ public static class GymChaosVehicleDepartureVerifier
     private const string AllModeKey = "GymChaos.VehicleDepartureVerificationAll";
     private static double started;
     private static bool requested;
+    private static double requestedAt;
     private static EnemyFighter fighter;
     private static GymVisitorVehicle vehicle;
     private static int approachVersion;
@@ -230,6 +231,7 @@ public static class GymChaosVehicleDepartureVerifier
                 approachVersion = agent != null ? agent.CompletedVehicleApproaches : 0;
                 ResetRouteQuality();
                 requested = true;
+                requestedAt = Time.timeAsDouble;
                 Debug.Log($"GYMCHAOS_VEHICLE_DEPARTURE_ONLY_STARTED enemy={fighter.Identity}");
             }
             if (requested && fighter != null && vehicle != null)
@@ -311,7 +313,10 @@ public static class GymChaosVehicleDepartureVerifier
             // the corner. This end-to-end mode includes the door exit, walk
             // to the car, and the complete vehicle route. Keep a separate
             // generous ceiling while per-waypoint telemetry identifies stalls.
-            if (elapsed > (arnoldMode ? 300d : 135d))
+            // The budget runs from the departure request: the director waits for a
+            // parked car first, which can take a while under lane load.
+            if (requested ? Time.timeAsDouble - requestedAt > (arnoldMode ? 300d : 135d)
+                : elapsed > (arnoldMode ? 300d : 135d))
             {
                 GymVisitorAgent timedOutAgent = fighter != null
                     ? fighter.GetComponent<GymVisitorAgent>() : null;

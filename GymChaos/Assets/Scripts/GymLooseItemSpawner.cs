@@ -578,6 +578,13 @@ public sealed class GymLooseItemSpawner : MonoBehaviour
         public bool Created;
     }
 
+    /// <summary>True when the point lies in the deadlift platform's no-walk margin.</summary>
+    public static bool IsInsideDeadliftClearance(Vector3 point, float clearance)
+    {
+        GymDeadliftStationMarker marker = instance != null ? instance.deadliftStationMarker : null;
+        return marker != null && marker.isActiveAndEnabled && marker.IsInsideNavigationClearance(point, clearance);
+    }
+
     public static void IgnoreDeadliftStationForEnemy(EnemyFighter enemy)
     {
         EnsureDeadliftStationCollisionIgnore(enemy);

@@ -106,9 +106,25 @@ public static class GymChaosMirrorTemporalVerifier
                         $"Visible mirror refresh gap exceeded one frame: " +
                         $"maxGap={maxRefreshGap} mirrors={mirrors.Length}.");
                 }
+                // Sharpness: the target keeps the screen aspect (no stretch) and
+                // holds at least 0.75 x screen height, capped at 1080 rows.
+                for (int i = 0; i < mirrors.Length; i++)
+                {
+                    RenderTexture rt = mirrors[i].ReflectionTexture;
+                    float screenAspect = (float)Screen.width / Mathf.Max(1, Screen.height);
+                    float rtAspect = (float)rt.width / Mathf.Max(1, rt.height);
+                    int minHeight = Mathf.Min(1080, Mathf.FloorToInt(Screen.height * 0.75f)) - 2;
+                    if (Mathf.Abs(rtAspect / screenAspect - 1f) > 0.02f || rt.height < minHeight)
+                    {
+                        throw new InvalidOperationException(
+                            $"Mirror {mirrors[i].name} target {rt.width}x{rt.height} is stretched or " +
+                            $"too small for screen {Screen.width}x{Screen.height}.");
+                    }
+                }
                 Debug.Log(
                     $"GYMCHAOS_MIRROR_TEMPORAL_OK mirrors={mirrors.Length} " +
-                    $"sampleFrames={mirrors.Length * 100} maxRefreshGap={maxRefreshGap} actualRender=True");
+                    $"sampleFrames={mirrors.Length * 100} maxRefreshGap={maxRefreshGap} actualRender=True " +
+                    $"aspectOk=True rt={mirrors[0].ReflectionTexture.width}x{mirrors[0].ReflectionTexture.height}");
                 Finish(0);
                 return;
             }

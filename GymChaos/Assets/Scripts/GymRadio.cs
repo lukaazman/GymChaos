@@ -719,7 +719,7 @@ public sealed class GymRadio : MonoBehaviour
             ? 1f
             : radioRolloff.Evaluate(normalizedDistance);
         float linearVolume = BaseRadioVolume * UserVolumeScale *
-            Mathf.Clamp01(attenuation);
+            GymRuntimeSettings.MusicVolume * Mathf.Clamp01(attenuation);
         return Mathf.Clamp(Mathf.RoundToInt(linearVolume * 100f), 0, 100);
     }
 
@@ -759,7 +759,9 @@ public sealed class GymRadio : MonoBehaviour
         // keeps the playlist anchored to the radio after it is carried or
         // thrown instead of making it sound like a global gym track.
         audioSource.spatialBlend = 1f;
-        audioSource.volume = BaseRadioVolume * UserVolumeScale;
+        audioSource.volume = BaseRadioVolume * UserVolumeScale * GymRuntimeSettings.MusicVolume;
+        // Music has its own slider; AudioListener.volume carries the effects level.
+        audioSource.ignoreListenerVolume = true;
         audioSource.rolloffMode = AudioRolloffMode.Custom;
         audioSource.minDistance = 2.5f;
         audioSource.maxDistance = 96f;
@@ -1102,6 +1104,7 @@ public sealed class GymRadio : MonoBehaviour
         if (audioSource != null)
         {
             audioSource.mute = !musicEnabled || !insideGym;
+            audioSource.volume = BaseRadioVolume * UserVolumeScale * GymRuntimeSettings.MusicVolume;
         }
         UpdateSoundCloudWidgetVolume(widgetListenerPosition, insideGym);
     }

@@ -97,20 +97,27 @@ public static class GymChaosVisitorUnstickVerifier
 
             EnemyFighter visitor = null;
             EnemyFighter member = null;
-            // A real visitor and an ordinary member: no police, Goku or staff.
+            // A real visitor and an ordinary member: no police, Goku or staff,
+            // and nobody whose colliders are off (driving, on a treadmill,
+            // carried). Picked by identity, not by scene order.
+            var candidates = new System.Collections.Generic.List<EnemyFighter>();
             foreach (EnemyFighter fighter in UnityEngine.Object.FindObjectsByType<EnemyFighter>(
                          FindObjectsSortMode.None))
             {
                 if (fighter == null || fighter.IsDead || fighter.IsAggressive ||
+                    fighter.IsSeatedInVehicle || fighter.IsRidingVehicleForVerification ||
+                    fighter.IsOnTreadmill || fighter.IsCarriedByPlayer ||
                     fighter.GetComponent<Rigidbody>() == null ||
                     fighter.GetComponent<GymVisitorAgent>() == null ||
                     fighter.Identity == BodybuilderIdentity.Goku ||
                     fighter.Identity == BodybuilderIdentity.Ronnie ||
                     fighter.Identity == BodybuilderIdentity.Manwithsuit1 ||
                     fighter.Identity == BodybuilderIdentity.Mark) continue;
-                if (visitor == null) visitor = fighter;
-                else if (member == null) { member = fighter; break; }
+                candidates.Add(fighter);
             }
+            candidates.Sort((x, y) => x.Identity.CompareTo(y.Identity));
+            if (candidates.Count > 0) visitor = candidates[0];
+            if (candidates.Count > 1) member = candidates[1];
             PickupItem prop = null;
             foreach (PickupItem item in UnityEngine.Object.FindObjectsByType<PickupItem>(FindObjectsSortMode.None))
             {

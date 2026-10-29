@@ -23,6 +23,26 @@ public static class GymRuntimeSettings
     private const string PostProcessingKey = "GymChaos.UI.PostProcessing.v1";
     private const string AntiAliasingKey = "GymChaos.UI.AntiAliasing.v1";
     private const string MasterVolumeKey = "GymChaos.UI.MasterVolume.v1";
+    private const string MusicVolumeKey = "GymChaos.UI.MusicVolume.v1";
+    private const string EffectsVolumeKey = "GymChaos.UI.EffectsVolume.v1";
+    private const string RenderScaleKey = "GymChaos.UI.RenderScale.v1";
+    private const string ShadowQualityKey = "GymChaos.UI.ShadowQuality.v1";
+    private const int MsaaOption = 4;
+
+    private static float masterVolume = 1f;
+    private static float musicVolume = 1f;
+    private static float effectsVolume = 1f;
+    private static UniversalRenderPipelineAsset projectPipeline;
+    private static UniversalRenderPipelineAsset runtimePipeline;
+    private static RenderPipelineAsset projectQualityPipeline;
+
+    /// <summary>Radio volume: master x music. The radio ignores AudioListener.volume, which carries master x effects.</summary>
+    public static float MusicVolume => masterVolume * musicVolume;
+
+    /// <summary>The project URP asset while a runtime copy is active, else null.</summary>
+    public static UniversalRenderPipelineAsset ProjectPipeline => runtimePipeline != null ? projectPipeline : null;
+
+    private static bool IsWeb => Application.platform == RuntimePlatform.WebGLPlayer;
 
     private static readonly Color Ink = new Color(0.91f, 0.94f, 0.98f, 1f);
     private static readonly Color Accent = new Color(0.98f, 0.34f, 0.13f, 1f);
@@ -60,84 +80,81 @@ public static class GymRuntimeSettings
         Stretch(veil.rectTransform);
         CreateSettingsSheet(panel.transform, titleFont);
 
-        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.765f);
-        CreateRowLabel(panel.transform, labelFont, "RESOLUTION", RowY(0));
-        CreateRowLabel(panel.transform, labelFont, "WINDOW MODE", RowY(1));
+        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.775f);
+        // WebGL: the page owns the canvas size and the template's button owns
+        // fullscreen; a fullscreen request from here can be refused by the
+        // browser and kill the player, so these two rows exist only on desktop.
+        int renderScaleRow = IsWeb ? 0 : 2;
+        if (!IsWeb) CreateDisplayRows(panel.transform, labelFont);
+        CreateRowLabel(panel.transform, labelFont, "RENDER SCALE", RowY(renderScaleRow));
 
-        Resolution[] resolutions = GetResolutionOptions();
-        string[] resolutionLabels = GetResolutionLabels(resolutions);
-        Resolution selectedResolution = resolutions[FindResolutionIndex(resolutions)];
-        FullScreenMode[] modes =
-        {
-            FullScreenMode.Windowed,
-            FullScreenMode.FullScreenWindow,
-            FullScreenMode.ExclusiveFullScreen
-        };
-        string[] modeLabels = { "WINDOWED", "BORDERLESS", "FULLSCREEN" };
-        FullScreenMode selectedMode = GetStoredWindowMode(modes);
+        CreateDropdown("Render Scale Dropdown", panel.transform, labelFont,
+            RenderScaleLabels(), StoredRenderScaleIndex(), RowY(renderScaleRow), ApplyRenderScale);
 
-        CreateDropdown("Resolution Dropdown", panel.transform, labelFont,
-            resolutionLabels, FindResolutionIndex(resolutions), RowY(0), index =>
-            {
-                selectedResolution = resolutions[Mathf.Clamp(index, 0, resolutions.Length - 1)];
-                ApplyDisplay(selectedResolution, selectedMode);
-            });
-        CreateDropdown("Window Mode Dropdown", panel.transform, labelFont,
-            modeLabels, GetWindowModeIndex(modes, selectedMode), RowY(1), index =>
-            {
-                selectedMode = modes[Mathf.Clamp(index, 0, modes.Length - 1)];
-                ApplyDisplay(selectedResolution, selectedMode);
-            });
+        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.572f);
+        CreateRowLabel(panel.transform, labelFont, "TEXTURE", RowY(3));
+        CreateRowLabel(panel.transform, labelFont, "SHADOWS", RowY(4));
+        CreateRowLabel(panel.transform, labelFont, "ANTI-ALIASING", RowY(5));
+        CreateRowLabel(panel.transform, labelFont, "POST FX", RowY(6));
 
-        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.545f);
-        CreateRowLabel(panel.transform, labelFont, "TEXTURE", RowY(2));
-        CreateRowLabel(panel.transform, labelFont, "POST FX", RowY(3));
-        CreateRowLabel(panel.transform, labelFont, "ANTI-ALIASING", RowY(4));
-
-        string[] textureLabels = { "FULL", "HALF", "QUARTER", "LOW" };
+        // Quarter is the floor: at 1/8 posters and signs turn into unreadable blocks.
+        string[] textureLabels = { "FULL", "HALF", "QUARTER" };
         CreateDropdown("Texture Quality Dropdown", panel.transform, labelFont,
             textureLabels,
             Mathf.Clamp(PlayerPrefs.GetInt(TextureQualityKey,
                 QualitySettings.globalTextureMipmapLimit), 0, textureLabels.Length - 1),
-            RowY(2), ApplyTextureQuality);
+            RowY(3), ApplyTextureQuality);
+
+        CreateDropdown("Shadow Quality Dropdown", panel.transform, labelFont,
+            new[] { "LOW", "MEDIUM", "HIGH" }, StoredShadowQuality(), RowY(4), ApplyShadowQuality);
+
+        // WebGL has no headroom for 4x MSAA on top of the browser's own canvas.
+        string[] aaLabels = IsWeb
+            ? new[] { "OFF", "FXAA", "SMAA", "TAA" }
+            : new[] { "OFF", "FXAA", "SMAA", "TAA", "MSAA 4X" };
+        CreateDropdown("Anti Aliasing Dropdown", panel.transform, labelFont, aaLabels,
+            Mathf.Clamp(GetStoredAntiAliasing(), 0, aaLabels.Length - 1),
+            RowY(5), ApplyAntiAliasing);
 
         bool postEnabled = PlayerPrefs.GetInt(PostProcessingKey, 1) != 0;
         Text postValue = CreateText("Post FX Value", panel.transform, labelFont,
             postEnabled ? "ON" : "OFF", 26, Ink, FontStyle.Normal,
-            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(3)),
-            new Vector2(ControlMaxX, RowY(3) + RowHeight));
+            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(6)),
+            new Vector2(ControlMaxX, RowY(6) + RowHeight));
         Toggle postToggle = CreateToggle("Post FX Toggle", panel.transform, postEnabled,
-            new Vector2(ControlMinX, RowY(3) + 0.008f),
-            new Vector2(ControlMinX + 0.04f, RowY(3) + RowHeight - 0.008f));
+            new Vector2(ControlMinX, RowY(6) + 0.006f),
+            new Vector2(ControlMinX + 0.035f, RowY(6) + RowHeight - 0.006f));
         postToggle.onValueChanged.AddListener(value =>
         {
             postValue.text = value ? "ON" : "OFF";
             ApplyPostProcessing(value);
         });
 
-        string[] aaLabels = { "OFF", "FXAA", "SMAA", "TAA" };
-        CreateDropdown("Anti Aliasing Dropdown", panel.transform, labelFont, aaLabels,
-            Mathf.Clamp(GetStoredAntiAliasing(), 0, aaLabels.Length - 1),
-            RowY(4), ApplyAntiAliasing);
-
-        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.25f);
-        CreateRowLabel(panel.transform, labelFont, "MASTER", RowY(5));
-        Text volumeValue = CreateText("Master Value", panel.transform, labelFont,
-            FormatVolume(AudioListener.volume), 26, Ink, FontStyle.Normal,
-            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(5)),
-            new Vector2(ControlMaxX, RowY(5) + RowHeight));
-        CreateSlider("Master Volume Slider", panel.transform, AudioListener.volume,
-            new Vector2(ControlMinX, RowY(5) + 0.012f),
-            new Vector2(ValueMinX - 0.008f, RowY(5) + RowHeight - 0.012f), value =>
-            {
-                volumeValue.text = FormatVolume(value);
-                ApplyMasterVolume(value);
-            });
+        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.323f);
+        CreateVolumeRow(panel.transform, labelFont, "MASTER", "Master", 7, masterVolume, value =>
+        {
+            masterVolume = value;
+            ApplyVolumes();
+        });
+        CreateVolumeRow(panel.transform, labelFont, "MUSIC", "Music", 8, musicVolume, value =>
+        {
+            musicVolume = value;
+            ApplyVolumes();
+        });
+        CreateVolumeRow(panel.transform, labelFont, "EFFECTS", "Effects", 9, effectsVolume, value =>
+        {
+            effectsVolume = value;
+            ApplyVolumes();
+        });
 
         // Downscaled copy of the menu buttons, centred under the sheet.
         Button back = PersonaMenuStyle.CreateButton(panel.transform, "Options Back Button",
             labelFont, "BACK", PersonaMenuStyle.ArtWidth * 0.5f,
-            PersonaMenuStyle.ArtHeight * 0.875f, 190f, 52f, 44, -1f, backAction);
+            PersonaMenuStyle.ArtHeight * 0.875f, 190f, 52f, 44, -1f, () =>
+            {
+                PlayerPrefs.Save();
+                backAction?.Invoke();
+            });
         PersonaMenuButton backPersona = back.GetComponent<PersonaMenuButton>();
         if (backPersona != null) backPersona.SetFocusMotion(1.06f, 2f);
         panel.SetActive(false);
@@ -151,15 +168,63 @@ public static class GymRuntimeSettings
     private const float ControlMinX = 0.49f;
     private const float ControlMaxX = 0.665f;
     private const float ValueMinX = 0.61f;
-    private const float RowHeight = 0.058f;
-    private static readonly float[] RowBottoms = { 0.69f, 0.615f, 0.47f, 0.395f, 0.32f, 0.175f };
+    private const float RowHeight = 0.04f;
+    private static readonly float[] RowBottoms =
+        { 0.72f, 0.674f, 0.628f, 0.517f, 0.471f, 0.425f, 0.379f, 0.268f, 0.222f, 0.176f };
     private static readonly Color OptionsVeil = new Color(0.012f, 0.05f, 0.13f, 0.72f);
     private static readonly Color SheetColor = new Color(0.03f, 0.036f, 0.058f, 1f);
 
-    // Two display rows, three graphics rows, one audio row.
+    // Three display rows, four graphics rows, three audio rows.
     private static float RowY(int row)
     {
         return RowBottoms[Mathf.Clamp(row, 0, RowBottoms.Length - 1)];
+    }
+
+    private static void CreateDisplayRows(Transform parent, Font labelFont)
+    {
+        CreateRowLabel(parent, labelFont, "RESOLUTION", RowY(0));
+        CreateRowLabel(parent, labelFont, "WINDOW MODE", RowY(1));
+
+        Resolution[] resolutions = GetResolutionOptions();
+        string[] resolutionLabels = GetResolutionLabels(resolutions);
+        Resolution selectedResolution = resolutions[FindResolutionIndex(resolutions)];
+        FullScreenMode[] modes =
+        {
+            FullScreenMode.Windowed,
+            FullScreenMode.FullScreenWindow,
+            FullScreenMode.ExclusiveFullScreen
+        };
+        string[] modeLabels = { "WINDOWED", "BORDERLESS", "FULLSCREEN" };
+        FullScreenMode selectedMode = GetStoredWindowMode(modes);
+
+        CreateDropdown("Resolution Dropdown", parent, labelFont,
+            resolutionLabels, FindResolutionIndex(resolutions), RowY(0), index =>
+            {
+                selectedResolution = resolutions[Mathf.Clamp(index, 0, resolutions.Length - 1)];
+                ApplyDisplay(selectedResolution, selectedMode);
+            });
+        CreateDropdown("Window Mode Dropdown", parent, labelFont,
+            modeLabels, GetWindowModeIndex(modes, selectedMode), RowY(1), index =>
+            {
+                selectedMode = modes[Mathf.Clamp(index, 0, modes.Length - 1)];
+                ApplyDisplay(selectedResolution, selectedMode);
+            });
+    }
+
+    private static void CreateVolumeRow(Transform parent, Font font, string label, string name,
+        int row, float initial, UnityAction<float> onChanged)
+    {
+        CreateRowLabel(parent, font, label, RowY(row));
+        Text value = CreateText(name + " Value", parent, font, FormatVolume(initial), 26, Ink,
+            FontStyle.Normal, TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(row)),
+            new Vector2(ControlMaxX, RowY(row) + RowHeight));
+        CreateSlider(name + " Volume Slider", parent, initial,
+            new Vector2(ControlMinX, RowY(row) + 0.009f),
+            new Vector2(ValueMinX - 0.008f, RowY(row) + RowHeight - 0.009f), v =>
+            {
+                value.text = FormatVolume(v);
+                onChanged(v);
+            });
     }
 
     private static void CreateSettingsSheet(Transform parent, Font titleFont)
@@ -223,7 +288,9 @@ public static class GymRuntimeSettings
             FullScreenMode.FullScreenWindow,
             FullScreenMode.ExclusiveFullScreen
         };
-        if (PlayerPrefs.HasKey(ResolutionWidthKey) && PlayerPrefs.HasKey(ResolutionHeightKey))
+        // WebGL: page sizes the canvas, and fullscreen without a user gesture is denied and kills the player.
+        if (Application.platform != RuntimePlatform.WebGLPlayer
+            && PlayerPrefs.HasKey(ResolutionWidthKey) && PlayerPrefs.HasKey(ResolutionHeightKey))
         {
             Screen.SetResolution(
                 Mathf.Max(320, PlayerPrefs.GetInt(ResolutionWidthKey)),
@@ -235,7 +302,122 @@ public static class GymRuntimeSettings
             TextureQualityKey, QualitySettings.globalTextureMipmapLimit));
         ApplyPostProcessing(PlayerPrefs.GetInt(PostProcessingKey, 1) != 0);
         ApplyAntiAliasing(PlayerPrefs.GetInt(AntiAliasingKey, GetStoredAntiAliasing()));
-        ApplyMasterVolume(PlayerPrefs.GetFloat(MasterVolumeKey, AudioListener.volume));
+        if (PlayerPrefs.HasKey(RenderScaleKey)) ApplyRenderScale(StoredRenderScaleIndex());
+        if (PlayerPrefs.HasKey(ShadowQualityKey)) ApplyShadowQuality(StoredShadowQuality());
+        masterVolume = Mathf.Clamp01(PlayerPrefs.GetFloat(MasterVolumeKey, 1f));
+        musicVolume = Mathf.Clamp01(PlayerPrefs.GetFloat(MusicVolumeKey, 1f));
+        effectsVolume = Mathf.Clamp01(PlayerPrefs.GetFloat(EffectsVolumeKey, 1f));
+        ApplyVolumes();
+    }
+
+#if UNITY_EDITOR
+    /// <summary>Verifier access: applies one option combination the way the menu does.</summary>
+    internal static void ApplyForVerification(int texture, int antiAliasing, int renderScale, int shadows, bool post)
+    {
+        ApplyTextureQuality(texture);
+        ApplyAntiAliasing(antiAliasing);
+        ApplyRenderScale(renderScale);
+        ApplyShadowQuality(shadows);
+        ApplyPostProcessing(post);
+    }
+#endif
+
+    // Settings edit a runtime copy of the URP asset so the project asset never changes on disk.
+    private static UniversalRenderPipelineAsset RuntimePipeline()
+    {
+        if (runtimePipeline != null) return runtimePipeline;
+        if (!(GraphicsSettings.currentRenderPipeline is UniversalRenderPipelineAsset source)) return null;
+        projectPipeline = source;
+        projectQualityPipeline = QualitySettings.renderPipeline;
+        runtimePipeline = Object.Instantiate(source);
+        runtimePipeline.name = source.name;
+        runtimePipeline.hideFlags = HideFlags.DontSave;
+        QualitySettings.renderPipeline = runtimePipeline;
+#if UNITY_EDITOR
+        EditorApplication.playModeStateChanged -= RestoreOnExitPlayMode;
+        EditorApplication.playModeStateChanged += RestoreOnExitPlayMode;
+#endif
+        return runtimePipeline;
+    }
+
+    /// <summary>Puts the project URP asset back (Editor play-mode exit and verifiers).</summary>
+    public static void RestoreProjectPipeline()
+    {
+        if (runtimePipeline == null) return;
+        QualitySettings.renderPipeline = projectQualityPipeline;
+        Object.DestroyImmediate(runtimePipeline);
+        runtimePipeline = null;
+        projectPipeline = null;
+    }
+
+#if UNITY_EDITOR
+    private static void RestoreOnExitPlayMode(PlayModeStateChange change)
+    {
+        if (change == PlayModeStateChange.ExitingPlayMode) RestoreProjectPipeline();
+    }
+#endif
+
+    // WebGL tops out at native: the browser GPU has no headroom for supersampling.
+    private static float[] RenderScales => IsWeb
+        ? new[] { 0.7f, 0.85f, 1f }
+        : new[] { 0.75f, 1f, 1.25f, 1.5f };
+
+    private static string[] RenderScaleLabels()
+    {
+        float[] scales = RenderScales;
+        string[] labels = new string[scales.Length];
+        for (int i = 0; i < scales.Length; i++) labels[i] = Mathf.RoundToInt(scales[i] * 100f) + "%";
+        return labels;
+    }
+
+    private static int StoredRenderScaleIndex()
+    {
+        float[] scales = RenderScales;
+        int fallback = System.Array.IndexOf(scales, 1f);
+        return Mathf.Clamp(PlayerPrefs.GetInt(RenderScaleKey, fallback), 0, scales.Length - 1);
+    }
+
+    private static void ApplyRenderScale(int index)
+    {
+        float[] scales = RenderScales;
+        int clamped = Mathf.Clamp(index, 0, scales.Length - 1);
+        PlayerPrefs.SetInt(RenderScaleKey, clamped);
+        PlayerPrefs.Save();
+        GymDynamicResolution.MaxScale = scales[clamped];
+        UniversalRenderPipelineAsset asset = RuntimePipeline();
+        if (asset != null) asset.renderScale = scales[clamped];
+    }
+
+    private static int StoredShadowQuality()
+    {
+        if (PlayerPrefs.HasKey(ShadowQualityKey)) return Mathf.Clamp(PlayerPrefs.GetInt(ShadowQualityKey), 0, 2);
+        UniversalRenderPipelineAsset asset = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+        return asset == null || asset.shadowCascadeCount <= 1 ? 0 : asset.shadowDistance <= 60f ? 1 : 2;
+    }
+
+    // Distance, map resolution and cascades together: a visible step each level.
+    private static void ApplyShadowQuality(int value)
+    {
+        int clamped = Mathf.Clamp(value, 0, 2);
+        PlayerPrefs.SetInt(ShadowQualityKey, clamped);
+        PlayerPrefs.Save();
+        UniversalRenderPipelineAsset asset = RuntimePipeline();
+        if (asset == null) return;
+        // The sun shadow keeps daylight out under the roof, so PC levels all reach
+        // across the gym (40 m) and only lose cascades. WebGL LOW keeps the 28 m
+        // default: every extra metre costs the browser GPU (40 m halved the gym fps).
+        if (IsWeb)
+        {
+            // Browser GPU budget: one 2048 cascade at most.
+            asset.shadowDistance = clamped == 0 ? 28f : clamped == 1 ? 40f : 55f;
+            asset.mainLightShadowmapResolution = 2048;
+            asset.shadowCascadeCount = 1;
+            return;
+        }
+        asset.shadowDistance = clamped == 0 ? 40f : clamped == 1 ? 55f : 90f;
+        // Below 2048 the map turns thin parts into flat dark blocks; levels differ in cascades instead.
+        asset.mainLightShadowmapResolution = clamped == 2 ? 4096 : 2048;
+        asset.shadowCascadeCount = clamped == 0 ? 1 : clamped == 1 ? 2 : 4;
     }
 
     public static void ExitGame()
@@ -653,7 +835,7 @@ public static class GymRuntimeSettings
 
     private static void ApplyTextureQuality(int value)
     {
-        int clamped = Mathf.Clamp(value, 0, 3);
+        int clamped = Mathf.Clamp(value, 0, 2);
         QualitySettings.globalTextureMipmapLimit = clamped;
         PlayerPrefs.SetInt(TextureQualityKey, clamped);
         PlayerPrefs.Save();
@@ -685,7 +867,7 @@ public static class GymRuntimeSettings
     {
         if (PlayerPrefs.HasKey(AntiAliasingKey))
         {
-            return Mathf.Clamp(PlayerPrefs.GetInt(AntiAliasingKey), 0, 3);
+            return Mathf.Clamp(PlayerPrefs.GetInt(AntiAliasingKey), 0, IsWeb ? MsaaOption - 1 : MsaaOption);
         }
         Camera[] cameras = Object.FindObjectsByType<Camera>(FindObjectsSortMode.None);
         for (int i = 0; i < cameras.Length; i++)
@@ -707,16 +889,25 @@ public static class GymRuntimeSettings
 
     private static void ApplyAntiAliasing(int value)
     {
-        int clamped = Mathf.Clamp(value, 0, 3);
+        int clamped = Mathf.Clamp(value, 0, IsWeb ? MsaaOption - 1 : MsaaOption);
         PlayerPrefs.SetInt(AntiAliasingKey, clamped);
         PlayerPrefs.Save();
+        // MSAA smooths geometry edges at the source; SMAA on top catches shader edges.
         AntialiasingMode mode = clamped switch
         {
             1 => AntialiasingMode.FastApproximateAntialiasing,
             2 => AntialiasingMode.SubpixelMorphologicalAntiAliasing,
             3 => AntialiasingMode.TemporalAntiAliasing,
+            MsaaOption => AntialiasingMode.SubpixelMorphologicalAntiAliasing,
             _ => AntialiasingMode.None
         };
+        int msaa = clamped == MsaaOption ? 4 : 1;
+        UniversalRenderPipelineAsset current = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+        if (current != null && current.msaaSampleCount != msaa)
+        {
+            UniversalRenderPipelineAsset asset = RuntimePipeline();
+            if (asset != null) asset.msaaSampleCount = msaa;
+        }
         Camera[] cameras = Object.FindObjectsByType<Camera>(FindObjectsSortMode.None);
         for (int i = 0; i < cameras.Length; i++)
         {
@@ -728,11 +919,17 @@ public static class GymRuntimeSettings
         }
     }
 
-    private static void ApplyMasterVolume(float value)
+    // Effects ride AudioListener.volume; the radio ignores it and reads MusicVolume.
+    private static void ApplyVolumes()
     {
-        float clamped = Mathf.Clamp01(value);
-        AudioListener.volume = clamped;
-        PlayerPrefs.SetFloat(MasterVolumeKey, clamped);
+        masterVolume = Mathf.Clamp01(masterVolume);
+        musicVolume = Mathf.Clamp01(musicVolume);
+        effectsVolume = Mathf.Clamp01(effectsVolume);
+        AudioListener.volume = masterVolume * effectsVolume;
+        PlayerPrefs.SetFloat(MasterVolumeKey, masterVolume);
+        PlayerPrefs.SetFloat(MusicVolumeKey, musicVolume);
+        PlayerPrefs.SetFloat(EffectsVolumeKey, effectsVolume);
+        // Saved per change: a WebGL tab can close without BACK ever being pressed.
         PlayerPrefs.Save();
     }
 

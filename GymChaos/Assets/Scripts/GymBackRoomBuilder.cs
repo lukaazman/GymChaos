@@ -156,6 +156,8 @@ public static class GymBackRoomBuilder
         CreateBox("Locker Room Ceiling", rootObject.transform,
             roomCenter + Vector3.up * BackHeight, new Vector3(BackWidth, 0.18f, BackDepth), trimMaterial, true);
 
+        CreateCeilingLights(rootObject.transform, roomCenter);
+
         float northZ = roomCenter.z + BackDepth * 0.5f;
         float southZ = roomCenter.z - BackDepth * 0.5f;
         float minX = roomCenter.x - BackWidth * 0.5f;
@@ -1334,6 +1336,39 @@ public static class GymBackRoomBuilder
                     $"{authoredLockerPropRequests}", loaded);
             });
     }
+    // Recessed ceiling panels, each with an unshadowed downlight: 2x2 over the
+    // lockers, one over the sinks, one in the stall. Panels stay under the bloom threshold.
+    private static void CreateCeilingLights(Transform parent, Vector3 center)
+    {
+        Material panel = GymMaterialLibrary.Lit("Locker ceiling panel light", new Color(0.93f, 0.95f, 0.97f),
+            0f, 0.6f, emission: new Color(1.05f, 1.07f, 1.1f));
+        Vector3[] spots =
+        {
+            new Vector3(-5.8f, 0f, -3.2f), new Vector3(0f, 0f, -3.2f),
+            new Vector3(-5.8f, 0f, 3.2f), new Vector3(0f, 0f, 3.2f),
+            new Vector3(5.9f, 0f, -2.2f), new Vector3(7.3f, 0f, 4.3f)
+        };
+        for (int i = 0; i < spots.Length; i++)
+        {
+            Vector3 position = center + spots[i] + Vector3.up * (BackHeight - 0.1f);
+            bool bathroom = spots[i].x > 3f;
+            CreateBox("Locker ceiling panel " + i, parent, position,
+                bathroom ? new Vector3(0.9f, 0.03f, 0.9f) : new Vector3(1.6f, 0.03f, 0.7f), panel, false);
+            GameObject lightObject = new GameObject("Locker downlight " + i);
+            lightObject.transform.SetParent(parent, false);
+            lightObject.transform.SetPositionAndRotation(position - Vector3.up * 0.05f,
+                Quaternion.Euler(90f, 0f, 0f));
+            Light light = lightObject.AddComponent<Light>();
+            light.type = LightType.Spot;
+            light.color = new Color(1f, 0.97f, 0.93f);
+            light.intensity = bathroom ? 60f : 85f;
+            light.range = 9f;
+            light.spotAngle = 130f;
+            light.innerSpotAngle = 85f;
+            light.shadows = LightShadows.None;
+        }
+    }
+
     private static void CreateBathroom(
         Transform parent, Vector3 center, float floorY,
         Material tile, Material metal, Material accent, Material mirror,

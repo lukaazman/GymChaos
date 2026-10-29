@@ -27,6 +27,8 @@ public class GymExerciseStation : MonoBehaviour
     private static readonly int[] LatPulldownWeights = { 20, 40, 50, 60, 70, 80, 90, 100, 115, 130 };
     private static readonly int[] DeadliftWeights = { 60, 80, 100, 140, 180, 200, 300, 400 };
     private const int DeadliftBarWeight = 20;
+    // Widest visitor body radius plus EnemyFighter's 0.18 m deadlift margin.
+    private const float DeadliftReachClearance = 0.7f;
     private const int DeadliftStartingLoad = 60;
     public const float DeadliftBarVisualMajorSize = 4.15f;
     // Inner loading position on the sleeve, measured from the authored bar
@@ -649,6 +651,12 @@ public class GymExerciseStation : MonoBehaviour
 
             if (!station.IsSquat || station.IsOccupied ||
                 (excludedStations != null && excludedStations.Contains(station)))
+            {
+                continue;
+            }
+            // A rack whose stand point sits in the deadlift platform's no-walk
+            // margin can never be reached: the visitor stalled and left.
+            if (GymLooseItemSpawner.IsInsideDeadliftClearance(station.EnemyPosition, DeadliftReachClearance))
             {
                 continue;
             }

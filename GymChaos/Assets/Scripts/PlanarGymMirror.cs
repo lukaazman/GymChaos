@@ -22,7 +22,6 @@ public sealed class PlanarGymMirror : MonoBehaviour
     private bool continuousRefresh;
     private bool refreshRequested = true;
     private bool useObliqueClip = true;
-    private bool halfRate;
     private float nextPlayerMaterialRepair;
     private static float nextGlobalPlayerMaterialRepair;
     private static float nextPlayerRendererDiscovery;
@@ -119,23 +118,7 @@ public sealed class PlanarGymMirror : MonoBehaviour
             hideFlags = HideFlags.DontSave
         };
 
-        // WebGL: a smaller reflection target; the mirror is a secondary view
-        // and fill rate is the browser GPU budget.
-        bool web = Application.platform == RuntimePlatform.WebGLPlayer;
-        halfRate = web;
-        float scale = web ? 0.4f : 0.62f;
-        int width = Mathf.Clamp(Mathf.RoundToInt(Screen.width * scale), web ? 384 : 512, web ? 640 : 1024);
-        int height = Mathf.Clamp(Mathf.RoundToInt(Screen.height * scale), web ? 216 : 288, web ? 360 : 576);
-        reflectionTexture = new RenderTexture(width, height, 16, RenderTextureFormat.Default)
-        {
-            name = "Gym Planar Reflection",
-            antiAliasing = 1,
-            useMipMap = false,
-            autoGenerateMips = false,
-            hideFlags = HideFlags.DontSave
-        };
-        reflectionTexture.Create();
-        mirrorMaterial.SetTexture(ReflectionTextureId, reflectionTexture);
+        CreateReflectionTexture();
 
         GameObject cameraObject = new GameObject("Gym Mirror Camera");
         cameraObject.transform.SetParent(transform, false);
@@ -173,9 +156,43 @@ public sealed class PlanarGymMirror : MonoBehaviour
         RenderPipelineManager.endCameraRendering += EndCameraRendering;
         UpdateReflectionCamera();
         Debug.Log(
-            $"GYMCHAOS_PLANAR_MIRROR_READY normal={planeNormal} rt={width}x{height} " +
+            $"GYMCHAOS_PLANAR_MIRROR_READY normal={planeNormal} " +
+            $"rt={reflectionTexture.width}x{reflectionTexture.height} " +
             $"playerLayer={(reflectionCamera.cullingMask & (1 << MirrorPlayerLayer)) != 0}",
             this);
+    }
+
+    // Sharp and undistorted: 0.75 x screen height at the screen aspect, capped
+    // at 1080 rows (720 on WebGL). It renders every frame, but only while visible.
+    private static Vector2Int TargetSize()
+    {
+        int maxHeight = Application.platform == RuntimePlatform.WebGLPlayer ? 720 : 1080;
+        int height = Mathf.Clamp(Mathf.RoundToInt(Screen.height * 0.75f), 240, maxHeight);
+        float aspect = (float)Screen.width / Mathf.Max(1, Screen.height);
+        return new Vector2Int(Mathf.Max(320, Mathf.RoundToInt(height * aspect)), height);
+    }
+
+    private void CreateReflectionTexture()
+    {
+        Vector2Int size = TargetSize();
+        if (reflectionTexture != null)
+        {
+            if (reflectionTexture.width == size.x && reflectionTexture.height == size.y) return;
+            if (reflectionCamera != null) reflectionCamera.targetTexture = null;
+            reflectionTexture.Release();
+            Destroy(reflectionTexture);
+        }
+        reflectionTexture = new RenderTexture(size.x, size.y, 16, RenderTextureFormat.Default)
+        {
+            name = "Gym Planar Reflection",
+            antiAliasing = 1,
+            useMipMap = false,
+            autoGenerateMips = false,
+            hideFlags = HideFlags.DontSave
+        };
+        reflectionTexture.Create();
+        mirrorMaterial.SetTexture(ReflectionTextureId, reflectionTexture);
+        if (reflectionCamera != null) reflectionCamera.targetTexture = reflectionTexture;
     }
 
     private void LateUpdate()
@@ -185,14 +202,13 @@ public sealed class PlanarGymMirror : MonoBehaviour
             return;
         }
 
-        // WebGL: the reflection refreshes every other frame (the mirror keeps
-        // the previous image), unless a refresh was asked for.
-        bool skipFrame = halfRate && !continuousRefresh && !refreshRequested && (Time.frameCount & 1) == 1;
-        if (skipFrame || !(continuousRefresh || refreshRequested || IsVisibleFromSourceCamera()))
+        if (!(continuousRefresh || refreshRequested || IsVisibleFromSourceCamera()))
         {
             reflectionCamera.enabled = false;
             return;
         }
+        // Window resize or fullscreen toggle: keep the target matched to the screen.
+        CreateReflectionTexture();
 
         refreshRequested = false;
         UpdateReflectionCamera();

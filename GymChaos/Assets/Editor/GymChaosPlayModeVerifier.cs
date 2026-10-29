@@ -372,10 +372,12 @@ public static class GymChaosPlayModeVerifier
                     {
                         runBandDirection = Vector3.forward;
                     }
+                    // 4.4 m keeps a metre of margin over attack range for one bounded
+                    // frame (GokuSampleMaximumDeltaTime); still below 5.2 m flight.
                     MovePlayerForVerification(
                         player,
                         gokuForVerification.transform.position +
-                        runBandDirection.normalized * 3.4f);
+                        runBandDirection.normalized * 4.4f);
                 }
                 float gokuDistance = gokuForVerification != null
                     ? Vector3.ProjectOnPlane(
@@ -1046,6 +1048,10 @@ public static class GymChaosPlayModeVerifier
             $"player={safePlayerPosition} planarDistance={gokuSetupDistance:F2} " +
             $"floor={(floor != null ? floor.bounds.ToString() : "missing")} ");
         MovePlayerForVerification(player, safePlayerPosition);
+        // Roaming visitors walked into Goku's chase line; one he bumped hit
+        // back (grudge retaliation) and stunned him mid-stage. Same isolation
+        // as GymChaosGokuFlightVerifier: visitors hold still from here on.
+        GymVisitorDirector.Instance?.SuspendVisitorSimulationForVerification();
         // Under parallel regression load one editor frame could advance up to
         // Maximum Allowed Timestep (0.33 s of game time, ~16 physics steps):
         // Goku took off, flew and landed between two verifier ticks, so the

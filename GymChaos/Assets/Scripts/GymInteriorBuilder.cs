@@ -781,10 +781,10 @@ public static class GymInteriorBuilder
                 Light light = lightObject.AddComponent<Light>();
                 light.type = LightType.Spot;
                 light.color = new Color(0.96f, 0.97f, 1f);
-                light.intensity = 440f;
+                light.intensity = 620f;
                 light.range = 13f;
-                light.spotAngle = 105f;
-                light.innerSpotAngle = 70f;
+                light.spotAngle = 120f;
+                light.innerSpotAngle = 45f;
                 light.shadows = LightShadows.None;
             }
         }

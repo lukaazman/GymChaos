@@ -102,14 +102,14 @@ public partial class PlayerMovement : MonoBehaviour
     private Vector3 cameraBaseLocalPosition;
     private const float PlayerPunchAimLift = 0.16f;
     private const float ContextPromptMinWidth = 220f;
-    private const float ContextPromptMaxWidth = 328f;
-    private const float ContextPromptHeight = 50f;
+    private const float ContextPromptHeight = 56f;
+    internal const bool PromptMessageWraps = false;
     private const float ContextPromptGap = 8f;
     private const float ContextPromptBottomInset = 28f;
     private const float ContextPromptViewportInset = 16f;
     private const float ContextPromptOuterInset = 12f;
     private const float ContextPromptInnerInset = 10f;
-    private const float ContextPromptKeyColumnWidth = 54f;
+    private const float ContextPromptKeyColumnWidth = 60f;
     private const float ContextPromptMessageLeftPadding = 14f;
     private const float ContextPromptMessageRightPadding = 12f;
 
@@ -2378,10 +2378,7 @@ public partial class PlayerMovement : MonoBehaviour
             // contextual prompts remain on this path.
             if (CanShowCursorRecapturePrompt)
             {
-                float promptWidth = Mathf.Min(360f, Screen.width - 32f);
-                DrawHudPrompt(
-                    new Rect((Screen.width - promptWidth) * 0.5f, Screen.height * 0.5f - 26f, promptWidth, 52f),
-                    "LMB", "CLICK TO LOOK AROUND");
+                DrawCursorRecapturePrompt();
             }
 
             DrawContextInteractionPrompts();
@@ -2429,13 +2426,7 @@ public partial class PlayerMovement : MonoBehaviour
 
         if (CanShowCursorRecapturePrompt)
         {
-            float width = Mathf.Min(360f, Screen.width - 32f);
-            Rect captureRect = new Rect(
-                (Screen.width - width) * 0.5f,
-                Screen.height * 0.5f - 26f,
-                width,
-                52f);
-            DrawHudPrompt(captureRect, "LMB", "CLICK TO LOOK AROUND");
+            DrawCursorRecapturePrompt();
         }
 
         DrawContextInteractionPrompts();
@@ -2637,7 +2628,41 @@ public partial class PlayerMovement : MonoBehaviour
         }
     }
 
+    // Prompts are laid out on a 1080-row virtual screen and scaled by GUI.matrix,
+    // so they take the same share of the screen at any resolution or aspect.
+    private static float PromptScale => PromptScaleFor(Screen.height);
+    internal static float PromptScaleFor(int screenHeight) => Mathf.Max(0.5f, screenHeight / 1080f);
+    // Prompt plate height on a 1080-row screen; the message never wraps (one line).
+    internal const float PromptVirtualHeight = ContextPromptHeight;
+    private static float PromptScreenWidth => Screen.width / PromptScale;
+    private static float PromptScreenHeight => Screen.height / PromptScale;
+
+    private void DrawCursorRecapturePrompt()
+    {
+        Matrix4x4 previous = GUI.matrix;
+        GUI.matrix = Matrix4x4.Scale(new Vector3(PromptScale, PromptScale, 1f));
+        string message = "CLICK TO LOOK AROUND";
+        float width = GetHudPromptWidth(message);
+        DrawHudPrompt(new Rect((PromptScreenWidth - width) * 0.5f, PromptScreenHeight * 0.5f - ContextPromptHeight * 0.5f,
+            width, ContextPromptHeight), "LMB", message);
+        GUI.matrix = previous;
+    }
+
     private void DrawContextInteractionPrompts()
+    {
+        Matrix4x4 previous = GUI.matrix;
+        GUI.matrix = Matrix4x4.Scale(new Vector3(PromptScale, PromptScale, 1f));
+        try
+        {
+            DrawContextInteractionPromptsScaled();
+        }
+        finally
+        {
+            GUI.matrix = previous;
+        }
+    }
+
+    private void DrawContextInteractionPromptsScaled()
     {
         if (GymRaceDirector.IsRaceActive || GymExperienceService.Active != null &&
             GymExperienceService.Active.IsBlockingPlayerInput)
@@ -2683,25 +2708,25 @@ public partial class PlayerMovement : MonoBehaviour
         float fHeight = hasF ? GetHudPromptHeight(fMessage, fWidth) : 0f;
         float promptHeight = Mathf.Max(eHeight, fHeight, ContextPromptHeight);
         float maxAllowedWidth = GetHudPromptViewportWidth();
-        bool sideBySide = hasE && hasF && Screen.width >= 640f &&
+        bool sideBySide = hasE && hasF && PromptScreenWidth >= 640f &&
             eWidth + ContextPromptGap + fWidth <= maxAllowedWidth;
         if (sideBySide)
         {
             float totalWidth = eWidth + ContextPromptGap + fWidth;
-            float left = (Screen.width - totalWidth) * 0.5f;
+            float left = (PromptScreenWidth - totalWidth) * 0.5f;
             DrawHudPrompt(
-                new Rect(left, Screen.height - ContextPromptBottomInset - promptHeight, eWidth, promptHeight),
+                new Rect(left, PromptScreenHeight - ContextPromptBottomInset - promptHeight, eWidth, promptHeight),
                 "E",
                 eMessage);
             DrawHudPrompt(
-                new Rect(left + eWidth + ContextPromptGap, Screen.height - ContextPromptBottomInset - promptHeight,
+                new Rect(left + eWidth + ContextPromptGap, PromptScreenHeight - ContextPromptBottomInset - promptHeight,
                     fWidth, promptHeight),
                 "F",
                 fMessage);
             return;
         }
 
-        float stackedBottom = Screen.height - ContextPromptBottomInset;
+        float stackedBottom = PromptScreenHeight - ContextPromptBottomInset;
         float stackedTotalHeight = (hasE ? eHeight : 0f) +
             (hasF ? fHeight : 0f) +
             (hasE && hasF ? ContextPromptGap : 0f);
@@ -2711,7 +2736,7 @@ public partial class PlayerMovement : MonoBehaviour
         {
             DrawHudPrompt(
                 new Rect(
-                    (Screen.width - eWidth) * 0.5f,
+                    (PromptScreenWidth - eWidth) * 0.5f,
                     stackedTop,
                     eWidth,
                     eHeight),
@@ -2724,7 +2749,7 @@ public partial class PlayerMovement : MonoBehaviour
         {
             DrawHudPrompt(
                 new Rect(
-                    (Screen.width - fWidth) * 0.5f,
+                    (PromptScreenWidth - fWidth) * 0.5f,
                     stackedTop,
                     fWidth,
                     fHeight),
@@ -2735,7 +2760,7 @@ public partial class PlayerMovement : MonoBehaviour
 
     private static float GetHudPromptViewportWidth()
     {
-        return Mathf.Max(1f, Screen.width - ContextPromptViewportInset * 2f);
+        return Mathf.Max(1f, PromptScreenWidth - ContextPromptViewportInset * 2f);
     }
 
     private float GetHudPromptWidth(string message)
@@ -2751,10 +2776,8 @@ public partial class PlayerMovement : MonoBehaviour
             measuredMessageWidth;
         float availableWidth = GetHudPromptViewportWidth();
         float minimumWidth = Mathf.Min(ContextPromptMinWidth, availableWidth);
-        return Mathf.Clamp(
-            desiredWidth,
-            minimumWidth,
-            Mathf.Min(ContextPromptMaxWidth, availableWidth));
+        // One line: the plate grows with the text up to the screen width.
+        return Mathf.Clamp(desiredWidth, minimumWidth, availableWidth);
     }
 
     private float GetHudPromptHeight(string message, float promptWidth)
@@ -2899,11 +2922,12 @@ public partial class PlayerMovement : MonoBehaviour
         hudHintStyle.normal.textColor = new Color(0.86f, 0.9f, 0.96f);
         hudAccentStyle = CreateHudStyle(14, FontStyle.Bold, TextAnchor.UpperLeft);
         hudAccentStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
-        hudPromptStyle = CreateHudStyle(17, FontStyle.Bold, TextAnchor.MiddleCenter);
+        hudPromptStyle = CreateHudStyle(22, FontStyle.Bold, TextAnchor.MiddleCenter);
         hudPromptStyle.normal.textColor = new Color(1f, 0.82f, 0.35f);
-        hudPromptMessageStyle = CreateHudStyle(14, FontStyle.Bold, TextAnchor.MiddleLeft);
+        hudPromptMessageStyle = CreateHudStyle(19, FontStyle.Bold, TextAnchor.MiddleLeft);
         hudPromptMessageStyle.normal.textColor = Color.white;
         hudPromptMessageStyle.clipping = TextClipping.Clip;
+        hudPromptMessageStyle.wordWrap = PromptMessageWraps;
     }
 
     private static GUIStyle CreateHudStyle(

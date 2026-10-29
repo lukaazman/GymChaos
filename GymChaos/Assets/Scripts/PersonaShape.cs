@@ -52,6 +52,17 @@ public sealed class PersonaShape : MaskableGraphic
         SetVerticesDirty();
     }
 
+    // Width in screen pixels of the transparent fringe that anti-aliases slanted edges.
+    public const float EdgeFeatherPixels = 1.25f;
+
+    /// <summary>True when the last mesh build added the anti-aliasing fringe.</summary>
+    public bool EdgeFeathered { get; private set; }
+
+#if UNITY_EDITOR
+    // Before/after captures only: builds plates without the fringe.
+    internal static bool FringeOffForComparison;
+#endif
+
     protected override void OnPopulateMesh(VertexHelper vh)
     {
         vh.Clear();
@@ -67,13 +78,60 @@ public sealed class PersonaShape : MaskableGraphic
         {
             Vector2 offset = cornerOffsets != null && i < cornerOffsets.Length
                 ? cornerOffsets[i] : Vector2.zero;
-            Vector2 position = corners[i] + Vector2.Scale(offset, rect.size);
-            Vector2 uv = pattern != null
-                ? position / patternTileSize
-                : new Vector2(i >= 2 ? 1f : 0f, i == 1 || i == 2 ? 1f : 0f);
-            vh.AddVert(position, color, uv);
+            corners[i] += Vector2.Scale(offset, rect.size);
+        }
+
+        // Overlay UI gets no camera AA: slanted or rotated edges get a fringe
+        // that fades to transparent over ~1 px. Upright plates stay crisp.
+        Canvas owner = canvas;
+        EdgeFeathered = owner != null && (HasCornerOffsets ||
+            Quaternion.Angle(transform.rotation, owner.transform.rotation) > 0.05f);
+#if UNITY_EDITOR
+        if (FringeOffForComparison) EdgeFeathered = false;
+#endif
+        float feather = EdgeFeathered
+            ? EdgeFeatherPixels / Mathf.Max(0.01f, owner.scaleFactor * transform.lossyScale.x /
+                Mathf.Max(0.0001f, owner.transform.lossyScale.x))
+            : 0f;
+        Color32 clear = color;
+        clear.a = 0;
+        for (int ring = 0; ring < (EdgeFeathered ? 2 : 1); ring++)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                Vector2 position = corners[i];
+                if (EdgeFeathered)
+                {
+                    position += Miter(corners[(i + 3) % 4], corners[i], corners[(i + 1) % 4]) *
+                        (ring == 0 ? -0.5f : 0.5f) * feather;
+                }
+                Vector2 uv = pattern != null
+                    ? position / patternTileSize
+                    : new Vector2(i >= 2 ? 1f : 0f, i == 1 || i == 2 ? 1f : 0f);
+                vh.AddVert(position, ring == 0 ? (Color32)color : clear, uv);
+            }
         }
         vh.AddTriangle(0, 1, 2);
         vh.AddTriangle(2, 3, 0);
+        if (!EdgeFeathered) return;
+        for (int i = 0; i < 4; i++)
+        {
+            int next = (i + 1) % 4;
+            vh.AddTriangle(i, i + 4, next + 4);
+            vh.AddTriangle(next + 4, next, i);
+        }
+    }
+
+    // Outward miter at b for the clockwise outline a -> b -> c (y up), capped for sharp corners.
+    private static Vector2 Miter(Vector2 a, Vector2 b, Vector2 c)
+    {
+        Vector2 d1 = (b - a).normalized;
+        Vector2 d2 = (c - b).normalized;
+        Vector2 n1 = new Vector2(-d1.y, d1.x);
+        Vector2 n2 = new Vector2(-d2.y, d2.x);
+        Vector2 sum = n1 + n2;
+        if (sum.sqrMagnitude < 1e-6f) return n1;
+        Vector2 direction = sum.normalized;
+        return direction / Mathf.Max(0.35f, Vector2.Dot(direction, n1));
     }
 }

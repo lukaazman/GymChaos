@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
 
@@ -21,6 +22,10 @@ public static class GymChaosPauseOptionsVerifier
     private const string PostProcessingKey = "GymChaos.UI.PostProcessing.v1";
     private const string AntiAliasingKey = "GymChaos.UI.AntiAliasing.v1";
     private const string MasterVolumeKey = "GymChaos.UI.MasterVolume.v1";
+    private const string MusicVolumeKey = "GymChaos.UI.MusicVolume.v1";
+    private const string EffectsVolumeKey = "GymChaos.UI.EffectsVolume.v1";
+    private const string RenderScaleKey = "GymChaos.UI.RenderScale.v1";
+    private const string ShadowQualityKey = "GymChaos.UI.ShadowQuality.v1";
 
     private static readonly string[] IntegerPreferenceKeys =
     {
@@ -29,7 +34,16 @@ public static class GymChaosPauseOptionsVerifier
         WindowModeKey,
         TextureQualityKey,
         PostProcessingKey,
-        AntiAliasingKey
+        AntiAliasingKey,
+        RenderScaleKey,
+        ShadowQualityKey
+    };
+
+    private static readonly string[] FloatPreferenceKeys =
+    {
+        MasterVolumeKey,
+        MusicVolumeKey,
+        EffectsVolumeKey
     };
 
     private sealed class CameraState
@@ -46,8 +60,14 @@ public static class GymChaosPauseOptionsVerifier
             new bool[IntegerPreferenceKeys.Length];
         public readonly int[] IntegerPreferenceValues =
             new int[IntegerPreferenceKeys.Length];
-        public bool MasterVolumePresent;
-        public float MasterVolume;
+        public readonly bool[] FloatPreferencePresent =
+            new bool[FloatPreferenceKeys.Length];
+        public readonly float[] FloatPreferenceValues =
+            new float[FloatPreferenceKeys.Length];
+        public RenderPipelineAsset QualityPipeline;
+        public float DiskRenderScale;
+        public int DiskMsaa;
+        public float DiskShadowDistance;
         public int ScreenWidth;
         public int ScreenHeight;
         public FullScreenMode ScreenMode;
@@ -82,10 +102,11 @@ public static class GymChaosPauseOptionsVerifier
             ValidatePauseControls(menuRoot);
             ValidateOptionsControls(menuRoot);
             ExerciseMenuPath(menuRoot);
+            ExerciseSettingEffects(menuRoot, snapshot);
 
             Debug.Log(
                 "GYMCHAOS_PAUSE_OPTIONS_UI_OK " +
-                "canvasScaler=1920x1080/0.5 controls=11 flow=play-options-back");
+                "canvasScaler=1920x1080/0.5 controls=14 flow=play-options-back effects=ok");
             exitCode = 0;
         }
         catch (Exception exception)
@@ -136,8 +157,16 @@ public static class GymChaosPauseOptionsVerifier
             snapshot.IntegerPreferenceValues[i] = PlayerPrefs.GetInt(key);
         }
 
-        snapshot.MasterVolumePresent = PlayerPrefs.HasKey(MasterVolumeKey);
-        snapshot.MasterVolume = PlayerPrefs.GetFloat(MasterVolumeKey);
+        for (int i = 0; i < FloatPreferenceKeys.Length; i++)
+        {
+            snapshot.FloatPreferencePresent[i] = PlayerPrefs.HasKey(FloatPreferenceKeys[i]);
+            snapshot.FloatPreferenceValues[i] = PlayerPrefs.GetFloat(FloatPreferenceKeys[i]);
+        }
+        snapshot.QualityPipeline = QualitySettings.renderPipeline;
+        UniversalRenderPipelineAsset disk = DiskPipeline();
+        snapshot.DiskRenderScale = disk.renderScale;
+        snapshot.DiskMsaa = disk.msaaSampleCount;
+        snapshot.DiskShadowDistance = disk.shadowDistance;
         return snapshot;
     }
 
@@ -216,7 +245,11 @@ public static class GymChaosPauseOptionsVerifier
         RequireDropdown(menuRoot, "Texture Quality Dropdown");
         RequireToggle(menuRoot, "Post FX Toggle");
         RequireDropdown(menuRoot, "Anti Aliasing Dropdown");
+        RequireDropdown(menuRoot, "Render Scale Dropdown");
+        RequireDropdown(menuRoot, "Shadow Quality Dropdown");
         RequireSlider(menuRoot, "Master Volume Slider");
+        RequireSlider(menuRoot, "Music Volume Slider");
+        RequireSlider(menuRoot, "Effects Volume Slider");
         RequireButton(menuRoot, "Options Back Button");
     }
 
@@ -242,6 +275,72 @@ public static class GymChaosPauseOptionsVerifier
         playButton.onClick.Invoke();
         Require(!GymPauseMenu.IsVisible && !pausePage.activeSelf && !optionsPanel.activeSelf,
             "Pause Play button did not resume and hide the menu.");
+    }
+
+    // Every option must change what the game renders or plays, on a runtime
+    // copy of the URP asset; the project asset on disk stays untouched.
+    private static void ExerciseSettingEffects(GameObject menuRoot, Snapshot snapshot)
+    {
+        RequireSlider(menuRoot, "Master Volume Slider").value = 0.8f;
+        RequireSlider(menuRoot, "Effects Volume Slider").value = 0.5f;
+        RequireSlider(menuRoot, "Music Volume Slider").value = 0.25f;
+        Require(Mathf.Abs(AudioListener.volume - 0.4f) < 0.01f,
+            "Effects volume did not scale AudioListener.volume: " + AudioListener.volume);
+        Require(Mathf.Abs(GymRuntimeSettings.MusicVolume - 0.2f) < 0.01f,
+            "Music volume is not master x music: " + GymRuntimeSettings.MusicVolume);
+
+        Dropdown aa = RequireDropdown(menuRoot, "Anti Aliasing Dropdown");
+        aa.value = aa.options.Count - 1;
+        UniversalRenderPipelineAsset runtime =
+            GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+        Require(runtime != null && runtime != DiskPipeline(),
+            "Settings must edit a runtime copy of the URP asset.");
+        Require(runtime.msaaSampleCount == 4, "MSAA option did not set 4x MSAA: " + runtime.msaaSampleCount);
+        aa.value = 1;
+        Require(runtime.msaaSampleCount == 1, "FXAA option did not turn MSAA off.");
+
+        Dropdown scale = RequireDropdown(menuRoot, "Render Scale Dropdown");
+        scale.value = scale.options.Count - 1;
+        Require(runtime.renderScale > 1.2f, "Highest render scale is not supersampling: " + runtime.renderScale);
+        scale.value = 0;
+        Require(runtime.renderScale < 0.8f, "Lowest render scale is not below 0.8: " + runtime.renderScale);
+
+        Dropdown shadows = RequireDropdown(menuRoot, "Shadow Quality Dropdown");
+        shadows.value = 0;
+        float low = runtime.shadowDistance;
+        shadows.value = shadows.options.Count - 1;
+        Require(runtime.shadowDistance >= low * 2f && runtime.mainLightShadowmapResolution >= 4096,
+            $"Shadow quality barely changes: low={low} high={runtime.shadowDistance} " +
+            $"res={runtime.mainLightShadowmapResolution}");
+
+        GameObject optionsPanel = RequireNamedTransform(menuRoot, "Options Panel").gameObject;
+        optionsPanel.SetActive(true);
+        PersonaShape plate = RequireNamedTransform(menuRoot, "Sheet Plate").GetComponent<PersonaShape>();
+        plate.SetVerticesDirty();
+        Canvas.ForceUpdateCanvases();
+        bool feathered = plate != null && plate.EdgeFeathered;
+        optionsPanel.SetActive(false);
+        Require(feathered, "Slanted settings plate has no anti-aliased edge.");
+
+        GymRuntimeSettings.RestoreProjectPipeline();
+        UniversalRenderPipelineAsset disk = DiskPipeline();
+        Require(QualitySettings.renderPipeline == snapshot.QualityPipeline &&
+                Mathf.Approximately(disk.renderScale, snapshot.DiskRenderScale) &&
+                disk.msaaSampleCount == snapshot.DiskMsaa &&
+                Mathf.Approximately(disk.shadowDistance, snapshot.DiskShadowDistance),
+            "Settings leaked into the project URP asset or quality level.");
+    }
+
+    private static UniversalRenderPipelineAsset DiskPipeline()
+    {
+        RenderPipelineAsset asset = QualitySettings.renderPipeline != null
+            ? QualitySettings.renderPipeline
+            : GraphicsSettings.defaultRenderPipeline;
+        UniversalRenderPipelineAsset urp = GymRuntimeSettings.ProjectPipeline != null
+            ? GymRuntimeSettings.ProjectPipeline
+            : asset as UniversalRenderPipelineAsset;
+        Require(urp != null, "No URP asset is active.");
+        return urp;
     }
 
     private static Button RequireButton(GameObject root, string name)
@@ -359,14 +458,18 @@ public static class GymChaosPauseOptionsVerifier
             }
         }
 
-        if (snapshot.MasterVolumePresent)
+        for (int i = 0; i < FloatPreferenceKeys.Length; i++)
         {
-            PlayerPrefs.SetFloat(MasterVolumeKey, snapshot.MasterVolume);
+            if (snapshot.FloatPreferencePresent[i])
+            {
+                PlayerPrefs.SetFloat(FloatPreferenceKeys[i], snapshot.FloatPreferenceValues[i]);
+            }
+            else
+            {
+                PlayerPrefs.DeleteKey(FloatPreferenceKeys[i]);
+            }
         }
-        else
-        {
-            PlayerPrefs.DeleteKey(MasterVolumeKey);
-        }
+        GymRuntimeSettings.RestoreProjectPipeline();
 
         PlayerPrefs.Save();
         QualitySettings.globalTextureMipmapLimit = snapshot.TextureMipmapLimit;

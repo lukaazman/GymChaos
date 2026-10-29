@@ -495,6 +495,8 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		GymVisitorVehicle.HasConflictingParkingArrivalNear(
 			arrivalVehicle, fighter.VisitorPhysicsPosition);
 
+	// Last reason TickPhysics held this visitor (verifier diagnostics; constant strings).
+	public string TickHoldForVerification { get; private set; } = "none";
 	public bool IsYieldingToVehicle => (UnityEngine.Object)(object)yieldingToVehicle != (UnityEngine.Object)null;
 
 	public bool CanDeactivate
@@ -1300,6 +1302,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		}
 		if (IsUsingSharedParkingConnector && !TryAcquireSharedParkingConnectorReservation())
 		{
+			TickHoldForVerification = "connector";
 			fighter.StopVisitorMovement();
 			return true;
 		}
@@ -1326,6 +1329,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 			(state == VisitorState.EnteringRoom && IsDoorwayEntryAreaOccupied());
 		if (needsDoorSlot && !TryAcquireDoorwayEntrySlot())
 		{
+			TickHoldForVerification = "door-entry-slot";
 			fighter.StopVisitorMovement();
 			return true;
 		}
@@ -1333,6 +1337,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		{
 			if (!TryAcquireDoorwayExitSlot())
 			{
+				TickHoldForVerification = "door-exit-slot";
 				fighter.StopVisitorMovement();
 				return true;
 			}
@@ -1343,18 +1348,22 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		}
 		if ((UnityEngine.Object)(object)workoutReleaseStation != (UnityEngine.Object)null)
 		{
+			TickHoldForVerification = "workout-release";
 			TickWorkoutStationRelease();
 			return true;
 		}
 		if ((state == VisitorState.ExitingDoor || state == VisitorState.LeavingGym || state == VisitorState.ApproachingVehicle) && !fighter.TickVisitorGroundingForMovement())
 		{
+			TickHoldForVerification = "grounding";
 			return true;
 		}
 		if ((UnityEngine.Object)(object)yieldingToVehicle != (UnityEngine.Object)null)
 		{
+			TickHoldForVerification = "vehicle-yield";
 			TickVehicleYield();
 			return true;
 		}
+		TickHoldForVerification = "route";
 		Vector3 val;
 		switch (state)
 		{

@@ -75,6 +75,8 @@ public sealed class GymFixerAgent : MonoBehaviour
     private float fadeSeconds = 0.25f;
     private SkinnedMeshRenderer bodyRenderer;
     private GymFixerMagicEffect magic;
+    private GymFixerArrivalCamera arrivalCamera;
+    private bool arrivalShotTaken;
     private Transform footLeft;
     private Transform footRight;
     private Transform head;
@@ -126,6 +128,12 @@ public sealed class GymFixerAgent : MonoBehaviour
     public float PeakAltitude { get; private set; }
     public float MeasuredHeight { get; private set; }
     public float GlowEnvelope => magic != null ? magic.Envelope : 0f;
+    public GymFixerArrivalCamera ArrivalCamera => arrivalCamera;
+    // Arrival shot evidence: height above ground when it began, and the states
+    // he was in when the title showed and when the shot handed back.
+    public float ArrivalShotStartHeight { get; private set; } = -1f;
+    public string ArrivalTitleState { get; private set; } = string.Empty;
+    public string ArrivalShotEndState { get; private set; } = string.Empty;
     public GymFixerNavGrid NavGrid => navGrid;
     public Vector3 LandingPoint => landingPoint;
     public float GroundY => groundY;
@@ -208,6 +216,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         GameObject magicObject = new GameObject("Jolly Dog Lollipop Magic");
         magicObject.transform.SetParent(transform, false);
         magic = magicObject.AddComponent<GymFixerMagicEffect>();
+        arrivalCamera = gameObject.AddComponent<GymFixerArrivalCamera>();
         SnapTo(ClipMagicA, 0f);
         Bounds candy = glowShell != null ? BakeBounds(glowShell) : new Bounds(hand.position, Vector3.one * 0.1f);
         magic.Configure(glowShell, hand, candy);
@@ -398,6 +407,9 @@ public sealed class GymFixerAgent : MonoBehaviour
         // He was hidden: measure pose speed from this visit's first frame.
         lastBonePositions = null;
         impactPlayed = false;
+        arrivalShotTaken = false;
+        ArrivalShotStartHeight = -1f;
+        ArrivalTitleState = ArrivalShotEndState = string.Empty;
 
         landingPoint = director.FindLandingPoint();
         groundY = landingPoint.y;
@@ -459,6 +471,20 @@ public sealed class GymFixerAgent : MonoBehaviour
 
     private void EnterState(FixerState next)
     {
+        if (arrivalCamera != null && arrivalCamera.IsActive)
+        {
+            if (next == FixerState.Landing)
+            {
+                arrivalCamera.ShowTitle();
+                ArrivalTitleState = next.ToString();
+            }
+            else if (next != FixerState.Falling)
+            {
+                // He starts walking (or casts from where he stands): back to the player.
+                arrivalCamera.End();
+                ArrivalShotEndState = next.ToString();
+            }
+        }
         state = next;
         stateEnteredAt = Time.time;
         StateHistory.Add(next.ToString());
@@ -514,6 +540,12 @@ public sealed class GymFixerAgent : MonoBehaviour
     private void TickFalling(float dt)
     {
         float height = transform.position.y - groundY;
+        // The shot covers only the lower half of the drop.
+        if (!arrivalShotTaken && height <= SpawnHeight * 0.5f)
+        {
+            arrivalShotTaken = true;
+            if (arrivalCamera.Begin(transform, landingPoint)) ArrivalShotStartHeight = height;
+        }
         if (height > BrakeHeight)
         {
             verticalSpeed = Mathf.Min(verticalSpeed + FallAcceleration * dt, MaxFallSpeed);

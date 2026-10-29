@@ -56,12 +56,35 @@ public static class BuildScript
             throw new BuildFailedException($"WebGL build failed with result: {report.summary.result}");
         }
 
+        GuardFullscreenButton(Path.Combine(outputPath, "index.html"));
         DeleteLegacySoundCloudArtifact(
             Path.Combine(outputPath, "soundcloud-callback.html"));
         DeleteLegacySoundCloudArtifact(
             Path.Combine(outputPath, "soundcloud-config.json"));
         File.WriteAllText(Path.Combine(outputPath, "gymchaos-runtime.json"),
             "{\"runtimeBootstrap\":true,\"scene\":\"SampleScene\",\"features\":[\"mirrors\",\"characters\",\"exercises\",\"combat\",\"pickups\",\"pointer-lock\",\"soundcloud-widget\",\"day-night\",\"tv-screen\",\"webgl-colliders\",\"jay-cutler\",\"goku-flight\"]}");
+    }
+
+    // The default template's fullscreen button calls unityInstance.SetFullscreen,
+    // which throws "Fullscreen request denied" when the browser refuses and the
+    // loader turns that into a fatal error page. The browser API with a caught
+    // rejection does the same job and a refusal just leaves the page windowed.
+    private const string TemplateFullscreenCall = "unityInstance.SetFullscreen(1);";
+    private const string GuardedFullscreenCall =
+        "var request = canvas.requestFullscreen || canvas.webkitRequestFullscreen;" +
+        " if (request) { try { Promise.resolve(request.call(canvas)).catch(function () {}); } catch (e) {} }";
+
+    private static void GuardFullscreenButton(string indexPath)
+    {
+        string html = File.ReadAllText(indexPath);
+        if (!html.Contains(TemplateFullscreenCall))
+        {
+            throw new BuildFailedException(
+                $"WebGL template changed: '{TemplateFullscreenCall}' not found in {indexPath}; " +
+                "re-check the fullscreen guard.");
+        }
+        File.WriteAllText(indexPath, html.Replace(TemplateFullscreenCall, GuardedFullscreenCall));
+        Debug.Log("GYMCHAOS_WEBGL_FULLSCREEN_GUARD_OK");
     }
 
     private static void DeleteLegacySoundCloudArtifact(string path)

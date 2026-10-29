@@ -25,10 +25,13 @@ public sealed class GymDynamicResolution : MonoBehaviour
     }
 #endif
 
+    /// <summary>Upper bound picked in the render-scale setting.</summary>
+    public static float MaxScale = 1f;
+
     public static float NextScale(float scale, float fps)
     {
         float next = fps < 45f ? scale - 0.1f : fps > 57f ? scale + 0.1f : scale;
-        return Mathf.Clamp(Mathf.Round(next * 10f) / 10f, 0.7f, 1f);
+        return Mathf.Clamp(Mathf.Round(next * 10f) / 10f, Mathf.Min(0.7f, MaxScale), MaxScale);
     }
 
     private void Update()

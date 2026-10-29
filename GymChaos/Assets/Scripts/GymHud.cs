@@ -238,9 +238,23 @@ public sealed class GymHud : MonoBehaviour
             if (!shown) continue;
             Notice notice = notices[i];
             noticeLabels[i].text = notice.count > 1 ? notice.text + "   x" + notice.count : notice.text;
+            FitNoticeLine(i);
             noticeRims[i].color = notice.priority >= 2 ? PersonaMenuStyle.Gold :
                 notice.priority == 1 ? PersonaMenuStyle.Accent : PersonaMenuStyle.Muted;
         }
+    }
+
+    // One line at a fixed size: the plate grows with the text; a line longer
+    // than the screen is scaled down as a whole instead of wrapping.
+    private void FitNoticeLine(int index)
+    {
+        Text label = noticeLabels[index];
+        RectTransform line = (RectTransform)noticeRoots[index].transform;
+        float maxWidth = Mathf.Max(200f, ((RectTransform)transform).rect.width - NoticeScreenMargin * 2f);
+        float textWidth = label.preferredWidth;
+        float scale = Mathf.Min(1f, (maxWidth - NoticePadding * 2f) / Mathf.Max(1f, textWidth));
+        label.rectTransform.localScale = new Vector3(scale, scale, 1f);
+        line.sizeDelta = new Vector2(Mathf.Min(maxWidth, textWidth * scale + NoticePadding * 2f), NoticeHeight);
     }
 
     private void HandleSaveStatus(GymSaveStatus status, string message)
@@ -494,6 +508,11 @@ public sealed class GymHud : MonoBehaviour
     // ---- construction ----
 
     private const float Border = 3f;
+    public const int NoticeFontSize = 28;
+    public const float NoticeHeight = 46f;
+    private const float NoticeStep = 56f;
+    private const float NoticePadding = 26f;
+    private const float NoticeScreenMargin = 60f;
 
     private void Build()
     {
@@ -503,6 +522,9 @@ public sealed class GymHud : MonoBehaviour
         canvas.sortingOrder = 50;
         CanvasScaler scaler = gameObject.AddComponent<CanvasScaler>();
         GymRuntimeSettings.ConfigureBalancedCanvasScaler(scaler);
+        // Height only: the HUD and its notices keep the same share of the
+        // screen at every resolution and aspect ratio (ultrawide included).
+        scaler.matchWidthOrHeight = 1f;
         rootGroup = gameObject.AddComponent<CanvasGroup>();
         // The HUD never takes input, so gameplay clicks pass straight through.
         rootGroup.interactable = false;
@@ -516,7 +538,8 @@ public sealed class GymHud : MonoBehaviour
         BuildVitals(vitalsRoot.transform, body, title);
         progressRoot = Corner("Progress", new Vector2(1f, 1f), new Vector2(-36f, -30f), new Vector2(400f, 250f));
         BuildProgress(progressRoot.transform, body);
-        GameObject noticeRoot = Corner("Notices", new Vector2(0.5f, 0f), new Vector2(0f, 190f), new Vector2(760f, 160f));
+        GameObject noticeRoot = Corner("Notices", new Vector2(0.5f, 0f), new Vector2(0f, 190f),
+            new Vector2(760f, NoticeStep * MaxVisibleNotices));
         BuildNotices(noticeRoot.transform, body);
         saveRoot = Corner("Save Indicator", new Vector2(1f, 0f), new Vector2(-36f, 34f), new Vector2(230f, 46f));
         BuildSaveIndicator(saveRoot.transform, body);
@@ -682,15 +705,12 @@ public sealed class GymHud : MonoBehaviour
     {
         for (int i = 0; i < MaxVisibleNotices; i++)
         {
-            RectTransform line = Box(parent, "Notice " + i, new Vector2(0f, -i * 52f), new Vector2(720f, 42f),
-                false, true);
+            RectTransform line = Box(parent, "Notice " + i, new Vector2(0f, -i * NoticeStep),
+                new Vector2(720f, NoticeHeight), false, true);
             noticeRims[i] = Panel(line, PersonaMenuStyle.Accent, new Color(0.035f, 0.05f, 0.1f, 1f));
-            noticeLabels[i] = Label(line, "Text", body, string.Empty, 26, PersonaMenuStyle.Ink,
-                TextAnchor.MiddleCenter, new Vector2(0.03f, 0f), new Vector2(0.97f, 1f));
-            noticeLabels[i].horizontalOverflow = HorizontalWrapMode.Wrap;
-            noticeLabels[i].resizeTextForBestFit = true;
-            noticeLabels[i].resizeTextMinSize = 14;
-            noticeLabels[i].resizeTextMaxSize = 26;
+            // Label() already sets Overflow: never wraps, never shrinks to fit.
+            noticeLabels[i] = Label(line, "Text", body, string.Empty, NoticeFontSize, PersonaMenuStyle.Ink,
+                TextAnchor.MiddleCenter, new Vector2(0.5f, 0f), new Vector2(0.5f, 1f));
             noticeRoots[i] = line.gameObject;
             line.gameObject.SetActive(false);
         }
@@ -789,6 +809,8 @@ public sealed class GymHud : MonoBehaviour
     public RectTransform[] LayoutRectsForVerification =>
         GetComponentsInChildren<RectTransform>(true);
     public RawImage ClassPictureForVerification => classArt;
+    public Text[] NoticeLabelsForVerification => noticeLabels;
+    public void TickNoticesForVerification() => TickNotices();
     public string LevelBadgeForVerification => levelBadge != null ? levelBadge.text : string.Empty;
 #endif
 }

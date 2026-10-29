@@ -206,6 +206,7 @@ public static class GymChaosVisitorVerifier
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
             Time.timeScale = 1f;
+            GymTimeOfDay.ClockScale = 1f;
             GymChaosVerifierClock.EndFixedStep();
             SetPoseSamplingBound(false);
             RestorePlayerAfterRouteScenario();
@@ -245,6 +246,11 @@ public static class GymChaosVisitorVerifier
                 ValidateScene(director, timeOfDay, doorway);
                 IsolatePlayerFromRouteScenario(player);
                 Time.timeScale = 2f;
+                // A day lasts 45 s at 2x; under lane load several passed and the
+                // test visitor went home mid-workout. A tenth-speed clock keeps
+                // the smoke in daylight (a day is ~450 s) while queues and
+                // schedules that run on Time01 still advance; a stopped clock froze them.
+                GymTimeOfDay.ClockScale = 0.1f;
                 sceneValidated = true;
                 Debug.Log(
                     $"GYMCHAOS_VISITOR_SCENE_OK eligible={director.EligibleEnemyCount} " +
@@ -277,6 +283,7 @@ public static class GymChaosVisitorVerifier
                         $"target={agent.TravelTargetForVerification} " +
                         $"waypoint={agent.VehicleEntryWaypointForVerification} " +
                         $"waitOwner={agent.DoorwayRouteWaitOwnerForVerification} " +
+                        $"connectorWait={agent.ConnectorWaitForVerification} hold={agent.TickHoldForVerification} " +
                         $"vel={(entryBody != null ? entryBody.linearVelocity : Vector3.zero)} " +
                         $"blocker={entryFighter.LastVisitorRouteBlocker} " +
                         $"capsule={DescribeEntryCapsule(entryFighter, agent.TravelTargetForVerification)}");
@@ -594,7 +601,8 @@ public static class GymChaosVisitorVerifier
                     departureApproachVersion = departureAgent != null
                         ? departureAgent.CompletedVehicleApproaches : 0;
                     departureRequested = true;
-                    departureStartedAt = elapsed;
+                    // Game time: under lane load the game runs slower than the wall clock.
+                    departureStartedAt = Time.timeAsDouble;
                     Debug.Log($"GYMCHAOS_VISITOR_DEPARTURE_TEST_STARTED enemy={departureFighter.Identity}");
                     return;
                 }
@@ -611,10 +619,13 @@ public static class GymChaosVisitorVerifier
                 {
                     // This timer includes clearing the doorway and walking to the
                     // parked vehicle, not only the time the vehicle is driving.
-                    if (elapsed - departureStartedAt > 180d)
+                    if (Time.timeAsDouble - departureStartedAt > 360d)
                     {
                         throw new InvalidOperationException(
                             $"Vehicle departure incomplete: walked={walkedToVehicle} " +
+                            $"connectorWait={completedDepartureAgent?.ConnectorWaitForVerification} " +
+                            $"state={completedDepartureAgent?.State} hold={completedDepartureAgent?.TickHoldForVerification} " +
+                            $"connectorOwner={GymVisitorAgent.ConnectorOwnerForVerification} " +
                             $"departed={departureVehicle.HasCompletedDeparture} " +
                             $"fighterActive={departureFighter.gameObject.activeInHierarchy} " +
                             $"vehiclePosition={departureVehicle.transform.position} " +

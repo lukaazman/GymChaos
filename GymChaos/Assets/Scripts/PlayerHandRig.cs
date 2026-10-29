@@ -1707,9 +1707,11 @@ public sealed class PlayerHandRig : MonoBehaviour
                 material.SetColor("_Color", color);
             }
             if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0f);
-            Texture baseColor = sourceBaseColor != null
+            // Same scan atlas as the body: mip 0 only, or the texture-quality
+            // option drops the arms to mips that blend islands into specks.
+            Texture baseColor = ScanTextureMips.Limit(sourceBaseColor != null
                 ? sourceBaseColor
-                : fallbackBaseColor;
+                : fallbackBaseColor);
             if (baseColor != null && material.HasProperty("_BaseMap"))
             {
                 material.SetTexture("_BaseMap", baseColor);

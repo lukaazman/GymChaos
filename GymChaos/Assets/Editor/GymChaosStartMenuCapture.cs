@@ -47,6 +47,9 @@ public static class GymChaosStartMenuCapture
             started = EditorApplication.timeSinceStartup;
             stepStarted = started;
             Application.runInBackground = true;
+            // GYMCHAOS_UI_FRINGE=0 captures the plates without edge anti-aliasing.
+            PersonaShape.FringeOffForComparison =
+                System.Environment.GetEnvironmentVariable("GYMCHAOS_UI_FRINGE") == "0";
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
         EditorApplication.update -= Tick;

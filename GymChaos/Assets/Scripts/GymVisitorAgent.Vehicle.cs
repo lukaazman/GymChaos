@@ -833,7 +833,7 @@ public sealed partial class GymVisitorAgent
 		{
 			return false;
 		}
-		if (IsOtherInboundOnSharedConnector(this))
+		if (IsOtherInboundOnSharedConnector(this, out _))
 		{
 			return false;
 		}
@@ -1120,8 +1120,29 @@ public sealed partial class GymVisitorAgent
 		float bayPosition = Mathf.InverseLerp(parking.min.x, parking.max.x, vehicleX);
 		return Mathf.Lerp(0.24f, 0.76f, bayPosition);
 	}
+	// Current connector owner with its state and hold reason (verifier diagnostics).
+	public static string ConnectorOwnerForVerification => activeVehicleApproachAgent == null || activeVehicleApproachAgent.fighter == null
+		? "none"
+		: activeVehicleApproachAgent.fighter.Identity + ":" + activeVehicleApproachAgent.state + ":" +
+			activeVehicleApproachAgent.TickHoldForVerification + "@" + activeVehicleApproachAgent.fighter.transform.position;
+
+	// Who this visitor is waiting for on the shared parking connector: breaks
+	// owner/inbound mutual waits and feeds verifier diagnostics.
+	private GymVisitorAgent connectorWaitAgent;
+	public string ConnectorWaitForVerification => connectorWaitAgent == null || connectorWaitAgent.fighter == null
+		? "none"
+		: connectorWaitAgent.fighter.Identity + ":" + connectorWaitAgent.state;
+
 	private bool TryAcquireSharedParkingConnectorReservation()
 	{
+		bool acquired = AcquireSharedParkingConnectorReservation(out GymVisitorAgent waitedFor);
+		connectorWaitAgent = acquired ? null : waitedFor;
+		return acquired;
+	}
+
+	private bool AcquireSharedParkingConnectorReservation(out GymVisitorAgent waitedFor)
+	{
+		waitedFor = null;
 		if (!IsUsingSharedParkingConnector)
 		{
 			return true;
@@ -1137,6 +1158,7 @@ public sealed partial class GymVisitorAgent
 			activeDoorwayEntryAgent.isActiveAndEnabled &&
 			activeDoorwayEntryAgent.IsDoorwayEntryAreaOccupied())
 		{
+			waitedFor = activeDoorwayEntryAgent;
 			return false;
 		}
 
@@ -1152,11 +1174,12 @@ public sealed partial class GymVisitorAgent
 			// trip only crosses near the door, where the doorway queue already
 			// orders people. Only a visitor walking back to a car (the
 			// opposite direction along the whole connector) makes them wait.
+			waitedFor = activeVehicleApproachAgent;
 			return walkingFromCar &&
 				(activeVehicleApproachAgent.state != VisitorState.ApproachingVehicle ||
 				 IsBlockingConnectorOwner(activeVehicleApproachAgent));
 		}
-		if (!walkingFromCar && IsOtherInboundOnSharedConnector(this))
+		if (!walkingFromCar && IsOtherInboundOnSharedConnector(this, out waitedFor))
 		{
 			return false;
 		}
@@ -1198,8 +1221,9 @@ public sealed partial class GymVisitorAgent
 		vehicleEntryWaypoints != null && vehicleEntryWaypoints.Length >= 2 &&
 		vehicleEntryWaypointIndex == vehicleEntryWaypoints.Length - 2 &&
 		Vector3.ProjectOnPlane(fighter.VisitorPhysicsPosition - travelTarget, Vector3.up).magnitude <= 0.60f;
-	private static bool IsOtherInboundOnSharedConnector(GymVisitorAgent self)
+	private static bool IsOtherInboundOnSharedConnector(GymVisitorAgent self, out GymVisitorAgent inbound)
 	{
+		inbound = null;
 		for (int i = 0; i < activeAgents.Count; i++)
 		{
 			GymVisitorAgent other = activeAgents[i];
@@ -1210,8 +1234,12 @@ public sealed partial class GymVisitorAgent
 				(self == null || self.fighter == null || other.fighter == null ||
 				 Vector3.ProjectOnPlane(other.fighter.VisitorPhysicsPosition -
 					self.fighter.VisitorPhysicsPosition, Vector3.up).magnitude < InboundMeetDistance) &&
-				(self == null || !self.IsBlockingConnectorOwner(other)))
+				(self == null || !self.IsBlockingConnectorOwner(other)) &&
+				// An inbound walker already stopped for this visitor (the connector
+				// owner) must not hold it in turn: both waited forever.
+				(self == null || other.connectorWaitAgent != self))
 			{
+				inbound = other;
 				return true;
 			}
 		}

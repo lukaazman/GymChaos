@@ -26,6 +26,8 @@ public static class GymChaosFixerVerifier
     private const string ProgressionHadKey = "GymChaos.FixerVerifier.ProgressionHad";
     private const float DayTime = 0.42f;
     private const float NightTime = 0.9f;
+    // Mirror, moved prop and three corpses.
+    private const int StagedIssues = 5;
 
     private static IEnumerator script;
     private static double started;
@@ -83,7 +85,7 @@ public static class GymChaosFixerVerifier
             if (!script.MoveNext())
             {
                 script = null;
-                Debug.Log("GYMCHAOS_FIXER_OK");
+                Debug.Log("GYMCHAOS_FIXER_OK arrivalCam=ok");
                 Finish(0);
                 return;
             }
@@ -187,7 +189,7 @@ public static class GymChaosFixerVerifier
         yield return 3f;
         fixers.ScanNowForVerification();
         int issueCount = fixers.CurrentIssues.Count;
-        Require(issueCount >= 5,
+        Require(issueCount >= StagedIssues,
             $"Expected mirror, prop and three corpses as issues, got {issueCount}: {DescribeIssues(fixers)}");
         Debug.Log($"GYMCHAOS_FIXER_VERIFY_ISSUES count={issueCount} {DescribeIssues(fixers)}");
 
@@ -233,8 +235,23 @@ public static class GymChaosFixerVerifier
         bool officerReturning = false;
         bool capturedFall = false, capturedCast = false, capturedRainbow = false, capturedFlight = false;
         int fixedBefore = fixers.FixedCount;
+        Vector3 eyeBefore = player.playerCamera.transform.localPosition;
+        bool shotDuringExit = false;
+        bool titleSeen = false;
+        bool playerLockedInShot = false;
         while (fixers.IsVisitActive)
         {
+            GymFixerArrivalCamera shot = dog.ArrivalCamera;
+            if (shot.IsActive && (dog.State == GymFixerAgent.FixerState.Exiting ||
+                dog.State == GymFixerAgent.FixerState.Flying)) shotDuringExit = true;
+            if (shot.IsTitleVisible && !titleSeen)
+            {
+                titleSeen = true;
+                Transform eye = player.playerCamera.transform;
+                Capture("arrival-shot", eye.position, eye.position + eye.forward, player.playerCamera.fieldOfView,
+                    player.playerCamera.cullingMask);
+            }
+            if (shot.IsActive && player.IsCinematicLocked) playerLockedInShot = true;
             peakRainbow = Mathf.Max(peakRainbow, fixers.RainbowFade);
             if (fixers.RainbowFade > 0.5f)
                 rainbowSunDot = Mathf.Min(rainbowSunDot, Vector3.Dot(
@@ -276,14 +293,30 @@ public static class GymChaosFixerVerifier
             $"poseSpeed={dog.MaxPoseSpeed:F2} glowOutsideCast={dog.MaxGlowWhileNotCasting:F2} " +
             $"peaks={string.Join(",", dog.CastGlowPeaks)} altitude={dog.PeakAltitude:F1}");
         RequireOrder(dog.StateHistory, "Falling", "Landing", "Running", "Casting", "Exiting", "Flying", "Hidden");
+        // --- arrival shot: lower half of the fall, title on landing, back when he walks
+        Debug.Log($"GYMCHAOS_FIXER_ARRIVAL_SHOT startHeight={dog.ArrivalShotStartHeight:F1} " +
+            $"title={dog.ArrivalTitleState} end={dog.ArrivalShotEndState} exitShot={shotDuringExit}");
+        Require(dog.ArrivalShotStartHeight > 3f && dog.ArrivalShotStartHeight <= 35.5f,
+            $"Arrival shot began at {dog.ArrivalShotStartHeight:F1} m, not in the lower half of the fall");
+        Require(dog.ArrivalTitleState == "Landing" && titleSeen,
+            $"'{GymFixerArrivalCamera.Title}' did not show on landing (state {dog.ArrivalTitleState})");
+        Require(dog.ArrivalShotEndState == "Running" || dog.ArrivalShotEndState == "Casting",
+            $"Arrival shot ended in {dog.ArrivalShotEndState}, not when he started moving");
+        Require(playerLockedInShot, "Player was not held still during the arrival shot");
+        Require(!shotDuringExit, "A camera shot played on his departure");
+        Require(!dog.ArrivalCamera.IsActive && !player.IsCinematicLocked &&
+            (player.playerCamera.transform.localPosition - eyeBefore).sqrMagnitude < 0.0025f,
+            "Camera or controls were not handed back to the player");
         Require(maxFallSpeed > 25f, $"Fall was not very fast ({maxFallSpeed:F1} m/s)");
         Require(peakRainbow > 0.9f, $"Rainbow never faded in ({peakRainbow:F2})");
         // A real rainbow is centred on the antisolar point.
         Require(rainbowSunDot < -0.5f, $"Rainbow is not opposite the sun (dot {rainbowSunDot:F2})");
         int fixedThisVisit = fixers.FixedCount - fixedBefore;
         // The repair list is fixed at the drop; it holds at least our five.
-        Require(dog.VisitIssueCount >= issueCount,
-            $"Drop listed {dog.VisitIssueCount} issues, fewer than the {issueCount} staged");
+        // Members can knock a prop over and back before the drop, so only
+        // the staged five are guaranteed; each is checked as repaired below.
+        Require(dog.VisitIssueCount >= StagedIssues,
+            $"Drop listed {dog.VisitIssueCount} issues, fewer than the {StagedIssues} staged");
         Require(fixedThisVisit == dog.VisitIssueCount,
             $"Fixed {fixedThisVisit} of {dog.VisitIssueCount} listed issues");
         Require(dog.CastCount == fixedThisVisit, $"Casts {dog.CastCount} != repairs {fixedThisVisit}");
@@ -414,7 +447,7 @@ public static class GymChaosFixerVerifier
         return Capture("rainbow", eye, eye + look * 10f + Vector3.up * 4.5f, 75f);
     }
 
-    private static bool Capture(string name, Vector3 eye, Vector3 target, float fov = 55f)
+    private static bool Capture(string name, Vector3 eye, Vector3 target, float fov = 55f, int cullingMask = ~0)
     {
         if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null) return true;
         GameObject host = new GameObject("Fixer Evidence Camera");
@@ -424,6 +457,7 @@ public static class GymChaosFixerVerifier
             Camera camera = host.AddComponent<Camera>();
             camera.transform.SetPositionAndRotation(eye, Quaternion.LookRotation(target - eye, Vector3.up));
             camera.fieldOfView = fov;
+            camera.cullingMask = cullingMask;
             camera.nearClipPlane = 0.05f;
             camera.farClipPlane = 1500f;
             camera.clearFlags = CameraClearFlags.Skybox;

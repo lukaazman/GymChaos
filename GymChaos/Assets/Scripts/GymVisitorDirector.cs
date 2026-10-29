@@ -596,8 +596,10 @@ public bool BeginDepartureForVerification(
         for (int i = 0; i < records.Count; i++)
         {
             VisitorRecord record = records[i];
+            // A car still settling into its bay (slow frames) is not a parked departure.
             if (!record.active || record.waitingForVehicle || record.agent == null ||
-                !record.agent.IsInsideGym || record.agent.IsBusy) continue;
+                !record.agent.IsInsideGym || record.agent.IsBusy ||
+                (record.vehicle != null && !record.vehicle.IsParked)) continue;
             EnsureVehicle(record, true);
             record.suspendedForCombat = false;
             fighter = record.fighter;
@@ -1133,9 +1135,14 @@ public bool BeginDepartureForVerification(
                         $"visit={record.visitsToday}",
                         this);
                 }
-                else if (Time.time - record.entryStartedAt > VisitorEntryTimeoutSeconds &&
-                    !record.agent.IsWaitingForSharedCorridor &&
-                    !record.agent.IsWaitingForSharedParkingConnector)
+                else if (record.agent.IsWaitingForSharedCorridor ||
+                    record.agent.IsWaitingForSharedParkingConnector)
+                {
+                    // Queue time is not a failed route: only walking counts toward
+                    // the timeout, or a long door queue aborted the entry right after.
+                    record.entryStartedAt += Time.deltaTime;
+                }
+                else if (Time.time - record.entryStartedAt > VisitorEntryTimeoutSeconds)
                 {
                     // A failed incoming route must still return through the
                     // authored doorway. Never hide an object at the room
