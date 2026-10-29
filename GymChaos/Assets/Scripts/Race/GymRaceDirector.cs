@@ -164,8 +164,6 @@ public sealed class GymRaceDirector : MonoBehaviour
         if (GymPoliceDirector.IsDispatchActive) return "POLICE NEARBY";
         if (player.IsHoldingItem || player.IsCarryingCorpse) return "HANDS FULL";
         if (!GymRaceCityCarver.CityReady()) return "CITY LOADING";
-        // A visitor car already on the road would drive through the grid.
-        if (GymVisitorVehicle.IsGroundTrafficActive) return "TRAFFIC ON THE ROAD";
         return null;
     }
 
@@ -206,6 +204,20 @@ public sealed class GymRaceDirector : MonoBehaviour
         autopilot = autopilotPlayer;
         phase = Phase.Building;
         GymVisitorDirector.RaceTrafficHold = true;
+        // A visitor car already on the road would drive through the grid. The
+        // hold stops new cars, so wait for the last one to park instead of
+        // refusing the race (it was refused most of the time on slow WebGL).
+        float trafficWait = Time.time + 25f;
+        bool noticed = false;
+        while (GymVisitorVehicle.IsGroundTrafficActive && Time.time < trafficWait)
+        {
+            if (!noticed)
+            {
+                GymHud.Active?.PushNotice("Race: clearing the road", 3f, 1);
+                noticed = true;
+            }
+            yield return null;
+        }
         player.SetCinematicLock(true);
         savedCameraLocalPosition = player.playerCamera.transform.localPosition;
         savedCameraLocalRotation = player.playerCamera.transform.localRotation;

@@ -176,6 +176,12 @@ public static class GymRaceCityCarver
                 Mesh carved = BuildCarved(original, data, blocked, content, triangleMask);
                 if (carved != null)
                 {
+#if !UNITY_EDITOR
+                    // Keep only the GPU copy: readable carved copies of every
+                    // city renderer grew the WebGL heap by ~145 MB at race start.
+                    // Editor verifiers read the carved triangles, so they keep it.
+                    carved.UploadMeshData(true);
+#endif
                     CarvedRenderer entry = new CarvedRenderer
                     {
                         Filter = filter,
