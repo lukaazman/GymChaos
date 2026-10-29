@@ -123,10 +123,10 @@ def smooth_and_inflate(bm, vert_inflate, iterations=40, lam=0.5, mu=-0.53, norma
     for i, v in enumerate(verts):
         v.co = Vector(out[weld[i]])
 
-def build_shell(tex):
-    data = np.frombuffer((outfits / 'oversized_shell.bytes').read_bytes(), np.uint8)
+def build_shell(tex, mask='oversized_shell.bytes'):
+    data = np.frombuffer((outfits / mask).read_bytes(), np.uint8)
     import tempfile, os
-    tmp = Path(tempfile.gettempdir()) / 'oversized_shell_tmp.png'
+    tmp = Path(tempfile.gettempdir()) / (mask + '_tmp.png')
     tmp.write_bytes(data.tobytes())
     mimg = bpy.data.images.load(str(tmp))
     w, h = mimg.size
@@ -178,8 +178,51 @@ cam = bpy.data.objects.new('cam', cam_data)
 scene.collection.objects.link(cam)
 scene.camera = cam
 
+# Bottoms (Tools/build_player_bottoms.py): grey fabric tinted like
+# PlayerTopShell does at runtime (colour / BottomsFabricLevel).
+BOTTOM_COLORS = {'black': (0.025, 0.03, 0.04), 'white': (0.9, 0.92, 0.9), 'red': (0.72, 0.045, 0.025),
+                 'blue': (0.035, 0.22, 0.78), 'gold': (0.92, 0.58, 0.08)}
+
+def tinted_fabric(color):
+    import tempfile
+    img = bpy.data.images.load(str(outfits / 'bottoms_fabric.png'))
+    w, h = img.size
+    px = np.array(img.pixels[:]).reshape(h, w, 4)
+    px[..., :3] = np.clip(px[..., :3] * np.array(BOTTOM_COLORS[color]) / 0.8, 0, 1)
+    out = bpy.data.images.new('fabric_' + color, w, h)
+    out.pixels[:] = px.ravel()
+    path = Path(tempfile.gettempdir()) / f'bottoms_{color}.png'
+    out.filepath_raw = str(path)
+    out.file_format = 'PNG'
+    out.save()
+    return path
+
 for look in looks:
     top, color = look.split('_', 1)
+    if top in ('shorts', 'pants'):
+        body.data.materials.clear()
+        body.data.materials.append(make_material(look, root / 'GymChaos/Assets/Resources/Characters/Textures/player_authored.png'))
+        shell = build_shell(tinted_fabric(color), f'{top}_shell.bytes')
+        cam_data.ortho_scale = 1.05
+        frames = []
+        for view, (pos, rot) in {'front': ((0, -3, 0.5), (math.radians(90), 0, 0)),
+                                 'back': ((0, 3, 0.5), (math.radians(90), 0, math.radians(180)))}.items():
+            cam.location = pos
+            cam.rotation_euler = rot
+            path = out_dir / f'_{look}_{view}.png'
+            scene.render.filepath = str(path)
+            bpy.ops.render.render(write_still=True)
+            frames.append(path)
+        a = bpy.data.images.load(str(frames[0])); b = bpy.data.images.load(str(frames[1]))
+        W, H = a.size
+        combo = bpy.data.images.new('combo', W * 2, H)
+        combo.pixels[:] = np.concatenate([np.array(a.pixels[:]).reshape(H, W, 4), np.array(b.pixels[:]).reshape(H, W, 4)], 1).ravel()
+        combo.filepath_raw = str(out_dir / f'render_{look}.png')
+        combo.file_format = 'PNG'
+        combo.save()
+        bpy.data.objects.remove(shell)
+        print('RENDERED', look)
+        continue
     tex = (root / 'GymChaos/Assets/Resources/Characters/Textures/player_authored.png'
            if look == 'tank_black' else
            outfits / (f'shirt_{color}.png' if top == 'tank' else f'{top}_{color}.png'))

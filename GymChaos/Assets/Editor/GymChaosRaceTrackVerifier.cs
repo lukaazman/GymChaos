@@ -1,4 +1,5 @@
 #if UNITY_EDITOR
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using UnityEditor;
@@ -9,7 +10,9 @@ using UnityEngine;
 /// Race track gate: the traced layout is a closed drivable lap with sane
 /// slopes and spiral clearance, the built road has a collider under every
 /// metre of both branches, the city towers and exterior walls on the road are
-/// gone while the track exists, and everything comes back afterwards.
+/// gone while the track exists, the race fill closes the empty stretches
+/// beside the road (towers beside at least 97 % of it), and everything comes
+/// back afterwards.
 /// Logs GYMCHAOS_RACE_TRACK_OK.
 /// </summary>
 public static class GymChaosRaceTrackVerifier
@@ -23,6 +26,8 @@ public static class GymChaosRaceTrackVerifier
     private static int stage;
     private static long trianglesBefore;
     private static GymRaceTrack track;
+    private static IEnumerator filling;
+    private static float coverageBefore;
     private static readonly StringBuilder report = new StringBuilder();
 
     [InitializeOnLoadMethod]
@@ -77,6 +82,12 @@ public static class GymChaosRaceTrackVerifier
                     trianglesBefore = GymRaceCityCarver.CountCityTriangles();
                     GymRaceCorridorClearance.Clear();
                     track = GymRaceTrackBuilder.Build(null);
+                    coverageBefore = GymRaceCityFiller.MeasureCoverage();
+                    filling = GymRaceCityFiller.Fill();
+                    stage = 3;
+                    return;
+                case 3:
+                    if (filling.MoveNext()) return;
                     GymRaceCityCarver.CarveNow();
                     stage = 1;
                     return;
@@ -208,7 +219,12 @@ public static class GymChaosRaceTrackVerifier
     {
         Require(track != null, "track was not built");
         Require(GymRaceCityCarver.FootprintCount > 100, $"only {GymRaceCityCarver.FootprintCount} footprints loaded");
-        Require(GymRaceCityCarver.CityCopyCount == 8, $"carver found {GymRaceCityCarver.CityCopyCount} city copies");
+        Require(GymRaceCityCarver.CityCopyCount == 8 + GymRaceCityFiller.CopyCount,
+            $"carver found {GymRaceCityCarver.CityCopyCount} city copies, fill added {GymRaceCityFiller.CopyCount}");
+        float coverage = GymRaceCityFiller.MeasureCoverage();
+        Require(coverage >= 0.97f && GymRaceCityFiller.CopyCount > 0,
+            $"towers beside {coverage:P0} of the road (before fill {coverageBefore:P0}, fill copies {GymRaceCityFiller.CopyCount})");
+        report.Append($"cityFill={GymRaceCityFiller.CopyCount} coverage={coverageBefore:P0}->{coverage:P0} ");
         Require(GymRaceCityCarver.RemovedBuildingCount > 0, "no building was removed");
         int onRoad = GymRaceCityCarver.CountTrianglesOnRoad(0f);
         Require(onRoad == 0, $"{onRoad} city triangles remain on the road");
@@ -304,6 +320,8 @@ public static class GymChaosRaceTrackVerifier
         GameObject west = GameObject.Find("City Dystopia Ground West");
         Require(west != null && west.GetComponent<Renderer>().enabled, "west city ground not restored");
         Require(GameObject.Find(GymRaceTrackBuilder.RootName) == null, "race track root still exists");
+        Require(GymRaceCityFiller.FillCount == 0 && GameObject.Find("City Dystopia Race Fill 1") == null,
+            "race city fill still stands");
         report.Append("restored=1");
     }
 

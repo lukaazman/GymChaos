@@ -8,7 +8,8 @@ using UnityEngine.InputSystem;
 /// <summary>
 /// Locker outfit selector in the menu and HUD style: an upright ink-rimmed
 /// plate with a red title tag, Bebas labels and Persona buttons for every
-/// top, shirt colour and headwear option. The worn item keeps the selected plate, locked
+/// top, bottom and headwear option; tops and bottoms each pick their colour
+/// from a row of swatches beside the section label. The worn item keeps the selected plate, locked
 /// items are dimmed with a padlock; hovering one names its unlock requirement. Equip rules stay in
 /// <see cref="GymExperienceService"/>; this only presents and forwards clicks.
 /// </summary>
@@ -33,6 +34,8 @@ public sealed class GymLockerMenuUI : MonoBehaviour
     private Text challengeLabel;
     private Button[] topButtons;
     private Button[] shirtButtons;
+    private Button[] bottomButtons;
+    private Button[] bottomColorButtons;
     private Button[] headwearButtons;
     private Button doneButton;
     private bool shown;
@@ -43,6 +46,10 @@ public sealed class GymLockerMenuUI : MonoBehaviour
     public bool IsShowingForVerification => shown;
     public Button[] TopButtonsForVerification => topButtons;
     public Button[] ShirtButtonsForVerification => shirtButtons;
+    public Button[] BottomButtonsForVerification => bottomButtons;
+    public Button[] BottomColorButtonsForVerification => bottomColorButtons;
+    public static bool IsSwatchSelectedForVerification(Button swatch) =>
+        swatch.transform.Find("Worn").gameObject.activeSelf;
     public Button[] HeadwearButtonsForVerification => headwearButtons;
     public Button DoneButtonForVerification => doneButton;
 
@@ -111,27 +118,31 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             AddLockHover(topButtons[i], () => service != null ? service.GetLockerTopRequirement(top) : string.Empty);
         }
 
-        // The colour tints whichever top is worn.
-        PersonaMenuStyle.CreateLayoutLabel(panel, "Shirt Section", body, "COLOR",
+        // The swatches beside TOP colour whichever top is worn.
+        shirtButtons = BuildSwatches("Shirt", 100f,
+            shirt => { service?.EquipShirt(shirt); Refresh(); });
+
+        PersonaMenuStyle.CreateLayoutLabel(panel, "Bottom Section", body, "BOTTOMS",
             new Vector2(Padding, 216f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
-        shirtButtons = new Button[GymExperienceService.LockerShirts.Count];
-        for (int i = 0; i < shirtButtons.Length; i++)
+        bottomButtons = new Button[GymExperienceService.LockerBottoms.Length];
+        for (int i = 0; i < bottomButtons.Length; i++)
         {
-            GymShirtColor shirt = GymExperienceService.LockerShirts[i];
-            shirtButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Shirt " + shirt, body, string.Empty,
+            GymBottomStyle bottom = GymExperienceService.LockerBottoms[i];
+            bottomButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Bottom " + bottom, body, string.Empty,
                 Cell(i, 258f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
-                () => { service?.EquipShirt(shirt); Refresh(); });
-            AddLockHover(shirtButtons[i], () => service != null ? service.GetLockerShirtRequirement(shirt) : string.Empty);
+                () => { service?.EquipBottom(bottom); Refresh(); });
         }
+        bottomColorButtons = BuildSwatches("Bottom Color", 216f,
+            color => { service?.EquipBottomColor(color); Refresh(); });
 
         PersonaMenuStyle.CreateLayoutLabel(panel, "Headwear Section", body, "HEADWEAR",
-            new Vector2(Padding, 412f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+            new Vector2(Padding, 334f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
         headwearButtons = new Button[GymExperienceService.LockerHeadwear.Count];
         for (int i = 0; i < headwearButtons.Length; i++)
         {
             GymHeadwear item = GymExperienceService.LockerHeadwear[i];
             headwearButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Headwear " + item, body, string.Empty,
-                Cell(i, 454f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                Cell(i, 376f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipHeadwear(item); Refresh(); });
             AddLockHover(headwearButtons[i], () => service != null ? service.GetLockerHeadwearRequirement(item) : string.Empty);
         }
@@ -147,6 +158,68 @@ public sealed class GymLockerMenuUI : MonoBehaviour
             () => service?.CloseLockerMenuFromUi());
 
         SetShown(false);
+    }
+
+    private const float SwatchSize = 34f;
+    private const float SwatchGap = 12f;
+
+    // One colour square per shirt colour on a section's label row, right
+    // aligned; a white frame marks the worn colour, locked ones are dimmed.
+    private Button[] BuildSwatches(string name, float rowTop, System.Action<GymShirtColor> equip)
+    {
+        int count = GymExperienceService.LockerShirts.Count;
+        Button[] swatches = new Button[count];
+        float right = PanelWidth - Padding - 12f;
+        for (int i = 0; i < count; i++)
+        {
+            GymShirtColor color = GymExperienceService.LockerShirts[i];
+            GameObject root = new GameObject(name + " " + color, typeof(RectTransform), typeof(Image), typeof(Button));
+            root.transform.SetParent(panel, false);
+            RectTransform rect = root.GetComponent<RectTransform>();
+            rect.anchorMin = rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 1f);
+            rect.anchoredPosition = new Vector2(right - (count - i) * (SwatchSize + SwatchGap) + SwatchGap, -rowTop + 1f);
+            rect.sizeDelta = new Vector2(SwatchSize, SwatchSize);
+            root.GetComponent<Image>().color = PersonaMenuStyle.Ink;
+            Image worn = SwatchPart(rect, "Worn", -4f, Color.white);
+            worn.transform.SetAsFirstSibling();
+            Image fill = SwatchPart(rect, "Colour", 3f, PlayerCosmeticLoadout.GetSwatchColor(color));
+            Button button = root.GetComponent<Button>();
+            button.targetGraphic = fill;
+            button.transition = Selectable.Transition.None;
+            button.onClick.AddListener(() => equip(color));
+            swatches[i] = button;
+            AddLockHover(button, () => service != null ? service.GetLockerShirtRequirement(color) : string.Empty);
+        }
+        return swatches;
+    }
+
+    private static Image SwatchPart(RectTransform parent, string name, float inset, Color color)
+    {
+        GameObject part = new GameObject(name, typeof(RectTransform), typeof(Image));
+        part.transform.SetParent(parent, false);
+        RectTransform rect = part.GetComponent<RectTransform>();
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = new Vector2(inset, inset);
+        rect.offsetMax = new Vector2(-inset, -inset);
+        Image image = part.GetComponent<Image>();
+        image.color = color;
+        image.raycastTarget = name == "Colour";
+        return image;
+    }
+
+    private static void ConfigureSwatch(Button swatch, bool unlocked, bool worn)
+    {
+        swatch.interactable = unlocked;
+        swatch.transform.Find("Worn").gameObject.SetActive(worn);
+        Image fill = swatch.transform.Find("Colour").GetComponent<Image>();
+        Color c = fill.color;
+        c.a = unlocked ? 1f : 0.3f;
+        fill.color = c;
+        // The dimmed square already says locked; the hover hint names the unlock.
+        Transform padlock = swatch.transform.Find("Padlock");
+        if (padlock != null) padlock.gameObject.SetActive(false);
     }
 
     private static Vector2 Cell(int index, float top, float width)
@@ -229,8 +302,14 @@ public sealed class GymLockerMenuUI : MonoBehaviour
         for (int i = 0; i < shirtButtons.Length; i++)
         {
             GymShirtColor shirt = GymExperienceService.LockerShirts[i];
-            Configure(shirtButtons[i], service.GetLockerShirtLabel(shirt),
-                service.IsCosmeticUnlocked(shirt), service.IsShirtWorn(shirt));
+            ConfigureSwatch(shirtButtons[i], service.IsCosmeticUnlocked(shirt), service.IsShirtWorn(shirt));
+            ConfigureSwatch(bottomColorButtons[i], service.IsCosmeticUnlocked(shirt), service.IsBottomColorWorn(shirt));
+        }
+        for (int i = 0; i < bottomButtons.Length; i++)
+        {
+            GymBottomStyle bottom = GymExperienceService.LockerBottoms[i];
+            Configure(bottomButtons[i], PlayerCosmeticLoadout.GetBottomDisplayName(bottom), true,
+                service.IsBottomWorn(bottom));
         }
         for (int i = 0; i < headwearButtons.Length; i++)
         {

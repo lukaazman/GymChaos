@@ -2,6 +2,7 @@
 using System;
 using System.Collections;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -14,8 +15,11 @@ using UnityEngine.UI;
 /// shirt colour.
 /// - Save: the top survives a JSON round trip; an unknown or missing top
 ///   falls back to the tank top.
-/// - Locker: a TOP row with the three named buttons above the colour row;
-///   clicking one equips it.
+/// - Locker: a TOP row with the three named buttons under the TOP label,
+///   whose colour swatches sit on the label row; a BOTTOMS row (SHORTS,
+///   PANTS) with its own swatches. Clicking a button or swatch equips it.
+/// - Bottoms: Shorts and Pants are skinned shells tinted with the bottoms
+///   colour; pants reach the ankles, shorts stop above the knee.
 /// - Look: every top x colour loads its own texture on the body; only
 ///   Oversized adds the skinned cloth shell, which shares the body's bones,
 ///   sits outside the body (a few cm, never inside) and follows animation.
@@ -148,10 +152,22 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         }
         RectTransform topRect = (RectTransform)tops[0].transform;
         RectTransform shirtRect = (RectTransform)ui.ShirtButtonsForVerification[0].transform;
-        Require(topRect.position.y > shirtRect.position.y, "TOP row is not above the colour row");
+        Require(shirtRect.position.y > topRect.position.y && shirtRect.position.x > topRect.position.x,
+            "TOP colour swatches are not on the TOP label row");
         tops[1].onClick.Invoke();
         yield return null;
         Require(service.State.top == "Oversized", $"clicking OVERSIZED wore {service.State.top}");
+        Button[] bottoms = ui.BottomButtonsForVerification;
+        Require(bottoms.Length == 2 && bottoms[0].GetComponentInChildren<Text>().text == "SHORTS" &&
+            bottoms[1].GetComponentInChildren<Text>().text == "PANTS", "BOTTOMS row is not SHORTS / PANTS");
+        Require(((RectTransform)bottoms[0].transform).position.y < topRect.position.y, "BOTTOMS row is not under TOP");
+        bottoms[1].onClick.Invoke();
+        int white = Array.IndexOf(GymExperienceService.LockerShirts.ToArray(), GymShirtColor.White);
+        ui.BottomColorButtonsForVerification[white].onClick.Invoke();
+        yield return null;
+        Require(service.State.bottom == "Pants" && service.State.bottomColor == "White" &&
+            GymLockerMenuUI.IsSwatchSelectedForVerification(ui.BottomColorButtonsForVerification[white]),
+            $"BOTTOMS clicks wore {service.State.bottom}/{service.State.bottomColor}");
         service.CloseLockerMenuFromUi();
         notes.Add("locker=ok");
 
@@ -220,6 +236,53 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
             MeasureFit(FindBody(rig), loadout.TopShellRenderer, "onyx_" + clip, 0.0004f, 0.012f);
         }
 
+        // ---- bottoms: both cuts in every colour, tinted on the shell
+        foreach (GymBottomStyle bottom in GymExperienceService.LockerBottoms)
+        {
+            Color previousTint = Color.clear;
+            foreach (GymShirtColor colour in Enum.GetValues(typeof(GymShirtColor)))
+            {
+                service.EquipBottom(bottom);
+                service.EquipBottomColor(colour);
+                limit = Time.realtimeSinceStartup + 15f;
+                yield return null;
+                while (loadout.IsBottomShellPending && Time.realtimeSinceStartup < limit) yield return null;
+                yield return null;
+                SkinnedMeshRenderer bottomShell = loadout.BottomShellRenderer;
+                string expectedName = bottom == GymBottomStyle.Pants
+                    ? PlayerTopShell.PantsObjectName : PlayerTopShell.ShortsObjectName;
+                Require(bottomShell != null && bottomShell.name == expectedName,
+                    $"{bottom} {colour}: shell {bottomShell?.name ?? "missing"}");
+                Color tint = bottomShell.sharedMaterials[0].GetColor("_BaseColor");
+                Require(loadout.CurrentBottomColor == colour && tint != previousTint,
+                    $"{bottom} {colour}: tint {tint} did not change");
+                previousTint = tint;
+            }
+        }
+        SkinnedMeshRenderer legs = FindBody(rig);
+        float bodyBottom = legs.bounds.min.y;
+        float bodyHeight = legs.bounds.size.y;
+        service.EquipBottom(GymBottomStyle.Pants);
+        yield return WaitBottom(loadout);
+        float pantsLow = loadout.BottomShellRenderer.bounds.min.y;
+        ExportShell(loadout.BottomShellRenderer, "pants");
+        foreach (string clip in new[] { "idle1", "running" })
+        {
+            rig.HoldStablePoseForVerification(clip, 0.45f, out _);
+            yield return null;
+            MeasureFit(legs, loadout.BottomShellRenderer, "pants_" + clip, 0.002f, 0.05f);
+        }
+        service.EquipBottom(GymBottomStyle.Shorts);
+        yield return WaitBottom(loadout);
+        float shortsLow = loadout.BottomShellRenderer.bounds.min.y;
+        ExportShell(loadout.BottomShellRenderer, "shorts");
+        rig.HoldStablePoseForVerification("idle1", 0.45f, out _);
+        yield return null;
+        MeasureFit(legs, loadout.BottomShellRenderer, "shorts_idle1", 0.0004f, 0.02f);
+        Require(pantsLow < bodyBottom + bodyHeight * 0.12f && shortsLow > bodyBottom + bodyHeight * 0.25f,
+            $"pants reach {(pantsLow - bodyBottom) / bodyHeight:F2}h, shorts {(shortsLow - bodyBottom) / bodyHeight:F2}h");
+        notes.Add($"bottoms=10 pantsLow={(pantsLow - bodyBottom) / bodyHeight:F2}h shortsLow={(shortsLow - bodyBottom) / bodyHeight:F2}h");
+
         // ---- shell geometry for offline inspection (rest pose OBJ)
         ExportShell(loadout, GymTopStyle.Onyx, "onyx");
         service.EquipTop(GymTopStyle.Oversized);
@@ -234,9 +297,11 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         notes.Add($"shells={PlayerTopShell.CachedShellCount}");
     }
 
-    private static void ExportShell(PlayerCosmeticLoadout loadout, GymTopStyle top, string name)
+    private static void ExportShell(PlayerCosmeticLoadout loadout, GymTopStyle top, string name) =>
+        ExportShell(loadout.TopShellRenderer, name);
+
+    private static void ExportShell(SkinnedMeshRenderer shell, string name)
     {
-        SkinnedMeshRenderer shell = loadout.TopShellRenderer;
         if (shell == null || shell.sharedMesh == null) return;
         Mesh mesh = shell.sharedMesh;
         System.Text.StringBuilder obj = new System.Text.StringBuilder();
@@ -259,6 +324,14 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         float limit = Time.realtimeSinceStartup + 10f;
         yield return null;
         while (loadout.IsTopShellPending && Time.realtimeSinceStartup < limit) yield return null;
+        yield return null;
+    }
+
+    private static IEnumerator WaitBottom(PlayerCosmeticLoadout loadout)
+    {
+        float limit = Time.realtimeSinceStartup + 15f;
+        yield return null;
+        while (loadout.IsBottomShellPending && Time.realtimeSinceStartup < limit) yield return null;
         yield return null;
     }
 

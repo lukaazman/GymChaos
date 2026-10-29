@@ -34,6 +34,12 @@ public static class GymCityDystopiaSurroundings
 
     public static bool IsBuilt { get; private set; }
     public static Bounds ProtectedBounds { get; private set; }
+    // Copy geometry for the race fill (GymRaceCityFiller).
+    public const float CornerCopyScale = CornerScale;
+    public const float SourceWidthMetres = SourceFarWidth;
+    public const float SourceNearDepthMetres = SourceNearDepth;
+    public const float SourceFarDepthMetres = SourceFarDepth;
+    public const float ProtectedHalfHeight = 2.6f;
     public static int ExpectedPlacements { get; private set; }
     public static int ReadyPlacements { get; private set; }
     public static int LoadFailures { get; private set; }
@@ -107,7 +113,7 @@ public static class GymCityDystopiaSurroundings
         Bounds protectedBounds = new Bounds(
             new Vector3(
                 (protectedMinX + protectedMaxX) * 0.5f,
-                floorY + 2.6f,
+                floorY + ProtectedHalfHeight,
                 (protectedMinZ + protectedMaxZ) * 0.5f),
             new Vector3(
                 protectedMaxX - protectedMinX,
@@ -310,6 +316,21 @@ public static class GymCityDystopiaSurroundings
             Object.Destroy(collider);
         }
     }
+    /// <summary>One more city block under the ring root (race fill); null when there is no ring.</summary>
+    public static void RequestExtraCopy(string objectName, Vector3 position, Quaternion rotation, float scale,
+        System.Action<GameObject> onLoaded)
+    {
+        GameObject root = GameObject.Find(RootName);
+        if (root == null)
+        {
+            onLoaded(null);
+            return;
+        }
+        RuntimeGlbSceneLoader.Request(AssetPath, root.transform, position, rotation, Vector3.one * scale,
+            objectName, CityBackgroundLayer, settleOnSupport: true, supportY: position.y,
+            onLoaded: onLoaded, renderProfile: RuntimeGlbRenderProfile.ChromeGlassBackground);
+    }
+
     private static void PlaceCity(
         Transform parent,
         CityDystopiaBuildTracker tracker,

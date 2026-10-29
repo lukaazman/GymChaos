@@ -682,12 +682,12 @@ public static class GymChaosProgressionVerifier
         Button[] headwear = ui.HeadwearButtonsForVerification;
         if (shirts.Length != GymExperienceService.LockerShirts.Count ||
             headwear.Length != GymExperienceService.LockerHeadwear.Count ||
-            shirts.Concat(headwear).Append(ui.DoneButtonForVerification).Any(b => !IsPersonaButton(b, bebas)))
+            headwear.Append(ui.DoneButtonForVerification).Any(b => !IsPersonaButton(b, bebas)))
         {
             Fail("Locker options are not one Persona menu button each.");
             return false;
         }
-        foreach (Button lockerButton in shirts.Concat(headwear).Append(ui.DoneButtonForVerification))
+        foreach (Button lockerButton in headwear.Append(ui.DoneButtonForVerification))
         {
             string shapeProblem = CheckReactiveShape(lockerButton);
             if (shapeProblem != null)
@@ -699,10 +699,10 @@ public static class GymChaosProgressionVerifier
         int blue = Array.IndexOf(GymExperienceService.LockerShirts.ToArray(), GymShirtColor.Blue);
         int red = Array.IndexOf(GymExperienceService.LockerShirts.ToArray(), GymShirtColor.Red);
         shirts[blue].onClick.Invoke();
-        PersonaMenuButton blueButton = shirts[blue].GetComponent<PersonaMenuButton>();
-        PersonaMenuButton redButton = shirts[red].GetComponent<PersonaMenuButton>();
-        if (!progression.IsShirtWorn(GymShirtColor.Blue) || !blueButton.IsSelectedForVerification ||
-            redButton.IsSelectedForVerification)
+        // Shirt colours are swatches on the TOP row: the worn one is framed.
+        if (!progression.IsShirtWorn(GymShirtColor.Blue) ||
+            !GymLockerMenuUI.IsSwatchSelectedForVerification(shirts[blue]) ||
+            GymLockerMenuUI.IsSwatchSelectedForVerification(shirts[red]))
         {
             Fail("Locker shirt button did not equip and mark the worn shirt.");
             return false;

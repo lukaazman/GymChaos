@@ -1511,8 +1511,11 @@ public sealed class PlayerHandRig : MonoBehaviour
         for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
         {
             SkinnedMeshRenderer renderer = renderers[rendererIndex];
+            // Cloth shells cover part of the body only (shorts, a top): they
+            // are not the body's height.
             if (renderer == null || renderer.sharedMesh == null || !renderer.enabled ||
-                renderer.gameObject.name.StartsWith("First Person Arms", StringComparison.Ordinal))
+                renderer.gameObject.name.StartsWith("First Person Arms", StringComparison.Ordinal) ||
+                PlayerTopShell.IsShellObject(renderer.gameObject.name))
             {
                 continue;
             }

@@ -176,8 +176,15 @@ public sealed class GymRaceHud : MonoBehaviour
 
         // End-of-race choice under the results board.
         choiceRoot = Stretch(new GameObject("Race Choice", typeof(RectTransform)), transform);
+        // 0 = back, then one race button per difficulty; ShowChoice hides
+        // the locked ones and spreads the rest along the row.
         choiceButtons.Add(PersonaMenuStyle.CreateButton(choiceRoot, "Back To Gym", body, "BACK TO GYM", 735f, 884f, 360f, 70f, 40, -1f, () => ChoiceMade = Choice.BackToGym));
-        choiceButtons.Add(PersonaMenuStyle.CreateButton(choiceRoot, "Race Again", body, "RACE AGAIN", 1125f, 884f, 360f, 70f, 40, -1f, () => ChoiceMade = Choice.RaceAgain));
+        for (int d = 0; d < GymRaceDirector.DifficultyNames.Length; d++)
+        {
+            int difficulty = d;
+            choiceButtons.Add(PersonaMenuStyle.CreateButton(choiceRoot, "Race " + GymRaceDirector.DifficultyNames[d], body,
+                GymRaceDirector.DifficultyNames[d], 1125f, 884f, 360f, 70f, 40, -1f, () => PickRace(difficulty)));
+        }
         for (int i = 0; i < choiceButtons.Count; i++)
         {
             int index = i;
@@ -204,17 +211,45 @@ public sealed class GymRaceHud : MonoBehaviour
         RaceAgain
     }
 
+    /// <summary>The level the chosen race button runs (with <see cref="Choice.RaceAgain"/>).</summary>
+    public int ChosenDifficulty { get; private set; }
+    private readonly List<int> visibleChoices = new List<int>();
+
     /// <summary>Set by a click or <see cref="ConfirmChoice"/> while the choice is shown.</summary>
     public Choice ChoiceMade { get; private set; }
     public bool ChoiceVisible => choiceRoot != null && choiceRoot.gameObject.activeSelf;
     public int FocusedChoice => choiceIndex;
-    /// <summary>Verification: 0 = BACK TO GYM, 1 = RACE AGAIN.</summary>
+    /// <summary>Verification: 0 = BACK TO GYM, 1.. = race at EASY, MEDIUM, HARD.</summary>
     public Button ChoiceButtonForVerification(int index) => choiceButtons[index];
 
-    public void ShowChoice()
+    /// <summary>
+    /// Back plus one race button per unlocked level. With only Easy open the
+    /// results row stays BACK TO GYM / RACE AGAIN; before a race it reads BACK.
+    /// </summary>
+    public void ShowChoice(int unlockedDifficulty, bool beforeRace)
     {
         GymRuntimeSettings.EnsureEventSystem();
         ChoiceMade = Choice.None;
+        visibleChoices.Clear();
+        visibleChoices.Add(0);
+        for (int d = 0; d <= unlockedDifficulty && d < GymRaceDirector.DifficultyNames.Length; d++)
+        {
+            visibleChoices.Add(d + 1);
+        }
+        SetLabel(choiceButtons[0], beforeRace ? "BACK" : "BACK TO GYM");
+        SetLabel(choiceButtons[1], unlockedDifficulty == 0 && !beforeRace ? "RACE AGAIN" : GymRaceDirector.DifficultyNames[0]);
+        float width = visibleChoices.Count > 3 ? 250f : visibleChoices.Count > 2 ? 300f : 360f;
+        float step = width + 30f;
+        float left = 930f - step * (visibleChoices.Count - 1) * 0.5f;
+        for (int i = 0; i < choiceButtons.Count; i++)
+        {
+            int slot = visibleChoices.IndexOf(i);
+            choiceButtons[i].gameObject.SetActive(slot >= 0);
+            if (slot >= 0)
+            {
+                PersonaMenuStyle.PlaceInArt((RectTransform)choiceButtons[i].transform, left + step * slot, 884f, width, 70f);
+            }
+        }
         choiceRoot.gameObject.SetActive(true);
         group.interactable = true;
         group.blocksRaycasts = true;
@@ -234,12 +269,26 @@ public sealed class GymRaceHud : MonoBehaviour
 
     public void MoveChoice(int direction)
     {
-        FocusChoice((choiceIndex + direction + choiceButtons.Count) % choiceButtons.Count);
+        int slot = Mathf.Max(0, visibleChoices.IndexOf(choiceIndex));
+        FocusChoice(visibleChoices[(slot + direction + visibleChoices.Count) % visibleChoices.Count]);
     }
 
     public void ConfirmChoice()
     {
-        ChoiceMade = choiceIndex == 0 ? Choice.BackToGym : Choice.RaceAgain;
+        if (choiceIndex == 0) ChoiceMade = Choice.BackToGym;
+        else PickRace(choiceIndex - 1);
+    }
+
+    private void PickRace(int difficulty)
+    {
+        ChosenDifficulty = difficulty;
+        ChoiceMade = Choice.RaceAgain;
+    }
+
+    private static void SetLabel(Button button, string label)
+    {
+        Text text = button.GetComponentInChildren<Text>(true);
+        if (text != null) text.text = label;
     }
 
     private void FocusChoice(int index)

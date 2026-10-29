@@ -1199,6 +1199,28 @@ public sealed class GymExperienceService : MonoBehaviour
         SaveNow();
     }
 
+    public void EquipBottom(GymBottomStyle bottom)
+    {
+        if (state == null) return;
+        state.bottom = bottom.ToString();
+        EnsureCosmetics();
+        cosmetics?.ApplyFromState(state);
+        SaveNow();
+    }
+
+    public void EquipBottomColor(GymShirtColor color)
+    {
+        if (state == null || !IsCosmeticUnlocked(color))
+        {
+            ShowFeedback("That colour unlocks at a higher level.", 2f);
+            return;
+        }
+        state.bottomColor = color.ToString();
+        EnsureCosmetics();
+        cosmetics?.ApplyFromState(state);
+        SaveNow();
+    }
+
     public void EquipHeadwear(GymHeadwear headwear)
     {
         if (state == null || !IsCosmeticUnlocked(headwear))
@@ -1747,6 +1769,14 @@ public sealed class GymExperienceService : MonoBehaviour
 
     public static System.Collections.Generic.IReadOnlyList<GymTopStyle> LockerTops => LockerTopOptions;
 
+    public static readonly GymBottomStyle[] LockerBottoms = { GymBottomStyle.Shorts, GymBottomStyle.Pants };
+
+    public bool IsBottomWorn(GymBottomStyle bottom) =>
+        state != null && string.Equals(state.bottom, bottom.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    public bool IsBottomColorWorn(GymShirtColor color) =>
+        state != null && string.Equals(state.bottomColor, color.ToString(), StringComparison.OrdinalIgnoreCase);
+
     public bool IsTopWorn(GymTopStyle top) =>
         state != null && string.Equals(state.top, top.ToString(), StringComparison.OrdinalIgnoreCase);
 
@@ -1793,6 +1823,7 @@ public sealed class GymExperienceService : MonoBehaviour
         (Enum.TryParse(state.top, true, out GymTopStyle wornTop)
             ? PlayerCosmeticLoadout.GetTopDisplayName(wornTop)
             : state.top.ToUpperInvariant()) + "   " +
+        state.bottomColor.ToUpperInvariant() + " " + state.bottom.ToUpperInvariant() + "   " +
         (cosmetics != null
             ? PlayerCosmeticLoadout.GetHeadwearDisplayName(cosmetics.CurrentHeadwear)
             : state.headwear).ToUpperInvariant();

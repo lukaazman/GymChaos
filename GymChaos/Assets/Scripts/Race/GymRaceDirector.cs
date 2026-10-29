@@ -204,6 +204,30 @@ public sealed class GymRaceDirector : MonoBehaviour
         autopilot = autopilotPlayer;
         phase = Phase.Building;
         GymVisitorDirector.RaceTrafficHold = true;
+        player.SetCinematicLock(true);
+        savedCameraLocalPosition = player.playerCamera.transform.localPosition;
+        savedCameraLocalRotation = player.playerCamera.transform.localRotation;
+        hud = GymRaceHud.Create();
+        hud.SetRaceWidgetsVisible(false);
+
+        // The first race is always Easy; once a win opens Medium the sign asks.
+        int unlocked = UnlockedDifficulty;
+        difficulty = 0;
+        if (unlocked > 0 && !autopilot)
+        {
+            yield return PickDifficulty(unlocked, false);
+            player.SetCursorCaptured(true);
+            if (pickedDifficulty < 0)
+            {
+                Destroy(hud.gameObject);
+                hud = null;
+                player.SetCinematicLock(false);
+                GymVisitorDirector.RaceTrafficHold = false;
+                phase = Phase.Idle;
+                yield break;
+            }
+            difficulty = pickedDifficulty;
+        }
         // A visitor car already on the road would drive through the grid. The
         // hold stops new cars, so wait for the last one to park instead of
         // refusing the race (it was refused most of the time on slow WebGL).
@@ -218,13 +242,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             }
             yield return null;
         }
-        player.SetCinematicLock(true);
-        savedCameraLocalPosition = player.playerCamera.transform.localPosition;
-        savedCameraLocalRotation = player.playerCamera.transform.localRotation;
-
-        hud = GymRaceHud.Create();
-        hud.SetRaceWidgetsVisible(false);
-        hud.ShowBanner("CITY GRAND PRIX", PersonaMenuStyle.Gold, 3.5f);
+        hud.ShowBanner("CITY GRAND PRIX  " + DifficultyNames[difficulty], PersonaMenuStyle.Gold, 3.5f);
 
         GymRaceCorridorClearance.Clear();
         track = GymRaceTrackBuilder.Build(transform);
@@ -241,6 +259,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         {
             yield return null;
         }
+        yield return GymRaceCityFiller.Fill();
         yield return GymRaceCityCarver.CarveRoutine();
         PlayCrumbles();
 
@@ -267,20 +286,36 @@ public sealed class GymRaceDirector : MonoBehaviour
             resultFinishTime = playerRacer != null ? playerRacer.FinishTime : 0f;
             AwardResults(xp);
             RacesRunForVerification++;
-            hud.ShowResults(rows, xpLine);
-            hud.ShowChoice();
             player.SetCursorCaptured(false);
             chase.StartOrbit();
             GymRaceHud.Choice choice = GymRaceHud.Choice.None;
-            float shownAt = Time.time;
             while (choice == GymRaceHud.Choice.None)
             {
-                CoastAll();
-                choice = ReadChoice(Time.time - shownAt);
-                yield return null;
+                hud.ShowResults(rows, xpLine);
+                hud.ShowChoice(0, false);
+                float shownAt = Time.time;
+                while (choice == GymRaceHud.Choice.None)
+                {
+                    CoastAll();
+                    choice = ReadChoice(Time.time - shownAt);
+                    yield return null;
+                }
+                hud.HideChoice();
+                hud.HideResults();
+                // RACE AGAIN opens the difficulty screen once Medium is won;
+                // BACK there returns to the results.
+                int open = UnlockedDifficulty;
+                if (choice == GymRaceHud.Choice.RaceAgain && open > 0 && !autopilot)
+                {
+                    yield return PickDifficulty(open, true);
+                    if (pickedDifficulty < 0)
+                    {
+                        choice = GymRaceHud.Choice.None;
+                        continue;
+                    }
+                    difficulty = pickedDifficulty;
+                }
             }
-            hud.HideChoice();
-            hud.HideResults();
             player.SetCursorCaptured(true);
             if (choice == GymRaceHud.Choice.RaceAgain)
             {
@@ -410,6 +445,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             kart.MeterFilling = false;
             kart.SpeedScale = 1f;
             kart.SetBoostMeter(0f);
+            ApplyDifficulty(racer);
             if (racer.IsPlayer && !autopilot)
             {
                 // The cool-down lap AI from the last finish hands back control.
@@ -499,6 +535,75 @@ public sealed class GymRaceDirector : MonoBehaviour
     }
 
     // -------------------------------------------------------------- spawning
+
+    // ---------------------------------------------------------- difficulty
+
+    public static readonly string[] DifficultyNames = { "EASY", "MEDIUM", "HARD" };
+    // Easy is the original race. Every kart, the player's too, gets faster
+    // per level (grip and steering follow so it stays drivable) and the AI
+    // takes corners closer to the limit.
+    private static readonly float[] DifficultySpeed = { 1f, 1.12f, 1.24f };
+    private static readonly float[] DifficultySkill = { 1f, 1.07f, 1.14f };
+    private int difficulty;
+    public int CurrentDifficulty => difficulty;
+
+    public static GymRaceKart.Stats ScaleStats(GymRaceKart.Stats stats, int level)
+    {
+        float speed = DifficultySpeed[Mathf.Clamp(level, 0, DifficultySpeed.Length - 1)];
+        stats.TopSpeed *= speed;
+        stats.Acceleration *= speed;
+        stats.Grip *= speed;
+        stats.Handling *= Mathf.Sqrt(speed);
+        return stats;
+    }
+
+    public static float AiSkillScale(int level) =>
+        DifficultySkill[Mathf.Clamp(level, 0, DifficultySkill.Length - 1)];
+
+    /// <summary>A win opens the level after the one raced; nothing else changes it.</summary>
+    public static int UnlockAfterRace(int unlocked, int raced, int place) =>
+        place == 1 ? Mathf.Clamp(Mathf.Max(unlocked, raced + 1), 0, DifficultyNames.Length - 1) : unlocked;
+
+    private static int UnlockedDifficulty
+    {
+        get
+        {
+            GymProgressionState state = GymExperienceService.Active != null ? GymExperienceService.Active.State : null;
+            return state != null ? Mathf.Clamp(state.raceDifficultyUnlocked, 0, DifficultyNames.Length - 1) : 0;
+        }
+    }
+
+    private int pickedDifficulty;
+
+    // Difficulty screen: BACK plus one button per open level; -1 = back.
+    private IEnumerator PickDifficulty(int unlocked, bool coast)
+    {
+        hud.ShowBanner("SELECT DIFFICULTY", PersonaMenuStyle.Gold, 600f);
+        hud.ShowChoice(unlocked, true);
+        player.SetCursorCaptured(false);
+        GymRaceHud.Choice choice = GymRaceHud.Choice.None;
+        float shownAt = Time.time;
+        while (choice == GymRaceHud.Choice.None)
+        {
+            if (coast) CoastAll();
+            choice = ReadChoice(Time.time - shownAt);
+            yield return null;
+        }
+        hud.HideChoice();
+        hud.ShowBanner(string.Empty, PersonaMenuStyle.Gold, 0f);
+        pickedDifficulty = choice == GymRaceHud.Choice.RaceAgain ? hud.ChosenDifficulty : -1;
+    }
+
+    private void ApplyDifficulty(GymRaceRacer racer)
+    {
+        RacerSpec spec = specs[racer.GridSlot];
+        racer.Kart.KartStats = ScaleStats(spec.Stats, difficulty);
+        GymRaceAIDriver ai = racer.Kart.GetComponent<GymRaceAIDriver>();
+        if (ai != null && !spec.Player)
+        {
+            ai.Skill = spec.Skill * AiSkillScale(difficulty);
+        }
+    }
 
     private static List<RacerSpec> Roster()
     {
@@ -597,7 +702,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             GymRaceVehicleFactory.Car car = cars[slot];
             Pose pose = GymRaceTrackLayout.GridSlot(slot);
             Bounds local = LocalBounds(car.Holder);
-            GymRaceKart kart = GymRaceKart.Create("Race Kart - " + spec.Name, pose.position, pose.rotation * Vector3.forward, spec.Stats, car.Holder);
+            GymRaceKart kart = GymRaceKart.Create("Race Kart - " + spec.Name, pose.position, pose.rotation * Vector3.forward, ScaleStats(spec.Stats, difficulty), car.Holder);
             kart.transform.SetParent(transform, true);
             kart.ControlsEnabled = false;
             kart.MeterFilling = false;
@@ -610,7 +715,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             {
                 GymRaceAIDriver ai = kart.gameObject.AddComponent<GymRaceAIDriver>();
                 ai.LaneOffset = spec.Lane;
-                ai.Skill = spec.Skill;
+                ai.Skill = spec.Skill * AiSkillScale(difficulty);
                 ai.Aggression = spec.Aggression;
             }
             GymRaceKartEffects effects = kart.gameObject.AddComponent<GymRaceKartEffects>();
@@ -1103,6 +1208,7 @@ public sealed class GymRaceDirector : MonoBehaviour
                     state.raceBestTotalMs = total;
                 }
             }
+            state.raceDifficultyUnlocked = UnlockAfterRace(state.raceDifficultyUnlocked, difficulty, place);
             if (place == 1)
             {
                 state.raceWins++;

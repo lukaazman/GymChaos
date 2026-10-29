@@ -18,6 +18,10 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
 
     private GymShirtColor currentShirt = GymShirtColor.Black;
     private GymTopStyle currentTop = GymTopStyle.TankTop;
+    private GymBottomStyle currentBottom = GymBottomStyle.Shorts;
+    private GymShirtColor currentBottomColor = GymShirtColor.Black;
+    private SkinnedMeshRenderer bottomRenderer;
+    private bool bottomPending;
     private SkinnedMeshRenderer shellRenderer;
     private SkinnedMeshRenderer shellBody;
     private bool shellPending;
@@ -33,6 +37,11 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
 
     public GymShirtColor CurrentShirt => currentShirt;
     public GymTopStyle CurrentTop => currentTop;
+    public GymBottomStyle CurrentBottom => currentBottom;
+    public GymShirtColor CurrentBottomColor => currentBottomColor;
+    public bool IsBottomShellPending => bottomPending;
+    public SkinnedMeshRenderer BottomShellRenderer =>
+        bottomRenderer != null && bottomRenderer.gameObject.activeInHierarchy ? bottomRenderer : null;
     public Texture CurrentTexture => currentTexture;
     /// <summary>Cloth shell of the worn top (Oversized or Onyx), null for the tank top.</summary>
     public bool IsTopShellPending => shellPending;
@@ -87,11 +96,16 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         if (!Enum.TryParse(state.shirt, true, out nextShirt)) nextShirt = GymShirtColor.Black;
         if (!Enum.TryParse(state.headwear, true, out nextHeadwear)) nextHeadwear = GymHeadwear.None;
         if (!Enum.TryParse(state.top, true, out GymTopStyle nextTop)) nextTop = GymTopStyle.TankTop;
+        if (!Enum.TryParse(state.bottom, true, out GymBottomStyle nextBottom)) nextBottom = GymBottomStyle.Shorts;
+        if (!Enum.TryParse(state.bottomColor, true, out GymShirtColor nextBottomColor)) nextBottomColor = GymShirtColor.Black;
         bool headwearChanged = !hasAppliedState || nextHeadwear != currentHeadwear;
         bool changed = !hasAppliedState || nextShirt != currentShirt ||
-            nextHeadwear != currentHeadwear || nextTop != currentTop;
+            nextHeadwear != currentHeadwear || nextTop != currentTop ||
+            nextBottom != currentBottom || nextBottomColor != currentBottomColor;
         currentShirt = nextShirt;
         currentTop = nextTop;
+        currentBottom = nextBottom;
+        currentBottomColor = nextBottomColor;
         currentHeadwear = nextHeadwear;
         hasAppliedState = true;
 
@@ -120,8 +134,30 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             oversized ? GetShirtColor(currentShirt) * 0.85f : new Color(0.03f, 0.03f, 0.034f));
     }
 
+    private PlayerTopShell.Style CurrentBottomStyle =>
+        currentBottom == GymBottomStyle.Pants ? PlayerTopShell.Pants : PlayerTopShell.Shorts;
+
+    // Bottoms share one grey fabric; the chosen colour tints it.
+    private SkinnedMeshRenderer AttachBottom(SkinnedMeshRenderer body)
+    {
+        Color color = GetShirtColor(currentBottomColor);
+        Color tint = color / PlayerTopShell.BottomsFabricLevel;
+        tint.a = 1f;
+        return PlayerTopShell.Attach(body, CurrentBottomStyle,
+            ScanTextureMips.Limit(Resources.Load<Texture2D>(BottomsFabricTexture)), color * 0.85f, tint);
+    }
+
     private void LateUpdate()
     {
+        if (bottomPending && shellBody != null)
+        {
+            bottomRenderer = AttachBottom(shellBody);
+            if (bottomRenderer != null || PlayerTopShell.IsSettled(shellBody.sharedMesh, CurrentBottomStyle))
+            {
+                bottomPending = false;
+                RequestMirrorRefresh();
+            }
+        }
         if (shellPending && shellBody != null && currentTop != GymTopStyle.TankTop)
         {
             shellRenderer = AttachShell(shellBody);
@@ -231,6 +267,13 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             shellRenderer = null;
             // Ready for the next locker change without a wait.
             PlayerTopShell.Prewarm(body.sharedMesh);
+        }
+        bottomPending = false;
+        if (body != null)
+        {
+            bottomRenderer = AttachBottom(body);
+            bottomPending = bottomRenderer == null &&
+                !PlayerTopShell.IsSettled(body.sharedMesh, CurrentBottomStyle);
         }
 
         Transform head = rig.RuntimeHead;
@@ -506,6 +549,10 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     // Scan texture with the tank-top straps beside the neck painted over in
     // skin (build_player_tops.py), worn by the body under a cloth shell.
     public const string UnderShellBodyTexture = "Player/Outfits/under_shell_body";
+    public const string BottomsFabricTexture = "Player/Outfits/bottoms_fabric";
+
+    public static string GetBottomDisplayName(GymBottomStyle bottom) =>
+        bottom == GymBottomStyle.Pants ? "PANTS" : "SHORTS";
 
     public static string GetOutfitTexturePath(GymTopStyle top, GymShirtColor color)
     {
@@ -576,6 +623,10 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             }
         }
     }
+
+    /// <summary>Locker swatch: the cloth colour, lifted so black still reads as a swatch.</summary>
+    public static Color GetSwatchColor(GymShirtColor shirt) =>
+        shirt == GymShirtColor.Black ? new Color(0.08f, 0.085f, 0.1f) : GetShirtColor(shirt);
 
     private static Color GetShirtColor(GymShirtColor shirt)
     {

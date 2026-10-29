@@ -3,7 +3,8 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Cloth for the Oversized and Onyx tops: a skinned shell copied from the
+/// Cloth for the Oversized and Onyx tops and the Shorts and Pants bottoms
+/// (masks from Tools/build_player_bottoms.py): a skinned shell copied from the
 /// player body's shirt area (Resources/Player/Outfits/*_shell, written by
 /// Tools/build_player_tops.py). The copy is welded, Taubin-smoothed (hard for
 /// Oversized so it hangs off the muscles, lightly for Onyx so it hides the
@@ -27,6 +28,8 @@ public static class PlayerTopShell
         // the radius over which the cloth rests on the highest body points.
         public float DrapeSmoothing;
         public float DrapeRadius;
+        // Bottoms (shorts, pants) swap only with each other, never with a top.
+        public bool Bottom;
         internal Color32[] MaskPixels;
         internal int MaskWidth;
         internal int MaskHeight;
@@ -53,8 +56,29 @@ public static class PlayerTopShell
         DrapeSmoothing = 75f
     };
 
+    // Athletic shorts over the scan's own: a few mm off the skin.
+    public static readonly Style Shorts = new Style
+    {
+        Name = ShortsObjectName, MaskResource = "Player/Outfits/shorts_shell",
+        SmoothIterations = 24, Lambda = 0.5f, EdgeOverhang = 0.004f,
+        DrapeSmoothing = 90f, Bottom = true
+    };
+    // Baggy sweatpants: smoothed hard and draped like the oversized top, so
+    // the cloth hangs off the thighs and calves instead of tracing them.
+    public static readonly Style Pants = new Style
+    {
+        Name = PantsObjectName, MaskResource = "Player/Outfits/pants_shell",
+        SmoothIterations = 60, Lambda = 0.6f, EdgeOverhang = 0.006f,
+        DrapeSmoothing = 450f, DrapeRadius = 0.04f, Bottom = true
+    };
+    private static readonly Style[] AllStyles = { Oversized, Onyx, Shorts, Pants };
+
     public const string ShellObjectName = "Oversized Top Shell";
     public const string OnyxObjectName = "Onyx Top Shell";
+    public const string ShortsObjectName = "Shorts Shell";
+    public const string PantsObjectName = "Pants Shell";
+    /// <summary>Grey of bottoms_fabric.png; the bottoms tint is the colour divided by it.</summary>
+    public const float BottomsFabricLevel = 0.8f;
     // Mask G = 1 means this fraction of the rest mesh height (build_player_tops.py INFLATE_RANGE).
     private const float InflateRange = 0.04f;
     // Mean triangle edge of the height-1 rest mesh: converts the mask's
@@ -71,14 +95,15 @@ public static class PlayerTopShell
 
     public static int CachedShellCount => shells.Count;
 
-    public static bool IsShellObject(string name) => name == ShellObjectName || name == OnyxObjectName;
+    public static bool IsShellObject(string name) =>
+        name == ShellObjectName || name == OnyxObjectName || name == ShortsObjectName || name == PantsObjectName;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics()
     {
         shells.Clear();
         pending.Clear();
-        foreach (Style style in new[] { Oversized, Onyx })
+        foreach (Style style in AllStyles)
         {
             style.MaskPixels = null;
             style.MaskLoaded = false;
@@ -140,19 +165,25 @@ public static class PlayerTopShell
         return shells.ContainsKey((body, style));
     }
 
-    /// <summary>Starts building both shells in the background.</summary>
+    /// <summary>Starts building every shell in the background.</summary>
     public static void Prewarm(Mesh body)
     {
-        GetShell(body, Oversized);
-        GetShell(body, Onyx);
+        foreach (Style style in AllStyles) GetShell(body, style);
     }
 
     /// <summary>Adds (or refreshes) the style's shell renderer beside the body
-    /// renderer and hides the other style's shell.</summary>
-    public static SkinnedMeshRenderer Attach(SkinnedMeshRenderer body, Style style, Texture texture, Color bandColor)
+    /// renderer and hides the other shells of its group (top or bottom).
+    /// A tint multiplies the cloth texture (bottoms share one grey fabric).</summary>
+    public static SkinnedMeshRenderer Attach(SkinnedMeshRenderer body, Style style, Texture texture, Color bandColor,
+        Color? tint = null)
     {
         if (body == null) return null;
-        Detach(body, style == Oversized ? Onyx : Oversized);
+        // Callers darken the band colour by scaling it, which scales alpha too.
+        bandColor.a = 1f;
+        foreach (Style other in AllStyles)
+        {
+            if (other != style && other.Bottom == style.Bottom) Detach(body, other);
+        }
         Mesh shell = GetShell(body.sharedMesh, style);
         if (shell == null) return null;
         Transform parent = body.transform.parent != null ? body.transform.parent : body.transform;
@@ -210,6 +241,11 @@ public static class PlayerTopShell
             material.EnableKeyword("_SPECULARHIGHLIGHTS_OFF");
             material.EnableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
         }
+        if (tint.HasValue)
+        {
+            if (materials[0].HasProperty("_BaseColor")) materials[0].SetColor("_BaseColor", tint.Value);
+            materials[0].color = tint.Value;
+        }
         if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", null);
         if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", null);
         if (materials[1].HasProperty("_BaseColor")) materials[1].SetColor("_BaseColor", bandColor);
@@ -217,14 +253,14 @@ public static class PlayerTopShell
         return renderer;
     }
 
-    /// <summary>Hides a shell (both styles when none is given).</summary>
+    /// <summary>Hides a shell (both top styles when none is given).</summary>
     public static void Detach(SkinnedMeshRenderer body, Style style = null)
     {
         if (body == null) return;
         Transform parent = body.transform.parent != null ? body.transform.parent : body.transform;
-        foreach (Style each in new[] { Oversized, Onyx })
+        foreach (Style each in AllStyles)
         {
-            if (style != null && each != style) continue;
+            if (style != null ? each != style : each.Bottom) continue;
             Transform existing = parent.Find(each.Name);
             if (existing != null) existing.gameObject.SetActive(false);
         }

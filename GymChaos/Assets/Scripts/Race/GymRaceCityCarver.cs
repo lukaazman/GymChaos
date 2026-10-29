@@ -233,6 +233,7 @@ public static class GymRaceCityCarver
         carvedCache.Clear();
         meshCache.Clear();
         blockedByContent.Clear();
+        GymRaceCityFiller.Clear();
         IsBusy = false;
         Debug.Log("GYMCHAOS_RACE_CITY_RESTORED");
     }
@@ -279,6 +280,26 @@ public static class GymRaceCityCarver
         }
         footprints = list.ToArray();
         return footprints.Length > 0;
+    }
+
+    /// <summary>World XZ rectangles (padded) of every tower still standing in the ring.</summary>
+    public static void CollectBuildingRects(List<Rect> rects, float padding = 2f)
+    {
+        rects.Clear();
+        if (!LoadFootprints()) return;
+        FindCityFilters(out List<Transform> contents);
+        foreach (Transform content in contents)
+        {
+            blockedByContent.TryGetValue(content, out bool[] blocked);
+            for (int i = 0; i < footprints.Length; i++)
+            {
+                if (blocked != null && IsCarved && blocked[i]) continue;
+                Vector3 a = content.TransformPoint(footprints[i].Min);
+                Vector3 b = content.TransformPoint(footprints[i].Max);
+                rects.Add(Rect.MinMaxRect(Mathf.Min(a.x, b.x) - padding, Mathf.Min(a.z, b.z) - padding,
+                    Mathf.Max(a.x, b.x) + padding, Mathf.Max(a.z, b.z) + padding));
+            }
+        }
     }
 
     private static bool[] FindBlockedBuildings(Transform content, GymRaceCorridorMask mask)

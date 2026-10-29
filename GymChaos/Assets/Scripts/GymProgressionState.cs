@@ -25,6 +25,12 @@ public enum GymTopStyle
     Onyx
 }
 
+public enum GymBottomStyle
+{
+    Shorts,
+    Pants
+}
+
 public enum GymHeadwear
 {
     None,
@@ -62,6 +68,9 @@ public sealed class GymProgressionState
     // Garment cut; the shirt colour above tints whichever top is worn.
     public string top = nameof(GymTopStyle.TankTop);
     public string headwear = nameof(GymHeadwear.None);
+    // Bottoms take their own colour from the shirt colour set.
+    public string bottom = nameof(GymBottomStyle.Shorts);
+    public string bottomColor = nameof(GymShirtColor.Black);
 
     public int[] dailyProgress = { 0, 0, 0 };
     // Daily cardio challenge (one per gym day, picked from the day number).
@@ -87,6 +96,8 @@ public sealed class GymProgressionState
     public int raceWins;
     public int raceBestLapMs;
     public int raceBestTotalMs;
+    // Highest race difficulty open (0 Easy, 1 Medium, 2 Hard); a win opens the next.
+    public int raceDifficultyUnlocked;
 
     public void Normalize()
     {
@@ -108,6 +119,9 @@ public sealed class GymProgressionState
         raceWins = Mathf.Max(0, raceWins);
         raceBestLapMs = Mathf.Max(0, raceBestLapMs);
         raceBestTotalMs = Mathf.Max(0, raceBestTotalMs);
+        raceDifficultyUnlocked = Mathf.Clamp(raceDifficultyUnlocked, 0, 2);
+        if (string.IsNullOrEmpty(bottom)) bottom = nameof(GymBottomStyle.Shorts);
+        if (string.IsNullOrEmpty(bottomColor)) bottomColor = nameof(GymShirtColor.Black);
 
         if (dailyProgress == null || dailyProgress.Length != 3)
         {
