@@ -13,7 +13,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
 {
     public const string CanonicalSquatSourcePath =
         "Assets/BodyBuilders/enemies/anims/squat.fbx";
-    private const float BasePunchDuration = 0.72f;
+    public const float BasePunchDuration = 0.65f;
     // Goku punches at 2x speed: the same clip plays in half the time.
     private float PunchDuration =>
         configuredIdentity == BodybuilderIdentity.Goku ? BasePunchDuration * 0.5f : BasePunchDuration;

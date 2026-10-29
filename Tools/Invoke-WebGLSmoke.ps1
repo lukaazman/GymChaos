@@ -12,6 +12,8 @@ param(
     # Gameplay benchmark (?bench=1, GymWebGLBench): skips the start screen and
     # measures the GymChaosPerformanceVerifier views; prints WEBGL_BENCH lines.
     [switch]$Bench,
+    # With -Bench: ?race=1 starts the race and waits for the Racing phase.
+    [switch]$Race,
     [int]$Port = 8765,
     # GYMCHAOS_WEBGL_FPS windows to collect after boot (5 s each).
     [ValidateRange(1, 20)]
@@ -96,7 +98,7 @@ $started = Get-Date
 try
 {
     Start-Sleep -Seconds 1
-    $openArgs = @("-s=$session", 'open', "--config=$config", "http://127.0.0.1:$Port/index.html?fps=1$(if ($Bench) { '&bench=1' })")
+    $openArgs = @("-s=$session", 'open', "--config=$config", "http://127.0.0.1:$Port/index.html?fps=1$(if ($Bench) { '&bench=1' })$(if ($Race) { '&race=1' })")
     if ($Headed) { $openArgs += '--headed' }
     playwright-cli @openArgs | Out-Null
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -119,7 +121,7 @@ try
         $steady = @($fps | Where-Object { $_.AtMs - 5000 -ge $loadEndMs })
         if ($Bench) { if ($console -match 'GYMCHAOS_WEBGL_BENCH_DONE') { break } }
         elseif ($booted -and $steady.Count -ge $FpsWindows) { break }
-        if ($console -match 'RuntimeError|Uncaught|Aborted\(') { $failure = 'runtime_error'; break }
+        if ($console -match 'RuntimeError|Uncaught|Aborted\(|GYMCHAOS_WEBGL_RACE_FAILED') { $failure = 'runtime_error'; break }
     }
     if (-not $failure -and -not $booted) { $failure = 'no_boot_marker' }
     elseif (-not $failure -and $Bench -and $console -notmatch 'GYMCHAOS_WEBGL_BENCH_DONE') { $failure = 'bench_unfinished' }

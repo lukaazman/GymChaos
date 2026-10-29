@@ -109,7 +109,7 @@ public sealed class GymRaceSign : MonoBehaviour
         label.color = new Color(1f, 0.85f, 0.3f);
         MeshRenderer textRenderer = labelObject.GetComponent<MeshRenderer>();
         textRenderer.sharedMaterial = font.material;
-        textRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        GymInteriorBuilder.UseDepthTestedText(textRenderer, Color.white);
 
         GameObject sub = new GameObject("Race Sign Sub");
         sub.transform.SetParent(transform, false);
@@ -124,7 +124,7 @@ public sealed class GymRaceSign : MonoBehaviour
         subLabel.color = new Color(0.8f, 0.9f, 1f);
         MeshRenderer subRenderer = sub.GetComponent<MeshRenderer>();
         subRenderer.sharedMaterial = subLabel.font.material;
-        subRenderer.shadowCastingMode = ShadowCastingMode.Off;
+        GymInteriorBuilder.UseDepthTestedText(subRenderer, Color.white);
     }
 
     private void Part(string name, PrimitiveType type, Vector3 localPosition, Vector3 scale, Material material, bool collider)

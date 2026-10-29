@@ -158,7 +158,7 @@ public static class GymChaosGokuFlightVerifier
         }
         try
         {
-            if (EditorApplication.timeSinceStartup - started > 150d)
+            if (EditorApplication.timeSinceStartup - started > 210d)
             {
                 throw new InvalidOperationException(
                     $"Goku flight verification timed out at stage {stage}: {lastDetails}");
@@ -545,7 +545,11 @@ public static class GymChaosGokuFlightVerifier
                     }
                     Debug.Log($"GYMCHAOS_GOKU_GROUND_CHASE_OK seconds=" +
                         $"{EditorApplication.timeSinceStartup - stageStarted:F1} distance={distance:F2}");
-                    Finish(0);
+                    UnityEngine.Object.Destroy(groundWall);
+                    groundWall = null;
+                    StartLongFlight();
+                    stage = 7;
+                    stageStarted = EditorApplication.timeSinceStartup;
                     return;
                 }
                 if (EditorApplication.timeSinceStartup - stageStarted > 15d)
@@ -553,6 +557,100 @@ public static class GymChaosGokuFlightVerifier
                     throw new InvalidOperationException(
                         $"GYMCHAOS_GOKU_GROUND_CHASE_FAIL Goku did not reach the player around the wall: " +
                         $"distance={distance:F2} routeSeen={groundRouteSeen} {goku.GokuFlightDiagnosticsForVerification}");
+                }
+                return;
+            }
+
+            float gap = Vector3.ProjectOnPlane(
+                player.transform.position - goku.transform.position, Vector3.up).magnitude;
+            if (stage == 7 || stage == 11)
+            {
+                // Long chase in flight; then the player stops 5 m short
+                // (stage 7) or leaves the gym (stage 11).
+                if (goku.IsFlying)
+                {
+                    if (stage == 7)
+                    {
+                        Vector3 toPlayer = Vector3.ProjectOnPlane(
+                            player.transform.position - goku.transform.position, Vector3.up).normalized;
+                        MovePlayer(goku.transform.position + toPlayer * 5f);
+                        stage = 8;
+                    }
+                    else
+                    {
+                        GymDoorway door = GymDoorway.Instance;
+                        Vector3 outward = Vector3.ProjectOnPlane(
+                            door.ExteriorPoint - door.InteriorPoint, Vector3.up).normalized;
+                        MovePlayer(door.ExteriorPoint + outward * 3f, false);
+                        stage = 12;
+                    }
+                    stageStarted = EditorApplication.timeSinceStartup;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - stageStarted > 10d)
+                {
+                    throw new InvalidOperationException(
+                        $"Goku did not take off for the long chase (stage {stage}): gap={gap:F2} " +
+                        goku.GokuFlightDiagnosticsForVerification);
+                }
+                return;
+            }
+
+            if (stage == 8)
+            {
+                // Hysteresis: once airborne Goku keeps flying until close and
+                // does not land as soon as the gap drops under the take-off range.
+                if (!goku.IsFlying)
+                {
+                    if (gap > 3.75f)
+                    {
+                        throw new InvalidOperationException(
+                            $"GYMCHAOS_GOKU_FLIGHT_HYSTERESIS_FAIL landed at gap={gap:F2} " +
+                            goku.GokuFlightDiagnosticsForVerification);
+                    }
+                    Debug.Log($"GYMCHAOS_GOKU_FLIGHT_HYSTERESIS_OK landedAt={gap:F2}");
+                    stage = 9;
+                    stageStarted = EditorApplication.timeSinceStartup;
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - stageStarted > 6d)
+                {
+                    throw new InvalidOperationException(
+                        $"GYMCHAOS_GOKU_FLIGHT_HYSTERESIS_FAIL never landed: gap={gap:F2}");
+                }
+                return;
+            }
+
+            if (stage == 9)
+            {
+                if (goku.IsGokuGrounded)
+                {
+                    StartLongFlight();
+                    stage = 11;
+                    stageStarted = EditorApplication.timeSinceStartup;
+                }
+                return;
+            }
+
+            if (stage == 12)
+            {
+                if (Time.frameCount % 30 == 0)
+                {
+                    Debug.Log($"GYMCHAOS_GOKU_OUTSIDE_SAMPLE goku={goku.transform.position} gap={gap:F2} " +
+                        $"flying={goku.IsGokuFlightActive} reason={goku.ChaseStopReasonForVerification}");
+                }
+                if (GymOutdoorBuilder.IsPlayerOutsideGym(goku.transform.position) && goku.IsGokuGrounded)
+                {
+                    Debug.Log($"GYMCHAOS_GOKU_FOLLOW_OUTSIDE_OK seconds=" +
+                        $"{EditorApplication.timeSinceStartup - stageStarted:F1} gap={gap:F2}");
+                    Finish(0);
+                    return;
+                }
+                if (EditorApplication.timeSinceStartup - stageStarted > 25d)
+                {
+                    throw new InvalidOperationException(
+                        $"GYMCHAOS_GOKU_FOLLOW_OUTSIDE_FAIL goku={goku.transform.position} gap={gap:F2} " +
+                        $"flying={goku.IsGokuFlightActive} reason={goku.ChaseStopReasonForVerification}");
                 }
             }
         }
@@ -866,7 +964,16 @@ public static class GymChaosGokuFlightVerifier
         }
     }
 
-    private static void MovePlayer(Vector3 position)
+    private static void StartLongFlight()
+    {
+        goku.SetVisitorSpawnPose(gokuStartPosition, Quaternion.LookRotation(Vector3.right, Vector3.up));
+        Physics.SyncTransforms();
+        MovePlayer(new Vector3(
+            Mathf.Min(gokuStartPosition.x + 11f, floorArea.max.x - 1.5f),
+            player.transform.position.y, floorArea.center.z));
+    }
+
+    private static void MovePlayer(Vector3 position, bool keepHeight = true)
     {
         player.ResetMovementForVerification();
         CharacterController controller = player.GetComponent<CharacterController>();
@@ -875,7 +982,10 @@ public static class GymChaosGokuFlightVerifier
         {
             controller.enabled = false;
         }
-        position.y = player.transform.position.y;
+        if (keepHeight)
+        {
+            position.y = player.transform.position.y;
+        }
         player.transform.position = position;
         player.ResetMovementForVerification();
         if (wasEnabled)

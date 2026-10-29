@@ -178,6 +178,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         string blocked = BlockReason();
         if (blocked != null)
         {
+            Debug.Log($"GYMCHAOS_RACE_BLOCKED reason={blocked}");
             GymHud.Active?.PushNotice("Race unavailable: " + blocked.ToLowerInvariant(), 3f, 1);
             GymAudio.Play2D(GymSoundEffect.UiError);
             return false;

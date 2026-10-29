@@ -1004,7 +1004,11 @@ public static class GymInteriorBuilder
         label.anchor = TextAnchor.MiddleCenter;
         label.alignment = TextAlignment.Center;
         label.color = color;
-        MeshRenderer renderer = labelObject.GetComponent<MeshRenderer>();
+        UseDepthTestedText(labelObject.GetComponent<MeshRenderer>(), color);
+    }
+
+    internal static void UseDepthTestedText(MeshRenderer renderer, Color color)
+    {
         if (renderer != null)
         {
             // TextMesh's built-in GUI material can use an always-pass depth

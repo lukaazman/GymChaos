@@ -44,6 +44,11 @@ public sealed class GymWebGLBench : MonoBehaviour
             Debug.LogError("GYMCHAOS_WEBGL_BENCH_FAILED no player");
             yield break;
         }
+        if (Application.absoluteURL.Contains("race=1"))
+        {
+            yield return RaceSmoke(player);
+            yield break;
+        }
 
         Vector3 gym = GymDoorway.Instance.InteriorPoint + Vector3.left * 8f;
         Vector3 parking = new Vector3(GymOutdoorBuilder.ParkingBounds.max.x - 2f,
@@ -92,5 +97,52 @@ public sealed class GymWebGLBench : MonoBehaviour
                 $"avgMs={average:F1} p95Ms={p95:F1} frames={frames.Count}");
         }
         Debug.Log("GYMCHAOS_WEBGL_BENCH_DONE");
+    }
+
+    // ?race=1: start the race from the sign like the player does (player
+    // kart, no autopilot) and run into the race, the path that crashed the
+    // WebGL player.
+    private static IEnumerator RaceSmoke(PlayerMovement player)
+    {
+        yield return new WaitForSecondsRealtime(20f);
+        float giveUp = Time.unscaledTime + 90f;
+        while (GymRaceDirector.Instance == null || GymRaceSign.Instance == null ||
+            !StartFromSign(player))
+        {
+            if (Time.unscaledTime > giveUp)
+            {
+                Debug.LogError("GYMCHAOS_WEBGL_RACE_FAILED race never became available");
+                yield break;
+            }
+            yield return new WaitForSecondsRealtime(1f);
+        }
+        Debug.Log("GYMCHAOS_WEBGL_RACE_STARTED " + MemoryLine());
+        giveUp = Time.unscaledTime + 90f;
+        while (GymRaceDirector.Instance.CurrentPhase != GymRaceDirector.Phase.Racing)
+        {
+            if (Time.unscaledTime > giveUp)
+            {
+                Debug.LogError($"GYMCHAOS_WEBGL_RACE_FAILED stuck in {GymRaceDirector.Instance.CurrentPhase}");
+                yield break;
+            }
+            yield return null;
+        }
+        Debug.Log("GYMCHAOS_WEBGL_RACE_RACING " + MemoryLine());
+        yield return new WaitForSecondsRealtime(10f);
+        Debug.Log("GYMCHAOS_WEBGL_BENCH_DONE race=1 " + MemoryLine());
+    }
+
+    private static string MemoryLine() =>
+        $"reservedMB={UnityEngine.Profiling.Profiler.GetTotalReservedMemoryLong() / 1048576} " +
+        $"allocatedMB={UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / 1048576} " +
+        $"managedMB={System.GC.GetTotalMemory(false) / 1048576}";
+
+    private static bool StartFromSign(PlayerMovement player)
+    {
+        Vector3 stand = GymRaceSign.Instance.StandPoint + Vector3.up * 0.05f;
+        Rigidbody body = player.GetComponent<Rigidbody>();
+        if (body != null) body.position = stand;
+        player.transform.position = stand;
+        return GymRaceDirector.Instance.TryStartFromSign(player);
     }
 }

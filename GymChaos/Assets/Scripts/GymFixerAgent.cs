@@ -88,6 +88,8 @@ public sealed class GymFixerAgent : MonoBehaviour
     private float landingStartLowest;
     private CapsuleCollider capsule;
     private Rigidbody body;
+    private static readonly float[] SidestepAngles = { 0f, 40f, -40f, 80f, -80f };
+    private static readonly Collider[] PeopleHits = new Collider[16];
 
     private readonly GymFixerNavGrid navGrid = new GymFixerNavGrid();
     private Coroutine gridRoutine;
@@ -723,8 +725,19 @@ public sealed class GymFixerAgent : MonoBehaviour
         transform.rotation = Quaternion.RotateTowards(
             transform.rotation, Quaternion.LookRotation(direction), TurnSpeed * dt);
         float facing = Vector3.Dot(transform.forward, direction);
-        Vector3 next = transform.position + direction * Mathf.Min(distance,
-            speed * Mathf.Clamp01(0.35f + facing) * dt);
+        float stepLength = Mathf.Min(distance, speed * Mathf.Clamp01(0.35f + facing) * dt);
+        Vector3 next = transform.position;
+        // Straight first, then veer around a person; walls and doors never pass.
+        for (int i = 0; i < SidestepAngles.Length; i++)
+        {
+            Vector3 candidate = transform.position +
+                Quaternion.Euler(0f, SidestepAngles[i], 0f) * direction * stepLength;
+            if (CanStepTo(candidate))
+            {
+                next = candidate;
+                break;
+            }
+        }
         transform.position = next;
         if (TryGroundAt(next, groundY, transform, out float ground))
         {
@@ -978,6 +991,38 @@ public sealed class GymFixerAgent : MonoBehaviour
         Vector3 position = transform.position;
         position.y = y;
         transform.position = position;
+    }
+
+    private bool CanStepTo(Vector3 candidate)
+    {
+        // Off-grid (yard edge, a blocked landing cell) stays free so he never traps himself.
+        if (navGrid.IsWalkable(transform.position) && !navGrid.IsWalkable(candidate))
+        {
+            return false;
+        }
+        Vector3 bottom = candidate + Vector3.up * (capsule.radius + 0.1f);
+        Vector3 top = candidate + Vector3.up * (GameplayHeight - capsule.radius);
+        int count = Physics.OverlapCapsuleNonAlloc(
+            bottom, top, capsule.radius, PeopleHits,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = PeopleHits[i];
+            if (hit.transform.IsChildOf(transform) ||
+                (hit.GetComponentInParent<EnemyFighter>() == null &&
+                 hit.GetComponentInParent<GymVisitorAgent>() == null &&
+                 hit.GetComponentInParent<PlayerMovement>() == null))
+            {
+                continue;
+            }
+            // Moving away from someone he already touches is fine; closing in is not.
+            Vector3 center = hit.bounds.center;
+            if (GymShared.FlatDistance(candidate, center) < GymShared.FlatDistance(transform.position, center))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void UpdateDoorRequest()

@@ -251,7 +251,7 @@ public sealed class GymPoliceWeapon : MonoBehaviour
     //   (the side the curled fingers close toward).
     private const float GripPalmDepth = 0.035f;
     private const float GripAnchorRear = 0.22f;
-    private const float GripAnchorHeight = 0.3f;
+    private const float GripAnchorHeight = 0.45f;
 
     private bool TryGetHandFrame(out Vector3 palm, out Vector3 forward, out Vector3 gripDown, out Vector3 palmSide)
     {
@@ -261,7 +261,11 @@ public sealed class GymPoliceWeapon : MonoBehaviour
             return false;
         }
         Vector3 knuckles = (curlIndexBase.position + curlPinkyBase.position) * 0.5f;
-        forward = knuckles - rightHand.position;
+        // A pistol barrel continues the forearm. Wrist to knuckles tilts with
+        // every cocked wrist in the clips, which left the gun slanted in the fist.
+        forward = rightForearm != null
+            ? rightHand.position - rightForearm.position
+            : knuckles - rightHand.position;
         if (forward.sqrMagnitude < 1e-6f)
         {
             return false;
@@ -273,6 +277,13 @@ public sealed class GymPoliceWeapon : MonoBehaviour
             return false;
         }
         gripDown.Normalize();
+        // Aimed (barrel within ~25 degrees of level) the slide stays upright instead of
+        // rolling with the clip's twisted wrist; drawn upward it follows the hand.
+        if (Mathf.Abs(Vector3.Dot(forward, Vector3.up)) < 0.4f)
+        {
+            Vector3 level = Vector3.ProjectOnPlane(Vector3.down, forward).normalized;
+            gripDown = Vector3.Dot(level, gripDown) > -0.2f ? level : gripDown;
+        }
         palmSide = Vector3.Cross(forward, gripDown);
         // The curled middle finger's tip lies on the palm side.
         if (curlMiddleTip != null &&

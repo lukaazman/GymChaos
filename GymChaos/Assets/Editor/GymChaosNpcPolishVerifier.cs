@@ -121,7 +121,25 @@ public static class GymChaosNpcPolishVerifier
             Require(animator != null, "Goku has no retarget animator");
             float punch = (float)typeof(MixamoScanRetargetAnimator)
                 .GetProperty("PunchDuration", Any).GetValue(animator);
-            Require(Mathf.Abs(punch - 0.36f) < 0.001f, $"punch duration {punch:F3} expected 0.360");
+            Require(Mathf.Abs(punch - 0.325f) < 0.001f, $"punch duration {punch:F3} expected 0.325");
+            // An angry member throws punches back to back: the next combo
+            // starts as the last one ends (no pause), slightly faster than 0.72 s.
+            EnemyFighter member = null;
+            foreach (EnemyFighter f in UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None))
+            {
+                if (f != null && f != goku && !f.IsPolice && f.GetComponentInChildren<MixamoScanRetargetAnimator>(true) != null)
+                {
+                    member = f;
+                    break;
+                }
+            }
+            Require(member != null, "no member with a retarget animator");
+            float memberPunch = (float)typeof(MixamoScanRetargetAnimator).GetProperty("PunchDuration", Any)
+                .GetValue(member.GetComponentInChildren<MixamoScanRetargetAnimator>(true));
+            float memberCooldown = (float)typeof(EnemyFighter).GetField("attackCooldown", Any).GetValue(member);
+            Require(memberPunch < 0.72f && memberCooldown <= memberPunch + 0.001f,
+                $"member punch={memberPunch:F2} cooldown={memberCooldown:F2} (pause between combos)");
+            Debug.Log($"GYMCHAOS_NPC_PUNCH_COMBO_OK punch={memberPunch:F2} cooldown={memberCooldown:F2}");
             Debug.Log($"GYMCHAOS_NPC_GOKU_SPEED_OK run={grounded:F2} (was {maxSpeed:F2}) " +
                 $"fly={flying:F2} (was {maxSpeed * 1.5f:F2}) punchSeconds={punch:F2} (was 0.72) " +
                 $"cooldown={attackCooldown / 2f:F2} (was {attackCooldown:F2})");

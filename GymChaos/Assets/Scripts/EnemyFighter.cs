@@ -73,7 +73,9 @@ public partial class EnemyFighter : MonoBehaviour
     [SerializeField] private float detectionRange = 7.5f;
     [SerializeField] private float attackRange = 1.55f;
     [SerializeField] private float attackImpulse = 9f;
-    [SerializeField] private float attackCooldown = 1.05f;
+    // Start to start of a punch combo: the next one follows as the last ends,
+    // so an angry fighter in reach keeps punching without a pause.
+    [SerializeField] private float attackCooldown = MixamoScanRetargetAnimator.BasePunchDuration;
     [SerializeField] private float lightStunDuration = 0.3f;
     [SerializeField] private float throwPushbackDuration = 0.28f;
     [SerializeField] private float throwPushbackMinSpeed = 2.3f;
@@ -308,7 +310,10 @@ public partial class EnemyFighter : MonoBehaviour
     // a small lift keeps the belly near the player's waist instead of above
     // the player's head.
     private const float GokuFlightHeight = 0.15f;
-    private const float GokuFlightMinimumDistance = 5.2f;
+    // Take off only for a long chase and keep flying until close, so a
+    // player moving around one threshold does not flip run/fly every second.
+    private const float GokuFlightStartDistance = 8f;
+    private const float GokuFlightLandDistance = 3f;
     private const float GokuSpeedMultiplier = 1.5f;
     // 2x current: flight 1.5x -> 3x maxSpeed, ground run 1x -> 2x maxSpeed,
     // punch cooldown halved. Walking (roam) speed is untouched.
@@ -891,6 +896,17 @@ public partial class EnemyFighter : MonoBehaviour
         }
         // An angry member follows the same authored corridor as the police
         // once the fight leaves the gym (exit, path, parking, store).
+        bool outdoorChase = !GymBackRoomBuilder.IsInsideRoom(body.position) &&
+            (GymOutdoorBuilder.IsPlayerOutsideGym(body.position) ||
+                GymOutdoorBuilder.IsPlayerOutsideGym(currentTarget.position));
+        // The corridor writes ground velocity, which the kinematic flight body
+        // ignores: Goku hovered inside once the player left. Land first.
+        if (IsGoku() && outdoorChase && gokuFlightState != GokuFlightState.Grounded &&
+            !UpdateGokuFlight(false, currentTarget.position - body.position))
+        {
+            chaseStopReason = "goku-flight";
+            return;
+        }
         if ((isPolice || isAggressive) && !GymBackRoomBuilder.IsInsideRoom(body.position) &&
             TickAuthoredPolicePursuit())
         {
@@ -919,7 +935,10 @@ public partial class EnemyFighter : MonoBehaviour
             return;
         }
 
-        bool shouldGokuFly = IsGoku() && distance > GokuFlightMinimumDistance &&
+        bool gokuAirborne = gokuFlightState == GokuFlightState.TakingOff ||
+            gokuFlightState == GokuFlightState.Flying;
+        bool shouldGokuFly = IsGoku() && !outdoorChase &&
+            distance > (gokuAirborne ? GokuFlightLandDistance : GokuFlightStartDistance) &&
             Time.time >= gokuFlightGroundedUntil;
         if (IsGoku() && !UpdateGokuFlight(shouldGokuFly, planarToTarget))
         {

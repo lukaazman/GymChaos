@@ -271,6 +271,7 @@ public class GymArenaBootstrap : MonoBehaviour
         GymLooseItemSpawner.CreateForScene(player);
         EquipmentMaterialRestorer.ApplyToScene();
         EnsureSceneColliders();
+        BlockBikeSlots();
         MarkSpatiallyMountedWeightCandidates();
         EnsureWeightGameplayObjects();
         GymLooseItemSpawner.RegisterDeadliftStationColliders();
@@ -1501,6 +1502,32 @@ public class GymArenaBootstrap : MonoBehaviour
             }
         }
         return found;
+    }
+
+    // The exercise bikes stand in a 2 x 2 block with slots under a metre wide:
+    // narrower than a member's body, so one pushed in stood wedged between
+    // two bikes. One invisible box closes the block; Ignore Raycast keeps the
+    // player's prompts and punches on the bikes themselves.
+    private static void BlockBikeSlots()
+    {
+        if (!TryGetNamedBounds("bike", out Bounds bikes) || bikes.size.x > 8f || bikes.size.z > 8f)
+        {
+            Debug.LogWarning($"GYMCHAOS_BIKE_BLOCKER_SKIPPED bounds={bikes}");
+            return;
+        }
+        // The aisle to the treadmill block is a slot of the same width.
+        if (TryGetNamedBounds("treadmill", out Bounds treadmills))
+        {
+            float gap = treadmills.min.x - bikes.max.x;
+            if (gap > 0f && gap < 1.2f)
+            {
+                bikes.Encapsulate(new Vector3(treadmills.min.x, bikes.center.y, bikes.center.z));
+            }
+        }
+        GameObject blocker = new GameObject("Bike Block Slot Blocker") { layer = 2 };
+        blocker.transform.position = new Vector3(bikes.center.x, bikes.min.y + 0.9f, bikes.center.z);
+        blocker.AddComponent<BoxCollider>().size = new Vector3(bikes.size.x, 1.8f, bikes.size.z);
+        Debug.Log($"GYMCHAOS_BIKE_BLOCKER_OK bounds={bikes}");
     }
 
     private static bool TryGetNamedBounds(string nameFragment, out Bounds bounds)
