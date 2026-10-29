@@ -272,6 +272,17 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
             yield return null;
             MeasureFit(legs, loadout.BottomShellRenderer, "pants_" + clip, 0.006f, 0.03f);
         }
+        // Striding legs must not pull a web of cloth between them (a leg's
+        // inner side skinned to the other leg did).
+        foreach (string clip in new[] { "walking", "running" })
+        {
+            foreach (float phase in new[] { 0.2f, 0.45f, 0.7f })
+            {
+                rig.HoldStablePoseForVerification(clip, phase, out _);
+                yield return null;
+                MeasureStretch(legs, loadout.BottomShellRenderer, $"pants_{clip}_{phase:F2}");
+            }
+        }
         service.EquipBottom(GymBottomStyle.Shorts);
         yield return WaitBottom(loadout);
         float shortsLow = loadout.BottomShellRenderer.bounds.min.y;
@@ -355,6 +366,46 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
 
     /// <summary>Shell vertices sit outside the body: nearest body vertex is a
     /// few cm away on average and the shell is not sunk into the torso.</summary>
+    /// <summary>No baked cloth edge longer than 5 % of the body height: a web
+    /// between the legs stretches edges across the gap.</summary>
+    private void MeasureStretch(SkinnedMeshRenderer body, SkinnedMeshRenderer shell, string label)
+    {
+        Mesh baked = new Mesh();
+        shell.BakeMesh(baked, true);
+        Vector3[] v = baked.vertices;
+        Matrix4x4 m = shell.transform.localToWorldMatrix;
+        for (int i = 0; i < v.Length; i++) v[i] = m.MultiplyPoint3x4(v[i]);
+        float height = body.bounds.size.y;
+        float longest = 0f;
+        int from = -1, to = -1;
+        for (int sub = 0; sub < baked.subMeshCount; sub++)
+        {
+            int[] t = baked.GetTriangles(sub);
+            for (int i = 0; i < t.Length; i += 3)
+            {
+                for (int k = 0; k < 3; k++)
+                {
+                    int a = t[i + k], b = t[i + (k + 1) % 3];
+                    float d = (v[a] - v[b]).magnitude;
+                    if (d > longest) { longest = d; from = a; to = b; }
+                }
+            }
+        }
+        UnityEngine.Object.Destroy(baked);
+        float bottom = body.bounds.min.y;
+        Require(longest < height * 0.05f, $"{label}: cloth edge {longest / height:F3}h long (web between the legs) " +
+            $"vertices {from}@{(v[from].y - bottom) / height:F2}h-{to}@{(v[to].y - bottom) / height:F2}h of {v.Length} " +
+            $"bones {Bones(shell, from)} / {Bones(shell, to)}");
+        notes.Add($"{label}Edge={longest / height:F3}h");
+    }
+
+    private static string Bones(SkinnedMeshRenderer shell, int vertex)
+    {
+        BoneWeight w = shell.sharedMesh.boneWeights[vertex];
+        string Name(int i) => i >= 0 && i < shell.bones.Length && shell.bones[i] != null ? shell.bones[i].name : "?";
+        return $"{Name(w.boneIndex0)}:{w.weight0:F2},{Name(w.boneIndex1)}:{w.weight1:F2}";
+    }
+
     private void MeasureFit(SkinnedMeshRenderer body, SkinnedMeshRenderer shell, string clip, float minGap, float maxGap)
     {
         Require(body != null && shell != null, "fit: missing renderers");
@@ -453,6 +504,31 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 Capture(camera, Path.Combine(folder, $"{top}_{colour}_{side}.png".ToLowerInvariant()));
             }
         }
+        // Pants standing and mid-stride: nothing may hang between the legs.
+        service.EquipTop(GymTopStyle.TankTop);
+        service.EquipBottom(GymBottomStyle.Pants);
+        camera.orthographicSize = 0.8f;
+        foreach (GymShirtColor colour in new[] { GymShirtColor.Black, GymShirtColor.Blue })
+        {
+            service.EquipBottomColor(colour);
+            yield return WaitBottom(loadout);
+            foreach ((string clip, float phase) in new[] { ("idle1", 0f), ("walking", 0.2f), ("running", 0.45f) })
+            {
+                rig.HoldStablePoseForVerification(clip, phase, out _);
+                yield return null;
+                SkinnedMeshRenderer body = FindBody(rig);
+                Vector3 hips = body.bounds.center - Vector3.up * body.bounds.size.y * 0.2f;
+                foreach ((string side, Vector3 direction) in new[] { ("front", player.transform.forward), ("back", -player.transform.forward),
+                    ("side", player.transform.right) })
+                {
+                    camera.transform.position = hips + direction * 3f;
+                    camera.transform.LookAt(hips);
+                    light.transform.rotation = Quaternion.LookRotation(-direction + Vector3.down * 0.6f + player.transform.right * 0.3f);
+                    Capture(camera, Path.Combine(folder, $"pants_{colour}_{clip}_{side}.png".ToLowerInvariant()));
+                }
+            }
+        }
+        service.EquipBottom(GymBottomStyle.Shorts);
         Destroy(lightObject);
         Destroy(camera.gameObject);
     }

@@ -790,14 +790,14 @@ public static class PlayerTopShell
     private const float ThighEase = 0.01f;
     private const float HemEase = 0.016f;
     private const float ThighCap = 0.31f;
-    private const float HemTaper = 0.8f;
+    private const float HemTaper = 0.75f;
     private const float HemFlare = 0.002f;
     private const float HemBreak = 0.003f;
     private const float CreaseDepth = 0.0025f;
-    private const float DrapeDepth = 0.01f;
+    private const float DrapeDepth = 0.006f;
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
-    private const float Clearance = 0.008f;
+    private const float Clearance = 0.006f;
 
     private static ShellData BuildStraightPants(List<Vector3> body, int[] weld, List<int> sourceIndex,
         Vector2[] uvs, BoneWeight[] weights, float scale)
@@ -951,6 +951,10 @@ public static class PlayerTopShell
                 float z = PantsHem + r * RingStep;
                 float hem = 1f - Mathf.Clamp01((z - PantsHem) / 0.06f);
                 float drapeFade = 1f - Mathf.Clamp01((z - (ThighCap - 0.06f)) / 0.08f);
+                // Under the seat the leg tucks just inside it, with the plain
+                // outline the seat's bottom edge follows (no crease or drape).
+                float tuck = 0.006f * Mathf.Clamp01((z - YokeBottom) / RingStep);
+                float creaseFade = 1f - Mathf.Clamp01((z - (YokeBottom - 0.05f)) / 0.04f);
                 for (int s = 0; s <= LegSides; s++)
                 {
                     float angle = s * Mathf.PI * 2f / LegSides;
@@ -958,10 +962,10 @@ public static class PlayerTopShell
                     float front = Mathf.Cos(angle - frontAngle);
                     // Pressed crease down the front, a few long drape lines
                     // and a soft break over the shoe.
-                    float crease = CreaseDepth * Mathf.Pow(Mathf.Max(0f, front), 40f);
+                    float crease = CreaseDepth * creaseFade * Mathf.Pow(Mathf.Max(0f, front), 40f);
                     float drape = DrapeDepth * drapeFade * Mathf.Sin(angle * 5f + leg * 1.3f) * (1f - Mathf.Max(0f, front));
                     float radius = legRadius[r, s % LegSides] * (1f + drape) + crease +
-                        hem * (HemFlare + HemBreak * Mathf.Sin(angle * 3f + z * 120f));
+                        hem * (HemFlare + HemBreak * Mathf.Sin(angle * 3f + z * 120f)) - tuck;
                     verts.Add(Point(z, axis[leg] + dir * radius));
                     uvList.Add(new Vector2(s / (float)LegSides * circumference / FabricTile, z / FabricTile));
                 }
@@ -980,7 +984,9 @@ public static class PlayerTopShell
             float wrap = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(LegTop, LegTop + 0.05f, z));
             // The bottom edge tucks just inside the legs (no ledge); above it
             // the yoke covers the leg tops.
-            float overLegs = r == 0 ? -0.004f : r == 1 ? 0f : 0.002f;
+            // The bottom edge lies on the leg surface itself, so the seat
+            // continues the leg without a step; above it a hair outside.
+            float overLegs = r == 0 ? 0f : r == 1 ? 0.001f : 0.002f;
             for (int s = 0; s < YokeSides; s++)
             {
                 float angle = s * Mathf.PI * 2f / YokeSides;
@@ -991,7 +997,10 @@ public static class PlayerTopShell
                 // The bottom edge follows the legs only (they already clear the body).
                 // Over the leg tops the yoke follows the legs only (they clear the
                 // body and the old shorts rim); above, the hips with a little ease.
-                ring[s] = z < LegTop ? legs : Mathf.Max(yokeReach[r, s] + Clearance, legs * wrap);
+                // No body in this sector (the top rings pass the mask's waist):
+                // keep the ring below, or the waistband collapsed into a cone.
+                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + Clearance : yokeRadius[r - 1, s];
+                ring[s] = z < LegTop ? legs : Mathf.Max(hips, legs * wrap);
             }
             if (r > 0) SmoothRing(ring, 6);
             for (int s = 0; s < YokeSides; s++) yokeRadius[r, s] = ring[s];
@@ -1027,7 +1036,12 @@ public static class PlayerTopShell
             Flip(band);
         }
 
-        // Skin and UV from the nearest body vertex (grid search).
+        // Skin from the nearest body vertex of the same leg (grid search): a
+        // wide leg's inner side is often nearer the other thigh, and skinned
+        // to it the cloth stretched into a web between striding legs. Only
+        // the seat's middle (front and back of the crotch) may take either.
+        int legVertexCount = legRings * (LegSides + 1);
+        int SideOf(Vector3 p) => p[lateral] >= centre ? 1 : 0;
         Dictionary<Vector3Int, List<int>> grid = new Dictionary<Vector3Int, List<int>>();
         const float cell = 0.03f;
         Vector3Int Cell(Vector3 p) => new Vector3Int(Mathf.FloorToInt(p.x / cell), Mathf.FloorToInt(p.y / cell), Mathf.FloorToInt(p.z / cell));
@@ -1045,6 +1059,8 @@ public static class PlayerTopShell
         {
             Vector3 p = verts[v];
             Vector3Int c = Cell(p);
+            int side = v < legVertexCount ? 0 : v < legVertexCount * 2 ? 1 :
+                RestZ(p) < LegTop + 0.04f && Mathf.Abs(p[lateral] - centre) > 0.03f ? SideOf(p) : -1;
             int best = -1;
             float bestDistance = float.MaxValue;
             for (int radius = 1; radius <= 4 && best < 0; radius++)
@@ -1056,6 +1072,7 @@ public static class PlayerTopShell
                             if (!grid.TryGetValue(new Vector3Int(c.x + x, c.y + y, c.z + z), out List<int> list)) continue;
                             for (int k = 0; k < list.Count; k++)
                             {
+                                if (side >= 0 && SideOf(body[list[k]]) != side) continue;
                                 float d = (body[list[k]] - p).sqrMagnitude;
                                 if (d < bestDistance) { bestDistance = d; best = list[k]; }
                             }
@@ -1066,6 +1083,34 @@ public static class PlayerTopShell
             outUv[v] = source >= 0 ? uvs[source] : Vector2.zero;
             if (outWeights != null && source >= 0) outWeights[v] = weights[source];
         }
+        // Nearest-vertex weights jump between rings (46 % thigh, then 17 %):
+        // a swinging thigh stretched the seat. Blend them over the cloth grid.
+        // The seat's bottom rings sit on the leg tops: they take the weights of
+        // the leg vertex under them, or the two parts moved apart into a seam.
+        int seamRing = Mathf.Clamp(Mathf.RoundToInt((YokeBottom - PantsHem) / RingStep), 0, legRings - 1);
+        int[] seatOnLeg = new int[3 * (YokeSides + 1)];
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c <= YokeSides; c++)
+            {
+                int y = yokeStart + r * (YokeSides + 1) + c;
+                int legRing = Mathf.Min(seamRing + r, legRings - 1);
+                float best = float.MaxValue;
+                for (int leg = 0; leg < 2; leg++)
+                    for (int c2 = 0; c2 <= LegSides; c2++)
+                    {
+                        int l = leg * legVertexCount + legRing * (LegSides + 1) + c2;
+                        float d = (verts[l] - verts[y]).sqrMagnitude;
+                        if (d < best) { best = d; seatOnLeg[r * (YokeSides + 1) + c] = l; }
+                    }
+            }
+        if (outWeights != null)
+        {
+            SmoothWeights(outWeights, 0, legRings, LegSides + 1, 6);
+            SmoothWeights(outWeights, legVertexCount, legRings, LegSides + 1, 6);
+            for (int i = 0; i < seatOnLeg.Length; i++) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
+            SmoothWeights(outWeights, yokeStart, yokeRings, YokeSides + 1, 10);
+            for (int i = 0; i < 2 * (YokeSides + 1); i++) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
+        }
         // Own UVs on the tiling fabric (pants_fabric.png), not the body atlas.
         for (int v = 0; v < count; v++) outUv[v] = uvList[v];
 
@@ -1075,12 +1120,76 @@ public static class PlayerTopShell
         AddFaceNormals(rest, fabric, outNormals);
         AddFaceNormals(rest, band, outNormals);
         for (int v = 0; v < count; v++) outNormals[v] = outNormals[v].normalized;
+        // The seat's bottom rings take the legs' shading where they meet, so
+        // the join reads as one cloth.
+        // The leg's tucked top tilts its normals; the seam shades with the seat's.
+        for (int i = 0; i <= YokeSides; i++)
+        {
+            int l = seatOnLeg[i];
+            outNormals[yokeStart + i] = outNormals[yokeStart + i + YokeSides + 1];
+            outNormals[l] = outNormals[yokeStart + i];
+            outNormals[l - (LegSides + 1)] = Vector3.Slerp(outNormals[l - (LegSides + 1)], outNormals[l], 0.5f).normalized;
+        }
         return new ShellData
         {
             Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,
             Fabric = fabric, Band = band,
             Log = $"straightPants vertices={count} legRings={legRings} yokeRings={yokeRings} axis={axis[0]}/{axis[1]}"
         };
+    }
+
+    // Averages bone weights with the grid neighbours (ring above/below, side
+    // left/right) and keeps the four strongest bones.
+    private static void SmoothWeights(BoneWeight[] weights, int start, int rings, int columns, int passes)
+    {
+        int count = rings * columns;
+        var current = new Dictionary<int, float>[count];
+        for (int i = 0; i < count; i++)
+        {
+            current[i] = new Dictionary<int, float>(4);
+            BoneWeight w = weights[start + i];
+            void Add(int bone, float value) { if (value > 0f) current[i][bone] = current[i].TryGetValue(bone, out float old) ? old + value : value; }
+            Add(w.boneIndex0, w.weight0); Add(w.boneIndex1, w.weight1); Add(w.boneIndex2, w.weight2); Add(w.boneIndex3, w.weight3);
+        }
+        for (int pass = 0; pass < passes; pass++)
+        {
+            var next = new Dictionary<int, float>[count];
+            for (int r = 0; r < rings; r++)
+            {
+                for (int c = 0; c < columns; c++)
+                {
+                    var sum = new Dictionary<int, float>(8);
+                    void Mix(int index, float share)
+                    {
+                        foreach (KeyValuePair<int, float> pair in current[index])
+                            sum[pair.Key] = (sum.TryGetValue(pair.Key, out float old) ? old : 0f) + pair.Value * share;
+                    }
+                    int i = r * columns + c;
+                    Mix(i, 2f);
+                    if (r > 0) Mix(i - columns, 1f);
+                    if (r < rings - 1) Mix(i + columns, 1f);
+                    // The seam column repeats column 0: wrap past it.
+                    Mix(r * columns + (c == 0 ? columns - 2 : c - 1), 1f);
+                    Mix(r * columns + (c >= columns - 2 ? (c == columns - 1 ? 1 : 0) : c + 1), 1f);
+                    next[i] = sum;
+                }
+            }
+            current = next;
+        }
+        for (int i = 0; i < count; i++)
+        {
+            List<KeyValuePair<int, float>> top = new List<KeyValuePair<int, float>>(current[i]);
+            top.Sort((x, y) => y.Value.CompareTo(x.Value));
+            float total = 0f;
+            for (int k = 0; k < 4 && k < top.Count; k++) total += top[k].Value;
+            if (total <= 0f) continue;
+            BoneWeight w = new BoneWeight();
+            if (top.Count > 0) { w.boneIndex0 = top[0].Key; w.weight0 = top[0].Value / total; }
+            if (top.Count > 1) { w.boneIndex1 = top[1].Key; w.weight1 = top[1].Value / total; }
+            if (top.Count > 2) { w.boneIndex2 = top[2].Key; w.weight2 = top[2].Value / total; }
+            if (top.Count > 3) { w.boneIndex3 = top[3].Key; w.weight3 = top[3].Value / total; }
+            weights[start + i] = w;
+        }
     }
 
     private static int Sector(Vector2 d, int sides)
