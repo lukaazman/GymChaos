@@ -798,6 +798,9 @@ public static class PlayerTopShell
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
     private const float Clearance = 0.003f;
+    // The seat needs more room than a leg tube: the scan's old shorts rim is a
+    // raised lip, and at 3 mm it poked through as small dark holes on the hips.
+    private const float SeatClearance = 0.008f;
 
     private static ShellData BuildStraightPants(List<Vector3> body, int[] weld, List<int> sourceIndex,
         Vector2[] uvs, BoneWeight[] weights, float scale)
@@ -1003,7 +1006,7 @@ public static class PlayerTopShell
                 // body and the old shorts rim); above, the hips with a little ease.
                 // No body in this sector (the top rings pass the mask's waist):
                 // keep the ring below, or the waistband collapsed into a cone.
-                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + Clearance : yokeRadius[r - 1, s];
+                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + SeatClearance : yokeRadius[r - 1, s];
                 ring[s] = z < LegTop ? legs : Mathf.Max(hips, legs * wrap);
             }
             if (r > 0) SmoothRing(ring, 6);
