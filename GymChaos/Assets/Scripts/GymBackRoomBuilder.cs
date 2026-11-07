@@ -907,6 +907,17 @@ public static class GymBackRoomBuilder
         // Stand on the aisle side of the bench, between the two benches.
         float towardAisle = Mathf.Sign(roomCenter.z - benchCenter.z);
         point = benchCenter + new Vector3(0f, 0f, towardAisle * BagHandoffStandOff);
+        // A bench standing in the room's corner put this spot inside the bench
+        // or the locker bank. The member never reached it and idled there,
+        // leaning on the bench with his feet off the floor. Step out of any
+        // collider so the stop is a reachable standing place.
+        Vector3 chest = Vector3.up * 0.9f;
+        for (int step = 0; step < 5 &&
+            Physics.CheckSphere(point + chest, 0.3f, ~0, QueryTriggerInteraction.Ignore); step++)
+        {
+            point += new Vector3(0f, 0f, towardAisle * 0.3f);
+        }
+        point.y = roomFloorY;
         return true;
     }
 

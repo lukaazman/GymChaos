@@ -88,16 +88,19 @@ public static class GymRaceVehicleFactory
         }
         Transform seat = new GameObject("Bus Roof Seat").transform;
         seat.SetParent(bus.Holder, false);
-        rider.BeginVisitorVehicleSeat(seat);
-        animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f);
         // Hips over the roof a little behind the front edge, so the thighs
-        // rest on the roof; the measured clip offset moves the seat root.
-        Vector3 hipsFromRoot = rider.transform.InverseTransformPoint(rig.Hips.position);
+        // rest on it and the legs hang over the windscreen.
         Vector3 hips = new Vector3(busLocal.center.x, busLocal.max.y + RoofHipsLift, busLocal.max.z - RoofHipsInset);
-        seat.localPosition = hips - hipsFromRoot;
+        seat.localPosition = hips;
         seat.localRotation = Quaternion.identity;
-        rider.transform.SetPositionAndRotation(seat.position, seat.rotation);
-        return animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f, Vector3.zero);
+        rider.BeginVisitorVehicleSeat(seat);
+        // The sitting clip holds the pelvis a fixed height above the root and
+        // the animator re-applies that every frame. Measuring it once and
+        // handing it back as the root offset seats Davie on the roof instead
+        // of leaving him hanging in the air above it.
+        animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f);
+        Vector3 clipHips = rig.Hips.position - rider.transform.position;
+        return animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f, -clipHips);
     }
 
     private const float RoofHipsLift = 0.14f;

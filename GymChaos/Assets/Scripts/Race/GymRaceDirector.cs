@@ -703,9 +703,21 @@ public sealed partial class GymRaceDirector : MonoBehaviour
     private Pose GridPose(int slot)
     {
         Pose pose = GymRaceTrackLayout.GridSlot(slot);
-        if (specs[slot].Bus)
+        if (!specs[slot].Bus)
         {
-            pose.position += pose.rotation * Vector3.back * BusGridSetback;
+            return pose;
+        }
+        pose.position += pose.rotation * Vector3.back * BusGridSetback;
+        // Thirteen metres of bus in the player's column filled the whole
+        // chase-camera view at the start: keep it in the other grid column.
+        int playerSlot = specs.FindIndex(spec => spec.Player);
+        if (playerSlot >= 0)
+        {
+            float playerX = GymRaceTrackLayout.GridSlot(playerSlot).position.x;
+            float otherX = playerX >= GymRaceTrackLayout.GridRoadCenterX
+                ? GymRaceTrackLayout.GridRoadCenterX - GymRaceTrackLayout.GridLaneOffset
+                : GymRaceTrackLayout.GridRoadCenterX + GymRaceTrackLayout.GridLaneOffset;
+            pose.position = new Vector3(otherX, pose.position.y, pose.position.z);
         }
         return pose;
     }

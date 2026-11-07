@@ -953,7 +953,7 @@ public static class PlayerTopShell
                 float drapeFade = 1f - Mathf.Clamp01((z - (ThighCap - 0.06f)) / 0.08f);
                 // Under the seat the leg tucks just inside it, with the plain
                 // outline the seat's bottom edge follows (no crease or drape).
-                float tuck = 0.006f * Mathf.Clamp01((z - YokeBottom) / RingStep);
+                float tuck = 0.011f * Mathf.Clamp01((z - YokeBottom) / RingStep);
                 float creaseFade = 1f - Mathf.Clamp01((z - (YokeBottom - 0.05f)) / 0.04f);
                 for (int s = 0; s <= LegSides; s++)
                 {
@@ -986,7 +986,11 @@ public static class PlayerTopShell
             // the yoke covers the leg tops.
             // The bottom edge lies on the leg surface itself, so the seat
             // continues the leg without a step; above it a hair outside.
-            float overLegs = r == 0 ? 0f : r == 1 ? 0.001f : 0.002f;
+            // Every yoke ring clears the legs. The bottom ring used to lie
+            // exactly on the leg surface, so the two cloths z-fought along a
+            // ring at the scan's old shorts hem and opened see-through slits
+            // as soon as the thighs moved.
+            float overLegs = r == 0 ? 0.0035f : r == 1 ? 0.0045f : 0.005f;
             for (int s = 0; s < YokeSides; s++)
             {
                 float angle = s * Mathf.PI * 2f / YokeSides;

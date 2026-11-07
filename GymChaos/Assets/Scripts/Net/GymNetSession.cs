@@ -396,7 +396,12 @@ public sealed class GymNetSession : MonoBehaviour
         if (Client.CurrentPhase == GymNetClient.Phase.Failed && (reconnect == null || !reconnect.Active) && GymSessionService.HasActive &&
             (hostRetryUntil <= 0f || Time.unscaledTime >= hostRetryUntil))
         {
-            notice = "ROOM FAILED - " + (string.IsNullOrEmpty(Client.Error) ? "UNKNOWN" : Client.Error.ToUpperInvariant());
+            string reason = string.IsNullOrEmpty(Client.Error) ? "UNKNOWN" : Client.Error.ToUpperInvariant();
+            // Nothing on this machine starts a relay: "could not connect" is
+            // an empty address, never a room the host did wrong.
+            notice = reason == "COULD NOT CONNECT" && !string.IsNullOrEmpty(relayUrl)
+                ? "NO ROOM SERVER AT " + relayUrl.ToUpperInvariant()
+                : "ROOM FAILED - " + reason;
             GymSessionService.ReturnToMenu();
             return;
         }
