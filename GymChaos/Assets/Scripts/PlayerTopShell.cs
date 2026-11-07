@@ -51,11 +51,12 @@ public static class PlayerTopShell
     public static readonly Style Oversized = new Style
     {
         Name = ShellObjectName, MaskResource = "Player/Outfits/oversized_shell",
-        SmoothIterations = 24, Lambda = 0.6f, EdgeOverhang = 0.012f,
-        DrapeSmoothing = 150f, DrapeRadius = 0.034f,
-        // Oversized, not oppressed: the cloth stands ~3 cm off the body and
-        // the crew neck is a sewn circle rather than the scan's torn scoop.
-        ExtraEase = 0.016f, CollarRadius = 0.076f, Smoothness = 0.03f
+        SmoothIterations = 28, Lambda = 0.6f, EdgeOverhang = 0.012f,
+        DrapeSmoothing = 190f, DrapeRadius = 0.034f,
+        // Oversized, not oppressed: loose cloth over a sewn crew neck that sits
+        // close to the neck like the scan's own tank top. Slick polyester knit,
+        // so the cloth catches light instead of reading as flat carpet.
+        ExtraEase = 0.013f, CollarRadius = 0.062f, Smoothness = 0.16f
     };
     // Compression knit: a few mm off the skin, smoothed just enough to hide
     // the sculpted tank-top neckline and hem ridges in the scan.
@@ -82,7 +83,7 @@ public static class PlayerTopShell
     {
         Name = PantsObjectName, MaskResource = "Player/Outfits/pants_shell",
         SmoothIterations = 60, Lambda = 0.6f, EdgeOverhang = 0.006f,
-        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.08f
+        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.18f
     };
     private static readonly Style[] AllStyles = { Oversized, Onyx, Shorts, Pants };
 
@@ -249,10 +250,21 @@ public static class PlayerTopShell
             if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", style.Smoothness);
             if (material.HasProperty("_Glossiness")) material.SetFloat("_Glossiness", style.Smoothness);
             if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", 0f);
-            if (material.HasProperty("_SpecularHighlights")) material.SetFloat("_SpecularHighlights", 0f);
-            if (material.HasProperty("_EnvironmentReflections")) material.SetFloat("_EnvironmentReflections", 0f);
-            material.EnableKeyword("_SPECULARHIGHLIGHTS_OFF");
-            material.EnableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
+            // Sportswear catches a little light: only truly matte cloth keeps
+            // the specular off. Flat-on-everything read as carpet.
+            bool slick = style.Smoothness > 0.1f;
+            if (material.HasProperty("_SpecularHighlights")) material.SetFloat("_SpecularHighlights", slick ? 1f : 0f);
+            if (material.HasProperty("_EnvironmentReflections")) material.SetFloat("_EnvironmentReflections", slick ? 1f : 0f);
+            if (slick)
+            {
+                material.DisableKeyword("_SPECULARHIGHLIGHTS_OFF");
+                material.DisableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
+            }
+            else
+            {
+                material.EnableKeyword("_SPECULARHIGHLIGHTS_OFF");
+                material.EnableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
+            }
         }
         if (tint.HasValue)
         {
@@ -680,7 +692,7 @@ public static class PlayerTopShell
                 // Loose cloth everywhere but the collar: the neckline stays a
                 // sewn circle instead of stretching out with the body of the shirt.
                 float nx = pos[i].x, ny = pos[i].y - 0.01f;
-                bool collar = pos[i].z > 0.75f && Mathf.Sqrt(nx * nx + ny * ny) < 0.115f;
+                bool collar = pos[i].z > 0.75f && Mathf.Sqrt(nx * nx + ny * ny) < 0.095f;
                 if (!collar) amount += style.ExtraEase;
             }
             inflateSum += amount;
@@ -856,15 +868,16 @@ public static class PlayerTopShell
     // and the leg runs in one straight taper to 80 % at the hem, with a
     // pressed front crease, a few long drape lines and a soft break over the
     // shoe. Not tight, not a balloon.
-    private const float ThighEase = 0.004f;
-    private const float HemEase = 0.01f;
+    // Sportswear, not a parachute: a few millimetres of ease only.
+    private const float ThighEase = 0.0025f;
+    private const float HemEase = 0.004f;
     private const float ThighCap = 0.31f;
-    // Straight leg: the hem keeps the upper thigh's width, no taper.
-    private const float HemTaper = 1f;
+    // Straight leg: near the upper thigh's width, barely tapered.
+    private const float HemTaper = 0.96f;
     private const float HemFlare = 0.002f;
     private const float HemBreak = 0.003f;
     private const float CreaseDepth = 0.0025f;
-    private const float DrapeDepth = 0.006f;
+    private const float DrapeDepth = 0.0035f;
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
     private const float Clearance = 0.003f;
@@ -1007,7 +1020,9 @@ public static class PlayerTopShell
                 float z = PantsHem + r * RingStep;
                 float taper = Mathf.Lerp(HemTaper, 1f, Mathf.Clamp01((z - PantsHem) / (ThighCap - PantsHem)));
                 for (int s = 0; s < LegSides; s++)
-                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper);
+                    // Slim, not baggy: the tube only ever adds to the body's
+                    // own width, so trimming it here cannot cut into the leg.
+                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper * 0.95f);
             }
             for (int pass = 0; pass < 4; pass++)
                 for (int r = 1; r < legRings - 1; r++)
@@ -1076,7 +1091,10 @@ public static class PlayerTopShell
                 // body and the old shorts rim); above, the hips with a little ease.
                 // No body in this sector (the top rings pass the mask's waist):
                 // keep the ring below, or the waistband collapsed into a cone.
-                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + SeatClearance : yokeRadius[r - 1, s];
+                // Room over the hips, flush at the waistband so the shirt hem
+                // and the pants waist end up the same width.
+                float seatClearance = Mathf.Lerp(SeatClearance, 0.004f, Mathf.InverseLerp(YokeBottom, PantsWaist, z));
+                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + seatClearance : yokeRadius[r - 1, s];
                 ring[s] = z < LegTop ? legs : Mathf.Max(hips, legs * wrap);
             }
             if (r > 0) SmoothRing(ring, 6);
