@@ -276,6 +276,42 @@ public static class GymChaosRaceKartVerifier
         report.Append($"bumpGap={minGap:F2} ");
         Object.Destroy(left.gameObject);
         Object.Destroy(right.gameObject);
+        yield return null;
+
+        // ------------------------------------------------------ drift collision
+        // Side by side, both drift into each other: the swung-out bodies must
+        // touch and push apart, not pass through each other.
+        left = SpawnKart("Drift Kart L", padTop + new Vector3(-1.4f, 0f, 0f), Vector3.forward);
+        right = SpawnKart("Drift Kart R", padTop + new Vector3(1.4f, 0f, 0f), Vector3.forward);
+        chase.SetKart(left);
+        Time.maximumDeltaTime = 1f / 30f;
+        t0 = Time.time;
+        while (Time.time - t0 < 2.5f)
+        {
+            left.Input = new GymRaceDriveInput { Throttle = 1f };
+            right.Input = new GymRaceDriveInput { Throttle = 1f };
+            yield return null;
+        }
+        float worstOverlap = 0f;
+        float closest = float.MaxValue;
+        bool bothDrifted = false;
+        t0 = Time.time;
+        while (Time.time - t0 < 2.5f)
+        {
+            left.Input = new GymRaceDriveInput { Throttle = 1f, Steer = 0.9f, DriftHeld = true };
+            right.Input = new GymRaceDriveInput { Throttle = 1f, Steer = -0.9f, DriftHeld = true };
+            bothDrifted |= left.IsDrifting && right.IsDrifting && Mathf.Abs(left.VisualDriftAngle) > 12f;
+            worstOverlap = Mathf.Max(worstOverlap, BodyOverlap(left, right));
+            closest = Mathf.Min(closest, Vector3.Distance(left.Body.position, right.Body.position));
+            yield return null;
+        }
+        Time.maximumDeltaTime = savedMaxDelta;
+        Require(bothDrifted, "drift-collision karts never drifted");
+        Require(closest < 3.4f, $"drift-collision karts never met (closest {closest:F2})");
+        Require(worstOverlap < 0.15f, $"drifting bodies overlapped {worstOverlap:F2} m");
+        report.Append($"driftOverlap={worstOverlap:F2} driftClosest={closest:F2} ");
+        Object.Destroy(left.gameObject);
+        Object.Destroy(right.gameObject);
         Object.Destroy(pad);
         yield return null;
 
@@ -346,6 +382,48 @@ public static class GymChaosRaceKartVerifier
             Object.Destroy(lapKart.gameObject);
             yield return null;
         }
+        // ------------------------------------------------- AI difficulty pace
+        // Hard karts: the AI at the new Hard skill must lap the outer road
+        // clean and faster than the old Hard skill (half the grip budget).
+        float[] hardLaps = new float[2];
+        for (int run = 0; run < 2; run++)
+        {
+            float skill = run == 0 ? GymRaceDirector.AiSkillScale(2) * 0.5f : GymRaceDirector.AiSkillScale(2);
+            Pose slot = GymRaceTrackLayout.GridSlot(0);
+            GymRaceKart lapKart = SpawnKart("Hard Kart " + run, slot.position, Vector3.forward);
+            lapKart.KartStats = GymRaceDirector.ScaleStats(GymRaceKart.Stats.Default, 2);
+            GymRaceRacer racer = lapKart.gameObject.AddComponent<GymRaceRacer>();
+            GymRaceAIDriver ai = lapKart.gameObject.AddComponent<GymRaceAIDriver>();
+            ai.ShortcutChoice = 0;
+            ai.AllowBoost = false;
+            ai.Skill = skill;
+            chase.SetKart(lapKart);
+            yield return null;
+            racer.ResetProgress(Time.time);
+            Time.timeScale = 2f;
+            int respawns = 0;
+            float raceStart = Time.time;
+            while (racer.Crossings < 2 && Time.time - raceStart < 120f)
+            {
+                lapKart.Input = ai.Think(Time.time);
+                racer.Tick(Time.time, Time.deltaTime, true);
+                if (racer.NeedsRespawn)
+                {
+                    respawns++;
+                    racer.RespawnAtSafePoint();
+                }
+                yield return null;
+            }
+            Time.timeScale = 1f;
+            Require(racer.LapTimes.Count == 1, $"hard run {run} (skill {skill:F2}) did not finish a lap");
+            Require(respawns == 0, $"hard run {run} (skill {skill:F2}) needed {respawns} respawns");
+            hardLaps[run] = racer.LapTimes[0];
+            Object.Destroy(lapKart.gameObject);
+            yield return null;
+        }
+        Require(hardLaps[1] < hardLaps[0] - 0.5f, $"new Hard AI lap {hardLaps[1]:F1}s not faster than old {hardLaps[0]:F1}s");
+        report.Append($"hardLap old={hardLaps[0]:F1}s new={hardLaps[1]:F1}s ");
+
         // ------------------------------------------- outer road after the fork
         // A kart that drifts toward the cut right after the fork, then keeps
         // right on the outer road, must stay on the main lap (no respawn).
@@ -392,6 +470,28 @@ public static class GymChaosRaceKartVerifier
         path.Sample(path.WrapDistance(distance), out Vector3 point, out _, out _, out _);
         return point;
     }
+
+    /// <summary>Ground-plane overlap depth of the two karts' visual boxes (separating axis test), 0 when apart.</summary>
+    private static float BodyOverlap(GymRaceKart a, GymRaceKart b)
+    {
+        Transform boxA = a.Visual.GetChild(0);
+        Transform boxB = b.Visual.GetChild(0);
+        Vector3[] axes = { Flat(boxA.right).normalized, Flat(boxA.forward).normalized, Flat(boxB.right).normalized, Flat(boxB.forward).normalized };
+        float depth = float.MaxValue;
+        foreach (Vector3 axis in axes)
+        {
+            float overlap = Extent(boxA, axis) + Extent(boxB, axis) - Mathf.Abs(Vector3.Dot(Flat(boxB.position - boxA.position), axis));
+            if (overlap <= 0f) return 0f;
+            depth = Mathf.Min(depth, overlap);
+        }
+        return depth;
+    }
+
+    private static float Extent(Transform box, Vector3 axis) =>
+        Mathf.Abs(Vector3.Dot(Flat(box.right), axis)) * box.lossyScale.x * 0.5f +
+        Mathf.Abs(Vector3.Dot(Flat(box.forward), axis)) * box.lossyScale.z * 0.5f;
+
+    private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
 
     private static GymRaceKart SpawnKart(string name, Vector3 roadPoint, Vector3 forward)
     {

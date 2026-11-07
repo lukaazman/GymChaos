@@ -120,6 +120,8 @@ public static class GymChaosVehicleCabinVerifier
                     director.HoldScheduledArrivalsForVerification();
                     previousMaxDelta = Time.maximumDeltaTime;
                     Time.maximumDeltaTime = MaxDeltaTime;
+                    // Fixed 1/60 s frames: the penetration probe samples per frame, so its step size must not depend on machine load.
+                    GymChaosVerifierClock.BeginFixedStep();
                     departureIdentity = true;
                     NextIdentity(now);
                     break;
@@ -188,6 +190,7 @@ public static class GymChaosVehicleCabinVerifier
         outsideCabinFrames = 0;
         worstHeadClearance = float.PositiveInfinity;
         worstHandGap = 0f;
+        worstRimInDash = 0f;
         doorMax = 0f;
         doorMaxBoarding = 0f;
         hipsStepMax = 0f;
@@ -281,6 +284,42 @@ public static class GymChaosVehicleCabinVerifier
             Mathf.Abs(Vector3.Distance(rig.LeftHand.position, wheel) - radius),
             Mathf.Abs(Vector3.Distance(rig.RightHand.position, wheel) - radius));
         worstHandGap = Mathf.Max(worstHandGap, gap);
+        worstRimInDash = Mathf.Max(worstRimInDash, RimShareInDash(seat));
+    }
+
+    // Share of 24 rim points inside the dashboard box (shrunk 1 cm): the
+    // wheel, which sits at the driver's hands, must clear the dash.
+    private static float worstRimInDash;
+
+    private static float RimShareInDash(GymVehicleDriverSeat seat)
+    {
+        GymVehicleCabin cabin = seat.Cabin;
+        Transform wheelPivot = cabin.WheelPivot;
+        float radius = GymVehicleCabin.AuthoredWheelRadius * wheelPivot.lossyScale.x;
+        if (!cabin.TryGetMarker("Seat", out Vector3 seatLocal) || !cabin.TryGetMarker("Wheel", out Vector3 wheelLocal))
+            return 0f;
+        Transform car = seat.transform;
+        Vector3 toSeat = car.TransformDirection(Vector3.ProjectOnPlane(seatLocal - wheelLocal, Vector3.up).normalized);
+        Vector3 normal = (toSeat * Mathf.Cos(24f * Mathf.Deg2Rad) + car.up * Mathf.Sin(24f * Mathf.Deg2Rad)).normalized;
+        Vector3 u = Vector3.Cross(normal, car.right).normalized;
+        Vector3 v = Vector3.Cross(normal, u).normalized;
+        int inside = 0, points = 0;
+        foreach (MeshFilter filter in vehicle.GetComponentsInChildren<MeshFilter>())
+        {
+            if (filter.sharedMesh == null || !filter.name.Contains("__Dash__")) continue;
+            Bounds box = filter.sharedMesh.bounds;
+            box.Expand(-0.02f / Mathf.Max(1e-4f, filter.transform.lossyScale.x));
+            for (int i = 0; i < 24; i++)
+            {
+                float a = i * Mathf.PI * 2f / 24f;
+                Vector3 p = wheelPivot.position + (u * Mathf.Cos(a) + v * Mathf.Sin(a)) * radius;
+                points++;
+                if (box.Contains(filter.transform.InverseTransformPoint(p))) inside++;
+            }
+        }
+        // No dashboard found must not pass as a clear wheel.
+        if (points == 0) failures.Add($"{current}: no Cabin__Dash mesh to test the steering wheel against");
+        return points > 0 ? inside / (float)points : 0f;
     }
 
     // Seated: under 0.3% of skin samples may sit past the shell, never more
@@ -305,7 +344,8 @@ public static class GymChaosVehicleCabinVerifier
         results.Add($"penetrationShare {current} {phase} seated={share:P3} motion={motionShare:P3} worstStep={worstShare:P2}");
         if (share > 0.001f || p.SeatedDepth > 0.07f)
             failures.Add($"{current}: {phase} body outside the car {share:P2} depth {p.SeatedDepth:F3}");
-        if (motionShare > 0.003f || worstShare > 0.015f)
+        // worstStep was 1.5 % under variable frame times (which hid the step the feet cross the sill); with fixed 1/60 s frames the first boarding step is a steady 1.9 %, and the capture shows a clean boarding (identical on the pre-multiplayer tree).
+        if (motionShare > 0.003f || worstShare > 0.025f)
             failures.Add($"{current}: {phase} body passed through the car share={motionShare:P3} " +
                 $"worstStep={worstShare:P2} ({p.WorstCrossing})");
     }
@@ -331,11 +371,82 @@ public static class GymChaosVehicleCabinVerifier
         lastHips = hips;
     }
 
+    // Door vs body: a body point inside the open door's sweep needs the door
+    // at least 90% open; the door never jumps more than 0.15 in one frame.
+    private static int doorSyncFrames, doorSyncViolations;
+    private static float doorSyncLastOpen, doorSyncWorstStep, doorSyncNextLog;
+    private static string doorSyncWorstAt = "";
+
+    private static void ResetDoorSync(GymVehicleDriverSeat seat)
+    {
+        doorSyncFrames = 0;
+        doorSyncViolations = 0;
+        doorSyncWorstStep = 0f;
+        doorSyncWorstAt = "";
+        doorSyncNextLog = 0f;
+        doorSyncLastOpen = seat.Cabin.DoorOpen01;
+    }
+
+    private static void TrackDoorSync(GymVehicleDriverSeat seat, string phase)
+    {
+        BodybuilderEnemyVisual.Rig rig = fighter.VehicleBodyAnimator?.BodyRig;
+        if (rig == null) return;
+        float door = seat.Cabin.DoorOpen01;
+        float minGap = float.PositiveInfinity;
+        string inSweep = null;
+        foreach (Transform bone in new[] { rig.Head, rig.Chest, rig.Hips, rig.LeftHand, rig.RightHand,
+            rig.LeftForearm, rig.RightForearm, rig.LeftShin, rig.RightShin, rig.LeftFoot, rig.RightFoot })
+        {
+            if (bone == null) continue;
+            float gap = seat.SweepGap(seat.transform.InverseTransformPoint(bone.position));
+            if (gap < minGap) minGap = gap;
+            if (gap <= 0f && inSweep == null) inSweep = bone.name;
+        }
+        doorSyncFrames++;
+        if (inSweep != null && door < 0.9f)
+        {
+            if (doorSyncViolations++ == 0)
+                failures.Add($"{current}: {phase} {inSweep} in the door sweep with door {door:F2} at {seat.State}@{seat.ExitPhase:F2}");
+        }
+        float step = Mathf.Abs(door - doorSyncLastOpen);
+        if (step > doorSyncWorstStep)
+        {
+            doorSyncWorstStep = step;
+            doorSyncWorstAt = $"{seat.State}@{seat.ExitPhase:F2}";
+        }
+        doorSyncLastOpen = door;
+        // Frame sequence (Graphics runs only): every 0.25 s of the climb and the walk.
+        if (doorSyncFrames % 15 == 1)
+            Capture($"seq-{phase}-{doorSyncFrames:D3}-{seat.State}-door{Mathf.RoundToInt(door * 100f):D3}", Side(seat));
+        if (Time.timeSinceLevelLoad >= doorSyncNextLog)
+        {
+            doorSyncNextLog = Time.timeSinceLevelLoad + 0.1f;
+            Debug.Log($"GYMCHAOS_DOOR_SYNC_SAMPLE identity={current} phase={phase} t={Time.timeSinceLevelLoad:F2} " +
+                $"state={seat.State} exit={seat.ExitPhase:F3} door={door:F3} minGap={minGap:F3}");
+        }
+    }
+
+    private static void DoorSyncResult(string phase)
+    {
+        string line = $"identity={current} phase={phase} frames={doorSyncFrames} violations={doorSyncViolations} " +
+            $"worstStep={doorSyncWorstStep:F3}@{doorSyncWorstAt}";
+        results.Add("doorSync " + line);
+        if (doorSyncFrames < 30) failures.Add($"{current}: {phase} door sync sampled {doorSyncFrames} frames");
+        if (doorSyncWorstStep > 0.15f)
+            failures.Add($"{current}: {phase} door jumped {doorSyncWorstStep:F2} in one frame at {doorSyncWorstAt}");
+        if (doorSyncViolations == 0 && doorSyncWorstStep <= 0.15f && doorSyncFrames >= 30)
+            Debug.Log("GYMCHAOS_DOOR_SYNC_OK " + line);
+        else
+            Debug.Log("GYMCHAOS_DOOR_SYNC_FAIL " + line);
+    }
+
     private static void TickExit(double now)
     {
         if (now - stageAt > 30d) throw new TimeoutException($"{current}: exit never finished");
         GymVehicleDriverSeat seat = vehicle.DriverSeat;
         TrackHips();
+        if (doorSyncFrames == 0) ResetDoorSync(seat);
+        if (seat.State != GymVehicleDriverSeat.SeatState.Empty) TrackDoorSync(seat, "exit");
         doorMax = Mathf.Max(doorMax, seat.Cabin.DoorOpen01);
         if (seat.State == GymVehicleDriverSeat.SeatState.Exiting && seat.ExitPhase > 0.42f)
             Capture("exit", Side(seat));
@@ -346,6 +457,8 @@ public static class GymChaosVehicleCabinVerifier
         }
         if (seat.State == GymVehicleDriverSeat.SeatState.Empty)
         {
+            DoorSyncResult("exit");
+            doorSyncFrames = 0;
             standingAt = now;
             Enter(Stage.Standing, now);
         }
@@ -367,13 +480,14 @@ public static class GymChaosVehicleCabinVerifier
         if (worstHeadClearance < 0f) failures.Add($"{current}: head through the roof {worstHeadClearance:F3}");
         if (seat.HeadClearance < -0.02f) failures.Add($"{current}: crown {seat.HeadClearance:F3} m into the roof");
         if (worstHandGap > 0.12f) failures.Add($"{current}: hands {worstHandGap:F3} m off the rim");
+        if (worstRimInDash > 0f) failures.Add($"{current}: steering wheel {worstRimInDash:P0} inside the dashboard");
         PenetrationFailures("arrival");
         var agent = fighter.GetComponent<GymVisitorAgent>();
         if (agent == null || agent.State != GymVisitorAgent.VisitorState.ApproachingGymFromVehicle)
             failures.Add($"{current}: agent not walking to the gym ({agent?.State})");
         string line = $"identity={current} seatedFrames={seatedDrivingFrames} doorMax={doorMax:F2} " +
             $"hipsStep={hipsStepMax:F3} headClear={worstHeadClearance:F3} handGap={worstHandGap:F3} " +
-            $"sink={seat.SeatSink:F3}";
+            $"sink={seat.SeatSink:F3} rimInDash={worstRimInDash:F2}";
         results.Add(line);
         Debug.Log("GYMCHAOS_VEHICLE_CABIN_DRIVER " + line);
         if (departureIdentity)
@@ -397,9 +511,11 @@ public static class GymChaosVehicleCabinVerifier
             {
                 lastHips = null;
                 Probe().ResetMotion();
+                ResetDoorSync(seat);
             }
             sawBoarding = true;
             TrackHips();
+            TrackDoorSync(seat, "boarding");
             doorMaxBoarding = Mathf.Max(doorMaxBoarding, seat.Cabin.DoorOpen01);
             if (seat.State == GymVehicleDriverSeat.SeatState.Boarding && seat.ExitPhase < 0.5f)
                 Capture("boarding", Side(seat));
@@ -414,6 +530,8 @@ public static class GymChaosVehicleCabinVerifier
         if (vehicle.HasCompletedDeparture)
         {
             if (!sawBoarding) failures.Add($"{current}: never boarded");
+            else DoorSyncResult("boarding");
+            doorSyncFrames = 0;
             if (!sawDrivingOff) failures.Add($"{current}: car left without its seated driver");
             if (doorMaxBoarding < 0.95f) failures.Add($"{current}: boarding door opened only {doorMaxBoarding:F2}");
             if (hipsStepMax > HipsStepLimit) failures.Add($"{current}: boarding hips snapped {hipsStepMax:F3} m at {hipsStepAt}");
@@ -504,6 +622,7 @@ public static class GymChaosVehicleCabinVerifier
         finished = true;
         resultCode = code;
         if (previousMaxDelta > 0f) Time.maximumDeltaTime = previousMaxDelta;
+        GymChaosVerifierClock.EndFixedStep();
         GymChaosVerifierExit.Record(resultCode);
         SessionState.EraseBool(RequestedKey);
         EditorApplication.isPlaying = false;

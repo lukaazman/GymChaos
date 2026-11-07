@@ -45,7 +45,7 @@ public static class PlayerTopShell
     public static readonly Style Oversized = new Style
     {
         Name = ShellObjectName, MaskResource = "Player/Outfits/oversized_shell",
-        SmoothIterations = 12, Lambda = 0.6f, EdgeOverhang = 0.007f,
+        SmoothIterations = 24, Lambda = 0.6f, EdgeOverhang = 0.012f,
         DrapeSmoothing = 150f, DrapeRadius = 0.034f
     };
     // Compression knit: a few mm off the skin, smoothed just enough to hide
@@ -776,10 +776,10 @@ public static class PlayerTopShell
     // rings and tore at the crotch, so the pants are lofted instead: two
     // straight leg tubes and a seat yoke round both, sized from the body.
     private const float PantsHem = 0.055f;
-    private const float PantsWaist = 0.522f;
+    private const float PantsWaist = 0.545f;
     // Legs run up into the yoke; the yoke reaches down over the leg tops.
     private const float LegTop = 0.37f;
-    private const float YokeBottom = 0.35f;
+    private const float YokeBottom = 0.33f;
     private const float RingStep = 0.01f;
     private const int LegSides = 48;
     private const int YokeSides = 56;
@@ -787,17 +787,17 @@ public static class PlayerTopShell
     // and the leg runs in one straight taper to 80 % at the hem, with a
     // pressed front crease, a few long drape lines and a soft break over the
     // shoe. Not tight, not a balloon.
-    private const float ThighEase = 0.01f;
-    private const float HemEase = 0.016f;
+    private const float ThighEase = 0.004f;
+    private const float HemEase = 0.01f;
     private const float ThighCap = 0.31f;
-    private const float HemTaper = 0.75f;
+    private const float HemTaper = 0.86f;
     private const float HemFlare = 0.002f;
     private const float HemBreak = 0.003f;
     private const float CreaseDepth = 0.0025f;
     private const float DrapeDepth = 0.006f;
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
-    private const float Clearance = 0.006f;
+    private const float Clearance = 0.003f;
 
     private static ShellData BuildStraightPants(List<Vector3> body, int[] weld, List<int> sourceIndex,
         Vector2[] uvs, BoneWeight[] weights, float scale)

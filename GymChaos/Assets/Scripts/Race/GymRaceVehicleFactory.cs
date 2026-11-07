@@ -64,6 +64,45 @@ public static class GymRaceVehicleFactory
         return car;
     }
 
+    /// <summary>Chaos race: Goku flies without a car; the kart moves this empty anchor and he rides it.</summary>
+    public static Car CreateFlightAnchor(Pose pose)
+    {
+        Car car = new Car { Identity = BodybuilderIdentity.Goku };
+        car.Holder = new GameObject("Goku Race Flight Anchor").transform;
+        car.Holder.SetPositionAndRotation(pose.position, pose.rotation);
+        car.MarkLoaded(false);
+        return car;
+    }
+
+    /// <summary>
+    /// Chaos race: Davie sits on the front of the bus roof, thighs on the
+    /// roof and legs over the windscreen, looping sitting_idle.
+    /// </summary>
+    public static bool SeatOnRoof(EnemyFighter rider, Car bus, Bounds busLocal)
+    {
+        MixamoScanRetargetAnimator animator = rider.VehicleBodyAnimator;
+        BodybuilderEnemyVisual.Rig rig = animator != null ? animator.BodyRig : null;
+        if (rig == null || rig.Hips == null || !animator.HasSittingIdleClip)
+        {
+            return false;
+        }
+        Transform seat = new GameObject("Bus Roof Seat").transform;
+        seat.SetParent(bus.Holder, false);
+        rider.BeginVisitorVehicleSeat(seat);
+        animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f);
+        // Hips over the roof a little behind the front edge, so the thighs
+        // rest on the roof; the measured clip offset moves the seat root.
+        Vector3 hipsFromRoot = rider.transform.InverseTransformPoint(rig.Hips.position);
+        Vector3 hips = new Vector3(busLocal.center.x, busLocal.max.y + RoofHipsLift, busLocal.max.z - RoofHipsInset);
+        seat.localPosition = hips - hipsFromRoot;
+        seat.localRotation = Quaternion.identity;
+        rider.transform.SetPositionAndRotation(seat.position, seat.rotation);
+        return animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f, Vector3.zero);
+    }
+
+    private const float RoofHipsLift = 0.14f;
+    private const float RoofHipsInset = 0.75f;
+
     public static Car CreatePoliceCar(Pose pose)
     {
         Car car = new Car { Identity = BodybuilderIdentity.Policeman, IsPolice = true };

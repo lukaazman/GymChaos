@@ -15,6 +15,15 @@ public static class GymChaosVisitorVerifier
         "GymChaos.VisitorVerificationOriginalSavePresent";
     private const string ProgressionSaveKey = "GymChaos.Progression.v1";
 
+    private static bool HasForeignCollider(Transform root, GymAutoDoor door)
+    {
+        foreach (Collider collider in root.GetComponentsInChildren<Collider>(true))
+        {
+            if (!door.OwnsCollider(collider)) return true;
+        }
+        return false;
+    }
+
     private static double enteredPlayTime;
     private static bool verificationCompleted;
     private static bool verificationFailed;
@@ -1125,10 +1134,10 @@ public static class GymChaosVisitorVerifier
         }
 
         if (doorway.AutoDoor == null || doorway.AutoDoor.LeafCount != 2 ||
-            doorway.DoorPanel == null || doorway.DoorPanel.GetComponentInChildren<Collider>() != null)
+            doorway.DoorPanel == null || HasForeignCollider(doorway.DoorPanel, doorway.AutoDoor))
         {
             throw new InvalidOperationException(
-                "Visitor door has no automatic two-leaf glass door, or a leaf carries a collider.");
+                "Visitor door has no automatic two-leaf glass door, or a leaf carries a collider that is not the door body.");
         }
 
         const float visitorDoorWidth = 3.25f;

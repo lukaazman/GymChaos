@@ -1,0 +1,9 @@
+{
+  "name": "gymchaos-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebSocket room relay for GymChaos multiplayer (max 4 players per room)",
+  "main": "relay.js",
+  "scripts": { "start": "node relay.js", "test": "node relay.test.js" },
+  "dependencies": { "ws": "8.18.0" }
+}

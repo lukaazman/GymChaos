@@ -10,7 +10,7 @@ using UnityEngine;
 /// the lap, and after the 3-2-1 countdown it is three laps around the city.
 /// Results award XP; the player then races again or returns to the gym.
 /// </summary>
-public sealed class GymRaceDirector : MonoBehaviour
+public sealed partial class GymRaceDirector : MonoBehaviour
 {
     public enum Phase
     {
@@ -31,12 +31,25 @@ public sealed class GymRaceDirector : MonoBehaviour
         public BodybuilderIdentity Identity;
         public bool Police;
         public bool Player;
+        // A human on another machine (co-op race) and the room id behind it.
+        public bool Remote;
+        public int NetId;
         public Color Color;
         public GymRaceKart.Stats Stats;
         public float Lane;
         public float Aggression;
         public float Skill;
+        // Chaos mode: Goku flies the track, Davie rides the bus roof.
+        public bool Flyer;
+        public bool Bus;
     }
+
+    public enum RaceMode { Normal, Chaos }
+    public static readonly string[] ModeNames = { "NORMAL", "CHAOS" };
+    private RaceMode mode;
+    public RaceMode CurrentMode => mode;
+    // The 13 m bus starts behind the back row instead of on it.
+    private const float BusGridSetback = 3.5f;
 
     public static readonly int[] PlaceExperience = { 300, 200, 140, 100, 80, 60 };
     public const int FirstWinBonus = 250;
@@ -102,6 +115,7 @@ public sealed class GymRaceDirector : MonoBehaviour
     {
         get
         {
+            if (NetGuestPrompt(out string guestPrompt)) return guestPrompt;
             string blocked = BlockReason();
             return blocked == null ? "START CITY RACE" : "RACE: " + blocked;
         }
@@ -125,6 +139,10 @@ public sealed class GymRaceDirector : MonoBehaviour
         if (GymRaceSign.Instance == null && GymOutdoorBuilder.IsBuilt)
         {
             GymRaceSign.Create();
+        }
+        if (NetUpdate())
+        {
+            return;
         }
         // Paused: the race clock stands still and no race input is read.
         if (runStack.Count > 0 && !GymPauseMenu.IsVisible)
@@ -161,7 +179,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         if (player == null) return "NO DRIVER";
         if (player.IsDead) return "YOU ARE DOWN";
         if (EnemyFighter.IsFightActive) return "FINISH YOUR FIGHT";
-        if (GymPoliceDirector.IsDispatchActive) return "POLICE NEARBY";
+        if (GymPoliceDirector.IsPoliceThreat) return "POLICE NEARBY";
         if (player.IsHoldingItem || player.IsCarryingCorpse) return "HANDS FULL";
         if (!GymRaceCityCarver.CityReady()) return "CITY LOADING";
         return null;
@@ -173,6 +191,10 @@ public sealed class GymRaceDirector : MonoBehaviour
         {
             player = source;
         }
+        if (phase == Phase.Idle && NetIsGuestInRoom())
+        {
+            return NetGuestPress();
+        }
         string blocked = BlockReason();
         if (blocked != null)
         {
@@ -182,18 +204,22 @@ public sealed class GymRaceDirector : MonoBehaviour
             return false;
         }
         GymAudio.Play2D(GymSoundEffect.UiConfirm);
-        StartRun(RaceRoutine(false));
+        bool driveItself = GymNetRace.AutopilotForVerification;
+        AutoContinueResults |= driveItself;
+        mode = RaceMode.Normal;
+        StartRun(RaceRoutine(driveItself));
         return true;
     }
 
     /// <summary>Verification: start without the sign; the player kart can drive itself.</summary>
-    public bool StartRaceForVerification(PlayerMovement source, bool autopilotPlayer)
+    public bool StartRaceForVerification(PlayerMovement source, bool autopilotPlayer, RaceMode raceMode = RaceMode.Normal)
     {
         player = source != null ? source : player;
         if (BlockReason() != null)
         {
             return false;
         }
+        mode = raceMode;
         AutoContinueResults = true;
         StartRun(RaceRoutine(autopilotPlayer));
         return true;
@@ -202,6 +228,10 @@ public sealed class GymRaceDirector : MonoBehaviour
     private IEnumerator RaceRoutine(bool autopilotPlayer)
     {
         autopilot = autopilotPlayer;
+        if (netRole != NetRoleKind.Guest)
+        {
+            NetPrepareHost();
+        }
         phase = Phase.Building;
         GymVisitorDirector.RaceTrafficHold = true;
         player.SetCinematicLock(true);
@@ -212,28 +242,41 @@ public sealed class GymRaceDirector : MonoBehaviour
 
         // The first race is always Easy; once a win opens Medium the sign asks.
         int unlocked = UnlockedDifficulty;
-        difficulty = 0;
-        if (unlocked > 0 && !autopilot)
+        difficulty = netRole == NetRoleKind.Guest ? netDifficulty : 0;
+        pickedDifficulty = 0;
+        // The sign first asks for the mode. Chaos is solo: a co-op room races Normal.
+        if (netRole != NetRoleKind.None)
+        {
+            mode = RaceMode.Normal;
+        }
+        else if (!autopilot)
+        {
+            yield return PickMode();
+            player.SetCursorCaptured(true);
+        }
+        if (pickedDifficulty >= 0 && unlocked > 0 && !autopilot && netRole != NetRoleKind.Guest)
         {
             yield return PickDifficulty(unlocked, false);
             player.SetCursorCaptured(true);
-            if (pickedDifficulty < 0)
-            {
-                Destroy(hud.gameObject);
-                hud = null;
-                player.SetCinematicLock(false);
-                GymVisitorDirector.RaceTrafficHold = false;
-                phase = Phase.Idle;
-                yield break;
-            }
-            difficulty = pickedDifficulty;
+            difficulty = Mathf.Max(0, pickedDifficulty);
         }
+        if (pickedDifficulty < 0)
+        {
+            NetHostCancelled();
+            Destroy(hud.gameObject);
+            hud = null;
+            player.SetCinematicLock(false);
+            GymVisitorDirector.RaceTrafficHold = false;
+            phase = Phase.Idle;
+            yield break;
+        }
+        NetHostBegin();
         // A visitor car already on the road would drive through the grid. The
         // hold stops new cars, so wait for the last one to park instead of
         // refusing the race (it was refused most of the time on slow WebGL).
         float trafficWait = Time.time + 25f;
         bool noticed = false;
-        while (GymVisitorVehicle.IsGroundTrafficActive && Time.time < trafficWait)
+        while (netRole != NetRoleKind.Guest && GymVisitorVehicle.IsGroundTrafficActive && Time.time < trafficWait)
         {
             if (!noticed)
             {
@@ -242,7 +285,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             }
             yield return null;
         }
-        hud.ShowBanner("CITY GRAND PRIX  " + DifficultyNames[difficulty], PersonaMenuStyle.Gold, 3.5f);
+        hud.ShowBanner((mode == RaceMode.Chaos ? "CHAOS GRAND PRIX  " : "CITY GRAND PRIX  ") + DifficultyNames[difficulty], PersonaMenuStyle.Gold, 3.5f);
 
         GymRaceCorridorClearance.Clear();
         track = GymRaceTrackBuilder.Build(transform);
@@ -254,6 +297,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         }
 
         SpawnField();
+        hud.RacerTotal = specs.Count;
         float buildStart = Time.time;
         while (!AllCarsReady() && Time.time - buildStart < 15f)
         {
@@ -267,24 +311,39 @@ public sealed class GymRaceDirector : MonoBehaviour
         // No walk to the car: the player starts the race behind the wheel.
         SeatPlayerNow();
         CaptureHeadshots();
+        NetSendReady();
         chase.Begin(player.playerCamera, playerRacer.Kart);
         chase.StartFlyover(FlyoverSeconds);
         yield return Wait(FlyoverSeconds);
         chase.StartChase();
         yield return Wait(0.4f);
+        if (netRole == NetRoleKind.Host)
+        {
+            yield return NetWaitForGuests();
+        }
 
         while (true)
         {
-            yield return RunRace();
+            yield return netRole == NetRoleKind.Guest ? RunRaceGuest() : RunRace();
+            if (netRole == NetRoleKind.Guest && !netResultsReceived)
+            {
+                // The host ended the race before any results.
+                break;
+            }
 
             // ------------------------------------------------------- results
             phase = Phase.Results;
-            List<GymRaceHud.ResultRow> rows = BuildResults();
+            List<GymRaceHud.ResultRow> rows = netRole == NetRoleKind.Guest ? NetGuestRows() : BuildResults();
+            NetHostResults();
             int xp = ComputeExperience(out string xpLine);
             resultBestLap = BestPlayerLap();
             resultFinished = playerRacer != null && playerRacer.Finished;
             resultFinishTime = playerRacer != null ? playerRacer.FinishTime : 0f;
-            AwardResults(xp);
+            // A guest whose own row never arrived gets nothing rather than first-place XP.
+            if (netRole != NetRoleKind.Guest || LastPlayerPlace > 0)
+            {
+                AwardResults(xp);
+            }
             RacesRunForVerification++;
             player.SetCursorCaptured(false);
             chase.StartOrbit();
@@ -292,7 +351,11 @@ public sealed class GymRaceDirector : MonoBehaviour
             while (choice == GymRaceHud.Choice.None)
             {
                 hud.ShowResults(rows, xpLine);
-                hud.ShowChoice(0, false);
+                hud.ShowChoice(0, false, netRole == NetRoleKind.Guest);
+                if (netRole == NetRoleKind.Guest)
+                {
+                    hud.SetHint("THE HOST PICKS THE NEXT RACE");
+                }
                 float shownAt = Time.time;
                 while (choice == GymRaceHud.Choice.None)
                 {
@@ -305,7 +368,7 @@ public sealed class GymRaceDirector : MonoBehaviour
                 // RACE AGAIN opens the difficulty screen once Medium is won;
                 // BACK there returns to the results.
                 int open = UnlockedDifficulty;
-                if (choice == GymRaceHud.Choice.RaceAgain && open > 0 && !autopilot)
+                if (choice == GymRaceHud.Choice.RaceAgain && open > 0 && !autopilot && netRole != NetRoleKind.Guest)
                 {
                     yield return PickDifficulty(open, true);
                     if (pickedDifficulty < 0)
@@ -319,6 +382,11 @@ public sealed class GymRaceDirector : MonoBehaviour
             player.SetCursorCaptured(true);
             if (choice == GymRaceHud.Choice.RaceAgain)
             {
+                if (netRole == NetRoleKind.Guest)
+                {
+                    difficulty = netRematchDifficulty;
+                }
+                NetHostRematch();
                 ResetToGrid();
                 continue;
             }
@@ -337,13 +405,31 @@ public sealed class GymRaceDirector : MonoBehaviour
         // ----------------------------------------------------------- countdown
         phase = Phase.Countdown;
         hud.SetRaceWidgetsVisible(true);
-        hud.SetHint("W GAS   S BRAKE   A/D STEER   SPACE / RMB DRIFT   SHIFT / LMB BOOST   Q LOOK BACK   R RESPAWN");
+        hud.SetHint(CountdownHint);
         countdownStart = Time.time;
         firstThrottleAt = -1f;
         for (int i = 0; i < racers.Count; i++)
         {
             racers[i].ResetProgress(Time.time);
         }
+        NetSendAll("Rc");
+        yield return CountdownSequence();
+        raceStartTime = Time.time;
+        NetSendAll("Rg");
+        StartRacing();
+
+        // -------------------------------------------------------------- racing
+        phase = Phase.Racing;
+        hud.SetHint(string.Empty);
+        while (phase == Phase.Racing || phase == Phase.Finishing)
+        {
+            TickRace();
+            yield return null;
+        }
+    }
+
+    private IEnumerator CountdownSequence()
+    {
         for (int step = 0; step < 3; step++)
         {
             track.SetCountdownLights(step + 1, false);
@@ -360,17 +446,6 @@ public sealed class GymRaceDirector : MonoBehaviour
         track.SetCountdownLights(0, true);
         hud.ShowCenter("GO!", PersonaMenuStyle.Gold, 1.1f);
         GymAudio.Play2D(GymSoundEffect.RaceGo, 0.9f);
-        raceStartTime = Time.time;
-        StartRacing();
-
-        // -------------------------------------------------------------- racing
-        phase = Phase.Racing;
-        hud.SetHint(string.Empty);
-        while (phase == Phase.Racing || phase == Phase.Finishing)
-        {
-            TickRace();
-            yield return null;
-        }
     }
 
     /// <summary>Verification: end the current race now and go to the results.</summary>
@@ -384,6 +459,11 @@ public sealed class GymRaceDirector : MonoBehaviour
 
     private GymRaceHud.Choice ReadChoice(float shownFor)
     {
+        if (netRole == NetRoleKind.Guest && netRematch)
+        {
+            netRematch = false;
+            return GymRaceHud.Choice.RaceAgain;
+        }
         if (hud.ChoiceMade != GymRaceHud.Choice.None)
         {
             return hud.ChoiceMade;
@@ -438,7 +518,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         {
             GymRaceRacer racer = racers[i];
             GymRaceKart kart = racer.Kart;
-            Pose pose = GymRaceTrackLayout.GridSlot(racer.GridSlot);
+            Pose pose = GridPose(racer.GridSlot);
             kart.Respawn(pose.position, pose.rotation * Vector3.forward, Vector3.up);
             kart.Input = new GymRaceDriveInput();
             kart.ControlsEnabled = false;
@@ -446,6 +526,10 @@ public sealed class GymRaceDirector : MonoBehaviour
             kart.SpeedScale = 1f;
             kart.SetBoostMeter(0f);
             ApplyDifficulty(racer);
+            if (specs[racer.GridSlot].Flyer && drivers[racer.GridSlot] != null)
+            {
+                drivers[racer.GridSlot].EndRaceFlight();
+            }
             if (racer.IsPlayer && !autopilot)
             {
                 // The cool-down lap AI from the last finish hands back control.
@@ -543,7 +627,8 @@ public sealed class GymRaceDirector : MonoBehaviour
     // per level (grip and steering follow so it stays drivable) and the AI
     // takes corners closer to the limit.
     private static readonly float[] DifficultySpeed = { 1f, 1.12f, 1.24f };
-    private static readonly float[] DifficultySkill = { 1f, 1.07f, 1.14f };
+    // AI cornering grip budget: twice the original 1 / 1.07 / 1.14.
+    private static readonly float[] DifficultySkill = { 2f, 2.14f, 2.28f };
     private int difficulty;
     public int CurrentDifficulty => difficulty;
 
@@ -594,6 +679,37 @@ public sealed class GymRaceDirector : MonoBehaviour
         pickedDifficulty = choice == GymRaceHud.Choice.RaceAgain ? hud.ChosenDifficulty : -1;
     }
 
+    // Mode screen: BACK plus NORMAL / CHAOS; pickedDifficulty -1 = back.
+    private IEnumerator PickMode()
+    {
+        hud.ShowBanner("SELECT MODE", PersonaMenuStyle.Gold, 600f);
+        hud.ShowModeChoice();
+        player.SetCursorCaptured(false);
+        GymRaceHud.Choice choice = GymRaceHud.Choice.None;
+        float shownAt = Time.time;
+        while (choice == GymRaceHud.Choice.None)
+        {
+            choice = ReadChoice(Time.time - shownAt);
+            yield return null;
+        }
+        hud.HideChoice();
+        hud.ShowBanner(string.Empty, PersonaMenuStyle.Gold, 0f);
+        bool picked = choice == GymRaceHud.Choice.RaceAgain;
+        pickedDifficulty = picked ? 0 : -1;
+        if (picked) mode = (RaceMode)hud.ChosenDifficulty;
+    }
+
+    /// <summary>Grid slot of a racer; the bus stands further back.</summary>
+    private Pose GridPose(int slot)
+    {
+        Pose pose = GymRaceTrackLayout.GridSlot(slot);
+        if (specs[slot].Bus)
+        {
+            pose.position += pose.rotation * Vector3.back * BusGridSetback;
+        }
+        return pose;
+    }
+
     private void ApplyDifficulty(GymRaceRacer racer)
     {
         RacerSpec spec = specs[racer.GridSlot];
@@ -605,7 +721,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         }
     }
 
-    private static List<RacerSpec> Roster()
+    private static List<RacerSpec> Roster(RaceMode raceMode)
     {
         GymRaceKart.Stats baseStats = GymRaceKart.Stats.Default;
         baseStats.Radius = 1.15f;
@@ -629,7 +745,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         GymRaceKart.Stats buggy = GymRaceKart.Stats.Default;
         buggy.Radius = 0.95f;
         buggy.Mass = 760f;
-        return new List<RacerSpec>
+        List<RacerSpec> roster = new List<RacerSpec>
         {
             new RacerSpec { Name = "Zyzz", Identity = BodybuilderIdentity.Zyzz, Color = new Color(0.3f, 0.85f, 1f), Stats = zyzz, Lane = -1.4f, Skill = 1.02f, Aggression = 0.1f },
             new RacerSpec { Name = "Cbum", Identity = BodybuilderIdentity.Cbum, Color = new Color(1f, 0.75f, 0.2f), Stats = baseStats, Lane = 1.2f, Skill = 1f, Aggression = 0.2f },
@@ -638,29 +754,55 @@ public sealed class GymRaceDirector : MonoBehaviour
             new RacerSpec { Name = "Arnold", Identity = BodybuilderIdentity.Arnold, Color = new Color(1f, 0.35f, 0.3f), Stats = arnold, Lane = 0.9f, Skill = 0.97f, Aggression = 0.35f },
             new RacerSpec { Name = "You", Player = true, Color = Color.white, Stats = buggy, Lane = 0f, Skill = 1f }
         };
+        if (raceMode == RaceMode.Chaos)
+        {
+            // Goku turns in the air: no drift, a slim body box.
+            GymRaceKart.Stats goku = baseStats;
+            goku.Radius = 0.8f;
+            goku.Mass = 500f;
+            goku.DriftAngle = 0f;
+            // The bus: heavy, slower to turn, a shorter drift swing for its length.
+            GymRaceKart.Stats bus = baseStats;
+            bus.Radius = 1.6f;
+            bus.Mass = 6000f;
+            bus.TopSpeed *= 0.94f;
+            bus.Acceleration *= 0.8f;
+            bus.Handling *= 0.75f;
+            bus.Grip *= 0.9f;
+            bus.DriftAngle = 11f;
+            roster.Add(new RacerSpec { Name = "Goku", Identity = BodybuilderIdentity.Goku, Flyer = true, Color = new Color(1f, 0.55f, 0.15f), Stats = goku, Lane = -0.6f, Skill = 1f, Aggression = 0.1f });
+            roster.Add(new RacerSpec { Name = "Davie", Identity = BodybuilderIdentity.Davie, Bus = true, Color = new Color(0.95f, 0.85f, 0.3f), Stats = bus, Lane = 0f, Skill = 0.9f, Aggression = 0.5f });
+        }
+        return roster;
     }
 
     private List<RacerSpec> specs;
 
     private void SpawnField()
     {
-        specs = Roster();
+        specs = Roster(mode);
+        NetAdjustRoster(specs);
         cars.Clear();
         drivers.Clear();
         for (int slot = 0; slot < specs.Count; slot++)
         {
             RacerSpec spec = specs[slot];
-            Pose pose = GymRaceTrackLayout.GridSlot(slot);
-            GymRaceVehicleFactory.Car car = spec.Player
+            Pose pose = GridPose(slot);
+            GymRaceVehicleFactory.Car car = spec.Player || spec.Remote
                 ? GymRaceVehicleFactory.CreatePlayerCar(pose)
+                : spec.Flyer
+                    ? GymRaceVehicleFactory.CreateFlightAnchor(pose)
                 : spec.Police
                     ? GymRaceVehicleFactory.CreatePoliceCar(pose)
                     : GymRaceVehicleFactory.CreateVisitorCar(spec.Identity, pose);
             car.Holder.SetParent(transform, true);
             cars.Add(car);
-            if (spec.Player)
+            if (spec.Player || spec.Remote)
             {
-                playerCar = car;
+                if (spec.Player)
+                {
+                    playerCar = car;
+                }
                 drivers.Add(null);
                 continue;
             }
@@ -700,7 +842,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         {
             RacerSpec spec = specs[slot];
             GymRaceVehicleFactory.Car car = cars[slot];
-            Pose pose = GymRaceTrackLayout.GridSlot(slot);
+            Pose pose = GridPose(slot);
             Bounds local = LocalBounds(car.Holder);
             GymRaceKart kart = GymRaceKart.Create("Race Kart - " + spec.Name, pose.position, pose.rotation * Vector3.forward, ScaleStats(spec.Stats, difficulty), car.Holder);
             kart.transform.SetParent(transform, true);
@@ -711,12 +853,21 @@ public sealed class GymRaceDirector : MonoBehaviour
             racer.Color = spec.Color;
             racer.IsPlayer = spec.Player;
             racer.GridSlot = slot;
-            if (!spec.Player || autopilot)
+            racer.RemoteHuman = spec.Remote;
+            racer.NetId = spec.Remote ? spec.NetId : -1;
+            racer.TrackOnly = netRole == NetRoleKind.Guest;
+            if (spec.Remote || (netRole == NetRoleKind.Guest && !spec.Player))
+            {
+                // The host (AI karts) or another machine (players) drives this kart.
+                kart.SetRemoteDriven();
+            }
+            else if (!spec.Player || autopilot)
             {
                 GymRaceAIDriver ai = kart.gameObject.AddComponent<GymRaceAIDriver>();
                 ai.LaneOffset = spec.Lane;
                 ai.Skill = spec.Skill * AiSkillScale(difficulty);
                 ai.Aggression = spec.Aggression;
+                ai.AllowDrift = spec.Stats.DriftAngle > 0f;
             }
             GymRaceKartEffects effects = kart.gameObject.AddComponent<GymRaceKartEffects>();
             effects.IsPlayer = spec.Player;
@@ -729,9 +880,16 @@ public sealed class GymRaceDirector : MonoBehaviour
             }
 
             EnemyFighter driver = drivers[slot];
-            if (driver != null)
+            if (driver != null && spec.Flyer)
             {
-                bool seated = car.Vehicle != null
+                kart.SetFootprint(0.45f, 1.1f);
+                driver.BeginVisitorVehicleRide(car.Holder);
+            }
+            else if (driver != null)
+            {
+                bool seated = spec.Bus
+                    ? GymRaceVehicleFactory.SeatOnRoof(driver, car, local)
+                    : car.Vehicle != null
                     ? car.Vehicle.TrySeatArrivingDriver(driver)
                     : car.ResolveSeat() != null && car.Seat.Mount(driver);
                 if (!seated)
@@ -890,8 +1048,16 @@ public sealed class GymRaceDirector : MonoBehaviour
         for (int i = 0; i < racers.Count; i++)
         {
             GymRaceKart kart = racers[i].Kart;
+            if (kart.RemoteDriven)
+            {
+                continue;
+            }
             kart.ControlsEnabled = true;
             kart.MeterFilling = true;
+            if (specs[racers[i].GridSlot].Flyer && drivers[racers[i].GridSlot] != null)
+            {
+                drivers[racers[i].GridSlot].BeginRaceFlight();
+            }
             bool rocket = racers[i].IsPlayer
                 ? firstThrottleAt >= 1.8f && firstThrottleAt <= 2.75f
                 : Random.value < 0.35f;
@@ -928,6 +1094,10 @@ public sealed class GymRaceDirector : MonoBehaviour
                     racer.RespawnAtSafePoint();
                 }
             }
+            else if (racer.RemoteHuman)
+            {
+                // Its machine drives it; the pose arrives over the net.
+            }
             else if (ai != null)
             {
                 kart.Input = ai.Think(now);
@@ -940,7 +1110,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             }
 
             bool finished = racer.Tick(raceTime, Time.deltaTime, true);
-            if (racer.NeedsRespawn)
+            if (racer.NeedsRespawn && !racer.RemoteHuman)
             {
                 racer.RespawnAtSafePoint();
             }
@@ -970,7 +1140,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         {
             allDone &= racers[i].Finished;
         }
-        if (phase == Phase.Finishing && (allDone || now - playerFinishTime > FinishGraceSeconds))
+        if (phase == Phase.Finishing && (allDone || now - playerFinishTime > (netRole == NetRoleKind.Host ? NetHostFinishGrace : FinishGraceSeconds)))
         {
             phase = Phase.Results;
         }
@@ -1058,6 +1228,7 @@ public sealed class GymRaceDirector : MonoBehaviour
 
     private void UpdateHud()
     {
+        NetPump();
         if (hud == null || playerRacer == null)
         {
             return;
@@ -1084,7 +1255,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             input.DriftHeld = false;
             kart.Input = input;
             racers[i].Tick(Time.time - raceStartTime, Time.deltaTime, false);
-            if (racers[i].NeedsRespawn)
+            if (racers[i].NeedsRespawn && !kart.RemoteDriven)
             {
                 racers[i].RespawnAtSafePoint();
             }
@@ -1100,7 +1271,7 @@ public sealed class GymRaceDirector : MonoBehaviour
             kart.Input = new GymRaceDriveInput { Brake = 1f };
             kart.ControlsEnabled = false;
             kart.MeterFilling = false;
-            if (kart.Body != null)
+            if (kart.Body != null && !kart.Body.isKinematic)
             {
                 kart.Body.linearVelocity = Vector3.zero;
             }
@@ -1228,6 +1399,7 @@ public sealed class GymRaceDirector : MonoBehaviour
 
     private void Teardown()
     {
+        NetBeforeTeardown();
         if (chase != null)
         {
             chase.End();
@@ -1274,6 +1446,7 @@ public sealed class GymRaceDirector : MonoBehaviour
         if (hud != null) Destroy(hud.gameObject);
         hud = null;
         GymVisitorDirector.RaceTrafficHold = false;
+        NetAfterTeardown();
         Debug.Log("GYMCHAOS_RACE_TEARDOWN_OK");
     }
 }

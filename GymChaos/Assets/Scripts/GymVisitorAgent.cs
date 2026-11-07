@@ -1993,7 +1993,7 @@ public sealed partial class GymVisitorAgent : MonoBehaviour
 		RestoreDoorwayWallCollisions();
 		ReleaseDoorOpenRequest();
 		squatStartPending = false;
-		if (Application.isPlaying && !applicationQuitting && !GymSessionService.IsReturningToMenu && enteredGym && !completedDoorExit)
+		if (Application.isPlaying && !applicationQuitting && !GymSessionService.IsReturningToMenu && enteredGym && !completedDoorExit && !(GymNetSession.Instance != null && GymNetSession.Instance.ActorsSuppressed))
 		{
 			Debug.LogError((object)($"GYMCHAOS_VISITOR_DISABLED_INSIDE enemy={fighter?.Identity} " + $"state={state} reason=external_disable"), (UnityEngine.Object)(object)this);
 		}

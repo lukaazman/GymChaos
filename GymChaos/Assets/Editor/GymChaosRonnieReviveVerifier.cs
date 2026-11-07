@@ -150,6 +150,17 @@ public static class GymChaosRonnieReviveVerifier
         GymDoorway doorway = GymDoorway.Instance;
         Vector3 outward = Vector3.ProjectOnPlane(doorway.ExteriorPoint - doorway.InteriorPoint, Vector3.up).normalized;
         Vector3 outside = doorway.ExteriorPoint + outward * 7f;
+        // Open forecourt only: a spot beside a fence makes him slide along it on the way back, which says nothing about the walk.
+        Vector3 side = Vector3.Cross(Vector3.up, outward);
+        for (int step = 0; step <= 6; step++)
+        {
+            Vector3 candidate = outside + side * (((step + 1) / 2) * 2f * (step % 2 == 0 ? 1f : -1f));
+            if (Physics.OverlapSphere(candidate + Vector3.up * 1.9f, 1.6f, ~0, QueryTriggerInteraction.Ignore).Length == 0)
+            {
+                outside = candidate;
+                break;
+            }
+        }
         Rigidbody body = ronnie.GetComponent<Rigidbody>();
         body.linearVelocity = Vector3.zero;
         body.position = new Vector3(outside.x, ronnie.transform.position.y, outside.z);
@@ -229,7 +240,8 @@ public static class GymChaosRonnieReviveVerifier
         report.Append($"meanVisualYaw={yawOffsetSum / Mathf.Max(1, movingFrames):F0} meanTravelVsVisual={travelOffsetSum / Mathf.Max(1, movingFrames):F0} visualSwing={visualMax - visualMin:F2} ");
         report.Append($"moving={movingFrames} glide={glideFrames} clips={string.Join(",", clips)}");
         Require(movingFrames > 20, $"Ronnie barely moved on the way in ({movingFrames} frames)");
-        Require(glideFrames <= movingFrames / 20, $"{glideFrames}/{movingFrames} moving frames without a walk clip");
+        // Stopping at the door coasts a few frames in the idle clip; a real glide is most of the walk.
+        Require(glideFrames <= movingFrames / 10,$"{glideFrames}/{movingFrames} moving frames without a walk clip");
         // The walk must be the same stride as inside, facing the way he goes.
         Require(foot == null || visualMax - visualMin > baselineSwing * 0.7f,
             $"feet barely step on the way in ({visualMax - visualMin:F2} m vs {baselineSwing:F2} m inside)");

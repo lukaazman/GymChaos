@@ -1248,17 +1248,16 @@ public sealed class GymExperienceService : MonoBehaviour
                 continue;
             }
 
-            // Planar reach: the prompt must not depend on whether the player
-            // pivot sits at the feet or the capsule centre.
-            Vector3 offset = candidate.transform.position - position;
-            if (Mathf.Abs(offset.y) > 2.5f)
+            // Planar reach from the target's edge: the prompt must not depend on
+            // whether the player pivot sits at the feet or the capsule centre,
+            // and where two targets reach the same spot the nearer one wins.
+            if (Mathf.Abs(candidate.transform.position.y - position.y) > 2.5f)
             {
                 continue;
             }
-            offset.y = 0f;
-            float reach = Mathf.Max(maxDistance, candidate.InteractionRange);
-            float distance = offset.sqrMagnitude;
-            if (distance <= reach * reach && distance < best)
+            float reach = candidate.InteractionRange > 0f ? candidate.InteractionRange : maxDistance;
+            float distance = candidate.PlanarDistance(position);
+            if (distance <= reach && distance < best)
             {
                 best = distance;
                 closest = candidate;

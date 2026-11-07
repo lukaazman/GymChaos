@@ -66,7 +66,7 @@ NECK_RADIUS = 0.072
 COLLAR_Z = 0.786
 COLLAR_SLOPE = 0.17
 # Onyx reaches past the tank top's hem so the tank never shows below it.
-ONYX_HEM = 0.512
+ONYX_HEM = 0.505
 TORSO_HALF_WIDTH = 0.135
 OVERSIZED_SLEEVE_END = 0.285
 # Onyx: short cap sleeve that ends below the deltoid, most of the biceps bare.

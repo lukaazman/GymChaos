@@ -183,9 +183,12 @@ public static class GymChaosFixerVerifier
                      90d, "the police officer answering Ronnie's death")) yield return step;
         EnemyFighter officer = GymPoliceDirector.LastOfficer;
         yield return 0.5f;
+        // Racing is blocked only while the police are angry: a live officer counts, a dead one does not.
+        Require(GymPoliceDirector.IsPoliceThreat, "a live officer is not a police threat");
         Kill(officer, player);
         foreach (object step in Until(() => member.IsSettledCorpse && ronnie.IsSettledCorpse &&
                      officer.IsSettledCorpse, 20d, "corpses to settle")) yield return step;
+        Require(!GymPoliceDirector.IsPoliceThreat, "Ronnie and the officer are dead and the police still block a race");
         yield return 3f;
         fixers.ScanNowForVerification();
         int issueCount = fixers.CurrentIssues.Count;
@@ -239,8 +242,18 @@ public static class GymChaosFixerVerifier
         bool shotDuringExit = false;
         bool titleSeen = false;
         bool playerLockedInShot = false;
+        bool deskChecked = false;
         while (fixers.IsVisitActive)
         {
+            // Larry's grid keeps him out of the receptionist's strip behind the desk.
+            if (!deskChecked && dog.NavGrid.IsReady)
+            {
+                deskChecked = true;
+                EnemyFighter receptionist = FindFighter(BodybuilderIdentity.Manwithsuit1);
+                Require(receptionist != null && !dog.NavGrid.IsWalkable(receptionist.transform.position),
+                    "Larry may walk behind the reception desk");
+                Debug.Log("GYMCHAOS_FIXER_DESK_BLOCKED_OK");
+            }
             GymFixerArrivalCamera shot = dog.ArrivalCamera;
             if (shot.IsActive && (dog.State == GymFixerAgent.FixerState.Exiting ||
                 dog.State == GymFixerAgent.FixerState.Flying)) shotDuringExit = true;

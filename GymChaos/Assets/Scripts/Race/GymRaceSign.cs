@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// Neon "RACE" sign in the north-east corner of the parking lot, beside the
+/// "RACE" sign in the menu style (Anton title, Bebas sub line, accent frame) in the north-east corner of the parking lot, beside the
 /// mouth of the visitor road. Pressing F next to it starts the race.
 /// </summary>
 public sealed class GymRaceSign : MonoBehaviour
@@ -66,11 +66,11 @@ public sealed class GymRaceSign : MonoBehaviour
     {
         Shader lit = GymMaterialLibrary.LitShader;
         Shader unlit = GymMaterialLibrary.UnlitShader;
-        Material metal = new Material(lit) { name = "Race Sign Metal", color = new Color(0.08f, 0.09f, 0.1f) };
-        Material face = new Material(lit) { name = "Race Sign Face", color = new Color(0.03f, 0.03f, 0.05f) };
-        Material white = new Material(unlit) { name = "Race Sign White", color = new Color(0.95f, 0.95f, 0.95f) };
-        Material black = new Material(unlit) { name = "Race Sign Black", color = new Color(0.02f, 0.02f, 0.02f) };
-        neon = new Material(unlit) { name = "Race Sign Neon", color = new Color(1f, 0.2f, 0.7f) };
+        Material metal = new Material(lit) { name = "Race Sign Metal", color = PersonaMenuStyle.ButtonIdle };
+        Material face = new Material(lit) { name = "Race Sign Face", color = PersonaMenuStyle.Ink };
+        Material white = new Material(unlit) { name = "Race Sign White", color = PersonaMenuStyle.Accent };
+        Material black = new Material(unlit) { name = "Race Sign Black", color = PersonaMenuStyle.PlateBlack };
+        neon = new Material(unlit) { name = "Race Sign Neon", color = PersonaMenuStyle.Accent };
         ownedMaterials = new[] { metal, face, white, black, neon };
         foreach (Material m in ownedMaterials)
         {
@@ -106,10 +106,11 @@ public sealed class GymRaceSign : MonoBehaviour
         label.fontSize = 64;
         label.anchor = TextAnchor.MiddleCenter;
         label.alignment = TextAlignment.Center;
-        label.color = new Color(1f, 0.85f, 0.3f);
+        // The depth-tested text shader draws glyphs dark, so the face is light.
+        label.color = PersonaMenuStyle.PlateBlack;
         MeshRenderer textRenderer = labelObject.GetComponent<MeshRenderer>();
         textRenderer.sharedMaterial = font.material;
-        GymInteriorBuilder.UseDepthTestedText(textRenderer, Color.white);
+        GymInteriorBuilder.UseDepthTestedText(textRenderer, label.color);
 
         GameObject sub = new GameObject("Race Sign Sub");
         sub.transform.SetParent(transform, false);
@@ -121,10 +122,10 @@ public sealed class GymRaceSign : MonoBehaviour
         subLabel.fontSize = 64;
         subLabel.anchor = TextAnchor.MiddleCenter;
         subLabel.alignment = TextAlignment.Center;
-        subLabel.color = new Color(0.8f, 0.9f, 1f);
+        subLabel.color = PersonaMenuStyle.PlateBlack;
         MeshRenderer subRenderer = sub.GetComponent<MeshRenderer>();
         subRenderer.sharedMaterial = subLabel.font.material;
-        GymInteriorBuilder.UseDepthTestedText(subRenderer, Color.white);
+        GymInteriorBuilder.UseDepthTestedText(subRenderer, subLabel.color);
     }
 
     private void Part(string name, PrimitiveType type, Vector3 localPosition, Vector3 scale, Material material, bool collider)
@@ -160,6 +161,20 @@ public sealed class GymRaceSign : MonoBehaviour
         }
         return true;
     }
+
+    private const string DefaultSubtitle = "3 LAPS AROUND THE CITY";
+
+    /// <summary>Sub line text, e.g. "WAITING FOR HOST"; null restores the default. Refitted to the band.</summary>
+    public void SetStatus(string text)
+    {
+        string wanted = string.IsNullOrEmpty(text) ? DefaultSubtitle : text;
+        if (subLabel == null || subLabel.text == wanted) return;
+        subLabel.text = wanted;
+        subLabel.characterSize = 0.03f;
+        labelsFitted = false;
+    }
+
+    public string StatusForVerification => subLabel != null ? subLabel.text : null;
 
     /// <summary>Verification: title and subtitle glyph boxes in sign space (x = width, y = min, z = max).</summary>
     public bool TryGetLabelExtents(out Vector3 title, out Vector3 subtitle)
@@ -239,10 +254,10 @@ public sealed class GymRaceSign : MonoBehaviour
             bool sub = FitLabel(subLabel, TextMaxWidth, SubMaxHeight);
             labelsFitted = title && sub;
         }
-        // Slow neon breathing so the sign reads as interactive.
+        // Slow breathing so the sign reads as interactive.
         phase += Time.deltaTime;
-        float pulse = 0.75f + 0.25f * Mathf.Sin(phase * 3f);
-        Color color = new Color(1f, 0.2f, 0.7f) * pulse;
+        float pulse = 0.85f + 0.15f * Mathf.Sin(phase * 3f);
+        Color color = PersonaMenuStyle.Accent * pulse;
         neon.color = color;
         if (neon.HasProperty("_BaseColor")) neon.SetColor("_BaseColor", color);
     }

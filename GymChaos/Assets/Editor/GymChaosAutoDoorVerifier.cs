@@ -10,11 +10,14 @@ using UnityEngine.Rendering;
 /// <summary>
 /// Automatic doors (2026-10-17): the gym entrance (double-acting glass
 /// leaves) and the protein.com storefront (sliding glass leaves).
-/// - Contract: both doors exist with two leaves, no leaf collider, the GLB's
+/// - Contract: both doors exist with two leaves, one collider per leaf (solid only while shut), the GLB's
 ///   parked store leaves are hidden, the old black inner panel is gone.
 /// - Sensing: a person standing far away, walking past or walking slowly a
 ///   few metres out does not open a door; a person at the door, or one
 ///   sprinting at it, does.
+/// - Solidity: a shut door blocks a player-sized capsule in its opening; at
+///   the moment the player reaches the door plane the leaves are open and the
+///   capsule is free.
 /// - Scripted walks: the player walks and sprints through both doors in both
 ///   directions. Each door is fully open before the player reaches the door
 ///   plane, did not start opening while the player was still far away, and
@@ -170,8 +173,8 @@ public static class GymChaosAutoDoorVerifier
             $"gym door kind={gym.Kind} leaves={gym.LeafCount}");
         Require(store.Kind == GymAutoDoor.DoorKind.Slide && store.LeafCount == 2,
             $"store door kind={store.Kind} leaves={store.LeafCount}");
-        Require(gym.GetComponentsInChildren<Collider>(true).Length == 0, "gym door parts carry colliders");
-        Require(store.GetComponentsInChildren<Collider>(true).Length == 0, "store door parts carry colliders");
+        Require(CountOwnedColliders(gym) == gym.LeafCount, "gym door leaves lack their collider");
+        Require(CountOwnedColliders(store) == store.LeafCount, "store door leaves lack their collider");
         Require(GameObject.Find("Visitor Door Panel") == null, "old black visitor door panel still exists");
         Require(GymDoorway.Instance != null && GymDoorway.Instance.AutoDoor == gym, "doorway is not bound to the gym door");
         int hiddenLeaves = 0;
@@ -188,6 +191,32 @@ public static class GymChaosAutoDoorVerifier
         Require(hiddenLeaves > 0 && visibleLeaves == 0,
             $"GLB parked store leaves hidden={hiddenLeaves} visible={visibleLeaves}");
         notes.Add($"glbLeavesHidden={hiddenLeaves}");
+    }
+
+    private static readonly Collider[] capsuleHits = new Collider[16];
+
+    private static int CountOwnedColliders(GymAutoDoor door)
+    {
+        int count = 0;
+        foreach (Collider collider in UnityEngine.Object.FindObjectsByType<BoxCollider>(FindObjectsInactive.Include))
+        {
+            if (door.OwnsCollider(collider)) count++;
+        }
+        return count;
+    }
+
+    // Player-sized capsule (radius 0.3) centred on the opening.
+    private static bool CapsuleHitsDoor(GymAutoDoor door)
+    {
+        Physics.SyncTransforms();
+        Vector3 c = door.Center;
+        int hits = Physics.OverlapCapsuleNonAlloc(c + Vector3.down * 0.5f, c + Vector3.up * 0.5f, 0.3f,
+            capsuleHits, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < hits; i++)
+        {
+            if (door.OwnsCollider(capsuleHits[i])) return true;
+        }
+        return false;
     }
 
     private static void CheckSensing(GymAutoDoor door)
@@ -261,6 +290,7 @@ public static class GymChaosAutoDoorVerifier
                     Require(now - phaseStarted < 40d, $"{walk.Name}: door never settled shut: {door.DescribeSensed()}");
                     return;
                 }
+                Require(door.LeavesSolid && CapsuleHitsDoor(door), $"{walk.Name}: shut door does not block the player capsule");
                 Capture(walk.Name + "_0_closed", door, walk.FromAlong);
                 walkPhase = 1;
                 phaseStarted = now;
@@ -277,6 +307,7 @@ public static class GymChaosAutoDoorVerifier
                 {
                     crossed = true;
                     crossBlend = door.OpenBlend;
+                    Require(!door.LeavesSolid && !CapsuleHitsDoor(door), $"{walk.Name}: open door still blocks the player capsule");
                     Capture(walk.Name + "_1_crossing", door, walk.FromAlong);
                 }
                 if (Mathf.Abs(walkAlong - walk.ToAlong) > 0.001f) return;

@@ -34,9 +34,13 @@ EXPORTS = {
             DRIVER_CLIPS if name in DRIVERS else MEMBER_CLIPS,
         )
         for name in ("arnold_authored", "cbum_authored", "goku_authored",
-                     "jaycutler_authored", "ronnie_authored", "zyzz_authored",
-                     "davie_authored")
+                     "jaycutler_authored", "ronnie_authored", "zyzz_authored")
     },
+    # Davie also sits on the Chaos race bus roof.
+    "davie_authored": (
+        PROJECT / "GymChaos/Assets/Resources/Characters/Enemies/davie_authored.fbx",
+        MEMBER_CLIPS + ("sitting_idle",),
+    ),
     "policeman_authored": (
         PROJECT / "GymChaos/Assets/Resources/Characters/Enemies/policeman_authored.fbx",
         POLICE_CLIPS,

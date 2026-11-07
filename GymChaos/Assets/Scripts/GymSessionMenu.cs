@@ -36,6 +36,8 @@ public sealed class GymSessionMenu : MonoBehaviour
     private Button loadGameButton;
     private Button newGameButton;
     private Text choiceNote;
+    // Why the last room ended (kept until the choice page shows it).
+    private string roomNotice;
 
     private readonly List<PersonaMenuButton> classCards = new List<PersonaMenuButton>();
     private readonly List<Button> classCardButtons = new List<Button>();
@@ -93,6 +95,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         menu.setMainMenuInteractable = setMainMenuInteractable;
         menu.restoreMainFocus = restoreMainFocus;
         menu.sessionReady = sessionReady;
+        GymNetSession.SetPending(null, null, null);
         menu.Build();
         menu.Show(State.Closed);
         return menu;
@@ -280,6 +283,7 @@ public sealed class GymSessionMenu : MonoBehaviour
                         ? " SAVE COULD NOT BE READ AND IS NOT LISTED"
                         : " SAVES COULD NOT BE READ AND ARE NOT LISTED")
                     : string.Empty;
+                if (!string.IsNullOrEmpty(roomNotice)) choiceNote.text = roomNotice;
                 GymShared.Select(hasSaves ? loadGameButton : newGameButton);
                 break;
             case State.ClassSelect:
@@ -427,6 +431,79 @@ public sealed class GymSessionMenu : MonoBehaviour
             "BACK", 1268f, 384f, 230f, 58f, 44, -2f, Back);
         choiceNote = PersonaMenuStyle.CreateLabel(choicePage.transform, "Note", bodyFont, string.Empty,
             1322f, 470f, 420f, 40f, 24, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+        BuildRoomControls();
+    }
+
+    // One save either way: solo and host load world + character, joining loads only the character.
+    private const string RelayPref = "GymChaos.RelayUrl";
+    private int roomMode;
+    private Text roomModeLabel;
+    private Text roomHint;
+    private InputField relayInput;
+    private InputField codeInput;
+
+    private void BuildRoomControls()
+    {
+        PersonaMenuStyle.CreatePanel(choicePage.transform, "Room Panel", 1320f, 672f, 430f, 300f, -2f,
+            new Color(0.035f, 0.05f, 0.1f, 1f), PersonaMenuStyle.Accent);
+        Button mode = PersonaMenuStyle.CreateButton(choicePage.transform, "Room Mode Button", bodyFont,
+            string.Empty, 1316f, 584f, 336f, 64f, 50, -2f, () => { roomMode = (roomMode + 1) % 3; ApplyRoom(); });
+        roomModeLabel = mode.transform.Find("Label").GetComponent<Text>();
+        relayInput = CreateRoomInput("Relay Input", "Relay address", 1318f, 664f, 380f, 52f, 120);
+        codeInput = CreateRoomInput("Room Code Input", "Room code", 1318f, 738f, 380f, 52f, 8);
+        codeInput.onValidateInput = (_, __, c) => char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '\0';
+        roomHint = PersonaMenuStyle.CreateLabel(choicePage.transform, "Room Hint", bodyFont, string.Empty,
+            1322f, 800f, 420f, 40f, 22, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+        relayInput.text = PlayerPrefs.GetString(RelayPref, GymNetSession.DefaultRelayUrl);
+        // A host that died picks up where it was: hosting again, same relay (the code comes back by itself).
+        if (GymNetSession.HasRecovery)
+        {
+            roomMode = 1;
+            relayInput.text = GymNetSession.RecoveryUrl;
+        }
+        ApplyRoom();
+        string leftover = GymNetSession.TakeNotice();
+        if (!string.IsNullOrEmpty(leftover)) roomNotice = leftover;
+    }
+
+    private InputField CreateRoomInput(string name, string placeholder, float x, float y, float width, float height, int limit)
+    {
+        GameObject field = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(InputField));
+        field.transform.SetParent(choicePage.transform, false);
+        PersonaMenuStyle.PlaceInArt(field.GetComponent<RectTransform>(), x, y, width, height);
+        field.transform.localRotation = Quaternion.Euler(0f, 0f, -2f);
+        Image face = field.GetComponent<Image>();
+        face.color = PersonaMenuStyle.ButtonIdle;
+        InputField input = field.GetComponent<InputField>();
+        input.targetGraphic = face;
+        input.characterLimit = limit;
+        Text hint = GymRuntimeSettings.CreateText(name + " Placeholder", field.transform, bodyFont, placeholder, 30,
+            PersonaMenuStyle.Muted, FontStyle.Italic, TextAnchor.MiddleLeft, new Vector2(0.04f, 0f), new Vector2(0.96f, 1f));
+        Text text = GymRuntimeSettings.CreateText(name + " Text", field.transform, bodyFont, string.Empty, 30,
+            PersonaMenuStyle.Ink, FontStyle.Normal, TextAnchor.MiddleLeft, new Vector2(0.04f, 0f), new Vector2(0.96f, 1f));
+        text.supportRichText = false;
+        input.placeholder = hint;
+        input.textComponent = text;
+        input.onValueChanged.AddListener(_ => ApplyRoom());
+        return input;
+    }
+
+    // Live: the launch context must be known before the character is created or loaded.
+    private void ApplyRoom()
+    {
+        if (roomModeLabel == null || relayInput == null || codeInput == null) return;
+        roomModeLabel.text = roomMode == 1 ? "ROOM: HOST" : roomMode == 2 ? "ROOM: JOIN" : "ROOM: SOLO";
+        relayInput.gameObject.SetActive(roomMode != 0);
+        codeInput.gameObject.SetActive(roomMode == 2);
+        string url = relayInput.text.Trim();
+        if (url.Length == 0) url = GymNetSession.DefaultRelayUrl;
+        string code = codeInput.text.Trim().ToUpperInvariant();
+        bool joinReady = roomMode == 2 && code.Length > 0;
+        if (roomMode != 0) PlayerPrefs.SetString(RelayPref, url);
+        GymNetSession.SetPending(roomMode == 1 ? "host" : joinReady ? "join" : null, url, code);
+        roomHint.text = roomMode == 1 ? "YOUR WORLD. THE CODE SHOWS IN GAME" :
+            roomMode == 2 ? (joinReady ? "THEIR WORLD, YOUR CHARACTER" : "ENTER THE HOST'S CODE, ELSE SOLO") :
+            "YOUR WORLD AND CHARACTER";
     }
 
     private void BuildClassPage()

@@ -28,6 +28,8 @@ public sealed class GymSessionService : MonoBehaviour
     private static GymCharacterSave active;
     private static bool activeIsNew;
     private static bool returningToMenu;
+    // Slot whose scene state was applied; a quit before that must not write the unloaded world.
+    private static string appliedSlot;
     /// <summary>True from return-to-menu until the reloaded scene is up.</summary>
     public static bool IsReturningToMenu => returningToMenu;
 
@@ -35,7 +37,9 @@ public sealed class GymSessionService : MonoBehaviour
     public static void MarkSceneReload() => returningToMenu = true;
 
     private Task writeTask;
-    private bool dirty;
+    // Sections changed since they were last written, and the ones in flight.
+    private GymSaveSections dirtySections;
+    private GymSaveSections writingSections;
     private bool requestPending;
     private float requestDueAt;
     private float autosaveElapsed;
@@ -52,6 +56,9 @@ public sealed class GymSessionService : MonoBehaviour
     public static GymSaveStatus Status { get; private set; }
     public static string StatusMessage { get; private set; } = string.Empty;
     public static int CompletedWriteCount { get; private set; }
+    /// <summary>Which sections of the character file this session may load and write.</summary>
+    public static GymSaveContext Context { get; private set; }
+    public static GymSaveSections AllowedSections => GymSaveRules.Allowed(Context);
     public static GymCharacterSave Active => active;
     public static bool HasActive => active != null;
     public static bool IsWriting => instance != null && instance.writeTask != null;
@@ -95,11 +102,20 @@ public sealed class GymSessionService : MonoBehaviour
         active = null;
         activeIsNew = false;
         returningToMenu = false;
+        Context = GymSaveContext.Solo;
+        appliedSlot = null;
         Status = GymSaveStatus.Idle;
         StatusMessage = string.Empty;
         CompletedWriteCount = 0;
         SaveStatusChanged = null;
     }
+
+    /// <summary>Solo and Host play their own world; Join plays in the host world.</summary>
+    public static void SetContext(GymSaveContext context) => Context = context;
+
+    /// <summary>The sections one write captures: dirty and allowed in the context. Autosave and manual save share it.</summary>
+    public static GymSaveSections SectionsToWrite(GymSaveContext context, GymSaveSections dirty) =>
+        dirty & GymSaveRules.Allowed(context);
 
     private static GymSessionService EnsureRunner()
     {
@@ -163,6 +179,7 @@ public sealed class GymSessionService : MonoBehaviour
     {
         active = GymCharacterSave.New(confirmedClassId);
         activeIsNew = true;
+        Context = GymNetSession.LaunchContext();
         EnsureRunner().ResetTimers();
         return active;
     }
@@ -177,6 +194,7 @@ public sealed class GymSessionService : MonoBehaviour
         }
         active = result.Data;
         activeIsNew = false;
+        Context = GymNetSession.LaunchContext();
         EnsureRunner().ResetTimers();
         error = string.Empty;
         return true;
@@ -203,24 +221,31 @@ public sealed class GymSessionService : MonoBehaviour
                 !activeIsNew && ShouldStartNewDay(active.savedUtc, DateTime.Now));
         }
 
-        GlassShatterPanel.ResetShatteredRegistry();
-        if (!activeIsNew)
+        // The world section loads only in a context that owns a world, and only
+        // once a Solo or Host session has written one.
+        bool ownsWorld = (AllowedSections & GymSaveSections.World) != 0;
+        bool restoreWorld = ownsWorld && !activeIsNew && active.hasWorld;
+        if (ownsWorld)
         {
-            if (GymTimeOfDay.Instance != null)
+            GlassShatterPanel.ResetShatteredRegistry();
+            if (restoreWorld)
             {
-                GymTimeOfDay.Instance.RestoreSession(active.worldTime, active.worldDay);
+                if (GymTimeOfDay.Instance != null)
+                {
+                    GymTimeOfDay.Instance.RestoreSession(active.worldTime, active.worldDay);
+                }
+                RestoreBrokenPanels(active.brokenPanels);
+                GymFixerDirector.RestoreIssueAges(active.fixerIssueIds, active.fixerIssueSince);
             }
-            RestoreBrokenPanels(active.brokenPanels);
-            GymFixerDirector.RestoreIssueAges(active.fixerIssueIds, active.fixerIssueSince);
-        }
-        else
-        {
-            GymFixerDirector.RestoreIssueAges(null, null);
+            else
+            {
+                GymFixerDirector.RestoreIssueAges(null, null);
+            }
         }
 
         if (player != null)
         {
-            bool spawnUsable = !activeIsNew && active.hasSpawn && IsSafeSpawn(active.spawn);
+            bool spawnUsable = restoreWorld && active.hasSpawn && IsSafeSpawn(active.spawn);
             float capacity = progression != null ? progression.GetSprintCapacity() : 100f;
             player.RestoreSessionState(
                 spawnUsable, active.spawn, active.facing,
@@ -231,6 +256,7 @@ public sealed class GymSessionService : MonoBehaviour
             runner.hasSafeSpawn = true;
         }
 
+        appliedSlot = active.slotId;
         Debug.Log($"GYMCHAOS_SESSION_APPLIED slot={active.slotId} class={active.classId} new={activeIsNew}");
         if (activeIsNew)
         {
@@ -259,7 +285,7 @@ public sealed class GymSessionService : MonoBehaviour
     /// <summary>Progress changed; include it in the next save without forcing one.</summary>
     public static void MarkDirty()
     {
-        if (instance != null && active != null) instance.dirty = true;
+        if (instance != null && active != null) instance.dirtySections |= GymSaveSections.Character;
     }
 
     public static void RequestSave(string reason, bool immediate = false, Action<bool, string> onCompleted = null)
@@ -269,7 +295,8 @@ public sealed class GymSessionService : MonoBehaviour
             onCompleted?.Invoke(false, "No character is active.");
             return;
         }
-        instance.dirty = true;
+        // Every section this context may write is saved; manual and timed saves alike.
+        instance.dirtySections |= AllowedSections;
         if (onCompleted != null) instance.queuedCallbacks.Add(onCompleted);
         float due = Time.unscaledTime + (immediate ? 0f : RequestDebounceSeconds);
         instance.requestDueAt = instance.requestPending ? Mathf.Min(instance.requestDueAt, due) : due;
@@ -288,12 +315,32 @@ public sealed class GymSessionService : MonoBehaviour
     public static void ReturnToLoadList()
     {
         OpenLoadListOnNextMenu = true;
-        ReturnToMenu();
+        // A host that dies keeps its room code for when it loads its save again.
+        ReturnToMenu(GymNetSession.RememberRoomForRecovery());
     }
 
-    public static void ReturnToMenu()
+    /// <summary>
+    /// Re-reads the active character from its own save file into the running
+    /// game, without a scene reload: progress since the last save is gone, the
+    /// world section is not touched. False when the save cannot be read.
+    /// </summary>
+    public static bool ReloadCharacterInPlace()
+    {
+        if (active == null) return false;
+        GymSaveReadResult result = Repository.Read(active.slotId);
+        if (!result.Success) return false;
+        active.progression = result.Data.progression;
+        active.oneShotRewards = result.Data.oneShotRewards;
+        GymExperienceService.Active?.ApplySession(active.progression, active.oneShotRewards, false);
+        return true;
+    }
+
+    /// <summary>Back to the boot menu. The room (host recovery) is dropped unless the caller keeps it.</summary>
+    public static void ReturnToMenu(bool keepRoom = false)
     {
         if (returningToMenu) return;
+        if (!keepRoom) GymNetSession.ClearRecovery();
+        appliedSlot = null;
         returningToMenu = true;
         active = null;
         activeIsNew = false;
@@ -306,13 +353,14 @@ public sealed class GymSessionService : MonoBehaviour
         SetStatus(GymSaveStatus.Idle, string.Empty);
         Time.timeScale = 1f;
         GlassShatterPanel.ResetShatteredRegistry();
+        GymNetSession.End();
         Debug.Log("GYMCHAOS_SESSION_RETURN_TO_MENU");
         SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
     }
 
     private void ResetTimers()
     {
-        dirty = false;
+        dirtySections = GymSaveSections.None;
         requestPending = false;
         autosaveElapsed = 0f;
         safeSpawnElapsed = 0f;
@@ -388,9 +436,10 @@ public sealed class GymSessionService : MonoBehaviour
         queuedCallbacks.Clear();
         string serialized;
         string slot = active.slotId;
+        writingSections = SectionsToWrite(Context, dirtySections);
         try
         {
-            Capture();
+            Capture(active, writingSections);
             serialized = Repository.Serialize(active);
         }
         catch (Exception exception)
@@ -402,7 +451,7 @@ public sealed class GymSessionService : MonoBehaviour
             return;
         }
 
-        dirty = false;
+        dirtySections &= ~writingSections;
         autosaveElapsed = 0f;
         SetStatus(GymSaveStatus.Saving, "SAVING");
         GymSaveRepository target = Repository;
@@ -448,7 +497,7 @@ public sealed class GymSessionService : MonoBehaviour
         else
         {
             // Keep the unsaved progress flagged so a retry or the next autosave writes it.
-            dirty = true;
+            dirtySections |= writingSections;
             Debug.LogWarning("GYMCHAOS_SAVE_NOT_WRITTEN " + message);
         }
         SetStatus(succeeded ? GymSaveStatus.Saved : GymSaveStatus.Failed, message);
@@ -474,16 +523,28 @@ public sealed class GymSessionService : MonoBehaviour
     }
 
     /// <summary>Copies authoritative gameplay state into the active save (main thread only).</summary>
-    private void Capture()
+    private void Capture(GymCharacterSave target, GymSaveSections sections)
     {
+        // Scene state lands in a scratch copy first; only the requested
+        // sections are merged into the save, so an unloaded world is never written.
+        GymCharacterSave live = new GymCharacterSave
+        {
+            progression = target.progression, oneShotRewards = target.oneShotRewards,
+            health = target.health, stamina = target.stamina, worldTime = target.worldTime,
+            worldDay = target.worldDay, hasSpawn = target.hasSpawn, spawn = target.spawn,
+            facing = target.facing, brokenPanels = target.brokenPanels,
+            fixerIssueIds = target.fixerIssueIds, fixerIssueSince = target.fixerIssueSince
+        };
+        bool character = (sections & GymSaveSections.Character) != 0;
+        bool world = (sections & GymSaveSections.World) != 0;
         GymExperienceService progression = GymExperienceService.Active;
-        if (progression != null && progression.State != null)
+        if (character && progression != null && progression.State != null)
         {
             progression.State.Normalize();
             // Detach from the live object so later gameplay cannot alter the snapshot.
-            active.progression = JsonUtility.FromJson<GymProgressionState>(
+            live.progression = JsonUtility.FromJson<GymProgressionState>(
                 JsonUtility.ToJson(progression.State));
-            active.oneShotRewards = progression.CaptureOneShotRewards();
+            live.oneShotRewards = progression.CaptureOneShotRewards();
         }
 
         PlayerMovement player = progression != null ? progression.Player : null;
@@ -492,29 +553,73 @@ public sealed class GymSessionService : MonoBehaviour
             if (player.IsDead)
             {
                 // A defeated character resumes rested at the entrance.
-                active.hasSpawn = false;
-                active.health = player.MaxHealth;
-                active.stamina = progression != null ? progression.GetSprintCapacity() : 100f;
+                live.hasSpawn = false;
+                live.health = player.MaxHealth;
+                live.stamina = progression != null ? progression.GetSprintCapacity() : 100f;
             }
             else
             {
                 SampleSafeSpawn();
-                active.hasSpawn = hasSafeSpawn;
-                active.spawn = safeSpawn;
-                active.facing = safeFacing;
-                active.health = player.CurrentHealth;
-                active.stamina = player.SprintEnergy;
+                live.hasSpawn = hasSafeSpawn;
+                live.spawn = safeSpawn;
+                live.facing = safeFacing;
+                live.health = player.CurrentHealth;
+                live.stamina = player.SprintEnergy;
             }
         }
 
+        if (world)
+        {
+            if (GymTimeOfDay.Instance != null)
+            {
+                live.worldTime = GymTimeOfDay.Instance.Time01;
+                live.worldDay = GymTimeOfDay.Instance.CurrentDay;
+            }
+            live.brokenPanels = GlassShatterPanel.CaptureShatteredIds();
+            GymFixerDirector.CaptureIssueAges(out live.fixerIssueIds, out live.fixerIssueSince);
+        }
+        GymSaveRules.Merge(target, live, sections);
+        target.savedUtc = DateTime.UtcNow.ToString("O");
+    }
+
+    /// <summary>The host's world as a guest needs it to join: clock, broken glass, fixer ages.</summary>
+    public static GymNetWorldSnapshot CaptureWorldSnapshot()
+    {
+        var world = new GymNetWorldSnapshot { brokenPanels = GlassShatterPanel.CaptureShatteredIds() };
         if (GymTimeOfDay.Instance != null)
         {
-            active.worldTime = GymTimeOfDay.Instance.Time01;
-            active.worldDay = GymTimeOfDay.Instance.CurrentDay;
+            world.worldTime = GymTimeOfDay.Instance.Time01;
+            world.worldDay = GymTimeOfDay.Instance.CurrentDay;
         }
-        active.brokenPanels = GlassShatterPanel.CaptureShatteredIds();
-        GymFixerDirector.CaptureIssueAges(out active.fixerIssueIds, out active.fixerIssueSince);
-        active.savedUtc = DateTime.UtcNow.ToString("O");
+        GymFixerDirector.CaptureIssueAges(out world.fixerIssueIds, out world.fixerIssueSince);
+        return world;
+    }
+
+    /// <summary>Applies a host's world to the scene only; no save is touched. False while the scene is not ready.</summary>
+    public static bool ApplyWorldSnapshot(GymNetWorldSnapshot world)
+    {
+        if (world == null || GymTimeOfDay.Instance == null) return false;
+        GymTimeOfDay.Instance.RestoreSession(world.worldTime, world.worldDay);
+        GlassShatterPanel.ResetShatteredRegistry();
+        // Glass the host has repaired since (a repair message may have been missed): grow it back.
+        var broken = new HashSet<string>(world.brokenPanels ?? Array.Empty<string>(), StringComparer.Ordinal);
+        foreach (GlassShatterPanel panel in FindObjectsByType<GlassShatterPanel>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            if (panel != null && panel.IsShattered && !broken.Contains(panel.StableId)) panel.ApplyNetworkRepair();
+        }
+        RestoreBrokenPanels(world.brokenPanels);
+        GymFixerDirector.RestoreIssueAges(world.fixerIssueIds, world.fixerIssueSince);
+        return true;
+    }
+
+    /// <summary>The live character section, for the host. Null without an active character.</summary>
+    public static GymCharacterSave CaptureCharacterForNet()
+    {
+        if (instance == null || active == null) return null;
+        // A copy: the net path must not touch the save's revision or timestamps.
+        GymCharacterSave copy = JsonUtility.FromJson<GymCharacterSave>(JsonUtility.ToJson(active));
+        instance.Capture(copy, GymSaveSections.Character);
+        return copy;
     }
 
     private static void RestoreBrokenPanels(string[] ids)
@@ -539,7 +644,7 @@ public sealed class GymSessionService : MonoBehaviour
     private void OnApplicationQuit()
     {
         // Best effort only: the timed and event saves are the real protection.
-        if (active == null) return;
+        if (active == null || appliedSlot != active.slotId) return;
         try
         {
             if (writeTask != null) writeTask.Wait(TimeSpan.FromSeconds(3));
@@ -551,7 +656,7 @@ public sealed class GymSessionService : MonoBehaviour
         // Always write on quit: position and playtime change without marking progress dirty.
         try
         {
-            Capture();
+            Capture(active, AllowedSections);
             Repository.Write(active.slotId, Repository.Serialize(active));
         }
         catch (Exception exception) when (IsWriteFailure(exception))

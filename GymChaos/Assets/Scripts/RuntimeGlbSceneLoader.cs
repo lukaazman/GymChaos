@@ -44,6 +44,9 @@ public sealed class RuntimeGlbSceneLoader : MonoBehaviour
     private readonly HashSet<string> pending =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>GLB assets still loading (the loading screen waits for none).</summary>
+    public static int PendingCount => instance != null ? instance.pending.Count : 0;
+
     private sealed class RuntimeScenePart
     {
         public Mesh Mesh;

@@ -55,6 +55,7 @@ VEHICLES = {
         "path": ASSETS / "Resources/Vehicles/cbum_vehicle.fbx",
         "axis": "y",
         # 1969 Camaro coupe: frameless door glass, long door.
+        "frameless": True,
         "windshield": {"view": "top", "z_min": 0.03, "poly": [
             (-0.125, -0.165), (-0.072, -0.128), (-0.072, 0.128), (-0.125, 0.165)]},
         "side_window": [(-0.117, 0.051), (-0.048, 0.118), (0.102, 0.118), (0.102, 0.051)],
@@ -288,6 +289,10 @@ class Regions:
         if self.side_window(p, n, 1):
             return DOOR_GLASS if self.door(p) else BODY_GLASS
         if self.door(p):
+            # Frameless door glass: the shell sliver round the glass (above
+            # the belt) is glass too, or it floats as a line once the door opens.
+            if self.cfg.get("frameless") and p[2] > min(z for _, z in self.cfg["side_window"]) + 0.002:
+                return DOOR_GLASS
             return DOOR
         return BODY
 
@@ -652,7 +657,7 @@ def ray_hit(bvh, origin, direction):
     return hit[0]
 
 
-def build_interior(cfg, frame, bvh, ground_z, half_width):
+def build_interior(cfg, frame, bvh, ground_z, half_width, body_bottom_z):
     pal = cfg["palette"]
     b = Builder(frame)
     belt_z = min(p[1] for p in cfg["side_window"])
@@ -735,7 +740,8 @@ def build_interior(cfg, frame, bvh, ground_z, half_width):
     # below the cabin floor of the tall cars (the Hummer) and would show
     # under the body; this reads as the dark chassis between the wheels.
     well_top = floor_z - 0.02 * M
-    well_bottom = ground_z + 0.14 * M
+    # Never below the body shell: a box under the chassis reads as a dark ghost box.
+    well_bottom = max(ground_z + 0.14 * M, body_bottom_z + 0.01 * M)
     if well_top - well_bottom > 0.04 * M:
         well_front = a_seat - 1.05 * M
         well_rear = a_seat + 0.15 * M
@@ -749,13 +755,64 @@ def build_interior(cfg, frame, bvh, ground_z, half_width):
     b.box(f"Cabin__Trim__{pal['trim']}",
           frame.world(a_seat - 0.30 * M, 0.0, cush_z + 0.09 * M), (0.05, 0.05, 0.10), bevel_m=0.015)
     # Dashboard from the windscreen base back to the driver's knees.
-    dash_rear = a_seat - 0.60 * M
-    dash_front = cowl_a + 0.03
-    dash_len = max(0.2, (dash_rear - dash_front) / M)
-    dash_top = min(belt_z - 0.02 * M, cush_z + 0.58 * M)
+    # The dash's driver face sits exactly on the door's front edge: no empty
+    # side gap in front of it through the open door, nothing in the doorway.
+    door_front = min(p[0] for p in cfg["door"])
+    dash_rear = door_front
+    # At least 0.4 m deep: on cars whose door starts at (or ahead of) the
+    # windscreen base it reaches forward under the hood, closing the engine bay.
+    dash_front = min(cowl_a + 0.03, dash_rear - 0.4 * M)
+    dash_len = (dash_rear - dash_front) / M
+    # Its top meets the windscreen's lower edge (an upright screen sits higher
+    # than the beltline), so nothing shows below the glass.
+    ws_bottom = (ws["z_min"] if ws["view"] == "top" else min(z for box in ws["boxes"] for _, z in box))
+    dash_top = max(min(belt_z - 0.02 * M, cush_z + 0.58 * M), min(ws_bottom - 0.004, cush_z + 0.75 * M))
+    # Wall to wall: the shell's inner width at the dash, so nothing ahead of
+    # the cabin shows past its ends.
+    dash_a = (dash_front + dash_rear) * 0.5
+    wall = ray_hit(bvh, frame.world(dash_a, 0.0, dash_top - 0.17 * M), frame.C)
+    dash_half = min(inner, (frame.local(wall).y if wall else inner) - LINER_INSET)
     b.box(f"Cabin__Dash__{pal['dash']}",
-          frame.world((dash_front + dash_rear) * 0.5, 0.0, dash_top - 0.17 * M),
-          (dash_len, 1.8 * inner / M, 0.34), bevel_m=0.05)
+          frame.world(dash_a, 0.0, dash_top - 0.17 * M),
+          (dash_len, 2 * dash_half / M, 0.34), bevel_m=0.05)
+    # Knee panel: closes the footwell under the dash so the engine bay never
+    # shows below the wheel. It slopes from the dash's underside (driver edge)
+    # down and forward to the floor ahead of the feet, wall to wall, like a
+    # real lower dash, and stays clear of the legs.
+    knee_top = (dash_rear - 0.01 * M, dash_top - 0.32 * M)
+    knee_bottom = (min(knee_top[0], max(dash_front + 0.02 * M, door_front - 0.25 * M)), floor_z - 0.01 * M)
+    rise_a = knee_top[0] - knee_bottom[0]
+    rise_z = knee_top[1] - knee_bottom[1]
+    if rise_z > 0.04 * M:
+        b.box(f"Cabin__Dash__{pal['dash']}",
+              frame.world((knee_top[0] + knee_bottom[0]) * 0.5, 0.0, (knee_top[1] + knee_bottom[1]) * 0.5),
+              (0.04, 2 * dash_half / M, math.hypot(rise_a, rise_z) / M),
+              pitch_deg=math.degrees(math.atan2(rise_a, rise_z)), bevel_m=0.0)
+    # Dash top shelf: on raked windscreens the glass runs back past the door's
+    # front edge, so from outside one looked down through it past the dash.
+    # A thin shelf at dash height reaches back under the glass, stopping
+    # ahead of the steering wheel rim (above the knees, out of the doorway's
+    # leg room).
+    ws_rear = (max(p[0] for p in ws["poly"]) if ws["view"] == "top" else ws["a_range"][1])
+    wheel_a = a_seat - 0.44 * M
+    shelf_rear = min(ws_rear - 0.25 * (ws_rear - cowl_a), wheel_a - 0.26 * M)
+    if shelf_rear - dash_rear > 0.03 * M:
+        b.box(f"Cabin__Dash__{pal['dash']}",
+              frame.world((dash_rear - 0.02 * M + shelf_rear) * 0.5, 0.0, dash_top - 0.03 * M),
+              ((shelf_rear - dash_rear + 0.02 * M) / M, 2 * dash_half / M, 0.06), bevel_m=0.02)
+    # Kick panels: from the windscreen base to the door's front edge, floor to
+    # beltline, on both sides; they close the gap between the dash end and
+    # the door aperture through which the engine bay and road showed.
+    kick_rear = min(p[0] for p in cfg["door"]) - 0.001
+    if kick_rear - cowl_a > 0.04 * M:
+        kick_a = (cowl_a + kick_rear) * 0.5
+        kick_z = (floor_z + belt_z) * 0.5
+        for side in (1, -1):
+            hit = ray_hit(bvh, frame.world(kick_a, 0.0, kick_z), frame.C * side)
+            wall_c = (abs(frame.local(hit).y) if hit else inner) - LINER_INSET
+            b.box(f"Cabin__Liner__{pal['liner']}",
+                  frame.world(kick_a, side * (wall_c - 0.02 * M), kick_z),
+                  ((kick_rear - cowl_a) / M, 0.04, (belt_z - floor_z) / M), bevel_m=0.0)
     b.box(f"Cabin__Trim__{pal['trim']}",
           frame.world(dash_rear - 0.10 * M, c_seat, dash_top + 0.03 * M), (0.18, 0.40, 0.07),
           bevel_m=0.02)
@@ -775,8 +832,11 @@ def build_interior(cfg, frame, bvh, ground_z, half_width):
         d = direction - normal * direction.dot(normal)
         b.cylinder(f"Steering_Wheel__Rim__{pal['wheel']}",
                    wheel_center + d.normalized() * 0.10 * M, d, 0.012, 0.17, segments=8)
-    b.cylinder(f"Steering_Wheel__Rim__{pal['wheel']}", wheel_center - normal * 0.22 * M,
-               normal, 0.035, 0.42, segments=12)
+    # Short column: it ends inside the dash, never through the knee panel.
+    # Column from the hub into the dash face (a few cm in, never through it).
+    column = max(0.12, (wheel_center.dot(frame.A) - dash_rear) / max(0.2, normal.dot(frame.A)) / M + 0.05)
+    b.cylinder(f"Steering_Wheel__Rim__{pal['wheel']}", wheel_center - normal * (0.01 * M + column * M * 0.5),
+               normal, 0.035, column, segments=12)
     hinge = door_hinge(cfg, frame, bvh)
     b.marker("Marker__Seat", frame.world(a_seat, c_seat, cush_z))
     b.marker("Marker__Roof", frame.world(a_seat + 0.01, c_seat, roof_z))
@@ -857,6 +917,7 @@ def process(name, render):
     bm.normal_update()
     half_width = max(abs(frame.local(v.co).y) for v in bm.verts)
     ground_z = min(min((o.matrix_world @ Vector(c)).z for c in o.bound_box) for o in [body] + wheels)
+    body_bottom_z = min((body.matrix_world @ Vector(c)).z for c in body.bound_box)
     bvh = BVHTree.FromBMesh(bm)
     regions = Regions(cfg, frame, half_width)
 
@@ -895,7 +956,7 @@ def process(name, render):
     shell.matrix_world = body.matrix_world
     liner, liner_faces = build_liner(shell, regions, frame, cfg, ground_z, pal)
     bpy.data.objects.remove(shell)
-    interior, info = build_interior(cfg, frame, bvh, ground_z, half_width)
+    interior, info = build_interior(cfg, frame, bvh, ground_z, half_width, body_bottom_z)
     bm.free()
 
     export(target)

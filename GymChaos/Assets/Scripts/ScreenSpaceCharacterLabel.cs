@@ -7,6 +7,10 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     private const float NameRevealDistance = 7.5f;
     private const float NameRevealDistanceSqr = NameRevealDistance * NameRevealDistance;
     private const float BehindOverlayAlpha = 0.18f;
+    // The line to the head is re-tested this often per label.
+    private const float OcclusionInterval = 0.2f;
+    private const float OcclusionSlack = 0.35f;
+    private static readonly RaycastHit[] OcclusionHits = new RaycastHit[32];
 
     /// <summary>
     /// The labels draw above the world but the shop overlays sit on top of
@@ -14,7 +18,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     /// </summary>
     public static float CurrentAlpha => GymProteinShopUI.IsOpen || GymDealerShopUI.IsOpen ? BehindOverlayAlpha : 1f;
 
-    private SkinnedMeshRenderer bodyRenderer;
+    private Renderer bodyRenderer;
     private Camera playerCamera;
     private string displayName;
     private float heightOffset;
@@ -33,9 +37,11 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     private Image barBackground;
     private Image barFill;
     private RectTransform barFillRect;
+    private float nextOcclusionTime;
+    private bool occluded;
 
     public void Configure(
-        SkinnedMeshRenderer targetRenderer, string label, float offset)
+        Renderer targetRenderer, string label, float offset)
     {
         bodyRenderer = targetRenderer;
         displayName = label;
@@ -46,7 +52,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     }
 
     public void ConfigureStandalone(
-        SkinnedMeshRenderer targetRenderer, string label, float offset)
+        Renderer targetRenderer, string label, float offset)
     {
         bodyRenderer = targetRenderer;
         displayName = label;
@@ -55,6 +61,9 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         standalone = true;
         if (nameText != null) nameText.text = displayName;
     }
+
+    /// <summary>Verifier hook: whether the label is on screen this frame.</summary>
+    public bool IsShowing => root != null && root.gameObject.activeSelf;
 
     private void OnEnable() => LabelCanvas.Register(this);
 
@@ -161,7 +170,47 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         showName = nearby || menuNametag || (!standalone && fighter.IsAggressive) ||
             isDialogueTarget;
         showHealth = standalone ? StandaloneHealthFraction >= 0f : fighter.HasTakenDamage;
+        // Only a label that would show something pays for the wall test.
+        if ((showName || showHealth) && IsOccluded(playerCamera.transform.position,
+                new Vector3(bounds.center.x, bounds.max.y, bounds.center.z)))
+        {
+            showName = false;
+            showHealth = false;
+        }
         return true;
+    }
+
+    /// <summary>
+    /// True when a wall or prop sits between the camera and the head. People
+    /// and cars do not hide a tag. Cached, a few tests per second per label.
+    /// </summary>
+    private bool IsOccluded(Vector3 eye, Vector3 head)
+    {
+        if (Time.time < nextOcclusionTime) return occluded;
+        nextOcclusionTime = Time.time + OcclusionInterval + (GetHashCode() & 7) * 0.01f;
+        Vector3 toHead = head - eye;
+        float distance = toHead.magnitude;
+        occluded = false;
+        if (distance < 0.01f) return false;
+        int count = Physics.RaycastNonAlloc(eye, toHead / distance, OcclusionHits,
+            Mathf.Max(0f, distance - OcclusionSlack), ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = OcclusionHits[i].collider;
+            if (hit.transform.IsChildOf(transform) ||
+                hit.GetComponentInParent<EnemyFighter>() != null ||
+                hit.GetComponentInParent<GymVisitorAgent>() != null ||
+                hit.GetComponentInParent<GymVisitorVehicle>() != null ||
+                hit.GetComponentInParent<GymFixerAgent>() != null ||
+                hit.GetComponentInParent<GymHomelessAgent>() != null ||
+                hit.GetComponentInParent<PlayerMovement>() != null)
+            {
+                continue;
+            }
+            occluded = true;
+            break;
+        }
+        return occluded;
     }
 
     private bool IsReceptionist

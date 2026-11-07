@@ -34,7 +34,9 @@ INFLATE_RANGE = tops.INFLATE_RANGE
 EDGE_RANGE = tops.EDGE_RANGE
 
 # Rest-mesh height fractions (the scan's shorts run 0.335-0.52).
-WAIST = 0.522
+# Waistband reaches under every top's hem (tank 0.528, Onyx 0.505), so no
+# unpainted body band shows between them.
+WAIST = 0.545
 SHORTS_HEM = 0.33
 ANKLE = 0.055
 # Straight leg: tube round a vertical axis per leg (x = +-LEG_AXIS_X,

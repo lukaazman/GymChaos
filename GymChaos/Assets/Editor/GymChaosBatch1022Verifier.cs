@@ -485,17 +485,18 @@ public static class GymChaosBatch1022Verifier
                 GymPoliceWeapon weapon = officer.GetComponent<GymPoliceWeapon>();
                 if (weapon != null && weapon.IsVisible && weapon.IsReady)
                 {
-                    float inside = weapon.HandSkinInsideGunForVerification(out int handVertices);
+                    float inside = weapon.TryMeasureGripForVerification(out GymPistolGrip.Measures grip) ? grip.RightInside : -1f;
                     if (inside >= 0f)
                     {
                         worstGrip = Mathf.Max(worstGrip, inside);
                         gripSamples++;
                     }
-                    details = $"gripInside={inside:F3} hand={handVertices} length={weapon.GunWorldLengthForVerification:F3} thumb={weapon.ThumbToGripForVerification:F3} grudge={a.HasGrudgeAgainstForVerification(officer)}";
+                    details = $"gripInside={inside:F3} length={weapon.GunWorldLengthForVerification:F3} grudge={a.HasGrudgeAgainstForVerification(officer)}";
                 }
                 if (a.HasGrudgeAgainstForVerification(officer) && gripSamples >= 20)
                 {
-                    if (worstGrip > 0.06f) throw new InvalidOperationException($"gun passes through the hand: {worstGrip:P0} of the hand skin inside it");
+                    // Right-hand skin inside the solid gun (handle, slide, frame, guard), the pose capture's measure and limit.
+                    if (worstGrip > 0.02f) throw new InvalidOperationException($"gun passes through the hand: {worstGrip:P0} of the hand skin inside it");
                     Debug.Log($"GYMCHAOS_BATCH1022_POLICE_GRIP worstInside={worstGrip:F3} {details}");
                     a.TakeMeleeHit(Vector3.forward, 9999f, 0.1f, officer);
                     Step(3);

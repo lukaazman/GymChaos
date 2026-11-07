@@ -136,7 +136,8 @@ CHARACTERS = {
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/davie_authored.fbx",
         "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/davie.png",
-        "clip_names": MEMBER_CLIPS,
+        # sitting_idle: Davie rides the Chaos race bus sitting on its roof.
+        "clip_names": MEMBER_CLIPS + ("sitting_idle",),
     },
     "zyzz": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/zyzz_rig.blend",

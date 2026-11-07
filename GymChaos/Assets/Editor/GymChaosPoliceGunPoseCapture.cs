@@ -14,8 +14,17 @@ using UnityEngine;
 public static class GymChaosPoliceGunPoseCapture
 {
     private const string RequestedKey = "GymChaos.PoliceGunPoseCaptureRequested";
-    private static readonly float[] DrawPhases = { 0.35f, 0.6f, 0.8f, 0.97f };
-    private static readonly float[] ShootPhases = { 0.1f, 0.4f, 0.7f };
+    // Every 5 % of both clips is checked; PNGs only at the key frames.
+    private static readonly float[] DrawPhases = Phases();
+    private static readonly float[] ShootPhases = Phases();
+    private static readonly string[] PictureLabels = { "draw-35", "draw-60", "draw-80", "draw-95", "shoot-10", "shoot-40", "shoot-70" };
+
+    private static float[] Phases()
+    {
+        float[] phases = new float[21];
+        for (int i = 0; i < phases.Length; i++) phases[i] = Mathf.Min(0.995f, i * 0.05f);
+        return phases;
+    }
     private static double started;
     private static bool killRequested;
     private static bool frozen;
@@ -42,6 +51,7 @@ public static class GymChaosPoliceGunPoseCapture
         frozen = false;
         step = 0;
         settleFrames = 0;
+        gripFailures.Clear();
         officer = null;
         weapon = null;
         animator = null;
@@ -58,6 +68,10 @@ public static class GymChaosPoliceGunPoseCapture
     {
         if (change == PlayModeStateChange.EnteredPlayMode)
         {
+            // GYMCHAOS_POLICE_GRIP_BAKE=1: solve the hold afresh and, when every
+            // pose passes, write Resources/PoliceGrip.json. Otherwise the run
+            // checks the hold the game loads.
+            GymPistolGrip.ResetForVerification(Environment.GetEnvironmentVariable("GYMCHAOS_POLICE_GRIP_BAKE") == "1");
             started = EditorApplication.timeSinceStartup;
             Time.timeScale = 3f;
             AudioListener.volume = 0f;
@@ -210,8 +224,23 @@ public static class GymChaosPoliceGunPoseCapture
         Transform body = officer.transform;
         Vector3 hand = weapon.HandPositionForVerification;
         Vector3 chest = body.position + Vector3.up * 1.45f;
-        Capture(label + "-player", chest + body.forward * 1.5f + Vector3.up * 0.2f, hand);
-        Capture(label + "-side", hand + body.right * 0.8f + body.forward * 0.15f + Vector3.up * 0.05f, hand);
+        if (SystemInfo.graphicsDeviceType != UnityEngine.Rendering.GraphicsDeviceType.Null &&
+            Array.IndexOf(PictureLabels, label) >= 0)
+        {
+            Capture(label + "-player", chest + body.forward * 1.5f + Vector3.up * 0.2f, hand);
+            Capture(label + "-side", hand + body.right * 0.8f + body.forward * 0.15f + Vector3.up * 0.05f, hand);
+            Capture(label + "-close", hand + body.right * 0.35f - body.forward * 0.05f + Vector3.up * 0.12f, hand);
+            Capture(label + "-far", hand - body.right * 0.55f + body.forward * 0.2f + Vector3.up * 0.05f, hand);
+            // The reference photos' cameras: the gun's left side, level with it
+            // (one-hand draw), and in front to the right of the muzzle (two-hand stance).
+            Vector3 centre = weapon.WeaponCenterForVerification;
+            Vector3 barrel = weapon.HeldBarrelDirectionForVerification;
+            Vector3 gunUp = Vector3.ProjectOnPlane(weapon.WeaponUpForVerification, barrel).normalized;
+            Vector3 gunRight = Vector3.Cross(gunUp, barrel).normalized;
+            Capture(label + "-ref2", centre - gunRight * 0.6f, centre);
+            Capture(label + "-ref3", centre + barrel * 0.55f + gunRight * 0.3f + gunUp * 0.05f, centre - barrel * 0.05f);
+        }
+        CheckGrip(label);
         Debug.Log(
             $"GYMCHAOS_POLICE_GUN_POSE label={label} " +
             $"handLocal={body.InverseTransformPoint(hand)} " +
@@ -222,11 +251,74 @@ public static class GymChaosPoliceGunPoseCapture
         settleFrames = 0;
         if (step >= TotalSteps)
         {
+            bool baking = Environment.GetEnvironmentVariable("GYMCHAOS_POLICE_GRIP_BAKE") == "1";
+            // The game path must load the bake: a run-time solve costs a few
+            // hundred milliseconds on the first draw.
+            if (!baking && !weapon.GripUsedBakeForVerification)
+                gripFailures.Add("hold was solved at run time: Resources/PoliceGrip.json missing or stale (re-run with GYMCHAOS_POLICE_GRIP_BAKE=1)");
+            if (gripFailures.Count > 0)
+            {
+                Debug.LogError("GYMCHAOS_POLICE_GRIP_POSE_FAIL " + string.Join(" | ", gripFailures));
+                Finish(1);
+                return;
+            }
             Debug.Log("GYMCHAOS_POLICE_GUN_POSE_CAPTURE_OK");
+            Debug.Log("GYMCHAOS_POLICE_GRIP_POSE_OK poses=" + TotalSteps);
+            if (baking)
+            {
+                string json = weapon.ExportGripForVerification();
+                if (json == null)
+                {
+                    Debug.LogError("GYMCHAOS_POLICE_GRIP_BAKE_FAIL no solved two-hand hold to bake");
+                    Finish(1);
+                    return;
+                }
+                File.WriteAllText(Path.Combine(Application.dataPath, "Resources", "PoliceGrip.json"), json);
+                Debug.Log("GYMCHAOS_POLICE_GRIP_BAKED");
+            }
             Finish(0);
             return;
         }
         ApplyStep();
+    }
+
+    // Held in the fist in every frozen pose: grip on the palm side, fingers
+    // curled toward the palm, barrel along the hand, slide up away from the
+    // pinky, and almost no hand skin inside the gun.
+    private static readonly System.Collections.Generic.List<string> gripFailures =
+        new System.Collections.Generic.List<string>();
+
+    private static void CheckGrip(string label)
+    {
+        if (!weapon.TryMeasureGripForVerification(out GymPistolGrip.Measures m))
+        {
+            gripFailures.Add($"{label}: grip not solved");
+            return;
+        }
+        float cant = weapon.SlideTiltFromUpForVerification;
+        float aimDeg = weapon.BarrelYawFromFacingForVerification;
+        float support = weapon.SupportWeightForVerification;
+        Debug.Log($"GYMCHAOS_POLICE_GRIP_POSE label={label} rightInside={m.RightInside:F3} wrapGap={m.WrapGap:F3} " +
+            $"triggerGap={m.TriggerGap:F3} thumbSide={m.ThumbSide:F2} thumbGap={m.ThumbGap:F3} thumbInside={m.ThumbInside} " +
+            $"support={support:F2} leftInside={m.LeftInside:F3} leftThroughRight={m.LeftThroughRight:F3} " +
+            $"cantDeg={cant:F1} yawDeg={aimDeg:F1} insideBones={m.InsideBones}");
+        // Held, not floating and not through: almost no hand skin inside the
+        // gun, middle/ring/pinky tips on the handle, index at the trigger,
+        // thumb on the far side of the frame.
+        if (m.RightInside > 0.02f) gripFailures.Add($"{label}: {m.RightInside:P1} of the right hand inside the gun");
+        if (m.WrapGap > 0.012f) gripFailures.Add($"{label}: fingertips {m.WrapGap:F3} m off the handle");
+        if (m.TriggerGap > 0.02f) gripFailures.Add($"{label}: index {m.TriggerGap:F3} m off the trigger");
+        if (m.ThumbSide < 0.8f || m.ThumbInside) gripFailures.Add($"{label}: thumb not on the far side ({m.ThumbSide:F2})");
+        if (m.ThumbGap > 0.012f) gripFailures.Add($"{label}: thumb {m.ThumbGap:F3} m off the frame");
+        if (cant > 25f) gripFailures.Add($"{label}: gun canted {cant:F0} deg");
+        if (aimDeg > 15f) gripFailures.Add($"{label}: barrel {aimDeg:F0} deg off the officer's facing");
+        // Two-hand stance: the left hand supports without passing through.
+        if (label.StartsWith("shoot"))
+        {
+            if (support < 0.5f) gripFailures.Add($"{label}: support hand not on the gun ({support:F2})");
+            if (m.LeftInside > 0.02f) gripFailures.Add($"{label}: {m.LeftInside:P1} of the left hand inside the gun");
+            if (m.LeftThroughRight > 0.03f) gripFailures.Add($"{label}: {m.LeftThroughRight:P1} of the left fingers through the right");
+        }
     }
 
     private static void Capture(string label, Vector3 eye, Vector3 focus)

@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -22,9 +23,36 @@ public sealed class GymPauseMenu : MonoBehaviour
     private Text failureMessage;
     private GameObject failurePage;
     private bool savingForReturn;
+    private GameObject deathPage;
+    private Button loadGameButton;
+    private bool deathMode;
+    private Action onLoadGame;
 
     public static bool IsVisible =>
         instance != null && instance.canvasGroup != null && instance.canvasGroup.blocksRaycasts;
+
+    /// <summary>The menu offered after a death in a room: LOAD GAME, OPTIONS, MAIN MENU, EXIT.</summary>
+    public static bool IsDeathMenuVisible => IsVisible && instance.deathMode;
+
+    /// <summary>Opens the death menu over the death screen. <paramref name="loadGame"/> runs when LOAD GAME is chosen.</summary>
+    public static void OpenDeathMenu(PlayerMovement source, Action loadGame)
+    {
+        if (instance == null) CreateForScene(source);
+        instance.player = source;
+        instance.onLoadGame = loadGame;
+        // A guest can die while paused: the room does not wait, and neither does the menu.
+        Time.timeScale = 1f;
+        instance.deathMode = true;
+        instance.ShowDeathPage();
+    }
+
+    /// <summary>Closes the death menu without touching the game clock (the room keeps running).</summary>
+    public static void CloseDeathMenu()
+    {
+        if (instance == null || !instance.deathMode) return;
+        instance.deathMode = false;
+        instance.HideMenu();
+    }
 
     public static GymPauseMenu CreateForScene(PlayerMovement targetPlayer)
     {
@@ -62,6 +90,13 @@ public sealed class GymPauseMenu : MonoBehaviour
 
         if (instance.savingForReturn)
         {
+            return;
+        }
+
+        if (instance.deathMode)
+        {
+            // There is no resuming from a death: Escape only backs out of the options.
+            if (instance.optionsPanel != null && instance.optionsPanel.activeSelf) instance.ShowDeathPage();
             return;
         }
 
@@ -117,6 +152,27 @@ public sealed class GymPauseMenu : MonoBehaviour
         saveStatus = PersonaMenuStyle.CreateLabel(
             pausePage.transform, "Pause Save Status", buttonFont, string.Empty,
             640f, 420f, 460f, 60f, 34, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+
+        deathPage = new GameObject("Death Page", typeof(RectTransform));
+        deathPage.transform.SetParent(transform, false);
+        GymRuntimeSettings.Stretch(deathPage.GetComponent<RectTransform>());
+        Image deathVeil = GymRuntimeSettings.CreateImage("Death Veil", deathPage.transform,
+            new Color(0.12f, 0.012f, 0.012f, 0.78f));
+        GymRuntimeSettings.Stretch(deathVeil.rectTransform);
+        loadGameButton = PersonaMenuStyle.CreatePrimaryButton(
+            deathPage.transform, "Death Load Button", buttonFont, "LOAD GAME", () => onLoadGame?.Invoke());
+        PersonaMenuStyle.CreateSecondaryButton(
+            deathPage.transform, "Death Options Button", buttonFont, "OPTIONS", ShowOptions);
+        PersonaMenuStyle.CreateTertiaryButton(
+            deathPage.transform, "Death Exit Button", buttonFont, "EXIT", Exit);
+        PersonaMenuStyle.CreateButton(
+            deathPage.transform, "Death Main Menu Button", buttonFont, "MAIN MENU",
+            214f, 420f, 330f, 68f, 56, -1.5f, () => GymSessionService.ReturnToMenu());
+        Text deathTitle = PersonaMenuStyle.CreateLabel(deathPage.transform, "Death Title",
+            PersonaMenuStyle.LoadTitleFont(font), "YOU DIED", 640f, 300f, 640f, 90f, 70,
+            PersonaMenuStyle.Accent, TextAnchor.MiddleLeft);
+        deathTitle.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -1.5f);
+        deathPage.SetActive(false);
 
         failurePage = new GameObject("Save Failed Page", typeof(RectTransform));
         failurePage.transform.SetParent(transform, false);
@@ -211,9 +267,26 @@ public sealed class GymPauseMenu : MonoBehaviour
         }
     }
 
+    private void ShowDeathPage()
+    {
+        if (player != null) player.SetCursorCaptured(false);
+        pausePage.SetActive(false);
+        optionsPanel.SetActive(false);
+        failurePage.SetActive(false);
+        deathPage.SetActive(true);
+        SetMenuVisible(true);
+        GymShared.Select(loadGameButton);
+    }
+
     private void ShowPausePage()
     {
-        Time.timeScale = 0f;
+        if (deathMode)
+        {
+            ShowDeathPage();
+            return;
+        }
+        // In a room the other players do not stop: pausing only brings up the menu.
+        if (!GymNetSession.InRoom) Time.timeScale = 0f;
         if (player != null)
         {
             player.SetCursorCaptured(false);
@@ -231,8 +304,9 @@ public sealed class GymPauseMenu : MonoBehaviour
 
     private void ShowOptions()
     {
-        Time.timeScale = 0f;
+        if (!deathMode) Time.timeScale = 0f;
         pausePage.SetActive(false);
+        if (deathPage != null) deathPage.SetActive(false);
         optionsPanel.SetActive(true);
         SetMenuVisible(true);
         GymShared.Select(optionsPanel.GetComponentInChildren<Selectable>(true));
@@ -279,6 +353,7 @@ public sealed class GymPauseMenu : MonoBehaviour
         canvasGroup.interactable = false;
         canvasGroup.blocksRaycasts = false;
         if (pausePage != null) pausePage.SetActive(false);
+        if (deathPage != null) deathPage.SetActive(false);
         if (optionsPanel != null) optionsPanel.SetActive(false);
         if (failurePage != null) failurePage.SetActive(false);
     }

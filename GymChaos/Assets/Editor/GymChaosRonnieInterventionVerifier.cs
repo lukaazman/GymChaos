@@ -164,13 +164,16 @@ public static class GymChaosRonnieInterventionVerifier
         if (Time.frameCount < 3) return;
         player = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
         EnemyFighter[] fighters = UnityEngine.Object.FindObjectsByType<EnemyFighter>(FindObjectsSortMode.None);
+        GymVisitorDirector director = UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>();
         foreach (EnemyFighter fighter in fighters)
         {
             if (fighter == null || fighter.IsDead) continue;
             if (fighter.Identity == BodybuilderIdentity.Ronnie) ronnie = fighter;
-            else if (fighter.Identity == BodybuilderIdentity.Zyzz) member = fighter;
+            // A member who is already in the gym: one still arriving by car (or leaving) is moved by his own route.
+            else if (member == null && director != null && fighter.Identity != BodybuilderIdentity.Goku &&
+                director.IsScheduledVisitor(fighter) && !GymOutdoorBuilder.IsPlayerOutsideGym(fighter.transform.position))
+                member = fighter;
         }
-        GymVisitorDirector director = UnityEngine.Object.FindAnyObjectByType<GymVisitorDirector>();
         Renderer floor = GameObject.Find("Rubber Floor")?.GetComponent<Renderer>();
         if (player == null || ronnie == null || member == null || director == null || floor == null ||
             GymDialogueDirector.Active == null)

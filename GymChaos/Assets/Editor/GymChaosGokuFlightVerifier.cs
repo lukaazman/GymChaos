@@ -525,10 +525,12 @@ public static class GymChaosGokuFlightVerifier
                     Debug.Log($"GYMCHAOS_GOKU_GROUND_CHASE_SAMPLE distance={distance:F2} " +
                         $"flying={goku.IsGokuFlightActive} {goku.GokuFlightDiagnosticsForVerification}");
                 }
-                if (goku.IsGokuFlightActive)
+                groundChaseFarthest = Mathf.Max(groundChaseFarthest, distance);
+                // Flight starts beyond 8 m: a detour round the wall that carries him past that is allowed to take off (the flight distance used to be shorter).
+                if (goku.IsGokuFlightActive && groundChaseFarthest < GroundChaseFlightDistance - 0.5f)
                 {
                     throw new InvalidOperationException(
-                        $"GYMCHAOS_GOKU_GROUND_CHASE_FAIL Goku took off inside the flight distance: distance={distance:F2}");
+                        $"GYMCHAOS_GOKU_GROUND_CHASE_FAIL Goku took off inside the flight distance: distance={distance:F2} farthest={groundChaseFarthest:F2}");
                 }
                 if (groundNoClearSince > 0d && EditorApplication.timeSinceStartup - groundNoClearSince > 2d)
                 {
@@ -661,8 +663,12 @@ public static class GymChaosGokuFlightVerifier
         }
     }
 
+    private const float GroundChaseFlightDistance = 8f;
+    private static float groundChaseFarthest;
+
     private static void SetUpGroundChase()
     {
+        groundChaseFarthest = 0f;
         if (obstacle != null)
         {
             UnityEngine.Object.Destroy(obstacle);

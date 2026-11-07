@@ -21,6 +21,12 @@ public sealed class GymLockerMenuUI : MonoBehaviour
     private const float ButtonHeight = 56f;
     private const float ButtonGap = 22f;
     private const float RowGap = 18f;
+    // Section label row to its item buttons. A hovered button grows and tilts
+    // (PersonaMenuButton), so this leaves the colour swatches clear of it.
+    private const float SectionToButtons = 58f;
+    private const float TopSection = 100f;
+    private const float BottomSection = 240f;
+    private const float HeadwearSection = 374f;
     private const int Columns = 3;
 
     private static GymLockerMenuUI instance;
@@ -107,42 +113,42 @@ public sealed class GymLockerMenuUI : MonoBehaviour
 
         float buttonWidth = (PanelWidth - Padding * 2f - ButtonGap * (Columns - 1) - 24f) / Columns;
         PersonaMenuStyle.CreateLayoutLabel(panel, "Top Section", body, "TOP",
-            new Vector2(Padding, 100f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+            new Vector2(Padding, TopSection), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
         topButtons = new Button[GymExperienceService.LockerTops.Count];
         for (int i = 0; i < topButtons.Length; i++)
         {
             GymTopStyle top = GymExperienceService.LockerTops[i];
             topButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Top " + top, body, string.Empty,
-                Cell(i, 142f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                Cell(i, TopSection + SectionToButtons, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipTop(top); Refresh(); });
             AddLockHover(topButtons[i], () => service != null ? service.GetLockerTopRequirement(top) : string.Empty);
         }
 
         // The swatches beside TOP colour whichever top is worn.
-        shirtButtons = BuildSwatches("Shirt", 100f,
+        shirtButtons = BuildSwatches("Shirt", TopSection,
             shirt => { service?.EquipShirt(shirt); Refresh(); });
 
         PersonaMenuStyle.CreateLayoutLabel(panel, "Bottom Section", body, "BOTTOMS",
-            new Vector2(Padding, 216f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+            new Vector2(Padding, BottomSection), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
         bottomButtons = new Button[GymExperienceService.LockerBottoms.Length];
         for (int i = 0; i < bottomButtons.Length; i++)
         {
             GymBottomStyle bottom = GymExperienceService.LockerBottoms[i];
             bottomButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Bottom " + bottom, body, string.Empty,
-                Cell(i, 258f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                Cell(i, BottomSection + SectionToButtons, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipBottom(bottom); Refresh(); });
         }
-        bottomColorButtons = BuildSwatches("Bottom Color", 216f,
+        bottomColorButtons = BuildSwatches("Bottom Color", BottomSection,
             color => { service?.EquipBottomColor(color); Refresh(); });
 
         PersonaMenuStyle.CreateLayoutLabel(panel, "Headwear Section", body, "HEADWEAR",
-            new Vector2(Padding, 334f), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
+            new Vector2(Padding, HeadwearSection), new Vector2(300f, 32f), 30, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
         headwearButtons = new Button[GymExperienceService.LockerHeadwear.Count];
         for (int i = 0; i < headwearButtons.Length; i++)
         {
             GymHeadwear item = GymExperienceService.LockerHeadwear[i];
             headwearButtons[i] = PersonaMenuStyle.CreateLayoutButton(panel, "Headwear " + item, body, string.Empty,
-                Cell(i, 376f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
+                Cell(i, HeadwearSection + 42f, buttonWidth), new Vector2(buttonWidth, ButtonHeight), 32,
                 () => { service?.EquipHeadwear(item); Refresh(); });
             AddLockHover(headwearButtons[i], () => service != null ? service.GetLockerHeadwearRequirement(item) : string.Empty);
         }

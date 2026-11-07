@@ -171,6 +171,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         IsBus && GymRoadsideBusStop.IsBuilt;
     public bool HasMountedRider => mountedRider != null;
     public static bool IsGroundTrafficActive => activeGroundTraffic.Count > 0;
+    internal static IReadOnlyList<GymVisitorVehicle> ActiveGroundTraffic => activeGroundTraffic;
     public bool HasPhysicalCollider => GetComponent<BoxCollider>() != null &&
         GetComponent<Rigidbody>() != null;
     public bool HasOriginalTexture
@@ -337,6 +338,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         {
             GameObject visual = Instantiate(prefab, root.transform);
             visual.name = identity + " Vehicle Model";
+            // The cloud model faces backwards: turn it so it flies head first.
+            if (vehicle.IsCloud) visual.transform.localRotation = Quaternion.Euler(0f, 180f, 0f) * visual.transform.localRotation;
             // Fit the body to the actual bay footprint. The old 4.5m target
             // was wider than the narrowest generated bay and the old route
             // point was not aligned with the painted bay centers.
@@ -382,7 +385,22 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         vehicle.raceVisual = true;
         vehicle.ConfigureRoute(0);
         root.transform.SetPositionAndRotation(position, rotation);
-        if (vehicle.IsArnold)
+        if (vehicle.IsBus)
+        {
+            // Chaos race: Davie's bus races with the cars.
+            RuntimeGlbSceneLoader.Request(
+                DavieBusAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one * DavieBusTargetLength,
+                "Davie Bus Race Car",
+                root.layer,
+                settleOnSupport: true,
+                supportY: position.y - RaceGroundOffset,
+                onLoaded: vehicle.FinalizeRuntimeBus);
+        }
+        else if (vehicle.IsArnold)
         {
             RuntimeGlbSceneLoader.Request(
                 ArnoldHummerAsset,

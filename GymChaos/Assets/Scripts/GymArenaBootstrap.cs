@@ -225,6 +225,7 @@ public class GymArenaBootstrap : MonoBehaviour
 
         double activationStarted = Time.realtimeSinceStartupAsDouble;
         gameplayStarted = true;
+        GymNetSession.TryAutoStart();
         if (preparedGameplayActors != null)
         {
             preparedGameplayActors.SetActive(true);
@@ -252,6 +253,7 @@ public class GymArenaBootstrap : MonoBehaviour
         {
             GymPauseMenu.CreateForScene(player);
             GymHud.CreateForScene(player);
+            GymLoadingScreen.Begin(player);
         }
         double activationMilliseconds =
             (Time.realtimeSinceStartupAsDouble - activationStarted) * 1000.0;

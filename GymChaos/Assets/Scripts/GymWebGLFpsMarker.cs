@@ -38,6 +38,10 @@ public sealed class GymWebGLFpsMarker : MonoBehaviour
         float p95Ms = frameMs[Mathf.Min(frameMs.Count - 1, (int)(frameMs.Count * 0.95f))];
         Debug.Log($"GYMCHAOS_WEBGL_FPS avg={1000f / averageMs:F1} avgMs={averageMs:F1} " +
             $"p95Ms={p95Ms:F1} frames={frameMs.Count}");
+        // Heap trend: a rising line over minutes means a leak (the player aborts with OOM when the heap cannot grow).
+        Debug.Log($"GYMCHAOS_WEBGL_MEMORY allocatedMB={UnityEngine.Profiling.Profiler.GetTotalAllocatedMemoryLong() / 1048576} " +
+            $"reservedMB={UnityEngine.Profiling.Profiler.GetTotalReservedMemoryLong() / 1048576} " +
+            $"monoMB={System.GC.GetTotalMemory(false) / 1048576}");
         frameMs.Clear();
         windowStart = Time.unscaledTime;
     }

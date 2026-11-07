@@ -62,6 +62,24 @@ public sealed class GymFixerNavGrid
         IsReady = true;
     }
 
+    /// <summary>Closes every cell whose centre lies inside the box (flat test), whatever the probe found.</summary>
+    public void Block(Bounds zone)
+    {
+        if (walkable == null) return;
+        for (int z = 0; z < rows; z++)
+        {
+            for (int x = 0; x < columns; x++)
+            {
+                Vector3 center = CellCenter(x, z, zone.center.y);
+                if (center.x < zone.min.x || center.x > zone.max.x || center.z < zone.min.z || center.z > zone.max.z) continue;
+                int index = z * columns + x;
+                if (!walkable[index]) continue;
+                walkable[index] = false;
+                WalkableCount--;
+            }
+        }
+    }
+
     /// <summary>Forces a corridor open (the doorway, whose panel swings).</summary>
     public void ForceWalkable(Vector3 from, Vector3 to, float radius)
     {

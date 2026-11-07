@@ -168,6 +168,7 @@ public partial class EnemyFighter
     public void EndVisitorVehicleRide(Vector3 groundPosition, Quaternion rotation)
     {
         visitorVehicleRideAnchor = null;
+        raceFlight = false;
         VehicleBodyAnimator?.SetNimbusStance(null);
         gokuFlightState = GokuFlightState.Grounded;
         gokuFlightTransition = 0f;

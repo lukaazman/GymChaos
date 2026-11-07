@@ -647,7 +647,11 @@ public partial class EnemyFighter : MonoBehaviour
         }
         if (visitorVehicleRideAnchor != null && !isDead)
         {
-            Vector3 ridePosition = visitorVehicleRideAnchor.position;
+            if (raceFlight)
+            {
+                TickRaceFlight();
+            }
+            Vector3 ridePosition = visitorVehicleRideAnchor.position + RaceFlightLift;
             Quaternion rideRotation = visitorVehicleRideAnchor.rotation;
             if (body != null)
             {
@@ -663,7 +667,7 @@ public partial class EnemyFighter : MonoBehaviour
             if (!visitorVehicleSeated)
             {
                 SetAnimatedMovement(false);
-                externalBodyAnimator?.SetFlying(false);
+                externalBodyAnimator?.SetFlying(raceFlight && gokuFlightState != GokuFlightState.Grounded);
             }
             return;
         }
@@ -1194,10 +1198,10 @@ public partial class EnemyFighter : MonoBehaviour
             // per physics step, or the rider lags behind: the cloud moves
             // 48 m/s and Goku trailed it by over a metre.
             transform.SetPositionAndRotation(
-                visitorVehicleRideAnchor.position, visitorVehicleRideAnchor.rotation);
+                visitorVehicleRideAnchor.position + RaceFlightLift, visitorVehicleRideAnchor.rotation);
             if (body != null)
             {
-                body.position = visitorVehicleRideAnchor.position;
+                body.position = transform.position;
                 body.rotation = visitorVehicleRideAnchor.rotation;
             }
             return;

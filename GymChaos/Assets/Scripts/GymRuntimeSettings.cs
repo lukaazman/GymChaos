@@ -81,6 +81,7 @@ public static class GymRuntimeSettings
         CreateSettingsSheet(panel.transform, titleFont);
 
         CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.775f);
+        float up = RowsHiddenShift;
         // WebGL: the page owns the canvas size and the template's button owns
         // fullscreen; a fullscreen request from here can be refused by the
         // browser and kill the player, so these two rows exist only on desktop.
@@ -91,7 +92,7 @@ public static class GymRuntimeSettings
         CreateDropdown("Render Scale Dropdown", panel.transform, labelFont,
             RenderScaleLabels(), StoredRenderScaleIndex(), RowY(renderScaleRow), ApplyRenderScale);
 
-        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.572f);
+        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.572f + up);
         CreateRowLabel(panel.transform, labelFont, "TEXTURE", RowY(3));
         CreateRowLabel(panel.transform, labelFont, "SHADOWS", RowY(4));
         CreateRowLabel(panel.transform, labelFont, "ANTI-ALIASING", RowY(5));
@@ -130,7 +131,7 @@ public static class GymRuntimeSettings
             ApplyPostProcessing(value);
         });
 
-        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.323f);
+        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.323f + up);
         CreateVolumeRow(panel.transform, labelFont, "MASTER", "Master", 7, masterVolume, value =>
         {
             masterVolume = value;
@@ -150,7 +151,7 @@ public static class GymRuntimeSettings
         // Downscaled copy of the menu buttons, centred under the sheet.
         Button back = PersonaMenuStyle.CreateButton(panel.transform, "Options Back Button",
             labelFont, "BACK", PersonaMenuStyle.ArtWidth * 0.5f,
-            PersonaMenuStyle.ArtHeight * 0.875f, 190f, 52f, 44, -1f, () =>
+            PersonaMenuStyle.ArtHeight * (0.875f - up), 190f, 52f, 44, -1f, () =>
             {
                 PlayerPrefs.Save();
                 backAction?.Invoke();
@@ -177,8 +178,11 @@ public static class GymRuntimeSettings
     // Three display rows, four graphics rows, three audio rows.
     private static float RowY(int row)
     {
-        return RowBottoms[Mathf.Clamp(row, 0, RowBottoms.Length - 1)];
+        return RowBottoms[Mathf.Clamp(row, 0, RowBottoms.Length - 1)] + (row >= 3 ? RowsHiddenShift : 0f);
     }
+
+    // WebGL hides the resolution and window-mode rows; the sections below close that gap.
+    private static float RowsHiddenShift => IsWeb ? RowBottoms[0] - RowBottoms[2] : 0f;
 
     private static void CreateDisplayRows(Transform parent, Font labelFont)
     {
@@ -232,7 +236,7 @@ public static class GymRuntimeSettings
         GameObject sheet = new GameObject("Options Sheet", typeof(RectTransform));
         sheet.transform.SetParent(parent, false);
         RectTransform sheetRect = sheet.GetComponent<RectTransform>();
-        SetAnchors(sheetRect, new Vector2(SheetMinX, 0.085f), new Vector2(SheetMaxX, 0.905f));
+        SetAnchors(sheetRect, new Vector2(SheetMinX, 0.085f + RowsHiddenShift), new Vector2(SheetMaxX, 0.905f));
         sheetRect.localRotation = Quaternion.Euler(0f, 0f, -0.8f);
         PersonaShape edge = PersonaMenuStyle.CreateShape("Sheet Accent Edge", sheet.transform,
             PersonaMenuStyle.Accent);
@@ -282,6 +286,15 @@ public static class GymRuntimeSettings
 
     public static void ApplyPersistedSettings()
     {
+        // First web visit: start on the lightest settings. Later choices are saved as usual.
+        if (IsWeb && !PlayerPrefs.HasKey(TextureQualityKey))
+        {
+            PlayerPrefs.SetInt(TextureQualityKey, 1);
+            PlayerPrefs.SetInt(PostProcessingKey, 0);
+            PlayerPrefs.SetInt(AntiAliasingKey, 0);
+            PlayerPrefs.SetInt(RenderScaleKey, 0);
+            PlayerPrefs.SetInt(ShadowQualityKey, 0);
+        }
         FullScreenMode[] modes =
         {
             FullScreenMode.Windowed,
@@ -427,6 +440,8 @@ public static class GymRuntimeSettings
         if (Application.platform == RuntimePlatform.WebGLPlayer)
         {
             Debug.Log("GYMCHAOS_WEBGL_RETURN_TO_START");
+            // The room goes with the game: a session left running would suppress the next game's world.
+            GymNetSession.End();
             GymSessionService.MarkSceneReload();
             SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
             return;
