@@ -34,6 +34,12 @@ public static class PlayerTopShell
         public bool StraightLegs;
         // Cloth smoothness: matte cotton by default; track-pants tricot shines a little.
         public float Smoothness = 0.06f;
+        // Extra bagginess in rest units (body height 1) pushed out along the
+        // smoothed normals, so the garment hangs instead of tracing muscles.
+        public float ExtraEase;
+        // Pulls the open neck edge onto a true circle of this radius (rest
+        // units); 0 leaves the scan's cut alone.
+        public float CollarRadius;
         internal Color32[] MaskPixels;
         internal int MaskWidth;
         internal int MaskHeight;
@@ -46,7 +52,10 @@ public static class PlayerTopShell
     {
         Name = ShellObjectName, MaskResource = "Player/Outfits/oversized_shell",
         SmoothIterations = 24, Lambda = 0.6f, EdgeOverhang = 0.012f,
-        DrapeSmoothing = 150f, DrapeRadius = 0.034f
+        DrapeSmoothing = 150f, DrapeRadius = 0.034f,
+        // Oversized, not oppressed: the cloth stands ~3 cm off the body and
+        // the crew neck is a sewn circle rather than the scan's torn scoop.
+        ExtraEase = 0.016f, CollarRadius = 0.076f, Smoothness = 0.03f
     };
     // Compression knit: a few mm off the skin, smoothed just enough to hide
     // the sculpted tank-top neckline and hem ridges in the scan.
@@ -73,7 +82,7 @@ public static class PlayerTopShell
     {
         Name = PantsObjectName, MaskResource = "Player/Outfits/pants_shell",
         SmoothIterations = 60, Lambda = 0.6f, EdgeOverhang = 0.006f,
-        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.22f
+        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.08f
     };
     private static readonly Style[] AllStyles = { Oversized, Onyx, Shorts, Pants };
 
@@ -657,11 +666,23 @@ public static class PlayerTopShell
             }
             for (int i = 0; i < n; i++) pos[i] += delta[i] * 0.5f;
         }
+        if (style.CollarRadius > 0f)
+        {
+            RoundCollar(pos, boundary, neighbours, delta, style.CollarRadius);
+        }
 
         double inflateSum = 0d, moveSum = 0d;
         for (int i = 0; i < n; i++)
         {
             float amount = weldedInflate[i];
+            if (style.ExtraEase > 0f)
+            {
+                // Loose cloth everywhere but the collar: the neckline stays a
+                // sewn circle instead of stretching out with the body of the shirt.
+                float nx = pos[i].x, ny = pos[i].y - 0.01f;
+                bool collar = pos[i].z > 0.75f && Mathf.Sqrt(nx * nx + ny * ny) < 0.115f;
+                if (!collar) amount += style.ExtraEase;
+            }
             inflateSum += amount;
             Vector3 p = pos[i] + normals[i] * amount;
             float gap = Vector3.Dot(p - original[i], normals[i]);
@@ -770,6 +791,54 @@ public static class PlayerTopShell
         };
     }
 
+    /// <summary>
+    /// A true round crew neck. The shell's opening follows the scan's ragged
+    /// cut, which read as a torn scoop with the collar pulled at the throat;
+    /// the open ring is pulled onto one circle and the ring under it relaxed
+    /// so the neckline rolls into the shoulders.
+    /// </summary>
+    private static void RoundCollar(Vector3[] pos, bool[] boundary, List<int>[] neighbours, Vector3[] delta, float radius)
+    {
+        const float neckY = 0.01f;
+        const float reach = 0.115f;
+        for (int pass = 0; pass < 6; pass++)
+        {
+            SnapCollarRing(pos, boundary, radius, neckY, reach);
+            for (int iteration = 0; iteration < 4; iteration++)
+            {
+                for (int i = 0; i < pos.Length; i++)
+                {
+                    delta[i] = Vector3.zero;
+                    if (boundary[i] || pos[i].z <= 0.72f) continue;
+                    float nx = pos[i].x, ny = pos[i].y - neckY;
+                    if (Mathf.Sqrt(nx * nx + ny * ny) > reach + 0.03f) continue;
+                    List<int> list = neighbours[i];
+                    if (list.Count == 0) continue;
+                    Vector3 sum = Vector3.zero;
+                    for (int k = 0; k < list.Count; k++) sum += pos[list[k]];
+                    delta[i] = sum / list.Count - pos[i];
+                }
+                for (int i = 0; i < pos.Length; i++) pos[i] += delta[i] * 0.4f;
+            }
+        }
+        SnapCollarRing(pos, boundary, radius, neckY, reach);
+    }
+
+    private static void SnapCollarRing(Vector3[] pos, bool[] boundary, float radius, float neckY, float reach)
+    {
+        for (int i = 0; i < pos.Length; i++)
+        {
+            if (!boundary[i] || pos[i].z <= 0.74f) continue;
+            float x = pos[i].x, dy = pos[i].y - neckY;
+            float r = Mathf.Sqrt(x * x + dy * dy);
+            if (r < 1e-4f || r > reach) continue;
+            float k = Mathf.Clamp01((reach - r) / 0.04f);
+            if (k <= 0f) continue;
+            float scale = Mathf.Lerp(1f, radius / r, k);
+            pos[i] = new Vector3(x * scale, neckY + dy * scale, pos[i].z);
+        }
+    }
+
     // ---- straight-leg pants (built, not copied from the scan) ----------
     // Rest units (body height 1, as build_player_bottoms.py). The scan's
     // shorts are a layered rim round the thigh: a copied shell stacked it into
@@ -790,7 +859,8 @@ public static class PlayerTopShell
     private const float ThighEase = 0.004f;
     private const float HemEase = 0.01f;
     private const float ThighCap = 0.31f;
-    private const float HemTaper = 0.86f;
+    // Straight leg: the hem keeps the upper thigh's width, no taper.
+    private const float HemTaper = 1f;
     private const float HemFlare = 0.002f;
     private const float HemBreak = 0.003f;
     private const float CreaseDepth = 0.0025f;
