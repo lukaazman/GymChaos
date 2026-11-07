@@ -96,12 +96,18 @@ public sealed class GymChaosBarbellLoadVerifierRunner : MonoBehaviour
     // Root and bar stay square; the authored clips sway the hips a few degrees.
     private const float MemberYawLimit = 3f;
     private const float MemberHipYawLimit = 8f;
+    // A plate rides a 2.2 m bar: its hole belongs on the shaft center line
+    // (5 mm) with its face square to the bar (about 11 degrees).
+    private const float MemberPlateRadialLimit = 0.005f;
+    private const float MemberPlateTiltLimit = 0.02f;
     private SquatWorkoutController sampledSquat;
     private GymExerciseStation sampledStation;
     private EnemyFighter sampledFighter;
     private int sampleWeightIndex;
     private int samples;
     private float rootYaw, hipYaw, shoulderYaw, barYaw, deepest, handGap;
+    private float radial, deepRadial, plateTilt;
+    private Vector3 radialVec;
     private string plateError;
     private Vector3 pinPosition;
     private bool deepCaptured;
@@ -158,6 +164,8 @@ public sealed class GymChaosBarbellLoadVerifierRunner : MonoBehaviour
             sampledFighter = fighter;
             samples = 0;
             rootYaw = hipYaw = shoulderYaw = barYaw = deepest = handGap = 0f;
+            radial = deepRadial = plateTilt = 0f;
+            radialVec = Vector3.zero;
             deepCaptured = false;
             plateError = null;
             pinPosition = fighter.transform.position;
@@ -166,10 +174,14 @@ public sealed class GymChaosBarbellLoadVerifierRunner : MonoBehaviour
             while (Time.timeAsDouble < until && squat.IsActive) yield return null;
             sampledSquat = null;
             string line = $"{label} samples={samples} deepest={deepest:F2} rootYaw={rootYaw:F1} " +
-                $"handGap={handGap:F3} hipYaw={hipYaw:F1} shoulderYaw={shoulderYaw:F1} barYaw={barYaw:F1} plates={plateError ?? "ok"}";
+                $"handGap={handGap:F3} hipYaw={hipYaw:F1} shoulderYaw={shoulderYaw:F1} barYaw={barYaw:F1} " +
+                $"radial={radial:F3} deepRadial={deepRadial:F3} tilt={plateTilt:F3} " +
+                $"lastRadialVec={radialVec.ToString("F3")} plates={plateError ?? "ok"}";
             Debug.Log("GYMCHAOS_MEMBER_SQUAT_SAMPLE " + line);
             if (samples < 20 || deepest < 0.9f || rootYaw > MemberYawLimit || hipYaw > MemberHipYawLimit ||
-                shoulderYaw > MemberHipYawLimit || handGap > 0.16f || barYaw > MemberYawLimit || plateError != null)
+                shoulderYaw > MemberHipYawLimit || handGap > 0.16f || barYaw > MemberYawLimit ||
+                radial > MemberPlateRadialLimit || deepRadial > MemberPlateRadialLimit ||
+                plateTilt > MemberPlateTiltLimit || plateError != null)
             {
                 failures.Add(line);
             }
@@ -181,6 +193,15 @@ public sealed class GymChaosBarbellLoadVerifierRunner : MonoBehaviour
             yield return null;
             Transform leftover = Field<Transform>(station, "loadedPlatesRoot");
             if (leftover != null) failures.Add(label + " plates left on the racked bar");
+            // Any other set still in the scene is a leftover from an earlier
+            // session: it renders at the old bar pose, which reads as discs
+            // floating above the bar being lifted now.
+            int sets = 0;
+            foreach (Transform candidate in FindObjectsByType<Transform>(FindObjectsSortMode.InstanceID))
+            {
+                if (candidate.name == "Exercise Loaded Plates") sets++;
+            }
+            if (sets != 0) failures.Add(label + " loaded plate sets still in the scene=" + sets);
             fighter.gameObject.SetActive(false);
         }
         GymExerciseStation.MemberSquatWeightForVerification = 0;
@@ -270,9 +291,29 @@ public sealed class GymChaosBarbellLoadVerifierRunner : MonoBehaviour
             Vector3 toHand = hand.position - center;
             handGap = Mathf.Max(handGap, (toHand - axis * Vector3.Dot(toHand, axis)).magnitude);
         }
+        // Shaft center line for the discs. Pick the shaft by its along-bar
+        // extent (a disc is two orders of magnitude thinner along the bar, so
+        // shear growth of a world AABB cannot swap them) and use the bar's own
+        // axis, which the station forces level and across the lifter.
+        Vector3 absAxisForShaft = new Vector3(Mathf.Abs(axis.x), Mathf.Abs(axis.y), Mathf.Abs(axis.z));
+        Renderer shaftRenderer = null;
+        float shaftAlong = 0f;
+        foreach (Renderer candidate in bar.GetComponentsInChildren<Renderer>(true))
+        {
+            if (plates != null && candidate.transform.IsChildOf(plates)) continue;
+            float along = Mathf.Abs(Vector3.Dot(candidate.bounds.extents, absAxisForShaft));
+            if (along > shaftAlong)
+            {
+                shaftAlong = along;
+                shaftRenderer = candidate;
+            }
+        }
+        Vector3 shaftWorldAxis = axis;
+        Vector3 shaftWorldCenter = shaftRenderer != null
+            ? shaftRenderer.transform.TransformPoint(shaftRenderer.localBounds.center)
+            : center;
         int left = 0, right = 0;
-        float innerFace = float.PositiveInfinity, outerFace = 0f, radial = 0f;
-        Vector3 radialDir = Vector3.zero;
+        float innerFace = float.PositiveInfinity, outerFace = 0f;
         if (plates != null)
         {
             foreach (Transform plate in plates)
@@ -280,29 +321,43 @@ public sealed class GymChaosBarbellLoadVerifierRunner : MonoBehaviour
                 Bounds bounds = GymShared.CombinedBounds(plate.GetComponentsInChildren<Renderer>(true));
                 float offset = Vector3.Dot(bounds.center - center, axis);
                 float thickness = Vector3.Dot(bounds.extents, new Vector3(Mathf.Abs(axis.x), Mathf.Abs(axis.y), Mathf.Abs(axis.z)));
-                // Mesh-space centres: world AABBs grow as the bar rolls.
-                Vector3 discCenter = GymShared.CombinedBounds(plate.GetComponentsInChildren<Renderer>(true)).center;
-                // Rendered shaft: world bounds centre along its longest extent.
-                Vector3 shaftCenter = shaft.bounds.center;
-                Vector3 se = shaft.bounds.extents;
-                Vector3 shaftAxis = se.x >= se.y && se.x >= se.z ? Vector3.right : se.y >= se.z ? Vector3.up : Vector3.forward;
-                Vector3 discOffset = discCenter - shaftCenter;
-                Vector3 radialOffset = discOffset - shaftAxis * Vector3.Dot(discOffset, shaftAxis);
-                if (radialOffset.magnitude > radial) radialDir = radialOffset;
-                radial = Mathf.Max(radial, radialOffset.magnitude);
                 if (offset < 0f) left++; else right++;
                 innerFace = Mathf.Min(innerFace, Mathf.Abs(offset) - thickness);
                 outerFace = Mathf.Max(outerFace, Mathf.Abs(offset) + thickness);
+                // The disc's drawn centre (not its pivot) has to sit on the
+                // shaft center line at every depth of the rep: a template
+                // whose mesh is offset from its pivot still has to hang on
+                // the shaft visually.
+                Vector3 fromShaft = bounds.center - shaftWorldCenter;
+                float discRadial = (fromShaft - shaftWorldAxis * Vector3.Dot(fromShaft, shaftWorldAxis)).magnitude;
+                radial = Mathf.Max(radial, discRadial);
+                if (discRadial >= radial)
+                {
+                    radialVec = fromShaft;
+                }
+                if (sampledSquat.CurrentMotion > 0.9f) deepRadial = Mathf.Max(deepRadial, discRadial);
+                // The disc's face normal is the thinnest axis of its own
+                // geometry; it has to point along the bar or the shaft cannot
+                // pass through the hole.
+                Bounds discLocal = GymShared.GetBoundsRelativeTo(
+                    plate, plate.GetComponentsInChildren<Renderer>(true));
+                Vector3 discSize = discLocal.size;
+                Vector3 discNormal = plate.TransformDirection(
+                    discSize.x <= discSize.y && discSize.x <= discSize.z ? Vector3.right
+                    : discSize.y <= discSize.z ? Vector3.up : Vector3.forward).normalized;
+                plateTilt = Mathf.Max(plateTilt, 1f - Mathf.Abs(Vector3.Dot(discNormal, shaftWorldAxis)));
             }
         }
         // Sleeve of a 2.2 m bar: from the collar at ~0.6 of the half length
         // to the bar end; the stack starts at the collar, on the shaft line.
         bool placed = expected == 0 || (innerFace > half * 0.52f && innerFace < half * 0.7f &&
-            outerFace <= half + 0.005f && radial < 0.01f);
-        if (left != expected || right != expected || !placed)
+            outerFace <= half + 0.005f);
+        if (left != expected || right != expected || !placed ||
+            radial > MemberPlateRadialLimit || plateTilt > MemberPlateTiltLimit)
         {
             plateError ??= $"expected={expected} left={left} right={right} innerFace={innerFace:F3} " +
-                $"outerFace={outerFace:F3} half={half:F3} radial={radial:F3} radialDir={radialDir} motion={sampledSquat.CurrentMotion:F2}";
+                $"outerFace={outerFace:F3} half={half:F3} radial={radial:F3} tilt={plateTilt:F3} " +
+                $"motion={sampledSquat.CurrentMotion:F2}";
         }
     }
 

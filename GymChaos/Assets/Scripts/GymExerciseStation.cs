@@ -1222,6 +1222,7 @@ public class GymExerciseStation : MonoBehaviour
         }
         desiredBarAxis.Normalize();
         AlignAttachedSquatBar(targetBarCenter, desiredBarAxis);
+        PlaceMemberPlates();
     }
 
     private void OnDestroy()
@@ -1882,7 +1883,7 @@ public class GymExerciseStation : MonoBehaviour
         // The bar's own renderers, before member plates join its hierarchy.
         squatBarRenderers = sceneBar.GetComponentsInChildren<Renderer>(true);
         BuildPlatesOnSceneBar();
-        if (loadedPlatesRoot != null) FixMemberPlatesToBar();
+        CaptureMemberPlateFrame();
         return true;
     }
 
@@ -1922,80 +1923,132 @@ public class GymExerciseStation : MonoBehaviour
         }
     }
 
-    // Member plates follow the drawn bar. The spine bones carry animated,
-    // non-uniform scale, so children of the bar shear off its shaft as the
-    // lifter squats; the plates stay in world space and are placed on the
-    // shaft's rendered centre line every frame instead.
+    // Member plates ride on the drawn bar. The spine bones carry animated,
+    // non-uniform scale, so a world AABB drifts off the shaft while the
+    // lifter squats. Each disc is captured once in the bar's own space and
+    // placed through the bar's transform, so it can only sit on the shaft.
     private Renderer memberShaft;
-    private Vector3 memberShaftAxis;
     private readonly List<float> memberPlateAlong = new List<float>();
-    private readonly List<Vector3> memberPlatePivot = new List<Vector3>();
-    private readonly List<Quaternion> memberPlateRotation = new List<Quaternion>();
+    private readonly List<Quaternion> memberPlateLocalRotation = new List<Quaternion>();
+    private readonly List<Renderer[]> memberPlateRenderers = new List<Renderer[]>();
 
-    private void FixMemberPlatesToBar()
+    private void CaptureMemberPlateFrame()
     {
-        memberShaft = null;
-        foreach (Renderer renderer in squatBarRenderers)
-        {
-            if (memberShaft == null || MaxExtent(renderer.bounds) > MaxExtent(memberShaft.bounds)) memberShaft = renderer;
-        }
         memberPlateAlong.Clear();
-        memberPlatePivot.Clear();
-        memberPlateRotation.Clear();
-        if (memberShaft == null) return;
-        GetShaftLine(out Vector3 line, out memberShaftAxis);
+        memberPlateLocalRotation.Clear();
+        memberPlateRenderers.Clear();
+        memberShaft = null;
+        if (sceneBar == null || squatBarRenderers == null || loadedPlatesRoot == null ||
+            loadedPlatesRoot.childCount == 0)
+        {
+            return;
+        }
+
+        // The shaft is the bar renderer with the longest along-axis extent: a
+        // disc is two orders of magnitude thinner along the bar, so a sheared
+        // AABB cannot swap them.
+        Vector3 barAxis = GetBarAxis(sceneBar).normalized;
+        Vector3 absAxis = new Vector3(Mathf.Abs(barAxis.x), Mathf.Abs(barAxis.y), Mathf.Abs(barAxis.z));
+        Renderer shaft = null;
+        float longest = 0f;
+        for (int i = 0; i < squatBarRenderers.Length; i++)
+        {
+            Renderer candidate = squatBarRenderers[i];
+            if (candidate == null)
+            {
+                continue;
+            }
+            float along = Mathf.Abs(Vector3.Dot(candidate.bounds.extents, absAxis));
+            if (along > longest)
+            {
+                longest = along;
+                shaft = candidate;
+            }
+        }
+        if (shaft == null)
+        {
+            return;
+        }
+
+        memberShaft = shaft;
+        // The bar hangs off animated spine bones whose scale is large and not
+        // uniform, so a bar-local offset cannot be mapped back reliably: that
+        // round trip lifted the discs as the lifter went deeper. Keep only the
+        // distance along the shaft in world metres and rebuild every disc from
+        // the shaft's current centre.
+        Vector3 shaftCenter = shaft.transform.TransformPoint(shaft.localBounds.center);
         foreach (Transform plate in loadedPlatesRoot)
         {
-            Vector3 disc = GymShared.CombinedBounds(plate.GetComponentsInChildren<Renderer>(true)).center;
-            memberPlateAlong.Add(Vector3.Dot(disc - line, memberShaftAxis));
-            memberPlatePivot.Add(plate.position - disc);
-            memberPlateRotation.Add(plate.rotation);
+            // A plate template's pivot is not always the middle of the drawn
+            // disc, so the frame is captured from the visual centre: a disc
+            // whose pivot sits on the shaft can still render above it.
+            Vector3 drawnCenter = plate.position;
+            Renderer[] plateRenderers = plate.GetComponentsInChildren<Renderer>(true);
+            if (plateRenderers.Length > 0)
+            {
+                drawnCenter = GymShared.CombinedBounds(plateRenderers).center;
+            }
+            memberPlateAlong.Add(Vector3.Dot(drawnCenter - shaftCenter, barAxis));
+            memberPlateLocalRotation.Add(Quaternion.Inverse(sceneBar.rotation) * plate.rotation);
+            memberPlateRenderers.Add(plateRenderers);
         }
         PlaceMemberPlates();
-        loadedPlatesRoot.gameObject.AddComponent<GymMemberPlateFollower>().Station = this;
     }
 
     internal void PlaceMemberPlates()
     {
-        if (memberShaft == null || loadedPlatesRoot == null) return;
-        GetShaftLine(out Vector3 line, out Vector3 axis);
-        Quaternion turn = Quaternion.FromToRotation(memberShaftAxis, axis);
+        if (sceneBar == null || loadedPlatesRoot == null || memberShaft == null ||
+            memberPlateAlong.Count == 0)
+        {
+            return;
+        }
+        // The bar's own axis, not TransformDirection of a bar-local direction:
+        // the animated spine bone scales the bar unevenly, so a skewed
+        // direction would carry each disc off the shaft (square to it, but
+        // floating beside the bar) as the lifter goes deeper.
+        Vector3 axis = GetBarAxis(sceneBar).normalized;
+        Vector3 shaftCenter = memberShaft.transform.TransformPoint(memberShaft.localBounds.center);
         int count = Mathf.Min(loadedPlatesRoot.childCount, memberPlateAlong.Count);
         for (int i = 0; i < count; i++)
         {
-            loadedPlatesRoot.GetChild(i).SetPositionAndRotation(
-                line + axis * memberPlateAlong[i] + turn * memberPlatePivot[i],
-                turn * memberPlateRotation[i]);
+            Transform plate = loadedPlatesRoot.GetChild(i);
+            Quaternion rotation = sceneBar.rotation * memberPlateLocalRotation[i];
+            Vector3 target = shaftCenter + axis * memberPlateAlong[i];
+            plate.SetPositionAndRotation(target, rotation);
+            if (i < memberPlateRenderers.Count && memberPlateRenderers[i].Length > 0)
+            {
+                // A plate template's pivot is not the middle of the drawn disc
+                // and the offset turns with the disc, so the visible centre is
+                // measured here every frame and moved onto the shaft.
+                Bounds drawn = GymShared.CombinedBounds(memberPlateRenderers[i]);
+                plate.position += target - drawn.center;
+            }
         }
-        if (Time.frameCount % 40 == 0) Debug.Log($"TMPDBG6 shaft={memberShaft.name} line={line:F3} axis={axis} along0={memberPlateAlong[0]:F3} piv0={memberPlatePivot[0]:F3} disc0={GymShared.CombinedBounds(loadedPlatesRoot.GetChild(0).GetComponentsInChildren<Renderer>(true)).center:F3} frame={Time.frameCount}");
     }
 
-    // Rendered shaft: centre of its world bounds, along its longest extent.
-    private void GetShaftLine(out Vector3 center, out Vector3 axis)
+    // A station owns at most one loaded plate set. A player session, a member
+    // set and a re-attach all rebuild it, so the previous set has to go or its
+    // discs stay in the world at the old bar pose.
+    private void DestroyLoadedPlates()
     {
-        Bounds bounds = memberShaft.bounds;
-        Vector3 e = bounds.extents;
-        Vector3 worldAxis = e.x >= e.y && e.x >= e.z ? Vector3.right : e.y >= e.z ? Vector3.up : Vector3.forward;
-        center = bounds.center;
-        // Keep a stable sign so plates never swap sides.
-        axis = memberShaftAxis.sqrMagnitude > 0f && Vector3.Dot(worldAxis, memberShaftAxis) < 0f ? -worldAxis : worldAxis;
+        if (loadedPlatesRoot == null)
+        {
+            return;
+        }
+        loadedPlatesRoot.gameObject.SetActive(false);
+        Destroy(loadedPlatesRoot.gameObject);
+        loadedPlatesRoot = null;
     }
-
-    private static float MaxExtent(Bounds bounds) =>
-        Mathf.Max(bounds.extents.x, Mathf.Max(bounds.extents.y, bounds.extents.z));
 
     private void RestoreSquatBar()
     {
-        if (loadedPlatesRoot != null && enemySquatWeight > 0)
-        {
-            loadedPlatesRoot.gameObject.SetActive(false);
-            Destroy(loadedPlatesRoot.gameObject);
-            loadedPlatesRoot = null;
-        }
+        DestroyLoadedPlates();
         enemySquatWeight = 0;
         squatBarRenderers = null;
         memberShaft = null;
-        memberShaftAxis = Vector3.zero;
+        memberPlateAlong.Clear();
+        memberPlateLocalRotation.Clear();
+        memberPlateRenderers.Clear();
         if (sceneBar != null && squatBarOriginalStateCaptured)
         {
             sceneBar.SetParent(squatBarOriginalParent, false);
@@ -2855,11 +2908,7 @@ public class GymExerciseStation : MonoBehaviour
             }
         }
 
-        if (loadedPlatesRoot != null)
-        {
-            Destroy(loadedPlatesRoot.gameObject);
-            loadedPlatesRoot = null;
-        }
+        DestroyLoadedPlates();
 
         RestoreDeadliftLoosePlates();
         deadliftBarCameraTargetCaptured = false;
@@ -2879,6 +2928,9 @@ public class GymExerciseStation : MonoBehaviour
 
     private void BuildPlatesOnSceneBar()
     {
+        // Never stack a second set on the station: an old player or member set
+        // would stay visible at the pose it was built for.
+        DestroyLoadedPlates();
         List<int> platesPerSide = GetPlatesPerSide();
         if (platesPerSide.Count == 0 || sceneBar == null) return;
 
@@ -3093,7 +3145,8 @@ public class GymExerciseStation : MonoBehaviour
         for (int i = 0; i < transforms.Length; i++)
         {
             Transform candidate = transforms[i];
-            if (candidate == null || candidate.GetComponentInParent<PlayerMovement>() != null || candidate.name.Contains("Asset Clone"))
+            if (candidate == null || candidate.GetComponentInParent<PlayerMovement>() != null || candidate.name.Contains("Asset Clone") ||
+                (candidate.parent != null && candidate.parent.name == "Exercise Loaded Plates"))
             {
                 continue;
             }
