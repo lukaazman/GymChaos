@@ -1093,10 +1093,14 @@ public static class PlayerTopShell
         // the leg vertex under them, or the two parts moved apart into a seam.
         int seamRing = Mathf.Clamp(Mathf.RoundToInt((YokeBottom - PantsHem) / RingStep), 0, legRings - 1);
         int[] seatOnLeg = new int[3 * (YokeSides + 1)];
+        for (int i = 0; i < seatOnLeg.Length; i++) seatOnLeg[i] = -1;
         for (int r = 0; r < 3; r++)
             for (int c = 0; c <= YokeSides; c++)
             {
                 int y = yokeStart + r * (YokeSides + 1) + c;
+                // Crotch vertices keep the seat's own hip weights: taking a
+                // thigh on each side drew a web between the legs in walking.
+                if (Mathf.Abs(verts[y][lateral] - centre) < 0.02f) continue;
                 int legRing = Mathf.Min(seamRing + r, legRings - 1);
                 float best = float.MaxValue;
                 for (int leg = 0; leg < 2; leg++)
@@ -1111,9 +1115,11 @@ public static class PlayerTopShell
         {
             SmoothWeights(outWeights, 0, legRings, LegSides + 1, 6);
             SmoothWeights(outWeights, legVertexCount, legRings, LegSides + 1, 6);
-            for (int i = 0; i < seatOnLeg.Length; i++) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
+            for (int i = 0; i < seatOnLeg.Length; i++)
+                if (seatOnLeg[i] >= 0) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
             SmoothWeights(outWeights, yokeStart, yokeRings, YokeSides + 1, 10);
-            for (int i = 0; i < 2 * (YokeSides + 1); i++) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
+            for (int i = 0; i < 2 * (YokeSides + 1); i++)
+                if (seatOnLeg[i] >= 0) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
         }
         // Own UVs on the tiling fabric (pants_fabric.png), not the body atlas.
         for (int v = 0; v < count; v++) outUv[v] = uvList[v];
@@ -1131,6 +1137,7 @@ public static class PlayerTopShell
         {
             int l = seatOnLeg[i];
             outNormals[yokeStart + i] = outNormals[yokeStart + i + YokeSides + 1];
+            if (l < 0) continue;
             outNormals[l] = outNormals[yokeStart + i];
             outNormals[l - (LegSides + 1)] = Vector3.Slerp(outNormals[l - (LegSides + 1)], outNormals[l], 0.5f).normalized;
         }
