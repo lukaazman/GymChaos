@@ -80,7 +80,10 @@ public static class GymChaosClassSessionPlay
             Application.logMessageReceived += CountReloadDisableErrors;
             string scenario = SessionState.GetString(ScenarioKey, string.Empty);
             routine = scenario == "classes" ? ClassScenario()
-                : scenario == "death" ? DeathScenario() : RuntimeScenario();
+                : scenario == "death" ? DeathScenario()
+                : scenario == "netDeath" ? NetDeathScenario()
+                : scenario == "netHost" ? NetHostScenario()
+                : scenario == "netGuest" ? NetGuestScenario() : RuntimeScenario();
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
         EditorApplication.update -= Tick;
@@ -92,6 +95,9 @@ public static class GymChaosClassSessionPlay
 
     private static void Cleanup()
     {
+        if (netRelay != null && !netRelay.HasExited) netRelay.Kill();
+        netRelay = null;
+        GymNetSession.End();
         string directory = SessionState.GetString(DirectoryKey, string.Empty);
         if (SessionState.GetBool(LegacyPresentKey, false))
             PlayerPrefs.SetString(LegacyProgressionKey, SessionState.GetString(LegacyValueKey, string.Empty));
@@ -124,7 +130,8 @@ public static class GymChaosClassSessionPlay
         double now = EditorApplication.timeSinceStartup;
         try
         {
-            if (now - started > 420d) throw new TimeoutException("Class/session verification timed out.");
+            bool net = SessionState.GetString(ScenarioKey, string.Empty).StartsWith("net", StringComparison.Ordinal);
+            if (now - started > (net ? 1200d : 420d)) throw new TimeoutException("Class/session verification timed out.");
             if (now < resumeAt) return;
             if (!routine.MoveNext())
             {
@@ -143,8 +150,10 @@ public static class GymChaosClassSessionPlay
         {
             routine = null;
             Debug.LogException(exception);
-            string marker = SessionState.GetString(ScenarioKey, string.Empty) == "classes"
-                ? "GYMCHAOS_CLASS_BEHAVIOR_FAILED " : "GYMCHAOS_CLASS_SESSION_RUNTIME_FAILED ";
+            string scenarioName = SessionState.GetString(ScenarioKey, string.Empty);
+            string marker = scenarioName == "classes" ? "GYMCHAOS_CLASS_BEHAVIOR_FAILED "
+                : scenarioName.StartsWith("net", StringComparison.Ordinal) ? "GYMCHAOS_NET_TWO_PROCESS_FAILED " + scenarioName + " "
+                : "GYMCHAOS_CLASS_SESSION_RUNTIME_FAILED ";
             Debug.LogError(marker + exception.Message);
             resultCode = 1;
             GymChaosVerifierExit.Record(1);
@@ -199,7 +208,8 @@ public static class GymChaosClassSessionPlay
         foreach (float wait in OpenSessionChoice()) yield return wait;
         Menu.ChooseNewGame();
         yield return Step;
-        Require(Menu.Current == GymSessionMenu.State.ClassSelect, "New Game did not open class selection");
+        // Two game processes start at once: the page change can take longer than one step.
+        foreach (float wait in Until(() => Menu.Current == GymSessionMenu.State.ClassSelect, 10d, "New Game to open class selection")) yield return wait;
         Require(Menu.HighlightedClassId == "bodybuilding", "Fresh class selection does not highlight Bodybuilding");
         FocusCard(classId);
         yield return Step;
@@ -1237,5 +1247,439 @@ public static class GymChaosClassSessionPlay
         }
         source.transform.SetPositionAndRotation(previousPosition, previousRotation);
         source.cullingMask = previousMask;
+    }
+
+    // ---- one real game as a guest against a scripted host, then as the host of a scripted guest ----
+
+    private static System.Diagnostics.Process netRelay;
+    private static GymNetClient scripted;
+
+    private static System.Diagnostics.Process StartNetRelay(int port)
+    {
+        string script = null;
+        for (string probe = Directory.GetParent(Application.dataPath).FullName; probe != null && script == null; probe = Directory.GetParent(probe)?.FullName)
+        {
+            string candidate = Path.Combine(probe, "Server", "relay", "relay.js");
+            if (File.Exists(candidate)) script = candidate;
+        }
+        Require(script != null, "Server/relay/relay.js not found");
+        var info = new System.Diagnostics.ProcessStartInfo("node", "\"" + script + "\"")
+        {
+            UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(script)
+        };
+        info.Environment["PORT"] = port.ToString();
+        System.Diagnostics.Process process = System.Diagnostics.Process.Start(info);
+        string line = null;
+        var reader = new System.Threading.Thread(() => line = process.StandardOutput.ReadLine());
+        reader.Start();
+        Require(reader.Join(10000) && line != null && line.Contains("GYMCHAOS_RELAY_LISTENING"), "relay did not start: " + line);
+        return process;
+    }
+
+    // Like Until, and keeps the scripted client's socket moving.
+    private static IEnumerable<float> NetUntil(Func<bool> condition, double seconds, string what)
+    {
+        double deadline = EditorApplication.timeSinceStartup + seconds;
+        while (!condition())
+        {
+            if (EditorApplication.timeSinceStartup > deadline) throw new TimeoutException("Timed out waiting for " + what);
+            scripted?.Tick();
+            yield return 0f;
+        }
+    }
+
+    private static IEnumerable<float> NetWait(double seconds)
+    {
+        double end = EditorApplication.timeSinceStartup + seconds;
+        foreach (float wait in NetUntil(() => EditorApplication.timeSinceStartup >= end, seconds + 5d, "a pause")) yield return wait;
+    }
+
+    private static IEnumerator<float> NetDeathScenario()
+    {
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        netRelay = StartNetRelay(18792);
+        const string url = "ws://127.0.0.1:18792";
+        var observed = new List<GymNetPose>();
+        scripted = new GymNetClient();
+        GymNetJoin scriptedJoin = new GymNetJoin(scripted) { WorldSource = GymSessionService.CaptureWorldSnapshot };
+        scripted.MessageReceived += (from, body) =>
+        {
+            if (scriptedJoin.Handle(from, body)) return;
+            if (body.Length > 1 && body[0] == 'p') observed.Add(JsonUtility.FromJson<GymNetPose>(body.Substring(1)));
+        };
+        scripted.Host(url, Guid.NewGuid().ToString("N"));
+        foreach (float wait in NetUntil(() => scripted.CurrentPhase == GymNetClient.Phase.Lobby, 20d, "the scripted host's room")) yield return wait;
+
+        // Part 1: this game is a guest. Through the real menu with the room set to JOIN.
+        GymNetSession.SetPending("join", url, scripted.RoomCode);
+        GymNetReconnect.LimitOverrideSeconds = 4f;
+        foreach (float wait in StartNewCharacter("cardio")) yield return wait;
+        Require(GymSessionService.Context == GymSaveContext.Join, "a joining game is not in the Join context");
+        foreach (float wait in NetUntil(() => NetSession != null && NetSession.Join.Guest == GymNetJoin.GuestState.Joined &&
+            NetSession.ActorsSuppressed && scriptedJoin.LastKnown.ContainsKey(1) && observed.Count >= 3, 90d, "the join")) yield return wait;
+        PlayerMovement guest = Player;
+        // Progress after the last save: LOAD GAME must take it away again.
+        foreach (float wait in NetUntil(() => GymSessionService.CompletedWriteCount >= 1 && !GymSessionService.IsWriting, 30d, "the first save")) yield return wait;
+        GymExperienceService.Active.State.level = 5;
+        SetPlayerHealth(guest, 10f);
+        observed.Clear();
+        // Even paused: a death in a room does not freeze the game behind its menu.
+        Time.timeScale = 0f;
+        // Damage from another player kills: there is no 1 health floor.
+        scripted.Send(1, GymNetPvp.DamageTag + "{\"amount\":25.0,\"ix\":0.0,\"iy\":0.0,\"iz\":0.0}");
+        foreach (float wait in NetUntil(() => guest.IsDead, 10d, "a punch from another player to kill")) yield return wait;
+        Vector3 deathPosition = guest.transform.position;
+        foreach (float wait in NetWait(1d)) yield return wait;
+        Require(observed.Count > 0 && observed[observed.Count - 1].d > 0.5f, "the others were not told the guest died");
+        foreach (float wait in NetUntil(() => GymPauseMenu.IsDeathMenuVisible, 15d, "the death menu")) yield return wait;
+        Require(NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby, "the guest left the room when it died");
+        Require(GymSessionService.HasActive, "the character was dropped on death");
+        Require(Time.timeScale == 1f, "the death menu left the game frozen");
+        yield return 0.5f;
+        Shot("net-death-menu");
+        observed.Clear();
+        Require(GymNetSession.RespawnLocalPlayer(), "LOAD GAME in the death menu did nothing");
+        foreach (float wait in NetWait(1.2d)) yield return wait;
+        Require(!guest.IsDead && guest.CurrentHealth > 1f, "LOAD GAME did not bring the guest back alive");
+        Require(Vector3.Distance(guest.transform.position, deathPosition) < 0.75f, "respawned away from where it died");
+        Require(!GymPauseMenu.IsDeathMenuVisible, "the death menu stayed open");
+        Require(GymExperienceService.Active.State.level == 1, "the character was not loaded from its save (level " + GymExperienceService.Active.State.level + ")");
+        Require(GymSessionService.Context == GymSaveContext.Join && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby, "the guest left Join or the room");
+        Require(observed.Count > 0 && observed[observed.Count - 1].d < 0.5f, "the others still see the guest dead");
+        int writes = GymSessionService.CompletedWriteCount;
+        GymSessionService.RequestSave("manual", true);
+        foreach (float wait in NetUntil(() => GymSessionService.CompletedWriteCount > writes && !GymSessionService.IsWriting, 20d, "the save")) yield return wait;
+        GymSaveReadResult read = GymSessionService.Repository.Read(GymSessionService.Active.slotId);
+        Require(read.Success && !read.Data.hasWorld && read.Data.worldRevision == 0, "a guest save wrote the world section");
+
+        // Part 1b: the host goes and never comes back. The guest gives up after its limit and the menu says why.
+        scripted.Disconnect();
+        foreach (float wait in NetUntil(() => NetSession != null && NetSession.Reconnect != null && NetSession.Reconnect.Active, 20d, "the guest to start reconnecting")) yield return wait;
+        foreach (float wait in NetUntil(() => !GymArenaBootstrap.IsGameplayStarted && !GymSessionService.HasActive, 40d, "the guest to give up and return to the menu")) yield return wait;
+        GymNetReconnect.LimitOverrideSeconds = 0f;
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        foreach (float wait in OpenSessionChoice()) yield return wait;
+        Require(Menu.ChoiceNoteText.StartsWith("HOST NOT BACK"), "the menu does not say why the room ended: '" + Menu.ChoiceNoteText + "'");
+        Menu.Back();
+        yield return Step;
+        // Part 1c: a code that does not exist: the game says so and goes back to the menu.
+        GymNetSession.SetPending("join", url, "QQQQ");
+        foreach (float wait in StartNewCharacter("cardio")) yield return wait;
+        foreach (float wait in NetUntil(() => !GymArenaBootstrap.IsGameplayStarted && !GymSessionService.HasActive, 30d, "the failed join to return to the menu")) yield return wait;
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        foreach (float wait in OpenSessionChoice()) yield return wait;
+        Require(Menu.ChoiceNoteText.StartsWith("ROOM FAILED"), "the menu does not say the room failed: '" + Menu.ChoiceNoteText + "'");
+        Menu.Back();
+        yield return Step;
+        scripted = new GymNetClient();
+        GymNetSession.SetPending(null, null, null);
+        foreach (float wait in StartNewCharacter("bodybuilding")) yield return wait;
+        guest = Player;
+
+        // Part 2: this game is the host and a scripted guest dies; the corpse stays until it respawns.
+        GymNetSession.End();
+        GymSessionService.SetContext(GymSaveContext.Solo);
+        GymNetSession host = GymNetSession.Begin(url, null);
+        foreach (float wait in NetUntil(() => host.Client.CurrentPhase == GymNetClient.Phase.Lobby, 20d, "the host room")) yield return wait;
+        scripted = new GymNetClient();
+        scripted.Join(url, host.Client.RoomCode, Guid.NewGuid().ToString("N"));
+        foreach (float wait in NetUntil(() => scripted.CurrentPhase == GymNetClient.Phase.Lobby && host.RemoteAvatarCount == 1, 20d, "the scripted guest")) yield return wait;
+        Vector3 at = guest.transform.position + guest.transform.right * 4f;
+        scripted.Send(0, "p" + JsonUtility.ToJson(new GymNetPose { x = at.x, y = at.y, z = at.z, h = 0f, d = 1f }));
+        foreach (float wait in NetWait(1.5d)) yield return wait;
+        host.TryGetAvatar(1, out GymRemoteAvatar corpse);
+        Require(corpse != null && corpse.IsCorpse && Vector3.Distance(corpse.transform.position, at) < 0.5f, "the dead guest is not a corpse where it fell");
+        Shot("net-death-corpse", LookAt(at));
+        scripted.Send(0, "p" + JsonUtility.ToJson(new GymNetPose { x = at.x, y = at.y, z = at.z, h = 1f, d = 0f }));
+        foreach (float wait in NetWait(1.5d)) yield return wait;
+        Require(!corpse.IsCorpse, "the corpse stayed after the guest respawned");
+
+        // Three players: guest 1 punches guest 2, the host decides and only guest 2 is told; a dead guest cannot punch.
+        GymNetClient second = new GymNetClient();
+        var secondDamage = new List<string>();
+        second.MessageReceived += (from, body) => { if (body.Length > 0 && body[0] == GymNetPvp.DamageTag) secondDamage.Add(from + ":" + body); };
+        var firstDamage = new List<string>();
+        scripted.MessageReceived += (from, body) => { if (body.Length > 0 && body[0] == GymNetPvp.DamageTag) firstDamage.Add(body); };
+        second.Join(url, host.Client.RoomCode, Guid.NewGuid().ToString("N"));
+        double joinEnd = EditorApplication.timeSinceStartup + 20d;
+        while (!(second.CurrentPhase == GymNetClient.Phase.Lobby && host.RemoteAvatarCount == 2))
+        {
+            if (EditorApplication.timeSinceStartup > joinEnd) throw new TimeoutException("the third player");
+            second.Tick();
+            scripted.Tick();
+            yield return 0f;
+        }
+        Vector3 firstAt = guest.transform.position + guest.transform.forward * 5f;
+        Vector3 secondAt = firstAt + Vector3.right * 1.5f;
+        scripted.Send(0, "p" + JsonUtility.ToJson(new GymNetPose { x = firstAt.x, y = firstAt.y, z = firstAt.z, r = 90f, h = 1f }));
+        second.Send(0, "p" + JsonUtility.ToJson(new GymNetPose { x = secondAt.x, y = secondAt.y, z = secondAt.z, r = 270f, h = 1f }));
+        double settle = EditorApplication.timeSinceStartup + 1.2d;
+        while (EditorApplication.timeSinceStartup < settle) { second.Tick(); scripted.Tick(); yield return 0f; }
+        scripted.Send(0, GymNetPvp.AttackTag + "{\"dx\":1.0,\"dy\":0.0,\"dz\":0.0}");
+        double hitEnd = EditorApplication.timeSinceStartup + 5d;
+        while (secondDamage.Count == 0)
+        {
+            if (EditorApplication.timeSinceStartup > hitEnd) throw new TimeoutException("guest 1 punching guest 2");
+            second.Tick();
+            scripted.Tick();
+            yield return 0f;
+        }
+        Require(secondDamage[0].StartsWith("0:") && firstDamage.Count == 0, "a guest-against-guest punch reached the wrong player: " + secondDamage[0]);
+        // Guest 1 lies dead: its punches count for nothing.
+        scripted.Send(0, "p" + JsonUtility.ToJson(new GymNetPose { x = firstAt.x, y = firstAt.y, z = firstAt.z, r = 90f, h = 0f, d = 1f }));
+        double deadEnd = EditorApplication.timeSinceStartup + 1.5d;
+        while (EditorApplication.timeSinceStartup < deadEnd) { second.Tick(); scripted.Tick(); yield return 0f; }
+        secondDamage.Clear();
+        scripted.Send(0, GymNetPvp.AttackTag + "{\"dx\":1.0,\"dy\":0.0,\"dz\":0.0}");
+        double quietEnd = EditorApplication.timeSinceStartup + 1.5d;
+        while (EditorApplication.timeSinceStartup < quietEnd) { second.Tick(); scripted.Tick(); yield return 0f; }
+        Require(secondDamage.Count == 0, "a dead guest landed a punch");
+        second.Disconnect();
+        Debug.Log("GYMCHAOS_NET_DEATH_OK pvpKills=yes replicated=yes menu=yes respawn=in-place level=from-save world=untouched corpse=until-respawn guestVsGuest=host-decides deadCannotPunch=yes");
+    }
+
+    // ---- two real game processes: one hosts, one joins (see Tools/Invoke-NetTwoProcess.ps1) ----
+
+    private const string NetUrl = "ws://127.0.0.1:18793";
+
+    private static string SyncDir => Environment.GetEnvironmentVariable("GYMCHAOS_NET_SYNC_DIR");
+
+    private static void SyncWrite(string name, string text = "1") =>
+        File.WriteAllText(Path.Combine(SyncDir, name), text);
+
+    private static bool SyncHas(string name) => File.Exists(Path.Combine(SyncDir, name));
+
+    private static IEnumerable<float> SyncWait(string name, double seconds)
+    {
+        foreach (float wait in Until(() => SyncHas(name), seconds, "the other process: " + name)) yield return wait;
+    }
+
+    private static GymNetSession NetSession => GymNetSession.Instance;
+
+    private static void SetPlayerHealth(PlayerMovement player, float value) =>
+        typeof(PlayerMovement).GetField("currentHealth", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .SetValue(player, value);
+
+    private static View LookAt(Vector3 point, float distance = 3.5f, float height = 1.4f)
+    {
+        Vector3 position = point + new Vector3(distance * 0.6f, height, -distance * 0.8f);
+        return new View { position = position, rotation = Quaternion.LookRotation(point - position), valid = true };
+    }
+
+    private static int CountNamed(string name)
+    {
+        int count = 0;
+        foreach (GameObject candidate in UnityEngine.Object.FindObjectsByType<GameObject>(FindObjectsSortMode.None))
+            if (candidate.name == name) count++;
+        return count;
+    }
+
+    // Host: a real new character in a real room, the guest walks in, they fight, the guest dies and
+    // respawns, then the host dies, loads its save and hosts the same code again.
+    private static IEnumerator<float> NetHostScenario()
+    {
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        GymNetSession.SetPending("host", NetUrl, null);
+        foreach (float wait in StartNewCharacter("bodybuilding")) yield return wait;
+        foreach (float wait in Until(() => NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby, 60d, "the room")) yield return wait;
+        Require(GymSessionService.Context == GymSaveContext.Host, "a hosting game is not in the Host context");
+        string code = NetSession.Client.RoomCode;
+        SyncWrite("code", code);
+        Debug.Log("GYMCHAOS_NET_HOST_ROOM code=" + code);
+        foreach (float wait in Until(() => NetSession.RemoteAvatarCount == 1 && NetSession.TryGetAvatar(1, out GymRemoteAvatar a) && a.PoseCount > 0, 240d, "the guest")) yield return wait;
+        foreach (float wait in SyncWait("guest-ready", 240d)) yield return wait;
+        yield return 1f;
+        NetSession.TryGetAvatar(1, out GymRemoteAvatar guestAvatar);
+        Shot("net-host-1-guest-avatar", LookAt(guestAvatar.transform.position));
+        Debug.Log("GYMCHAOS_NET_HOST_SEES_GUEST position=" + guestAvatar.transform.position);
+
+        // World actions that depend on both: glass breaking and being repaired by the host's fixer, and the day clock.
+        GlassShatterPanel glass = null;
+        foreach (GlassShatterPanel candidate in UnityEngine.Object.FindObjectsByType<GlassShatterPanel>(FindObjectsSortMode.None))
+            if (!candidate.IsShattered) { glass = candidate; break; }
+        Require(glass != null, "no intact glass panel for the coop glass test");
+        string glassId = glass.StableId;
+        glass.ShatterFromPowerImpact(glass.transform.position, glass.transform.forward, glass.transform.forward * 12f);
+        Require(glass.IsShattered, "the host's own glass did not break");
+        SyncWrite("glass-id", glassId);
+        foreach (float wait in SyncWait("guest-saw-glass", 60d)) yield return wait;
+        Require(glass.RepairByFixer(), "the host could not repair the glass");
+        SyncWrite("glass-repaired");
+        foreach (float wait in SyncWait("guest-saw-repair", 60d)) yield return wait;
+        GymTimeOfDay.Instance.RestoreSession(0.77f, 7);
+        SyncWrite("clock-set");
+        foreach (float wait in SyncWait("guest-saw-clock", 60d)) yield return wait;
+        // The other way round: the guest breaks glass, the host decides and both see it.
+        foreach (float wait in SyncWait("guest-glass-id", 60d)) yield return wait;
+        string guestGlassId = File.ReadAllText(Path.Combine(SyncDir, "guest-glass-id")).Trim();
+        foreach (float wait in Until(() => GlassShatterPanel.FindById(guestGlassId) != null && GlassShatterPanel.FindById(guestGlassId).IsShattered, 30d,
+            "the glass the guest broke")) yield return wait;
+        SyncWrite("host-saw-guest-glass");
+        Debug.Log("GYMCHAOS_NET_HOST_WORLD_ACTIONS_OK glass=" + glassId + " guestGlass=" + guestGlassId);
+
+        // PvP: walk up to the guest and punch.
+        PlayerMovement host = Player;
+        Vector3 stand = guestAvatar.transform.position + Vector3.right * 1.8f;
+        host.RestoreSessionState(true, stand, 270f, host.MaxHealth, 100f);
+        yield return 1.2f;
+        for (int i = 0; i < 6; i++)
+        {
+            Vector3 eye = host.transform.position + Vector3.up * GymNetPvp.EyeAboveRoot;
+            Vector3 aim = (guestAvatar.transform.position - eye).normalized;
+            GymNetPvp.LocalPunch(eye, aim);
+            yield return 0.35f;
+        }
+        SyncWrite("pvp-done");
+        foreach (float wait in SyncWait("guest-hurt", 60d)) yield return wait;
+        foreach (float wait in SyncWait("guest-low", 60d)) yield return wait;
+        // Finish the guest off.
+        for (int i = 0; i < 12 && !guestAvatar.IsCorpse; i++)
+        {
+            Vector3 eye = host.transform.position + Vector3.up * GymNetPvp.EyeAboveRoot;
+            GymNetPvp.LocalPunch(eye, (guestAvatar.transform.position - eye).normalized);
+            yield return 0.4f;
+        }
+        foreach (float wait in Until(() => guestAvatar.IsCorpse, 20d, "the guest's corpse")) yield return wait;
+        yield return 1f;
+        Shot("net-host-2-guest-corpse", LookAt(guestAvatar.transform.position));
+        Debug.Log("GYMCHAOS_NET_HOST_SEES_CORPSE");
+        SyncWrite("host-saw-corpse");
+        foreach (float wait in SyncWait("guest-respawned", 90d)) yield return wait;
+        foreach (float wait in Until(() => !guestAvatar.IsCorpse, 30d, "the guest standing again")) yield return wait;
+        yield return 1f;
+        Shot("net-host-3-guest-standing", LookAt(guestAvatar.transform.position));
+        Debug.Log("GYMCHAOS_NET_HOST_SEES_RESPAWN");
+
+        // The host dies: solo flow, then the same room again.
+        foreach (float wait in SaveNow()) yield return wait;
+        string slotId = GymSessionService.Active.slotId;
+        SyncWrite("host-dying");
+        Player.ReceiveEnemyPunch(100000f, Vector3.zero, null);
+        yield return Step;
+        Require(Player.IsDead, "lethal damage did not kill the host");
+        foreach (float wait in Until(() => GymStartScreen.IsMenuVisible && Menu != null &&
+            Menu.Current == GymSessionMenu.State.SaveList, 60d, "the save list after the host died")) yield return wait;
+        Require(GymNetSession.HasRecovery && GymNetSession.RecoveryCode == code, "the room was not remembered through the host's death");
+        Shot("net-host-4-save-list");
+        yield return 0.5f;
+        Menu.SelectSave(slotId);
+        yield return Step;
+        Menu.ConfirmLoad();
+        foreach (float wait in Until(() => GymArenaBootstrap.IsGameplayStarted, 60d, "the host's world again")) yield return wait;
+        foreach (float wait in Until(() => NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby, 60d, "the room again")) yield return wait;
+        Require(NetSession.Client.RoomCode == code, "the room came back as " + NetSession.Client.RoomCode + ", not " + code);
+        Require(GymSessionService.Context == GymSaveContext.Host && !GymNetSession.HasRecovery, "host context or recovery wrong after reload");
+        SyncWrite("host-back", NetSession.Client.RoomCode);
+        Debug.Log("GYMCHAOS_NET_HOST_REHOSTED code=" + NetSession.Client.RoomCode);
+        foreach (float wait in Until(() => NetSession.RemoteAvatarCount == 1 && NetSession.TryGetAvatar(1, out GymRemoteAvatar a) && a.PoseCount > 0, 180d, "the guest to rejoin")) yield return wait;
+        foreach (float wait in SyncWait("guest-rejoined", 120d)) yield return wait;
+        yield return 1.5f;
+        Require(CountNamed("Remote Player 1") == 1, "avatars for the guest: " + CountNamed("Remote Player 1"));
+        NetSession.TryGetAvatar(1, out GymRemoteAvatar again);
+        Shot("net-host-5-guest-rejoined", LookAt(again.transform.position));
+        SyncWrite("host-checked");
+        // The guest leaves through MAIN MENU: its avatar goes.
+        foreach (float wait in Until(() => NetSession.RemoteAvatarCount == 0, 120d, "the guest leaving")) yield return wait;
+        Debug.Log("GYMCHAOS_NET_TWO_PROCESS_HOST_OK code=" + code + " pvp=ok guestDeath=seen respawn=seen hostDeath=same-code rejoin=ok avatars=1 leave=ok");
+    }
+
+    // Guest: joins by code with its own new character, is hit, dies, uses the death menu, survives the host going down.
+    private static IEnumerator<float> NetGuestScenario()
+    {
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        foreach (float wait in SyncWait("code", 360d)) yield return wait;
+        string code = File.ReadAllText(Path.Combine(SyncDir, "code")).Trim();
+        GymNetSession.SetPending("join", NetUrl, code);
+        foreach (float wait in StartNewCharacter("cardio")) yield return wait;
+        Require(GymSessionService.Context == GymSaveContext.Join, "a joining game is not in the Join context");
+        foreach (float wait in Until(() => NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby &&
+            NetSession.Join.Guest == GymNetJoin.GuestState.Joined && NetSession.ActorsSuppressed && NetSession.Puppets.Count > 0, 240d,
+            "the host's world")) yield return wait;
+        Require(NetSession.Client.LocalId == 1, "guest id " + NetSession.Client.LocalId);
+        Debug.Log("GYMCHAOS_NET_GUEST_IN_WORLD puppets=" + NetSession.Puppets.Count);
+        yield return 1f;
+        Shot("net-guest-1-world-with-puppets");
+        SyncWrite("guest-ready");
+
+        // The host breaks and repairs glass and sets the clock: this world follows.
+        foreach (float wait in SyncWait("glass-id", 120d)) yield return wait;
+        string glassId = File.ReadAllText(Path.Combine(SyncDir, "glass-id")).Trim();
+        foreach (float wait in Until(() => GlassShatterPanel.FindById(glassId) != null && GlassShatterPanel.FindById(glassId).IsShattered, 30d, "the host's glass to break here")) yield return wait;
+        SyncWrite("guest-saw-glass");
+        foreach (float wait in SyncWait("glass-repaired", 60d)) yield return wait;
+        foreach (float wait in Until(() => !GlassShatterPanel.FindById(glassId).IsShattered, 30d, "the host's repair to reach this glass")) yield return wait;
+        SyncWrite("guest-saw-repair");
+        foreach (float wait in SyncWait("clock-set", 60d)) yield return wait;
+        foreach (float wait in Until(() => GymTimeOfDay.Instance.CurrentDay == 7 && Mathf.Abs(GymTimeOfDay.Instance.Time01 - 0.77f) < 0.03f, 30d,
+            "the host's day clock")) yield return wait;
+        SyncWrite("guest-saw-clock");
+        // The guest breaks glass near itself: its own copy stays whole until the host decides.
+        GlassShatterPanel nearest = null;
+        float nearestDistance = float.MaxValue;
+        foreach (GlassShatterPanel candidate in UnityEngine.Object.FindObjectsByType<GlassShatterPanel>(FindObjectsSortMode.None))
+        {
+            float d = Vector3.Distance(candidate.transform.position, Player.transform.position);
+            if (!candidate.IsShattered && d < nearestDistance) { nearest = candidate; nearestDistance = d; }
+        }
+        Require(nearest != null && nearestDistance < GymNetInteractions.MaxReach - 2f, "no glass within the host's reach of the guest (" + nearestDistance + ")");
+        string guestGlassId = nearest.StableId;
+        nearest.ShatterFromPowerImpact(nearest.transform.position, nearest.transform.forward, nearest.transform.forward * 12f);
+        Require(!nearest.IsShattered, "the guest's glass broke before the host decided");
+        SyncWrite("guest-glass-id", guestGlassId);
+        foreach (float wait in Until(() => GlassShatterPanel.FindById(guestGlassId).IsShattered, 30d, "the host to break the glass the guest asked for")) yield return wait;
+        foreach (float wait in SyncWait("host-saw-guest-glass", 60d)) yield return wait;
+        Debug.Log("GYMCHAOS_NET_GUEST_WORLD_ACTIONS_OK");
+
+        foreach (float wait in SyncWait("pvp-done", 240d)) yield return wait;
+        PlayerMovement guest = Player;
+        foreach (float wait in Until(() => guest.CurrentHealth < guest.MaxHealth - 1f, 30d, "damage from the host's punches")) yield return wait;
+        Debug.Log("GYMCHAOS_NET_GUEST_HURT health=" + guest.CurrentHealth);
+        Shot("net-guest-2-hurt");
+        SyncWrite("guest-hurt");
+        SetPlayerHealth(guest, 10f);
+        SyncWrite("guest-low");
+        foreach (float wait in Until(() => guest.IsDead, 60d, "the guest's death")) yield return wait;
+        Vector3 deathPosition = guest.transform.position;
+        Debug.Log("GYMCHAOS_NET_GUEST_DIED position=" + deathPosition);
+        foreach (float wait in Until(() => GymPauseMenu.IsDeathMenuVisible, 30d, "the death menu")) yield return wait;
+        Require(NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby, "the guest left the room when it died");
+        yield return 0.7f;
+        Shot("net-guest-3-death-menu");
+        foreach (float wait in SyncWait("host-saw-corpse", 120d)) yield return wait;
+        Require(GymNetSession.RespawnLocalPlayer(), "LOAD GAME in the death menu did nothing");
+        yield return 0.8f;
+        Require(!guest.IsDead && Vector3.Distance(guest.transform.position, deathPosition) < 0.75f, "the guest did not respawn where it died");
+        Require(!GymPauseMenu.IsDeathMenuVisible, "the death menu stayed open after LOAD GAME");
+        Shot("net-guest-4-respawned");
+        SyncWrite("guest-respawned");
+        Debug.Log("GYMCHAOS_NET_GUEST_RESPAWNED");
+
+        // The host dies and reloads: this guest waits and rejoins.
+        foreach (float wait in SyncWait("host-dying", 180d)) yield return wait;
+        foreach (float wait in Until(() => NetSession != null && NetSession.Reconnect != null && NetSession.Reconnect.Active, 60d, "the guest to notice the host is down")) yield return wait;
+        yield return 1f;
+        Shot("net-guest-5-host-down");
+        Debug.Log("GYMCHAOS_NET_GUEST_HOST_DOWN");
+        Require(!guest.IsDead && GymSessionService.HasActive, "the guest lost its character while the host was down");
+        foreach (float wait in SyncWait("host-back", 360d)) yield return wait;
+        foreach (float wait in Until(() => NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby &&
+            !NetSession.Reconnect.Active && NetSession.Join.Guest == GymNetJoin.GuestState.Joined, 240d, "the automatic rejoin")) yield return wait;
+        Require(NetSession.Client.RoomCode == code, "rejoined room " + NetSession.Client.RoomCode);
+        yield return 1.5f;
+        Shot("net-guest-6-rejoined");
+        Debug.Log("GYMCHAOS_NET_GUEST_REJOINED");
+        SyncWrite("guest-rejoined");
+
+        // The guest never wrote the host's world into its own save.
+        foreach (float wait in SaveNow()) yield return wait;
+        GymSaveReadResult read = GymSessionService.Repository.Read(GymSessionService.Active.slotId);
+        Require(read.Success && !read.Data.hasWorld && read.Data.worldRevision == 0, "the guest save holds a world section");
+        // MAIN MENU leaves the room (after the host has looked at the rejoined guest).
+        foreach (float wait in SyncWait("host-checked", 120d)) yield return wait;
+        yield return 1f;
+        GymSessionService.ReturnToMenu();
+        yield return 2f;
+        Debug.Log("GYMCHAOS_NET_TWO_PROCESS_GUEST_OK world=untouched death=menu+respawn hostDown=reconnected leave=ok");
     }
 }

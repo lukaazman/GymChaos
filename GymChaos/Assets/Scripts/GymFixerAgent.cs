@@ -461,6 +461,7 @@ public sealed class GymFixerAgent : MonoBehaviour
         region.Expand(new Vector3(1.5f, 0f, 1.5f));
         float started = Time.realtimeSinceStartup;
         yield return navGrid.Build(region, doorway.InteriorPoint.y, transform, 700);
+        BlockBehindReceptionDesk();
         Vector3 outward = Vector3.ProjectOnPlane(
             doorway.ExteriorPoint - doorway.InteriorPoint, Vector3.up).normalized;
         navGrid.ForceWalkable(
@@ -469,6 +470,23 @@ public sealed class GymFixerAgent : MonoBehaviour
             $"GYMCHAOS_FIXER_NAV_READY cells={navGrid.CellCount} walkable={navGrid.WalkableCount} " +
             $"seconds={Time.realtimeSinceStartup - started:F2}", this);
         gridRoutine = null;
+    }
+
+    // The strip between the reception desk and the wall is the receptionist's: Larry goes round the front and never in there.
+    private void BlockBehindReceptionDesk()
+    {
+        GameObject desk = GymSceneLookup.Find("Reception desk");
+        Renderer deskRenderer = desk != null ? desk.GetComponentInChildren<Renderer>(true) : null;
+        if (deskRenderer == null || !GymInteriorBuilder.TryGetMainGymBounds(out Bounds gym)) return;
+        Bounds counter = deskRenderer.bounds;
+        bool wallAtMaxZ = gym.max.z - counter.max.z < counter.min.z - gym.min.z;
+        float from = wallAtMaxZ ? counter.center.z : gym.min.z - 1f;
+        float to = wallAtMaxZ ? gym.max.z + 1f : counter.center.z;
+        Vector3 min = new Vector3(counter.min.x - 0.4f, counter.min.y, from);
+        Vector3 max = new Vector3(counter.max.x + 0.4f, counter.max.y, to);
+        Bounds zone = new Bounds();
+        zone.SetMinMax(min, max);
+        navGrid.Block(zone);
     }
 
     private void EnterState(FixerState next)

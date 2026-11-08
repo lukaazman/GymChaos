@@ -494,6 +494,8 @@ public sealed class GymFixerDirector : MonoBehaviour
     /// </summary>
     public SummonResult Summon()
     {
+        // A guest's fixer would be one the host does not know about.
+        if (GymNetSession.Instance != null && GymNetSession.Instance.ActorsSuppressed) return SummonResult.Unavailable;
         if (visitActive)
         {
             return SummonResult.AlreadyHere;
@@ -750,6 +752,20 @@ public sealed class GymFixerDirector : MonoBehaviour
     internal void ReviveForVerification(EnemyFighter fighter) => StartCoroutine(ReviveCorpse(fighter, null));
 #endif
 
+    private static readonly Collider[] standingHits = new Collider[8];
+
+    /// <summary>True when a standing body fits at this ground point: a nav cell beside a fence would wake him wedged.</summary>
+    private static bool FitsStanding(Vector3 ground, Transform self)
+    {
+        int count = Physics.OverlapCapsuleNonAlloc(ground + Vector3.up * 0.55f, ground + Vector3.up * 1.5f, 0.45f,
+            standingHits, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            if (!standingHits[i].transform.IsChildOf(self)) return false;
+        }
+        return true;
+    }
+
     private IEnumerator ReviveCorpse(EnemyFighter fighter, GymFixerAgent fixer)
     {
         Vector3 corpse = fighter.VisitorPhysicsPosition;
@@ -840,8 +856,9 @@ public sealed class GymFixerDirector : MonoBehaviour
                 doorway.InteriorPoint - doorway.ExteriorPoint, Vector3.up).normalized;
             stand = doorway.InteriorPoint + inward * 1.6f;
         }
-        if (fixer != null && fixer.NavGrid != null &&
-            fixer.NavGrid.TryNearestWalkable(stand, 1.5f, out Vector3 open))
+        // A body revived without the fixer (verifier) still snaps to open ground: a corpse resting in a fence corner must not wake wedged.
+        GymFixerNavGrid snapGrid = fixer != null ? fixer.NavGrid : agent != null ? agent.NavGrid : null;
+        if (snapGrid != null && snapGrid.TryNearestWalkable(stand, 1.5f, out Vector3 open) && FitsStanding(open, fighter.transform))
         {
             stand = open;
         }

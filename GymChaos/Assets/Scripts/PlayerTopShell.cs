@@ -33,7 +33,25 @@ public static class PlayerTopShell
         // Pants: built as straight leg tubes and a seat yoke (BuildStraightPants).
         public bool StraightLegs;
         // Cloth smoothness: matte cotton by default; track-pants tricot shines a little.
-        public float Smoothness = 0.06f;
+        public float Smoothness = 0.18f;
+        // Extra bagginess in rest units (body height 1) pushed out along the
+        // smoothed normals, so the garment hangs instead of tracing muscles.
+        public float ExtraEase;
+        // Pulls the open neck edge onto a true circle of this radius (rest
+        // units); 0 leaves the scan's cut alone.
+        public float CollarRadius;
+        // Extra ease across the deltoids and traps (rest units), so the
+        // shoulder seam hangs off the shoulder instead of tracing it.
+        public float ShoulderEase;
+        // Lifts the collared neck edge off the chest and up a few mm, the way
+        // a sewn rib band stands proud of the cloth.
+        public float CollarLift;
+        // Built from the body's measurements with its own UVs instead of a copy
+        // of the scan (the oversized tee): a true crew neck, dropped shoulders
+        // and a straight hem on a tiling fabric.
+        public bool LoftedTee;
+        // Resources path of the tiling fabric the lofted garment maps to.
+        public string FabricResource;
         internal Color32[] MaskPixels;
         internal int MaskWidth;
         internal int MaskHeight;
@@ -45,8 +63,15 @@ public static class PlayerTopShell
     public static readonly Style Oversized = new Style
     {
         Name = ShellObjectName, MaskResource = "Player/Outfits/oversized_shell",
-        SmoothIterations = 12, Lambda = 0.6f, EdgeOverhang = 0.007f,
-        DrapeSmoothing = 150f, DrapeRadius = 0.034f
+        SmoothIterations = 28, Lambda = 0.6f, EdgeOverhang = 0.012f,
+        DrapeSmoothing = 190f, DrapeRadius = 0.034f,
+        // Oversized, not oppressed: loose cloth over a sewn crew neck that sits
+        // close to the neck like the scan's own tank top. Slick polyester knit,
+        // so the cloth catches light instead of reading as flat carpet.
+        // Dropped shoulders and a rib band that stands up: the reference tee
+        // hangs off the traps instead of printing them through the cloth.
+        ExtraEase = 0.016f, ShoulderEase = 0.014f, CollarLift = 0.0065f,
+        CollarRadius = 0.052f, Smoothness = 0.16f
     };
     // Compression knit: a few mm off the skin, smoothed just enough to hide
     // the sculpted tank-top neckline and hem ridges in the scan.
@@ -73,7 +98,10 @@ public static class PlayerTopShell
     {
         Name = PantsObjectName, MaskResource = "Player/Outfits/pants_shell",
         SmoothIterations = 60, Lambda = 0.6f, EdgeOverhang = 0.006f,
-        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.22f
+        DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.18f,
+        // The lofted pants carry their own UVs, so they take the tiling brushed
+        // fleece instead of the old painted fabric atlas.
+        FabricResource = "Player/Outfits/fleece_brushed"
     };
     private static readonly Style[] AllStyles = { Oversized, Onyx, Shorts, Pants };
 
@@ -232,6 +260,22 @@ public static class PlayerTopShell
             if (materials[0].HasProperty("_BaseMap")) materials[0].SetTexture("_BaseMap", texture);
             if (materials[0].HasProperty("_MainTex")) materials[0].SetTexture("_MainTex", texture);
         }
+        // Lofted garments have their own UVs, so they take a tiling fabric (grey
+        // at BottomsFabricLevel) tinted by the cloth colour instead of the scan's
+        // painted atlas, whose islands each carry a different texel density.
+        if (!string.IsNullOrEmpty(style.FabricResource))
+        {
+            Texture2D fabric = Resources.Load<Texture2D>(style.FabricResource);
+            if (fabric != null)
+            {
+                if (materials[0].HasProperty("_BaseMap")) materials[0].SetTexture("_BaseMap", fabric);
+                if (materials[0].HasProperty("_MainTex")) materials[0].SetTexture("_MainTex", fabric);
+                Color cloth = bandColor / BottomsFabricLevel;
+                cloth.a = 1f;
+                if (materials[0].HasProperty("_BaseColor")) materials[0].SetColor("_BaseColor", cloth);
+                materials[0].color = cloth;
+            }
+        }
         // Cloth is matte: the body's skin smoothness read as plastic on the
         // knit and cotton.
         for (int m = 0; m < materials.Length; m++)
@@ -240,10 +284,21 @@ public static class PlayerTopShell
             if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", style.Smoothness);
             if (material.HasProperty("_Glossiness")) material.SetFloat("_Glossiness", style.Smoothness);
             if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", 0f);
-            if (material.HasProperty("_SpecularHighlights")) material.SetFloat("_SpecularHighlights", 0f);
-            if (material.HasProperty("_EnvironmentReflections")) material.SetFloat("_EnvironmentReflections", 0f);
-            material.EnableKeyword("_SPECULARHIGHLIGHTS_OFF");
-            material.EnableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
+            // Sportswear catches a little light: only truly matte cloth keeps
+            // the specular off. Flat-on-everything read as carpet.
+            bool slick = style.Smoothness > 0.1f;
+            if (material.HasProperty("_SpecularHighlights")) material.SetFloat("_SpecularHighlights", slick ? 1f : 0f);
+            if (material.HasProperty("_EnvironmentReflections")) material.SetFloat("_EnvironmentReflections", slick ? 1f : 0f);
+            if (slick)
+            {
+                material.DisableKeyword("_SPECULARHIGHLIGHTS_OFF");
+                material.DisableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
+            }
+            else
+            {
+                material.EnableKeyword("_SPECULARHIGHLIGHTS_OFF");
+                material.EnableKeyword("_ENVIRONMENTREFLECTIONS_OFF");
+            }
         }
         if (tint.HasValue)
         {
@@ -657,11 +712,54 @@ public static class PlayerTopShell
             }
             for (int i = 0; i < n; i++) pos[i] += delta[i] * 0.5f;
         }
+        if (style.CollarRadius > 0f)
+        {
+            RoundCollar(pos, boundary, neighbours, delta, style.CollarRadius);
+        }
+        if (style.CollarLift > 0f)
+        {
+            // A sewn crew neck stands off the chest: raise the round edge and
+            // tip it up, so it reads as a rib band instead of a cut.
+            for (int i = 0; i < n; i++)
+            {
+                if (!boundary[i] || pos[i].z <= 0.775f) continue;
+                float nx = pos[i].x, ny = pos[i].y - 0.01f;
+                if (Mathf.Sqrt(nx * nx + ny * ny) > 0.095f) continue;
+                // Push the ring out along the neck radius, not along the
+                // vertex normal: the normals around the ragged cut point at
+                // random, and lifting single vertices made spikes.
+                float radial = Mathf.Sqrt(nx * nx + ny * ny);
+                if (radial > 1e-4f)
+                {
+                    pos[i] += new Vector3(nx / radial, ny / radial, 0f) * style.CollarLift;
+                }
+                pos[i] += new Vector3(0f, 0f, style.CollarLift * 0.5f);
+            }
+        }
 
         double inflateSum = 0d, moveSum = 0d;
         for (int i = 0; i < n; i++)
         {
             float amount = weldedInflate[i];
+            if (style.ExtraEase > 0f)
+            {
+                // Loose cloth everywhere but the collar: the neckline stays a
+                // sewn circle instead of stretching out with the body of the shirt.
+                float nx = pos[i].x, ny = pos[i].y - 0.01f;
+                bool collar = pos[i].z > 0.75f && Mathf.Sqrt(nx * nx + ny * ny) < 0.095f;
+                if (!collar) amount += style.ExtraEase;
+                if (!collar && style.ShoulderEase > 0f)
+                {
+                    // Deltoid and trap band: the cloth has to clear the muscles
+                    // the scan sculpted, or the shoulder line reads as a print.
+                    float ax = Mathf.Abs(pos[i].x);
+                    float across = Mathf.Clamp01(Mathf.InverseLerp(0.085f, 0.13f, ax)) *
+                        (1f - Mathf.Clamp01(Mathf.InverseLerp(0.18f, 0.225f, ax)));
+                    float rise = Mathf.Clamp01(Mathf.InverseLerp(0.69f, 0.745f, pos[i].z)) *
+                        (1f - Mathf.Clamp01(Mathf.InverseLerp(0.80f, 0.83f, pos[i].z)));
+                    amount += style.ShoulderEase * across * rise;
+                }
+            }
             inflateSum += amount;
             Vector3 p = pos[i] + normals[i] * amount;
             float gap = Vector3.Dot(p - original[i], normals[i]);
@@ -734,6 +832,13 @@ public static class PlayerTopShell
             weld = usedWeld.ToArray();
             count = usedSource.Count;
         }
+        // The lofted tee measures and skins from the garment's own vertices, so
+        // it runs on the pruned component: atlas bleed onto the thighs used to
+        // pull 62 % of a thigh bone into the hem.
+        if (style.LoftedTee)
+        {
+            return BuildLooseTee(welded, weld, sourceIndex, weights, scale);
+        }
 
         Vector3[] outVertices = new Vector3[count];
         Vector3[] outNormals = new Vector3[count];
@@ -770,16 +875,394 @@ public static class PlayerTopShell
         };
     }
 
+    /// <summary>
+    /// A true round crew neck. The shell's opening follows the scan's ragged
+    /// cut, which read as a torn scoop with the collar pulled at the throat;
+    /// the open ring is pulled onto one circle and the ring under it relaxed
+    /// so the neckline rolls into the shoulders.
+    /// </summary>
+    private static void RoundCollar(Vector3[] pos, bool[] boundary, List<int>[] neighbours, Vector3[] delta, float radius)
+    {
+        const float neckY = 0.01f;
+        // Reach far enough to catch the whole ragged cut (the scan's opening
+        // strayed past the neck by 13 cm, which left teeth on the ring).
+        const float reach = 0.138f;
+        for (int pass = 0; pass < 6; pass++)
+        {
+            SnapCollarRing(pos, boundary, radius, neckY, reach);
+            for (int iteration = 0; iteration < 4; iteration++)
+            {
+                for (int i = 0; i < pos.Length; i++)
+                {
+                    delta[i] = Vector3.zero;
+                    if (boundary[i] || pos[i].z <= 0.72f) continue;
+                    float nx = pos[i].x, ny = pos[i].y - neckY;
+                    if (Mathf.Sqrt(nx * nx + ny * ny) > reach + 0.03f) continue;
+                    List<int> list = neighbours[i];
+                    if (list.Count == 0) continue;
+                    Vector3 sum = Vector3.zero;
+                    for (int k = 0; k < list.Count; k++) sum += pos[list[k]];
+                    delta[i] = sum / list.Count - pos[i];
+                }
+                for (int i = 0; i < pos.Length; i++) pos[i] += delta[i] * 0.4f;
+            }
+        }
+        SnapCollarRing(pos, boundary, radius, neckY, reach);
+        // Level the ring and cone the rows under it: snapping the radius alone
+        // left the opening's teeth (each boundary vertex kept its own cut
+        // height), which is what read as a torn scoop.
+        float meanZ = 0f;
+        int ringCount = 0;
+        for (int i = 0; i < pos.Length; i++)
+        {
+            if (boundary[i] && pos[i].z > 0.74f) { meanZ += pos[i].z; ringCount++; }
+        }
+        if (ringCount == 0) return;
+        meanZ /= ringCount;
+        for (int i = 0; i < pos.Length; i++)
+        {
+            if (boundary[i])
+            {
+                if (pos[i].z > 0.74f) pos[i].z = Mathf.Lerp(pos[i].z, meanZ, 0.7f);
+                continue;
+            }
+            float x = pos[i].x, dy = pos[i].y - neckY;
+            float r = Mathf.Sqrt(x * x + dy * dy);
+            if (r < 1e-4f || r > radius * 1.5f) continue;
+            float drop = meanZ - pos[i].z;
+            if (drop <= 0f) continue;
+            float target = radius + 0.022f * Mathf.Clamp01(drop / 0.022f);
+            if (r >= target) continue;
+            float s = Mathf.Lerp(1f, target / r, 0.55f);
+            pos[i] = new Vector3(x * s, neckY + dy * s, pos[i].z);
+        }
+    }
+
+    private static void SnapCollarRing(Vector3[] pos, bool[] boundary, float radius, float neckY, float reach)
+    {
+        for (int i = 0; i < pos.Length; i++)
+        {
+            if (!boundary[i] || pos[i].z <= 0.74f) continue;
+            float x = pos[i].x, dy = pos[i].y - neckY;
+            float r = Mathf.Sqrt(x * x + dy * dy);
+            if (r < 1e-4f || r > reach) continue;
+            float k = Mathf.Clamp01((reach - r) / 0.062f);
+            if (k <= 0f) continue;
+            float scale = Mathf.Lerp(1f, radius / r, k);
+            pos[i] = new Vector3(x * scale, neckY + dy * scale, pos[i].z);
+        }
+    }
+
+    // ---- oversized tee (built, not copied from the scan) ---------------
+    // A copy of the scan's tank top keeps its muscle relief (lumps over the
+    // traps and deltoids), its ragged collar cut and its body UVs. The tee is
+    // lofted instead: one grid of rings from the hem through the shoulder
+    // slope to the rib collar band, sleeves as tubes out of the shoulders,
+    // boxy ease and its own UVs on the tiling jersey.
+    private const float TeeTile = 0.12f;
+    private const float TeeNeckRadius = 0.049f;
+    // Vertices inside this half-width are torso; the arms hang outside it and
+    // must not widen the chest.
+    private const float TeeTorsoHalf = 0.19f;
+
+    private static ShellData BuildLooseTee(List<Vector3> body, int[] weld, List<int> sourceIndex,
+        BoneWeight[] weights, float scale)
+    {
+        int n = body.Count;
+        if (n < 200) return null;
+        int[] firstSource = new int[n];
+        for (int i = 0; i < n; i++) firstSource[i] = -1;
+        for (int i = 0; i < weld.Length; i++) if (firstSource[weld[i]] < 0) firstSource[weld[i]] = sourceIndex[i];
+
+        // Rest space (body height 1): z up, x across the shoulders, y front/back.
+        Vector3 min = body[0], max = body[0];
+        for (int i = 1; i < n; i++) { min = Vector3.Min(min, body[i]); max = Vector3.Max(max, body[i]); }
+        float height = max.z - min.z;
+        if (height < 0.12f) return null;
+        float hemZ = max.z - height * 0.97f;
+        float shoulderZ = max.z - height * 0.10f;
+        float neckZ = max.z - height * 0.02f;
+        float cx = 0f, cy = 0f;
+        for (int i = 0; i < n; i++) { cx += body[i].x; cy += body[i].y; }
+        cx /= n; cy /= n;
+
+        const int sides = 120;
+        const int columns = sides + 1;
+        const int torsoRings = 30;
+        const int shoulderRings = 4;
+        const int collarRings = 4;
+        int rings = torsoRings + shoulderRings + collarRings;
+        float stepZ = (shoulderZ - hemZ) / (torsoRings - 1);
+
+        // Body reach per torso ring and direction.
+        float[,] reach = new float[torsoRings, sides];
+        for (int i = 0; i < n; i++)
+        {
+            Vector3 p = body[i];
+            if (p.z < hemZ - stepZ || p.z > shoulderZ + stepZ) continue;
+            float dx = p.x - cx, dy = p.y - cy;
+            if (Mathf.Abs(dx) > TeeTorsoHalf || Mathf.Abs(dy) > 0.19f) continue;
+            int r = Mathf.Clamp(Mathf.RoundToInt((p.z - hemZ) / stepZ), 0, torsoRings - 1);
+            int s = Sector(new Vector2(dx, dy), sides);
+            reach[r, s] = Mathf.Max(reach[r, s], Mathf.Sqrt(dx * dx + dy * dy));
+        }
+
+        float[,] radius = new float[rings, sides];
+        float[] row = new float[sides];
+        float[] chest = new float[sides];
+        for (int s = 0; s < sides; s++)
+        {
+            float widest = 0f;
+            for (int r = 0; r < torsoRings; r++) widest = Mathf.Max(widest, reach[r, s]);
+            chest[s] = widest;
+        }
+        for (int r = 0; r < torsoRings; r++)
+        {
+            float t = r / (float)(torsoRings - 1);
+            // Boxy, not compressed: a little ease at the hem, most over the
+            // chest, snug at the shoulder, so the sides hang straight instead
+            // of tracing the lats.
+            float ease = Mathf.Lerp(0.022f, 0.026f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.15f, 0.7f, t)));
+            ease = Mathf.Lerp(ease, 0.015f, Mathf.InverseLerp(0.85f, 1f, t));
+            for (int s = 0; s < sides; s++)
+            {
+                float bodyReach = reach[r, s] > 0f ? reach[r, s] : chest[s] * 0.85f;
+                row[s] = Mathf.Max(bodyReach + ease, (chest[s] + 0.026f) * 0.96f);
+            }
+            SmoothRing(row, 3);
+            for (int s = 0; s < sides; s++) radius[r, s] = row[s];
+        }
+        // No steps ring to ring: a straight fall of cloth, not stacked tubes.
+        for (int pass = 0; pass < 5; pass++)
+            for (int r = 1; r < torsoRings - 1; r++)
+                for (int s = 0; s < sides; s++)
+                    radius[r, s] = Mathf.Max(radius[r, s],
+                        (radius[r - 1, s] + radius[r, s] * 2f + radius[r + 1, s]) * 0.25f);
+
+        // Shoulder slope: the shoulder ring narrows into the neck.
+        for (int k = 1; k <= shoulderRings; k++)
+        {
+            int r = torsoRings - 1 + k;
+            float f = Mathf.SmoothStep(0f, 1f, k / (float)shoulderRings);
+            for (int s = 0; s < sides; s++) radius[r, s] = Mathf.Lerp(radius[torsoRings - 1, s], TeeNeckRadius, f);
+        }
+        // Rib crew band: stands a few mm off the neck and turns over at the top.
+        for (int k = 1; k <= collarRings; k++)
+        {
+            int r = torsoRings - 1 + shoulderRings + k;
+            for (int s = 0; s < sides; s++)
+                radius[r, s] = TeeNeckRadius + 0.0035f + (k == collarRings ? 0.0015f : 0f);
+        }
+
+        float[] ringZ = new float[rings];
+        for (int r = 0; r < torsoRings; r++) ringZ[r] = hemZ + r * stepZ;
+        for (int k = 1; k <= shoulderRings; k++)
+            ringZ[torsoRings - 1 + k] = Mathf.Lerp(shoulderZ, neckZ,
+                Mathf.SmoothStep(0f, 1f, k / (float)shoulderRings));
+        float collarTop = neckZ + 0.020f;
+        for (int k = 1; k <= collarRings; k++)
+            ringZ[torsoRings - 1 + shoulderRings + k] = Mathf.Lerp(neckZ, collarTop, k / (float)collarRings);
+
+        List<Vector3> verts = new List<Vector3>(rings * columns + 1200);
+        List<Vector2> uvList = new List<Vector2>(rings * columns + 1200);
+        List<int> fabric = new List<int>();
+        List<int> band = new List<int>();
+        float meanRadius = 0f;
+        for (int r = 0; r < rings; r++)
+            for (int s = 0; s < sides; s++) meanRadius += radius[r, s];
+        meanRadius /= rings * sides;
+        float torsoU = Mathf.PI * 2f * meanRadius / TeeTile;
+        for (int r = 0; r < rings; r++)
+        {
+            float z = ringZ[r];
+            for (int s = 0; s < sides; s++)
+            {
+                // Long drape lines down the sides and a soft break at the hem:
+                // smooth functions of the angle, never per-vertex noise.
+                float angle = s * Mathf.PI * 2f / sides;
+                float drape = 0.0035f * Mathf.Sin(angle * 6f) * Mathf.Clamp01((shoulderZ - z) / 0.2f);
+                float rS = radius[r, s] + drape;
+                float px = cx + Mathf.Cos(angle) * rS, py = cy + Mathf.Sin(angle) * rS;
+                verts.Add(new Vector3(float.IsNaN(px) ? cx : px, float.IsNaN(py) ? cy : py, z));
+                uvList.Add(new Vector2(s / (float)sides * torsoU, z / TeeTile));
+            }
+            // Seam column repeats column 0, so the fabric UVs do not wrap.
+            verts.Add(verts[verts.Count - sides]);
+            uvList.Add(new Vector2(torsoU, z / TeeTile));
+        }
+        Loft(0, rings, sides, fabric, band, 1, collarRings);
+
+        // Sleeves: tubes from inside the shoulder out over the upper arm. Their
+        // first ring is buried in the torso, so the armhole reads as a seam.
+        int sleeveStart = verts.Count;
+        const int sleeveSides = 40;
+        const int sleeveRings = 12;
+        const float sleeveStep = 0.0125f;
+        float sleeveU = Mathf.PI * 2f * 0.070f / TeeTile;
+        for (int side = 0; side < 2; side++)
+        {
+            float sign = side == 0 ? -1f : 1f;
+            Vector3 direction = new Vector3(sign, 0f, -0.62f).normalized;
+            Vector3 e1 = Vector3.Cross(direction, new Vector3(0f, 0f, 1f)).normalized;
+            Vector3 e2 = Vector3.Cross(direction, e1).normalized;
+            Vector3 shoulder = new Vector3(cx + sign * (TeeTorsoHalf * 0.86f), cy, shoulderZ - 0.045f);
+            Vector3 start = shoulder - direction * 0.030f;
+            for (int r = 0; r < sleeveRings; r++)
+            {
+                Vector3 centre = start + direction * (r * sleeveStep);
+                float t = r / (float)(sleeveRings - 1);
+                // Relaxed short sleeve: widens off the shoulder to the hem.
+                float sleeveRadius = Mathf.Lerp(0.060f, 0.079f, Mathf.SmoothStep(0f, 1f, t));
+                for (int s = 0; s < sleeveSides; s++)
+                {
+                    float angle = s * Mathf.PI * 2f / sleeveSides;
+                    verts.Add(centre + (e1 * Mathf.Cos(angle) + e2 * Mathf.Sin(angle)) * sleeveRadius);
+                    uvList.Add(new Vector2(s / (float)sleeveSides * sleeveU, (r * sleeveStep + 0.05f) / TeeTile));
+                }
+                verts.Add(verts[verts.Count - sleeveSides]);
+                uvList.Add(new Vector2(sleeveU, (r * sleeveStep + 0.05f) / TeeTile));
+            }
+            Loft(sleeveStart + side * sleeveRings * (sleeveSides + 1), sleeveRings, sleeveSides,
+                fabric, band, 1, 0);
+        }
+
+        // Outward winding: flip the whole cloth when the first torso triangle
+        // faces inward (the sleeves use the same ring handedness).
+        {
+            int a = fabric[0], b = fabric[1], c = fabric[2];
+            Vector3 face = Vector3.Cross(verts[b] - verts[a], verts[c] - verts[a]);
+            Vector3 p = (verts[a] + verts[b] + verts[c]) / 3f;
+            if (Vector3.Dot(face, new Vector3(p.x - cx, p.y - cy, 0f)) < 0f)
+            {
+                Flip(fabric);
+                Flip(band);
+            }
+        }
+
+        // Some scan vertices carry no bone weight at all; copying one leaves a
+        // collar vertex undeformed and it stays behind in the rest pose.
+        bool Weighted(int bodyIndex)
+        {
+            if (weights == null) return true;
+            int source0 = firstSource[bodyIndex];
+            if (source0 < 0) return false;
+            BoneWeight w = weights[source0];
+            return w.weight0 + w.weight1 + w.weight2 + w.weight3 > 1e-4f;
+        }
+        int count = verts.Count;
+        Vector3[] outVertices = new Vector3[count];
+        Vector2[] outUv = uvList.ToArray();
+        BoneWeight[] outWeights = weights != null ? new BoneWeight[count] : null;
+        Dictionary<Vector3Int, List<int>> grid = new Dictionary<Vector3Int, List<int>>();
+        const float cell = 0.03f;
+        Vector3Int Cell(Vector3 p) => new Vector3Int(Mathf.FloorToInt(p.x / cell), Mathf.FloorToInt(p.y / cell),
+            Mathf.FloorToInt(p.z / cell));
+        for (int i = 0; i < n; i++)
+        {
+            Vector3Int key = Cell(body[i]);
+            if (!grid.TryGetValue(key, out List<int> list)) grid[key] = list = new List<int>();
+            list.Add(i);
+        }
+        for (int v = 0; v < count; v++)
+        {
+            Vector3 p = verts[v];
+            // The cloth takes the bones of its own part: the torso follows the
+            // chest and hips (never the arm, or a punch drags a shoulder patch
+            // off the body), and a sleeve takes only its own arm.
+            bool sleeve = v >= sleeveStart;
+            int side = sleeve ? (p.x >= cx ? 1 : 0) : -1;
+            Vector3Int c = Cell(p);
+            int best = -1;
+            float bestDistance = float.MaxValue;
+            for (int attempt = 0; attempt < 2 && best < 0; attempt++)
+            {
+                bool restricted = attempt == 0;
+                for (int radiusSearch = 1; radiusSearch <= 5 && best < 0; radiusSearch++)
+                {
+                    for (int x = -radiusSearch; x <= radiusSearch; x++)
+                        for (int y = -radiusSearch; y <= radiusSearch; y++)
+                            for (int z = -radiusSearch; z <= radiusSearch; z++)
+                            {
+                                if (!grid.TryGetValue(new Vector3Int(c.x + x, c.y + y, c.z + z), out List<int> list)) continue;
+                                for (int k = 0; k < list.Count; k++)
+                                {
+                                    if (restricted)
+                                    {
+                                        float bx = body[list[k]].x - cx;
+                                        if (sleeve)
+                                        {
+                                            if ((bx >= 0f ? 1 : 0) != side || Mathf.Abs(bx) < TeeTorsoHalf * 0.72f) continue;
+                                        }
+                                        else if (Mathf.Abs(bx) > TeeTorsoHalf * 0.92f) continue;
+                                        // The mask's bottom edge sits on the
+                                        // thighs; a hem vertex that copied
+                                        // one followed DEF-thigh.R 33 cm off
+                                        // the body in a punch.
+                                        else if (body[list[k]].z < hemZ + 0.05f) continue;
+                                        // Same height band only: an unweighted
+                                        // patch at the hem otherwise made the
+                                        // search jump 20 cm up to the chest and
+                                        // the hem hung on DEF-breast.
+                                        else if (Mathf.Abs(body[list[k]].z - p.z) > 0.06f) continue;
+                                    }
+                                    if (!Weighted(list[k])) continue;
+                                    float d = (body[list[k]] - p).sqrMagnitude;
+                                    if (d < bestDistance) { bestDistance = d; best = list[k]; }
+                                }
+                            }
+                }
+            }
+            // Last resort: a vertex the grid never reached (a sleeve that leans
+            // off the arm) still takes the nearest body vertex, so no part of the
+            // cloth is left unskinned at the rest pose.
+            if (best < 0)
+            {
+                bestDistance = float.MaxValue;
+                for (int i = 0; i < n; i++)
+                {
+                    if (!Weighted(i)) continue;
+                    float d = (body[i] - p).sqrMagnitude;
+                    if (d < bestDistance) { bestDistance = d; best = i; }
+                }
+            }
+            int source = best >= 0 ? firstSource[best] : -1;
+            outVertices[v] = p * scale;
+            if (outWeights != null && source >= 0) outWeights[v] = weights[source];
+        }
+        // Nearest-vertex weights jump ring to ring; blend them over the cloth
+        // grid so the shoulder slope and the hem do not crease.
+        if (outWeights != null)
+        {
+            SmoothWeights(outWeights, 0, rings, columns, 6);
+            for (int side = 0; side < 2; side++)
+                SmoothWeights(outWeights, sleeveStart + side * sleeveRings * (sleeveSides + 1),
+                    sleeveRings, sleeveSides + 1, 6);
+        }
+
+        Vector3[] outNormals = new Vector3[count];
+        AddFaceNormals(outVertices, fabric, outNormals);
+        AddFaceNormals(outVertices, band, outNormals);
+        for (int v = 0; v < count; v++) outNormals[v] = outNormals[v].normalized;
+
+        return new ShellData
+        {
+            Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,
+            Fabric = fabric, Band = band,
+            Log = $"looseTee vertices={count} rings={rings} hem={hemZ:F3} shoulder={shoulderZ:F3} " +
+                $"neck={TeeNeckRadius:F3} torsoHalf={TeeTorsoHalf:F3}"
+        };
+    }
+
     // ---- straight-leg pants (built, not copied from the scan) ----------
     // Rest units (body height 1, as build_player_bottoms.py). The scan's
     // shorts are a layered rim round the thigh: a copied shell stacked it into
     // rings and tore at the crotch, so the pants are lofted instead: two
     // straight leg tubes and a seat yoke round both, sized from the body.
     private const float PantsHem = 0.055f;
-    private const float PantsWaist = 0.522f;
+    private const float PantsWaist = 0.545f;
     // Legs run up into the yoke; the yoke reaches down over the leg tops.
     private const float LegTop = 0.37f;
-    private const float YokeBottom = 0.35f;
+    private const float YokeBottom = 0.33f;
     private const float RingStep = 0.01f;
     private const int LegSides = 48;
     private const int YokeSides = 56;
@@ -787,17 +1270,22 @@ public static class PlayerTopShell
     // and the leg runs in one straight taper to 80 % at the hem, with a
     // pressed front crease, a few long drape lines and a soft break over the
     // shoe. Not tight, not a balloon.
-    private const float ThighEase = 0.01f;
-    private const float HemEase = 0.016f;
+    // Sportswear, not a parachute: a few millimetres of ease only.
+    private const float ThighEase = 0.0025f;
+    private const float HemEase = 0.004f;
     private const float ThighCap = 0.31f;
-    private const float HemTaper = 0.75f;
+    // Straight leg: near the upper thigh's width, barely tapered.
+    private const float HemTaper = 0.96f;
     private const float HemFlare = 0.002f;
     private const float HemBreak = 0.003f;
     private const float CreaseDepth = 0.0025f;
-    private const float DrapeDepth = 0.006f;
+    private const float DrapeDepth = 0.0022f;
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
-    private const float Clearance = 0.006f;
+    private const float Clearance = 0.003f;
+    // The seat needs more room than a leg tube: the scan's old shorts rim is a
+    // raised lip, and at 3 mm it poked through as small dark holes on the hips.
+    private const float SeatClearance = 0.008f;
 
     private static ShellData BuildStraightPants(List<Vector3> body, int[] weld, List<int> sourceIndex,
         Vector2[] uvs, BoneWeight[] weights, float scale)
@@ -934,7 +1422,9 @@ public static class PlayerTopShell
                 float z = PantsHem + r * RingStep;
                 float taper = Mathf.Lerp(HemTaper, 1f, Mathf.Clamp01((z - PantsHem) / (ThighCap - PantsHem)));
                 for (int s = 0; s < LegSides; s++)
-                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper);
+                    // Slim, not baggy: the tube only ever adds to the body's
+                    // own width, so trimming it here cannot cut into the leg.
+                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper * 0.95f);
             }
             for (int pass = 0; pass < 4; pass++)
                 for (int r = 1; r < legRings - 1; r++)
@@ -953,7 +1443,7 @@ public static class PlayerTopShell
                 float drapeFade = 1f - Mathf.Clamp01((z - (ThighCap - 0.06f)) / 0.08f);
                 // Under the seat the leg tucks just inside it, with the plain
                 // outline the seat's bottom edge follows (no crease or drape).
-                float tuck = 0.006f * Mathf.Clamp01((z - YokeBottom) / RingStep);
+                float tuck = 0.011f * Mathf.Clamp01((z - YokeBottom) / RingStep);
                 float creaseFade = 1f - Mathf.Clamp01((z - (YokeBottom - 0.05f)) / 0.04f);
                 for (int s = 0; s <= LegSides; s++)
                 {
@@ -974,7 +1464,9 @@ public static class PlayerTopShell
         }
 
         // Yoke: covers the leg tops at the crotch, then follows the hips with
-        // a little ease up to the waistband.
+        // a little ease up to the waistband. Its bottom edge rides a hair
+        // outside the leg (it used to float 3.5-5 mm off and its shadow drew
+        // the line across both thighs).
         float[] ring = new float[YokeSides];
         int yokeStart = verts.Count;
         float[,] yokeRadius = new float[yokeRings, YokeSides];
@@ -982,11 +1474,7 @@ public static class PlayerTopShell
         {
             float z = YokeBottom + r * RingStep;
             float wrap = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(LegTop, LegTop + 0.05f, z));
-            // The bottom edge tucks just inside the legs (no ledge); above it
-            // the yoke covers the leg tops.
-            // The bottom edge lies on the leg surface itself, so the seat
-            // continues the leg without a step; above it a hair outside.
-            float overLegs = r == 0 ? 0f : r == 1 ? 0.001f : 0.002f;
+            float overLegs = r == 0 ? 0.0030f : r == 1 ? 0.0035f : 0.0040f;
             for (int s = 0; s < YokeSides; s++)
             {
                 float angle = s * Mathf.PI * 2f / YokeSides;
@@ -994,16 +1482,34 @@ public static class PlayerTopShell
                 int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
                 float legs = Mathf.Max(RayToLeg(pelvis, dir, axis[0], legOutline, 0, legRing, overLegs),
                     RayToLeg(pelvis, dir, axis[1], legOutline, 1, legRing, overLegs));
-                // The bottom edge follows the legs only (they already clear the body).
-                // Over the leg tops the yoke follows the legs only (they clear the
-                // body and the old shorts rim); above, the hips with a little ease.
                 // No body in this sector (the top rings pass the mask's waist):
                 // keep the ring below, or the waistband collapsed into a cone.
-                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + Clearance : yokeRadius[r - 1, s];
+                // Room over the hips, flush at the waistband so the shirt hem
+                // and the pants waist end up the same width.
+                float seatClearance = Mathf.Lerp(SeatClearance, 0.004f, Mathf.InverseLerp(YokeBottom, PantsWaist, z));
+                float hips = yokeReach[r, s] > 0f || r == 0 ? yokeReach[r, s] + seatClearance : yokeRadius[r - 1, s];
                 ring[s] = z < LegTop ? legs : Mathf.Max(hips, legs * wrap);
             }
             if (r > 0) SmoothRing(ring, 6);
             for (int s = 0; s < YokeSides; s++) yokeRadius[r, s] = ring[s];
+        }
+        // The relaxation below can pull a ring inside the thigh it covers; the
+        // sliver of body then shows through as a dark dot on the hip. Keep
+        // every ring that still rides the legs outside them.
+        for (int r = 0; r < yokeRings; r++)
+        {
+            float z = YokeBottom + r * RingStep;
+            if (z > LegTop + 0.005f) break;
+            int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
+            float over = r == 0 ? 0.0030f : r == 1 ? 0.0035f : 0.0040f;
+            for (int s2 = 0; s2 < YokeSides; s2++)
+            {
+                float angle = s2 * Mathf.PI * 2f / YokeSides;
+                Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                float legs = Mathf.Max(RayToLeg(pelvis, dir, axis[0], legOutline, 0, legRing, over),
+                    RayToLeg(pelvis, dir, axis[1], legOutline, 1, legRing, over));
+                yokeRadius[r, s2] = Mathf.Max(yokeRadius[r, s2], legs);
+            }
         }
         // Even out ring to ring, so the seat drapes instead of tracing the hips.
         for (int pass = 0; pass < 8; pass++)
@@ -1089,27 +1595,38 @@ public static class PlayerTopShell
         // the leg vertex under them, or the two parts moved apart into a seam.
         int seamRing = Mathf.Clamp(Mathf.RoundToInt((YokeBottom - PantsHem) / RingStep), 0, legRings - 1);
         int[] seatOnLeg = new int[3 * (YokeSides + 1)];
+        for (int i = 0; i < seatOnLeg.Length; i++) seatOnLeg[i] = -1;
         for (int r = 0; r < 3; r++)
             for (int c = 0; c <= YokeSides; c++)
             {
                 int y = yokeStart + r * (YokeSides + 1) + c;
+                // Crotch vertices keep the seat's own hip weights: taking a
+                // thigh on each side drew a web between the legs in walking.
+                if (Mathf.Abs(verts[y][lateral] - centre) < 0.02f) continue;
                 int legRing = Mathf.Min(seamRing + r, legRings - 1);
                 float best = float.MaxValue;
+                int closest = -1;
                 for (int leg = 0; leg < 2; leg++)
                     for (int c2 = 0; c2 <= LegSides; c2++)
                     {
                         int l = leg * legVertexCount + legRing * (LegSides + 1) + c2;
                         float d = (verts[l] - verts[y]).sqrMagnitude;
-                        if (d < best) { best = d; seatOnLeg[r * (YokeSides + 1) + c] = l; }
+                        if (d < best) { best = d; closest = l; }
                     }
+                // The saddle takes the weights of the leg it sits on; at the
+                // crotch that is the near thigh of its own side.
+                if (closest < 0 || best > 0.0015f * 0.0015f) continue;
+                seatOnLeg[r * (YokeSides + 1) + c] = closest;
             }
         if (outWeights != null)
         {
             SmoothWeights(outWeights, 0, legRings, LegSides + 1, 6);
             SmoothWeights(outWeights, legVertexCount, legRings, LegSides + 1, 6);
-            for (int i = 0; i < seatOnLeg.Length; i++) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
+            for (int i = 0; i < seatOnLeg.Length; i++)
+                if (seatOnLeg[i] >= 0) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
             SmoothWeights(outWeights, yokeStart, yokeRings, YokeSides + 1, 10);
-            for (int i = 0; i < 2 * (YokeSides + 1); i++) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
+            for (int i = 0; i < 2 * (YokeSides + 1); i++)
+                if (seatOnLeg[i] >= 0) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
         }
         // Own UVs on the tiling fabric (pants_fabric.png), not the body atlas.
         for (int v = 0; v < count; v++) outUv[v] = uvList[v];
@@ -1127,6 +1644,7 @@ public static class PlayerTopShell
         {
             int l = seatOnLeg[i];
             outNormals[yokeStart + i] = outNormals[yokeStart + i + YokeSides + 1];
+            if (l < 0) continue;
             outNormals[l] = outNormals[yokeStart + i];
             outNormals[l - (LegSides + 1)] = Vector3.Slerp(outNormals[l - (LegSides + 1)], outNormals[l], 0.5f).normalized;
         }
@@ -1232,7 +1750,8 @@ public static class PlayerTopShell
     // Quads between consecutive rings of sides + 1 vertices (the last one
     // repeats the first, so the fabric UVs do not wrap); the first hemBand
     // and last topBand rows (hem, waistband) go to the band submesh.
-    private static void Loft(int start, int rings, int sides, List<int> fabric, List<int> band, int hemBand, int topBand)
+    private static void Loft(int start, int rings, int sides, List<int> fabric, List<int> band,
+        int hemBand, int topBand)
     {
         int columns = sides + 1;
         for (int r = 0; r < rings - 1; r++)

@@ -893,7 +893,9 @@ public static class GymInteriorBuilder
 
         float posterBottom = center.y + 0.92f;
         float posterTop = center.y + lowerHeight - 0.42f;
-        float headerBottom = posterTop + 0.22f;
+        // The header starts where the yellow walls end: overlapping them in
+        // the same depth plane made the paint flicker.
+        float headerBottom = center.y + lowerHeight;
         float headerTop = center.y + height - 0.35f;
         float headerHeight = Mathf.Clamp(headerTop - headerBottom, 0.9f, 2.1f);
         float headerY = headerBottom + headerHeight * 0.5f;
@@ -902,14 +904,14 @@ public static class GymInteriorBuilder
             new Vector3(center.x, headerY, southWallZ + 0.18f),
             new Vector3(width - 0.5f, headerHeight, 0.08f),
             cream, false);
-        CreateWorldText(
-            "FITNES KING", parent,
-            new Vector3(center.x, headerY + 0.02f, southWallZ + 0.245f),
-            Mathf.Clamp(
-                Mathf.Min(headerHeight * 0.38f, Mathf.Max(1f, width - 0.9f) / 11.5f),
-                0.3f, 0.7f),
+        TextMesh title = CreateWorldText(
+            "FITNESS KING", parent,
+            new Vector3(center.x, headerY, southWallZ + 0.245f),
+            1f,
             new Color(0.012f, 0.012f, 0.012f),
             Quaternion.Euler(0f, 180f, 0f));
+        // As large as the header allows, a small margin inside its edges.
+        FitLettering(title, width - 0.5f - 0.3f, headerHeight - 0.2f);
 
         float posterHeight = Mathf.Min(3.75f, posterTop - posterBottom);
         float posterCenterY = (posterBottom + posterTop) * 0.5f;
@@ -941,7 +943,7 @@ public static class GymInteriorBuilder
         Debug.Log(
             "GYMCHAOS_MECCA_POSTERS_OK posters=10 west=5 east=5 " +
             "lockerDoorGap=2.8 yellowLower=1 whiteHeader=1 " +
-            "textures=10 labels=0 title=FITNES_KING");
+            "textures=10 labels=0 title=FITNESS_KING");
     }
 
     private static void CreatePersonalityPoster(
@@ -989,7 +991,31 @@ public static class GymInteriorBuilder
         return material;
     }
 
-    private static void CreateWorldText(
+    /// <summary>Sizes a TextMesh so its capital glyph block fits the box (TextMesh maps one font pixel to characterSize / 10 m).</summary>
+    private static void FitLettering(TextMesh label, float maxWidth, float maxHeight)
+    {
+        Font font = label.font != null ? label.font : PersonaMenuStyle.BuiltinFont;
+        font.RequestCharactersInTexture(label.text, label.fontSize, label.fontStyle);
+        float pixelsWide = 0f;
+        float minY = float.MaxValue;
+        float maxY = float.MinValue;
+        foreach (char c in label.text)
+        {
+            if (!font.GetCharacterInfo(c, out CharacterInfo info, label.fontSize, label.fontStyle)) continue;
+            pixelsWide += info.advance;
+            if (c == ' ') continue;
+            minY = Mathf.Min(minY, info.minY);
+            maxY = Mathf.Max(maxY, info.maxY);
+        }
+        if (pixelsWide <= 0f || maxY <= minY) return;
+        label.characterSize = Mathf.Min(maxWidth / (pixelsWide * 0.1f), maxHeight / ((maxY - minY) * 0.1f));
+        // The glyph maths above ignores the mesh's own padding: rescale to the real rendered bounds.
+        Bounds drawn = label.GetComponent<Renderer>().bounds;
+        float shrink = Mathf.Min(maxWidth / Mathf.Max(0.01f, drawn.size.x), maxHeight / Mathf.Max(0.01f, drawn.size.y));
+        if (shrink < 1f) label.characterSize *= shrink;
+    }
+
+    private static TextMesh CreateWorldText(
         string text, Transform parent, Vector3 position, float characterSize, Color color,
         Quaternion rotation)
     {
@@ -1005,6 +1031,7 @@ public static class GymInteriorBuilder
         label.alignment = TextAlignment.Center;
         label.color = color;
         UseDepthTestedText(labelObject.GetComponent<MeshRenderer>(), color);
+        return label;
     }
 
     internal static void UseDepthTestedText(MeshRenderer renderer, Color color)

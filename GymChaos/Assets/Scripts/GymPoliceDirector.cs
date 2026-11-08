@@ -73,6 +73,8 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private int policeCarRouteOverlapCount;
 
     public static bool IsDispatchActive => instance != null && instance.dispatchActive;
+    /// <summary>Police still angry with the player: dispatched, the officer (once out of the car) not dead, and not already driving off calm.</summary>
+    public static bool IsPoliceThreat => IsDispatchActive && !instance.calmDeparture && (LastOfficer == null || !LastOfficer.IsDead);
     public static GymPoliceDirector ActiveInstance => instance;
     public static EnemyFighter LastOfficer { get; private set; }
     public static Transform LastKillerTarget { get; private set; }

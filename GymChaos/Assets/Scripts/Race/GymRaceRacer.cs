@@ -16,6 +16,11 @@ public sealed class GymRaceRacer : MonoBehaviour
     public Color Color = Color.white;
     public bool IsPlayer;
     public int GridSlot;
+    /// <summary>A human on another machine drives this kart (co-op race).</summary>
+    public bool RemoteHuman;
+    public int NetId = -1;
+    /// <summary>Guest: laps and finish come from the host; Tick only follows the road position.</summary>
+    public bool TrackOnly;
 
     public GymRaceKart Kart { get; private set; }
     public bool OnShortcut { get; private set; }
@@ -167,6 +172,12 @@ public sealed class GymRaceRacer : MonoBehaviour
         {
             return false;
         }
+        if (TrackOnly)
+        {
+            stuckTimer = Kart.Input.Throttle > 0.5f && Kart.Speed < 1.2f ? stuckTimer + dt : 0f;
+            NeedsRespawn = stuckTimer > StuckSeconds || vertical < -OffTrackFall || Mathf.Abs(lateral) > halfWidth + 6f;
+            return false;
+        }
 
         // Sectors guard against crossing the line backwards for a lap.
         float L = main.Length;
@@ -229,6 +240,15 @@ public sealed class GymRaceRacer : MonoBehaviour
         float a = Mathf.Repeat(previous - line, length);
         float b = Mathf.Repeat(current - line, length);
         return a > length - 30f && b < 30f;
+    }
+
+    /// <summary>Guest: lap and finish state decided by the host.</summary>
+    public void ApplyNet(int crossings, bool finished, int finishPlace, float finishTime)
+    {
+        Crossings = Mathf.Clamp(crossings, 0, GymRaceTrackLayout.Laps + 1);
+        Finished = finished;
+        FinishPlace = finishPlace;
+        FinishTime = finishTime;
     }
 
     /// <summary>Puts the kart back on the last safe road point.</summary>

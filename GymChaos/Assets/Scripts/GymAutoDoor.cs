@@ -6,9 +6,11 @@ using UnityEngine;
 /// the protein.com storefront (sliding leaves). The door opens only for
 /// people close to the opening or about to reach it (velocity prediction, so
 /// a sprinting player never meets a closed leaf) and closes after the
-/// opening is clear. Leaves carry no colliders: a sensed person never waits
-/// for the leaf, so nobody can be stuck on it, and route probes see the same
-/// passage as before.
+/// opening is clear. Each leaf has a box collider that is on only while the
+/// door is mostly shut (below <see cref="SolidBelowBlend"/>), so a closed door
+/// blocks people but an opening or open one never traps anybody: the door
+/// opens before a sensed person arrives and only closes once the opening is
+/// clear.
 /// </summary>
 public sealed class GymAutoDoor : MonoBehaviour
 {
@@ -27,6 +29,7 @@ public sealed class GymAutoDoor : MonoBehaviour
         public float HingeSign;
         // Slide: local offset of the fully open leaf.
         public Vector3 SlideLocalOffset;
+        public BoxCollider Body;
     }
 
     // Depth (along the door normal) and lateral margin of the presence zone.
@@ -40,6 +43,9 @@ public sealed class GymAutoDoor : MonoBehaviour
     private const float CloseDelay = 0.55f;
     private const float SampleInterval = 0.08f;
     private const float VerticalReach = 2.6f;
+    // Leaf colliders are solid below this open amount.
+    public const float SolidBelowBlend = 0.5f;
+    private const float MinimumLeafThickness = 0.08f;
 
     private static readonly List<GymAutoDoor> doors = new List<GymAutoDoor>();
     private static readonly List<Vector3> peoplePositions = new List<Vector3>(48);
@@ -67,16 +73,44 @@ public sealed class GymAutoDoor : MonoBehaviour
     private float swingDirection = 1f;
     private float lastWantedTime = -100f;
     private bool sensedLastSample;
+    private bool networkDriven;
+    private float networkTarget;
     private int sensedCount;
     public string DoorName => doorName;
     public DoorKind Kind => kind;
     public float OpenBlend => blend;
+    /// <summary>Open amount with the swing side as its sign (swing doors), for the snapshot.</summary>
+    public float SignedOpenBlend => kind == DoorKind.Swing && swingDirection < 0f ? -blend : blend;
     public bool IsClosed => blend <= 0.002f;
     public bool IsSensingSomeone => sensedLastSample;
     public Vector3 Center => center;
     public Vector3 Normal => normal;
     public float HalfWidth => halfWidth;
     public int LeafCount => leaves.Count;
+    internal static IReadOnlyList<GymAutoDoor> AllDoors => doors;
+    public bool IsNetworkDriven => networkDriven;
+
+    /// <summary>Back to local sensing (the host went away).</summary>
+    public void StopNetworkDrive() => networkDriven = false;
+
+    /// <summary>Guest: the host decides when this door is open; local sensing stops.</summary>
+    public void DriveFromNetwork(float hostBlend)
+    {
+        networkDriven = true;
+        networkTarget = Mathf.Clamp01(Mathf.Abs(hostBlend));
+        // The host's door swings away from whoever opened it, who may be a player this guest does not sense.
+        if (kind == DoorKind.Swing && networkTarget > 0.01f && blend <= 0.01f) swingDirection = hostBlend < 0f ? -1f : 1f;
+    }
+    public bool LeavesSolid => leaves.Count > 0 && leaves[0].Body != null && leaves[0].Body.enabled;
+
+    public bool OwnsCollider(Collider collider)
+    {
+        for (int i = 0; i < leaves.Count; i++)
+        {
+            if (leaves[i].Body == collider) return true;
+        }
+        return false;
+    }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStatics()
@@ -128,7 +162,8 @@ public sealed class GymAutoDoor : MonoBehaviour
             Transform = hingePivot,
             ClosedLocalPosition = hingePivot.localPosition,
             ClosedLocalRotation = hingePivot.localRotation,
-            HingeSign = Mathf.Sign(hingeSign)
+            HingeSign = Mathf.Sign(hingeSign),
+            Body = CreateBody(hingePivot)
         });
         appliedBlend = -1f;
     }
@@ -141,9 +176,38 @@ public sealed class GymAutoDoor : MonoBehaviour
             Transform = leaf,
             ClosedLocalPosition = leaf.localPosition,
             ClosedLocalRotation = leaf.localRotation,
-            SlideLocalOffset = openLocalOffset
+            SlideLocalOffset = openLocalOffset,
+            Body = CreateBody(leaf)
         });
         appliedBlend = -1f;
+    }
+
+    /// <summary>Box over the closed leaf's renderers, in the leaf's own space.</summary>
+    private static BoxCollider CreateBody(Transform leaf)
+    {
+        Renderer[] renderers = leaf.GetComponentsInChildren<Renderer>(true);
+        bool any = false;
+        Bounds local = default;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Bounds world = renderers[i].bounds;
+            for (int corner = 0; corner < 8; corner++)
+            {
+                Vector3 point = leaf.InverseTransformPoint(world.center + Vector3.Scale(world.extents,
+                    new Vector3((corner & 1) == 0 ? -1f : 1f, (corner & 2) == 0 ? -1f : 1f, (corner & 4) == 0 ? -1f : 1f)));
+                if (!any) { local = new Bounds(point, Vector3.zero); any = true; }
+                else local.Encapsulate(point);
+            }
+        }
+        if (!any) return null;
+        BoxCollider body = leaf.gameObject.AddComponent<BoxCollider>();
+        body.center = local.center;
+        // Rotated leaf bounds overshoot a little; the door face stays thin.
+        Vector3 size = local.size;
+        body.size = new Vector3(
+            Mathf.Max(size.x, MinimumLeafThickness), Mathf.Max(size.y, MinimumLeafThickness),
+            Mathf.Max(size.z, MinimumLeafThickness));
+        return body;
     }
 
     /// <summary>True when a person at <paramref name="position"/> moving at
@@ -230,6 +294,8 @@ public sealed class GymAutoDoor : MonoBehaviour
         }
 
         float target = Time.time - lastWantedTime <= CloseDelay ? 1f : 0f;
+        // A guest's door also opens for the guest itself at once (the host only learns of it a round trip later) and follows the host for everybody else.
+        if (networkDriven) target = Mathf.Max(target, networkTarget);
         float duration = target > blend ? openSeconds : closeSeconds;
         blend = Mathf.MoveTowards(blend, target, Time.deltaTime / duration);
         ApplyPose();
@@ -239,12 +305,14 @@ public sealed class GymAutoDoor : MonoBehaviour
     {
         if (Mathf.Approximately(blend, appliedBlend)) return;
         appliedBlend = blend;
+        bool solid = blend < SolidBelowBlend;
         // Ease in and out so the leaves start and stop softly.
         float eased = blend * blend * (3f - 2f * blend);
         for (int i = 0; i < leaves.Count; i++)
         {
             Leaf leaf = leaves[i];
             if (leaf.Transform == null) continue;
+            if (leaf.Body != null) leaf.Body.enabled = solid;
             if (kind == DoorKind.Swing)
             {
                 // Hinge pivots are children of this door; rotating about
@@ -317,6 +385,16 @@ public sealed class GymAutoDoor : MonoBehaviour
         if (fixer != null && fixer.isActiveAndEnabled)
         {
             AddPerson(fixer.transform, dt);
+        }
+
+        // Other players are people too: the host's doors open for them.
+        GymNetSession session = GymNetSession.Instance;
+        if (session != null)
+        {
+            foreach (GymRemoteAvatar avatar in session.Avatars)
+            {
+                if (avatar != null) AddPerson(avatar.transform, dt);
+            }
         }
 
         Dictionary<Transform, Vector3> swap = lastPositions;

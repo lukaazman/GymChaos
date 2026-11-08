@@ -14,6 +14,8 @@ param(
     [switch]$Bench,
     # With -Bench: ?race=1 starts the race and waits for the Racing phase.
     [switch]$Race,
+    # Extra query text appended to the page URL, e.g. "&net=join&code=ABCD&relay=ws://127.0.0.1:8787".
+    [string]$ExtraQuery = '',
     [int]$Port = 8765,
     # GYMCHAOS_WEBGL_FPS windows to collect after boot (5 s each).
     [ValidateRange(1, 20)]
@@ -98,7 +100,7 @@ $started = Get-Date
 try
 {
     Start-Sleep -Seconds 1
-    $openArgs = @("-s=$session", 'open', "--config=$config", "http://127.0.0.1:$Port/index.html?fps=1$(if ($Bench) { '&bench=1' })$(if ($Race) { '&race=1' })")
+    $openArgs = @("-s=$session", 'open', "--config=$config", "http://127.0.0.1:$Port/index.html?fps=1$(if ($Bench) { '&bench=1' })$(if ($Race) { '&race=1' })$ExtraQuery")
     if ($Headed) { $openArgs += '--headed' }
     playwright-cli @openArgs | Out-Null
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)

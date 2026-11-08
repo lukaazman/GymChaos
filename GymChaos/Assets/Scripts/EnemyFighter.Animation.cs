@@ -244,6 +244,36 @@ public partial class EnemyFighter
 
         return true;
     }
+    // Chaos race: Goku rides his kart's anchor, standing on the grid, then
+    // takes off into the chase flight pose (same lift, clip and aura) while
+    // the kart steers him round the track.
+    private bool raceFlight;
+    private Vector3 RaceFlightLift => raceFlight ? Vector3.up * (GokuFlightHeight * GokuFlightAuraBlend) : Vector3.zero;
+
+    /// <summary>Takes off from the race anchor set by <see cref="BeginVisitorVehicleRide"/>.</summary>
+    public void BeginRaceFlight()
+    {
+        if (!IsGoku() || visitorVehicleRideAnchor == null || raceFlight) return;
+        raceFlight = true;
+        gokuFlightState = GokuFlightState.TakingOff;
+        gokuFlightTransition = 0f;
+    }
+
+    /// <summary>Back to standing on the race anchor (rematch grid).</summary>
+    public void EndRaceFlight()
+    {
+        raceFlight = false;
+        gokuFlightState = GokuFlightState.Grounded;
+        gokuFlightTransition = 0f;
+    }
+
+    private void TickRaceFlight()
+    {
+        if (gokuFlightState != GokuFlightState.TakingOff) return;
+        gokuFlightTransition = Mathf.Min(1f, gokuFlightTransition + Time.fixedDeltaTime / GokuFlightTransitionDuration);
+        if (gokuFlightTransition >= 1f) gokuFlightState = GokuFlightState.Flying;
+    }
+
     private void MoveGokuFlightPosition(Vector3 desiredPosition)
     {
         if (body == null)

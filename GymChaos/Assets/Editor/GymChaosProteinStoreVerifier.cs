@@ -498,7 +498,8 @@ public static class GymChaosProteinStoreVerifier
         Physics.SyncTransforms();
         bool blocked = Physics.Linecast(from, to, out RaycastHit hit, ~0, QueryTriggerInteraction.Ignore) &&
             hit.collider.GetComponentInParent<EnemyFighter>() == null &&
-            hit.collider.GetComponentInParent<PlayerMovement>() == null;
+            hit.collider.GetComponentInParent<PlayerMovement>() == null &&
+            !hit.collider.name.StartsWith("Store Door Leaf", StringComparison.Ordinal);
         details = $"padWest={padWest:F2} padEast={padEast:F2} padSouth={padSouth:F2} padNorth={padNorth:F2} " +
             $"fill={fill:F2} entrance={GymProteinStoreEnvironment.EntranceMinZ:F2}->{GymProteinStoreEnvironment.EntranceMaxZ:F2} " +
             $"pathEnd={pathEndZ:F2} openingClear={!blocked}" +

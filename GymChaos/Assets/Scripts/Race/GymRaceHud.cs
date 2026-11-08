@@ -63,6 +63,11 @@ public sealed class GymRaceHud : MonoBehaviour
     private float placePop;
     private int lastPlace = -1;
 
+    // Rows reserved for co-op players on top of the six solo racers.
+    private const int MaxNetPlayers = 3;
+    /// <summary>Racers in this race (the standings show "place / total").</summary>
+    public int RacerTotal = GymRaceTrackLayout.RacerCount;
+
     public static GymRaceHud Create()
     {
         GameObject go = new GameObject("Race HUD (Runtime)");
@@ -101,7 +106,7 @@ public sealed class GymRaceHud : MonoBehaviour
         // Standings: one black bar per racer with the place, a head portrait
         // (transparent, no backdrop) and the name to its right.
         RectTransform standings = Corner("Standings", new Vector2(0f, 0.5f), new Vector2(40f, -40f), new Vector2(330f, 300f));
-        for (int i = 0; i < GymRaceTrackLayout.RacerCount; i++)
+        for (int i = 0; i < GymRaceTrackLayout.RacerCount + MaxNetPlayers; i++)
         {
             Image bar = new GameObject("Bar " + i, typeof(RectTransform), typeof(Image)).GetComponent<Image>();
             RectTransform barRect = bar.rectTransform;
@@ -226,18 +231,22 @@ public sealed class GymRaceHud : MonoBehaviour
     /// Back plus one race button per unlocked level. With only Easy open the
     /// results row stays BACK TO GYM / RACE AGAIN; before a race it reads BACK.
     /// </summary>
-    public void ShowChoice(int unlockedDifficulty, bool beforeRace)
+    public void ShowChoice(int unlockedDifficulty, bool beforeRace, bool backOnly = false)
     {
         GymRuntimeSettings.EnsureEventSystem();
         ChoiceMade = Choice.None;
         visibleChoices.Clear();
         visibleChoices.Add(0);
-        for (int d = 0; d <= unlockedDifficulty && d < GymRaceDirector.DifficultyNames.Length; d++)
+        for (int d = 0; !backOnly && d <= unlockedDifficulty && d < GymRaceDirector.DifficultyNames.Length; d++)
         {
             visibleChoices.Add(d + 1);
         }
         SetLabel(choiceButtons[0], beforeRace ? "BACK" : "BACK TO GYM");
-        SetLabel(choiceButtons[1], unlockedDifficulty == 0 && !beforeRace ? "RACE AGAIN" : GymRaceDirector.DifficultyNames[0]);
+        for (int d = 0; d < GymRaceDirector.DifficultyNames.Length; d++)
+        {
+            SetLabel(choiceButtons[d + 1], GymRaceDirector.DifficultyNames[d]);
+        }
+        if (unlockedDifficulty == 0 && !beforeRace) SetLabel(choiceButtons[1], "RACE AGAIN");
         float width = visibleChoices.Count > 3 ? 250f : visibleChoices.Count > 2 ? 300f : 360f;
         float step = width + 30f;
         float left = 930f - step * (visibleChoices.Count - 1) * 0.5f;
@@ -254,6 +263,16 @@ public sealed class GymRaceHud : MonoBehaviour
         group.interactable = true;
         group.blocksRaycasts = true;
         FocusChoice(0);
+    }
+
+    /// <summary>Game mode screen: BACK, then one button per mode; the pick comes back as <see cref="ChosenDifficulty"/>.</summary>
+    public void ShowModeChoice()
+    {
+        ShowChoice(GymRaceDirector.ModeNames.Length - 1, true);
+        for (int m = 0; m < GymRaceDirector.ModeNames.Length; m++)
+        {
+            SetLabel(choiceButtons[m + 1], GymRaceDirector.ModeNames[m]);
+        }
     }
 
     public void HideChoice()
@@ -409,7 +428,7 @@ public sealed class GymRaceHud : MonoBehaviour
         }
         placeText.text = Ordinal(place);
         placeText.color = place == 1 ? PersonaMenuStyle.Gold : place <= 3 ? PersonaMenuStyle.Ink : PersonaMenuStyle.Accent;
-        placeOfText.text = "/ " + GymRaceTrackLayout.RacerCount;
+        placeOfText.text = "/ " + RacerTotal;
         placeText.transform.localScale = Vector3.one * (1f + 0.3f * placePop);
         placePop = Mathf.MoveTowards(placePop, 0f, Time.deltaTime * 3f);
 

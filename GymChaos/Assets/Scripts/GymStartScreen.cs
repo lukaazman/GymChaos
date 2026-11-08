@@ -181,10 +181,79 @@ public sealed class GymStartScreen : MonoBehaviour
             }
         }
 
+        if (Application.platform == RuntimePlatform.WebGLPlayer) CreateWebNotice(buttonFont);
+
         if (EventSystem.current != null && playButton != null)
         {
             EventSystem.current.SetSelectedGameObject(playButton.gameObject);
         }
+    }
+
+    // WebGL only: a speech bubble over the receptionist saying this is a trimmed build.
+    private RectTransform webNotice;
+    private Transform noticeTarget;
+    private float noticeHeadHeight = -1f;
+
+    private void CreateWebNotice(Font font)
+    {
+        GameObject root = new GameObject("Web Build Notice", typeof(RectTransform));
+        root.transform.SetParent(transform, false);
+        webNotice = root.GetComponent<RectTransform>();
+        webNotice.pivot = new Vector2(0.5f, 0f);
+        webNotice.sizeDelta = new Vector2(430f, 168f);
+
+        const float tail = 30f;
+        PersonaShape outline = PersonaMenuStyle.CreateShape("Outline", root.transform, Accent);
+        SetAnchors(outline.rectTransform, Vector2.zero, Vector2.one, -4f, tail - 4f, -4f, -4f);
+        PersonaShape face = PersonaMenuStyle.CreateShape("Face", root.transform, PersonaMenuStyle.ButtonIdle);
+        SetAnchors(face.rectTransform, Vector2.zero, Vector2.one, 0f, tail, 0f, 0f);
+        PersonaShape wedgeOutline = PersonaMenuStyle.CreateShape("Tail Outline", root.transform, Accent);
+        SetAnchors(wedgeOutline.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), -26f, 0f, -26f, 0f);
+        wedgeOutline.rectTransform.sizeDelta = new Vector2(52f, tail + 8f);
+        wedgeOutline.rectTransform.anchoredPosition = new Vector2(0f, (tail + 8f) * 0.5f - 4f);
+        wedgeOutline.SetCorners(new Vector2(0.5f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.5f, 0f));
+        PersonaShape wedge = PersonaMenuStyle.CreateShape("Tail", root.transform, PersonaMenuStyle.ButtonIdle);
+        SetAnchors(wedge.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
+        wedge.rectTransform.sizeDelta = new Vector2(40f, tail + 6f);
+        wedge.rectTransform.anchoredPosition = new Vector2(0f, (tail + 6f) * 0.5f - 1f);
+        wedge.SetCorners(new Vector2(0.5f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.5f, 0f));
+        outline.raycastTarget = face.raycastTarget = wedge.raycastTarget = wedgeOutline.raycastTarget = false;
+
+        Text head = GymRuntimeSettings.CreateText("Notice Heading", root.transform, font, "WEB DEMO", 30,
+            Accent, FontStyle.Normal, TextAnchor.UpperLeft, Vector2.zero, Vector2.one);
+        SetAnchors(head.rectTransform, Vector2.zero, Vector2.one, 22f, tail, 22f, 14f);
+        Text body = GymRuntimeSettings.CreateText("Notice Body", root.transform, font,
+            "A trimmed-down version, tuned for the browser. For the full experience, play the PC build.",
+            25, Color.white, FontStyle.Normal, TextAnchor.UpperLeft, Vector2.zero, Vector2.one);
+        SetAnchors(body.rectTransform, Vector2.zero, Vector2.one, 22f, tail, 22f, 50f);
+        body.horizontalOverflow = HorizontalWrapMode.Wrap;
+        root.SetActive(false);
+    }
+
+    private void LateUpdate()
+    {
+        if (webNotice == null) return;
+        Camera view = player != null ? player.playerCamera : null;
+        bool show = !closing && canvasGroup.blocksRaycasts && playButton != null && playButton.interactable &&
+            noticeTarget != null && view != null;
+        if (show)
+        {
+            if (noticeHeadHeight < 0f)
+            {
+                Bounds bounds = new Bounds(noticeTarget.position, Vector3.zero);
+                foreach (Renderer renderer in noticeTarget.GetComponentsInChildren<Renderer>()) bounds.Encapsulate(renderer.bounds);
+                noticeHeadHeight = bounds.max.y - noticeTarget.position.y;
+            }
+            Vector3 viewport = view.WorldToViewportPoint(noticeTarget.position + Vector3.up * (noticeHeadHeight + 0.2f));
+            show = viewport.z > 0f;
+            if (show)
+            {
+                Vector2 anchor = new Vector2(Mathf.Clamp(viewport.x, 0.68f, 0.88f), Mathf.Min(viewport.y, 0.74f));
+                webNotice.anchorMin = webNotice.anchorMax = anchor;
+                webNotice.anchoredPosition = Vector2.zero;
+            }
+        }
+        if (webNotice.gameObject.activeSelf != show) webNotice.gameObject.SetActive(show);
     }
 
     private const float ArtWidth = PersonaMenuStyle.ArtWidth;
@@ -305,6 +374,7 @@ public sealed class GymStartScreen : MonoBehaviour
         {
             return;
         }
+        noticeTarget = receptionist.transform;
 
         Vector3 toReceptionist = Vector3.ProjectOnPlane(
             receptionist.transform.position - view.transform.position, Vector3.up);

@@ -148,6 +148,17 @@ public static class GymChaosWheelSpinVerifier
     private static void TickVisitorParked()
     {
         if (EditorApplication.timeSinceStartup - phaseStarted < 1.0d) return;
+        if (vehicle.IsBus)
+        {
+            // Davie's bus waits hidden at the corner and only drives for a drop-off: it never starts parked, so it has no parked stretch to judge.
+            UnityEngine.Object.Destroy(vehicle.gameObject);
+            vehicle = null;
+            probe = null;
+            index++;
+            if (index < Identities.Length) CreateVisitor();
+            else { phase = 4; phaseStarted = EditorApplication.timeSinceStartup; }
+            return;
+        }
         if (!vehicle.IsParked)
             throw new InvalidOperationException($"{vehicle.name} was expected to start parked.");
         probe.Driving = true;

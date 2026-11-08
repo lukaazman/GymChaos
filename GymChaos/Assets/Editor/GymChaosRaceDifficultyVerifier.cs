@@ -22,8 +22,14 @@ public static class GymChaosRaceDifficultyVerifier
         {
             Require(GymRaceDirector.DifficultyNames.Length == 3, "three difficulty levels");
             GymRaceKart.Stats easy = GymRaceDirector.ScaleStats(GymRaceKart.Stats.Default, 0);
-            Require(Mathf.Approximately(easy.TopSpeed, GymRaceKart.Stats.Default.TopSpeed) &&
-                Mathf.Approximately(GymRaceDirector.AiSkillScale(0), 1f), "Easy must be the original race");
+            Require(Mathf.Approximately(easy.TopSpeed, GymRaceKart.Stats.Default.TopSpeed), "Easy must keep the original kart speed");
+            // The AI corners with twice the lateral grip budget it had before, at every level.
+            float[] legacySkill = { 1f, 1.07f, 1.14f };
+            for (int d = 0; d < 3; d++)
+            {
+                Require(Mathf.Approximately(GymRaceDirector.AiSkillScale(d), legacySkill[d] * 2f),
+                    $"level {d} AI skill {GymRaceDirector.AiSkillScale(d):F2} is not 2x the old {legacySkill[d]:F2}");
+            }
             for (int d = 1; d < 3; d++)
             {
                 GymRaceKart.Stats lower = GymRaceDirector.ScaleStats(GymRaceKart.Stats.Default, d - 1);
@@ -58,6 +64,18 @@ public static class GymChaosRaceDifficultyVerifier
                 $"keys picked {hud.ChoiceMade}/{hud.ChosenDifficulty}, expected MEDIUM");
             hud.ShowChoice(2, true);
             Require(Labels(hud) == "BACK|EASY|MEDIUM|HARD", $"difficulty screen: {Labels(hud)}");
+            // Game mode screen at the sign: BACK / NORMAL / CHAOS.
+            Require(string.Join("|", GymRaceDirector.ModeNames) == "NORMAL|CHAOS", "modes: " + string.Join("|", GymRaceDirector.ModeNames));
+            hud.ShowModeChoice();
+            Require(Labels(hud) == "BACK|NORMAL|CHAOS", $"mode screen: {Labels(hud)}");
+            hud.MoveChoice(1);
+            hud.MoveChoice(1);
+            hud.ConfirmChoice();
+            Require(hud.ChoiceMade == GymRaceHud.Choice.RaceAgain && hud.ChosenDifficulty == (int)GymRaceDirector.RaceMode.Chaos,
+                $"keys picked {hud.ChoiceMade}/{hud.ChosenDifficulty}, expected CHAOS");
+            // The difficulty row after the mode screen shows its own labels again.
+            hud.ShowChoice(2, true);
+            Require(Labels(hud) == "BACK|EASY|MEDIUM|HARD", $"difficulty screen after modes: {Labels(hud)}");
             Capture(hud);
             Debug.Log("GYMCHAOS_RACE_DIFFICULTY_OK");
         }

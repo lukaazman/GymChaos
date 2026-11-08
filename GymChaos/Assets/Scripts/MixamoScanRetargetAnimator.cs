@@ -23,7 +23,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     {
         None,
         Driving,
-        Exit
+        Exit,
+        // Davie on the Chaos race bus roof: sitting_idle loops.
+        SittingIdle
     }
 
     public enum MotionState
@@ -61,6 +63,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private AnimationClip authoredCarExitClip;
     // Goku on his cloud: held nimbus_stance pose, soles planted on the cloud.
     private AnimationClip nimbusStanceClip;
+    private AnimationClip sittingIdleClip;
+    public bool HasSittingIdleClip => sittingIdleClip != null;
+    public float SittingIdleClipLength => sittingIdleClip != null ? sittingIdleClip.length : 0f;
+    /// <summary>Seconds the looping car or seat pose has played (driving, sitting idle).</summary>
+    public float VehicleLoopTimeForVerification => vehicleDriveTime;
     private Func<Vector3, float> nimbusSurface;
     public bool HasNimbusStanceClip => nimbusStanceClip != null;
     public bool IsNimbusStanceActive => nimbusSurface != null && nimbusStanceClip != null;
@@ -252,6 +259,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         authoredCarDrivingClip = LoadAuthoredClip(resourcePath, "vehicle_driving");
         authoredCarExitClip = LoadAuthoredClip(resourcePath, "vehicle_exit");
         nimbusStanceClip = LoadAuthoredClip(resourcePath, "nimbus_stance");
+        sittingIdleClip = LoadAuthoredClip(resourcePath, "sitting_idle");
         vehiclePose = VehiclePose.None;
         authoredGunDrawingClip = policeSet
             ? LoadAuthoredClip(resourcePath, "gun_drawing") : null;
@@ -440,6 +448,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
         nimbusSurface = surface;
         nimbusSoleOffsets = Vector2.zero;
+        nimbusMeasureFrames = 0;
         if (surface != null)
         {
             moving = false;
@@ -463,9 +472,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         }
         // Ankle above the boot sole, measured once on the baked skin of
         // this pose (boots and Goku's scale make any proportion guess float).
-        if (nimbusSoleOffsets.x <= 0f)
+        // The first frames of the stance still blend in: keep the last measure, taken on the settled pose.
+        if (nimbusSoleOffsets.x <= 0f || nimbusMeasureFrames < NimbusMeasureFrameCount)
         {
             nimbusSoleOffsets = MeasureSoleOffsets();
+            nimbusMeasureFrames++;
         }
         float leftSole = nimbusSoleOffsets.x;
         float rightSole = nimbusSoleOffsets.y;
@@ -486,6 +497,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     }
 
     private Vector2 nimbusSoleOffsets;
+    private int nimbusMeasureFrames;
+    private const int NimbusMeasureFrameCount = 12;
     private Mesh soleScratch;
 
     private Vector2 MeasureSoleOffsets()
@@ -558,11 +571,11 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         float scale = 1f)
     {
         vehicleScale = pose == VehiclePose.None ? 1f : Mathf.Clamp(scale, 0.5f, 1f);
-        if (pose != VehiclePose.None && !HasVehicleClips)
+        if (pose != VehiclePose.None && VehiclePoseClip(pose) == null)
         {
             return false;
         }
-        if (pose == VehiclePose.Driving && vehiclePose != VehiclePose.Driving)
+        if (pose != VehiclePose.Exit && vehiclePose != pose)
         {
             vehicleDriveTime = 0f;
         }
@@ -587,16 +600,27 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     /// </summary>
     public bool SampleVehiclePoseNow(VehiclePose pose, float normalized, float scale = 1f)
     {
-        if (!configured || !HasVehicleClips || pose == VehiclePose.None)
+        AnimationClip clip = VehiclePoseClip(pose);
+        if (!configured || clip == null)
         {
             return false;
         }
-        AnimationClip clip = pose == VehiclePose.Driving ? authoredCarDrivingClip : authoredCarExitClip;
         float duration = Mathf.Max(0.01f, clip.length - 0.001f);
         vehicleSampleScale = scale;
         bool sampled = SampleDirect(clip, Mathf.Clamp01(normalized) * duration);
         vehicleSampleScale = -1f;
         return sampled;
+    }
+
+    private AnimationClip VehiclePoseClip(VehiclePose pose)
+    {
+        switch (pose)
+        {
+            case VehiclePose.Driving: return HasVehicleClips ? authoredCarDrivingClip : null;
+            case VehiclePose.Exit: return HasVehicleClips ? authoredCarExitClip : null;
+            case VehiclePose.SittingIdle: return sittingIdleClip;
+            default: return null;
+        }
     }
 
     /// <summary>
@@ -1357,9 +1381,9 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         if (vehiclePose != VehiclePose.None)
         {
             lastMotionState = MotionState.Idle;
-            bool driving = vehiclePose == VehiclePose.Driving;
-            AnimationClip vehicleClip = driving ? authoredCarDrivingClip : authoredCarExitClip;
-            string branch = driving ? "car-driving" : "car-exit";
+            bool driving = vehiclePose != VehiclePose.Exit;
+            AnimationClip vehicleClip = VehiclePoseClip(vehiclePose);
+            string branch = vehiclePose == VehiclePose.SittingIdle ? "sitting-idle" : driving ? "car-driving" : "car-exit";
             PreparePoseTransition(vehicleClip, branch);
             EmitAnimationMarker(MotionState.Idle, vehicleClip, branch);
             if (driving)

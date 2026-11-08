@@ -94,6 +94,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     public bool IsParked { get; private set; }
     public bool IsDriving => driveRoutine != null && !waitingForRuntimeVisual;
+    // Race: a visitor car still on the road finishes its route at once (parks
+    // or leaves unseen) instead of driving across the grid.
+    private bool RaceSkip => !raceVisual && GymRaceDirector.IsRaceActive;
     public bool IsLeaving => IsDriving && !drivingIntoParking;
     // A passenger stops for an arriving car only once the car is actually in
     // its vicinity and heading its way, like real parking-lot traffic. Farther
@@ -171,6 +174,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         IsBus && GymRoadsideBusStop.IsBuilt;
     public bool HasMountedRider => mountedRider != null;
     public static bool IsGroundTrafficActive => activeGroundTraffic.Count > 0;
+    internal static IReadOnlyList<GymVisitorVehicle> ActiveGroundTraffic => activeGroundTraffic;
     public bool HasPhysicalCollider => GetComponent<BoxCollider>() != null &&
         GetComponent<Rigidbody>() != null;
     public bool HasOriginalTexture
@@ -337,6 +341,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         {
             GameObject visual = Instantiate(prefab, root.transform);
             visual.name = identity + " Vehicle Model";
+            // The cloud model faces backwards: turn it so it flies head first.
+            if (vehicle.IsCloud) visual.transform.localRotation = Quaternion.Euler(0f, 180f, 0f) * visual.transform.localRotation;
             // Fit the body to the actual bay footprint. The old 4.5m target
             // was wider than the narrowest generated bay and the old route
             // point was not aligned with the painted bay centers.
@@ -382,7 +388,22 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         vehicle.raceVisual = true;
         vehicle.ConfigureRoute(0);
         root.transform.SetPositionAndRotation(position, rotation);
-        if (vehicle.IsArnold)
+        if (vehicle.IsBus)
+        {
+            // Chaos race: Davie's bus races with the cars.
+            RuntimeGlbSceneLoader.Request(
+                DavieBusAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one * DavieBusTargetLength,
+                "Davie Bus Race Car",
+                root.layer,
+                settleOnSupport: true,
+                supportY: position.y - RaceGroundOffset,
+                onLoaded: vehicle.FinalizeRuntimeBus);
+        }
+        else if (vehicle.IsArnold)
         {
             RuntimeGlbSceneLoader.Request(
                 ArnoldHummerAsset,
@@ -674,6 +695,12 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         while (total - progress > reach)
         {
+            if (RaceSkip)
+            {
+                progress = total;
+                if (!park) transform.position = path[path.Count - 1];
+                break;
+            }
             int steps = Mathf.Max(1, Mathf.CeilToInt(Time.deltaTime / MaxGroundRouteDeltaTime));
             float dt = Time.deltaTime / steps;
             float clearance = float.PositiveInfinity;
@@ -946,6 +973,62 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         BeginDriveOut(onGone);
     }
 
+    /// <summary>
+    /// Keeps the bus's own painted livery but drives the surface from a matte
+    /// Lit material. Its glTF PBR material carries a packed metallic map that
+    /// reads as chrome in URP, which lit the teal body up with blown-out white
+    /// reflections that looked like torn decals stuck over the paint.
+    /// </summary>
+    private static void ApplyLiveryMaterial(GameObject visual)
+    {
+        Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
+        var replacements = new Dictionary<Material, Material>();
+        string sourceShader = "none", sourceTexture = "none";
+        for (int r = 0; r < renderers.Length; r++)
+        {
+            Material[] source = renderers[r].sharedMaterials;
+            bool changed = false;
+            for (int i = 0; i < source.Length; i++)
+            {
+                Material original = source[i];
+                if (original == null) continue;
+                if (!replacements.TryGetValue(original, out Material material))
+                {
+                    Texture livery = original.HasProperty("_BaseMap")
+                        ? original.GetTexture("_BaseMap")
+                        : original.GetTexture("_MainTex");
+                    if (replacements.Count == 0)
+                    {
+                        sourceShader = original.shader != null ? original.shader.name : "none";
+                        sourceTexture = livery != null ? livery.name : "none";
+                    }
+                    material = new Material(GymMaterialLibrary.LitShader) { name = "Davie Bus Livery" };
+                    if (livery != null)
+                    {
+                        material.SetTexture("_BaseMap", livery);
+                        material.SetTexture("_MainTex", livery);
+                    }
+                    material.SetColor("_BaseColor", Color.white);
+                    material.color = Color.white;
+                    material.SetFloat("_Metallic", 0.02f);
+                    material.SetFloat("_Smoothness", 0.3f);
+                    replacements[original] = material;
+                }
+                if (!ReferenceEquals(source[i], material))
+                {
+                    source[i] = material;
+                    changed = true;
+                }
+            }
+            if (changed)
+            {
+                renderers[r].sharedMaterials = source;
+            }
+        }
+        Debug.Log($"GYMCHAOS_DAVIE_BUS_LIVERY renderers={renderers.Length} " +
+            $"materials={replacements.Count} shader={sourceShader} texture={sourceTexture}");
+    }
+
     private void FinalizeRuntimeBus(GameObject visual)
     {
         if (visual == null)
@@ -959,6 +1042,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
 
         visual.name = identity + " Vehicle Model";
+        ApplyLiveryMaterial(visual);
         AddPhysicalBody(visual);
         runtimeVisualReady = true;
         Debug.Log(
@@ -1185,7 +1269,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         float duration = Mathf.Max(1.15f, lengthEstimate / CloudSpeed);
         float elapsed = 0f;
         Vector3 previous = start;
-        while (elapsed < duration)
+        while (elapsed < duration && !RaceSkip)
         {
             elapsed += Time.deltaTime;
             float t = Mathf.Clamp01(elapsed / duration);
@@ -1323,6 +1407,11 @@ public sealed class GymVisitorVehicle : MonoBehaviour
                 preserveWaypoints ? 0.35f : 0.9f;
             while ((transform.position - target).sqrMagnitude > reachRadius * reachRadius)
             {
+                if (RaceSkip)
+                {
+                    transform.position = points[points.Length - 1];
+                    break;
+                }
                 int routeStepCount = IsCloud
                     ? 1
                     : Mathf.Max(1, Mathf.CeilToInt(Time.deltaTime / MaxGroundRouteDeltaTime));

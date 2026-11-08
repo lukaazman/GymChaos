@@ -154,11 +154,14 @@ public static class GymChaosSquatBarGripVerifier
         fighter.gameObject.SetActive(true);
         Vector3 stand = station.EnemyPosition;
         stand.y = FindSupportY(stand);
+        fighter.StopVisitorMovement();
         fighter.SetVisitorSpawnPose(stand, station.EnemyRotation, true);
         fighter.transform.SetPositionAndRotation(stand, station.EnemyRotation);
         Physics.SyncTransforms();
         if (!squat.Begin(station, fighter, 40, 2.0f))
             throw new InvalidOperationException($"{fighter.Identity} squat did not start");
+        // The visitor simulation is suspended, so nothing holds the lifter: pin the body like the Squatting state does.
+        fighter.GetComponent<Rigidbody>().isKinematic = true;
         foreach (SkinnedMeshRenderer skin in fighter.GetComponentsInChildren<SkinnedMeshRenderer>())
             skin.updateWhenOffscreen = true;
         deepMeasured = false;

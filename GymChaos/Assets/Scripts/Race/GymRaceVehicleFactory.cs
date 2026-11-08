@@ -64,6 +64,88 @@ public static class GymRaceVehicleFactory
         return car;
     }
 
+    /// <summary>Chaos race: Goku flies without a car; the kart moves this empty anchor and he rides it.</summary>
+    public static Car CreateFlightAnchor(Pose pose)
+    {
+        Car car = new Car { Identity = BodybuilderIdentity.Goku };
+        car.Holder = new GameObject("Goku Race Flight Anchor").transform;
+        car.Holder.SetPositionAndRotation(pose.position, pose.rotation);
+        car.MarkLoaded(false);
+        return car;
+    }
+
+    /// <summary>
+    /// Chaos race: Davie sits on the front of the bus roof, thighs on the
+    /// roof and legs over the windscreen, looping sitting_idle.
+    /// </summary>
+    public static bool SeatOnRoof(EnemyFighter rider, Car bus, Bounds busLocal)
+    {
+        MixamoScanRetargetAnimator animator = rider.VehicleBodyAnimator;
+        BodybuilderEnemyVisual.Rig rig = animator != null ? animator.BodyRig : null;
+        if (rig == null || rig.Hips == null || !animator.HasSittingIdleClip)
+        {
+            return false;
+        }
+        Transform seat = new GameObject("Bus Roof Seat").transform;
+        seat.SetParent(bus.Holder, false);
+        // Hips over the roof a little behind the front edge, so the thighs
+        // rest on it and the legs hang over the windscreen. The roof crowns
+        // towards the middle: sitting him on the bus's highest point left him
+        // hanging in the air over the lower front, so measure the roof he is on.
+        float seatZ = busLocal.max.z - RoofHipsInset;
+        float roof = RoofHeightAt(bus.Holder, busLocal.center.x, seatZ, busLocal.max.y);
+        Vector3 hips = new Vector3(busLocal.center.x, roof + RoofHipsLift, seatZ);
+        seat.localPosition = hips;
+        seat.localRotation = Quaternion.identity;
+        rider.BeginVisitorVehicleSeat(seat);
+        // The sitting clip holds the pelvis a fixed height above the root and
+        // the animator re-applies that every frame. Measuring it once and
+        // handing it back as the root offset seats Davie on the roof instead
+        // of leaving him hanging in the air above it.
+        animator.SampleVehiclePoseNow(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f);
+        Vector3 clipHips = rig.Hips.position - rider.transform.position;
+        return animator.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.SittingIdle, 0f, -clipHips);
+    }
+
+    private const float RoofHipsLift = 0.12f;
+    private const float RoofHipsInset = 0.75f;
+
+    /// <summary>Top of the bus body under a point in the holder's frame. The
+    /// roof is not flat (it crowns over the middle), so the front seat has to
+    /// measure the panels it actually rests on.</summary>
+    public static float RoofHeightAt(Transform holder, float x, float z, float fallback)
+    {
+        if (holder == null)
+        {
+            return fallback;
+        }
+        float top = float.MinValue;
+        Matrix4x4 toLocal = holder.worldToLocalMatrix;
+        foreach (MeshFilter filter in holder.GetComponentsInChildren<MeshFilter>(true))
+        {
+            Mesh mesh = filter.sharedMesh;
+            if (mesh == null)
+            {
+                continue;
+            }
+            Vector3[] vertices = mesh.vertices;
+            Matrix4x4 frame = toLocal * filter.transform.localToWorldMatrix;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector3 point = frame.MultiplyPoint3x4(vertices[i]);
+                if (Mathf.Abs(point.x - x) > 0.6f || Mathf.Abs(point.z - z) > 0.6f)
+                {
+                    continue;
+                }
+                if (point.y > top)
+                {
+                    top = point.y;
+                }
+            }
+        }
+        return top > float.MinValue ? top : fallback;
+    }
+
     public static Car CreatePoliceCar(Pose pose)
     {
         Car car = new Car { Identity = BodybuilderIdentity.Policeman, IsPolice = true };

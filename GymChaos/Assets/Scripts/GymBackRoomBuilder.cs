@@ -28,8 +28,14 @@ public static class GymBackRoomBuilder
     private const float BenchBagScale = 0.78f;
     private const float BenchOffsetX = -4.15f;
     private const float BenchOffsetZ = 2.65f;
-    public const float PrepInteractionRange = 3.6f;
-    public const float BenchPrepInteractionRange = 3.9f;
+    // Interaction reaches are measured from the edge of each trigger box.
+    public const float PrepInteractionRange = 2.4f;
+    public const float BenchPrepInteractionRange = 2.5f;
+    private const float LockerInteractionRange = 1.0f;
+    private const float MirrorInteractionRange = 1.0f;
+    private const float ToiletInteractionRange = 2.5f;
+    private const int LockerCount = 7;
+    private const float LockerSpacing = 1.28f;
     private static Bounds roomBounds;
     private static bool roomBoundsReady;
     private static float roomFloorY;
@@ -211,10 +217,16 @@ public static class GymBackRoomBuilder
                 new Vector3(3.4f, 2f, 1.8f),
                 GymBackRoomInteractionType.Prep, "Get ready", BenchPrepInteractionRange);
         }
+        // The locker prompt covers the floor strip in front of the whole bank.
         CreateInteractable(rootObject.transform, "Changing Locker",
-            new Vector3(minX + 1.5f, floorY + 1.1f, roomCenter.z + 0.4f),
-            new Vector3(2.2f, 2.1f, 1.8f),
-            GymBackRoomInteractionType.Locker, "Open locker");
+            new Vector3(minX + 1.45f, floorY + 1.1f, roomCenter.z),
+            new Vector3(1.0f, 2.1f, LockerCount * LockerSpacing + 0.2f),
+            GymBackRoomInteractionType.Locker, "Open locker", LockerInteractionRange);
+        // The big changing-room mirror opens the same outfit menu.
+        CreateInteractable(rootObject.transform, "Locker Mirror Outfit Point",
+            new Vector3(roomCenter.x, floorY + 1.0f, southZ + 1.0f),
+            new Vector3(3.6f, 2f, 1.2f),
+            GymBackRoomInteractionType.Locker, "Change outfit", MirrorInteractionRange);
 
         Debug.Log(
             $"GYMCHAOS_BACK_ROOM_OK center={roomCenter} size={BackWidth:F1}x{BackDepth:F1} " +
@@ -895,6 +907,17 @@ public static class GymBackRoomBuilder
         // Stand on the aisle side of the bench, between the two benches.
         float towardAisle = Mathf.Sign(roomCenter.z - benchCenter.z);
         point = benchCenter + new Vector3(0f, 0f, towardAisle * BagHandoffStandOff);
+        // A bench standing in the room's corner put this spot inside the bench
+        // or the locker bank. The member never reached it and idled there,
+        // leaning on the bench with his feet off the floor. Step out of any
+        // collider so the stop is a reachable standing place.
+        Vector3 chest = Vector3.up * 0.9f;
+        for (int step = 0; step < 5 &&
+            Physics.CheckSphere(point + chest, 0.3f, ~0, QueryTriggerInteraction.Ignore); step++)
+        {
+            point += new Vector3(0f, 0f, towardAisle * 0.3f);
+        }
+        point.y = roomFloorY;
         return true;
     }
 
@@ -1067,7 +1090,7 @@ public static class GymBackRoomBuilder
         Transform parent, Vector3 center, float floorY, float minX, float maxX,
         Material metal, Material accent)
     {
-        CreateModernLockerBank(parent, center.z, floorY, minX + 0.58f, -1, 7, 1.28f, metal, accent);
+        CreateModernLockerBank(parent, center.z, floorY, minX + 0.58f, -1, LockerCount, LockerSpacing, metal, accent);
     }
 
     public static void CreateModernLockerBank(
@@ -1439,7 +1462,7 @@ public static class GymBackRoomBuilder
         GymBackRoomInteractable toiletInteraction = CreateInteractable(parent, "Toilet Seat",
             new Vector3(toiletX - 0.8f, floorY + 1.0f, toiletZ),
             new Vector3(1.2f, 2f, 1.2f),
-            GymBackRoomInteractionType.ToiletSeat, "Open toilet");
+            GymBackRoomInteractionType.ToiletSeat, "Open toilet", ToiletInteractionRange);
         GymToiletSeat toiletSeat = toiletInteraction.gameObject.AddComponent<GymToiletSeat>();
         RequestLockerProp(
             ToiletAsset,
@@ -1601,7 +1624,7 @@ public static class GymBackRoomBuilder
 
     private static GymBackRoomInteractable CreateInteractable(
         Transform parent, string name, Vector3 position, Vector3 size,
-        GymBackRoomInteractionType type, string displayName, float interactionRange = 0f)
+        GymBackRoomInteractionType type, string displayName, float interactionRange)
     {
         GameObject objectRoot = new GameObject(name);
         objectRoot.transform.SetParent(parent, true);

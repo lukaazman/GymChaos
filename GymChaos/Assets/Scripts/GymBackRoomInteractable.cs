@@ -23,9 +23,21 @@ public sealed class GymBackRoomInteractable : MonoBehaviour
     }
     public GymBackRoomInteractionType InteractionType { get; private set; }
     public string DisplayName { get; private set; }
-    // Extra reach for large props such as the bench prep points; zero keeps
-    // the caller's default interaction distance.
+    // Reach measured from the edge of the trigger box; zero keeps the
+    // caller's default interaction distance.
     public float InteractionRange { get; private set; }
+    private Collider area;
+
+    // Planar distance from a point to the trigger box (zero inside it), so a
+    // long locker bank or bench is reachable along its whole length.
+    public float PlanarDistance(Vector3 position)
+    {
+        Bounds bounds = area != null ? area.bounds : new Bounds(transform.position, Vector3.zero);
+        position.y = bounds.center.y;
+        Vector3 offset = bounds.ClosestPoint(position) - position;
+        offset.y = 0f;
+        return offset.magnitude;
+    }
 
     private void OnEnable()
     {
@@ -56,5 +68,6 @@ public sealed class GymBackRoomInteractable : MonoBehaviour
         InteractionType = type;
         DisplayName = displayName;
         InteractionRange = Mathf.Max(0f, interactionRange);
+        area = GetComponent<Collider>();
     }
 }

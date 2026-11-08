@@ -20,6 +20,8 @@ public sealed class GymRaceKart : MonoBehaviour
         public float Grip;
         public float Mass;
         public float Radius;
+        /// <summary>How far the body swings out while drifting (degrees).</summary>
+        public float DriftAngle;
 
         public static Stats Default => new Stats
         {
@@ -28,7 +30,8 @@ public sealed class GymRaceKart : MonoBehaviour
             Handling = 96f,
             Grip = 28f,
             Mass = 900f,
-            Radius = 1f
+            Radius = 1f,
+            DriftAngle = 26f
         };
     }
 
@@ -37,7 +40,6 @@ public sealed class GymRaceKart : MonoBehaviour
     public const float BoostFillSeconds = 12f;
     public const float MiniTurboMultiplier = 1.22f;
     public const float SlipstreamMultiplier = 1.06f;
-    public const float DriftVisualAngle = 26f;
     public static readonly float[] DriftTierSeconds = { 0.9f, 1.9f, 3f };
     private static readonly float[] MiniTurboSeconds = { 0.55f, 0.95f, 1.35f };
     private const float ReverseSpeed = 8f;
@@ -59,6 +61,27 @@ public sealed class GymRaceKart : MonoBehaviour
     public bool MeterFilling = true;
     /// <summary>Director-set catch-up factor on top speed (rubber band).</summary>
     public float SpeedScale = 1f;
+    /// <summary>Chaos: how much faster the boost meter refills (3 = three times).</summary>
+    public float BoostFillScale = 1f;
+    /// <summary>Chaos: share of the speed a crash takes off us (1 = normal, 1/3 = softer).</summary>
+    public float ImpactSelfScale = 1f;
+    /// <summary>Chaos: share of the closing speed a ram hands to the rival (0 = a fair bump).</summary>
+    public float BumpKnockback = 0f;
+    /// <summary>Chaos: share of its speed the kart that gets rammed keeps. The
+    /// kart doing the hitting keeps all of its own; a hit on the rear bumper
+    /// costs the other kart nothing either.</summary>
+    public float RammedSpeedKeep = 1f;
+
+    /// <summary>Seconds this kart needs to refill an empty boost meter.</summary>
+    public float BoostFillSecondsCurrent => BoostFillSeconds / Mathf.Max(0.01f, BoostFillScale);
+    /// <summary>Share of the speed kept after a crash into the scenery.</summary>
+    public float WallSpeedKeepAfterImpact => Mathf.Lerp(1f, WallSpeedKeep, Mathf.Clamp01(ImpactSelfScale));
+    /// <summary>Speed a ram hands to the rival it hits at <paramref name="closingSpeed"/>.</summary>
+    public float KnockbackFrom(float closingSpeed) => Mathf.Max(0f, -closingSpeed) * BumpKnockback;
+    /// <summary>How much of a bump comes back at the kart doing the hitting.
+    /// Chaos throws only the rival, so it is 0 there and 1 (a fair shared
+    /// push) in the normal race.</summary>
+    public float RamSelfPushScale => BumpKnockback > 0f ? 0f : 1f;
     public Transform Visual;
 
     public event Action<Vector3, float, GymRaceKart> Bumped;
@@ -82,7 +105,7 @@ public sealed class GymRaceKart : MonoBehaviour
     public Vector3 GroundNormal { get; private set; } = Vector3.up;
     public Vector3 Heading => heading;
     public float ForwardSpeed { get; private set; }
-    public float Speed => body != null ? body.linearVelocity.magnitude : 0f;
+    public float Speed => RemoteDriven ? Mathf.Abs(remoteSpeed) : body != null ? body.linearVelocity.magnitude : 0f;
     public bool IsDrifting { get; private set; }
     public int DriftDirection { get; private set; }
     public float DriftCharge { get; private set; }
@@ -102,6 +125,12 @@ public sealed class GymRaceKart : MonoBehaviour
     // every step, so without this it keeps pushing into the other kart.
     private Vector3 kartContactNormal;
     private float kartContactUntil;
+    // Body box in the visual's frame (centre x/z, half width, half length):
+    // drifting swings it out past the sphere, so karts also keep these apart.
+    private Vector2 footprintCenter;
+    private Vector2 footprintHalf;
+    private Vector3 bodyFacing = Vector3.forward;
+    public Vector2 FootprintHalfExtents => footprintHalf;
 
     public static GymRaceKart Create(string name, Vector3 position, Vector3 forward, Stats stats, Transform visual)
     {
@@ -152,6 +181,37 @@ public sealed class GymRaceKart : MonoBehaviour
         Visual = visual;
         visual.SetParent(transform, true);
         UpdateVisual(1f);
+        MeasureFootprint();
+    }
+
+    /// <summary>Body box for kart-to-kart contact, for visuals without renderers (Goku).</summary>
+    public void SetFootprint(float halfWidth, float halfLength)
+    {
+        footprintCenter = Vector2.zero;
+        footprintHalf = new Vector2(halfWidth, halfLength);
+    }
+
+    private void MeasureFootprint()
+    {
+        Bounds local = new Bounds();
+        bool any = false;
+        foreach (Renderer renderer in Visual.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer.enabled || renderer is ParticleSystemRenderer) continue;
+            Bounds world = renderer.bounds;
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 corner = Visual.InverseTransformPoint(world.center + Vector3.Scale(world.extents,
+                    new Vector3((i & 1) == 0 ? -1f : 1f, (i & 2) == 0 ? -1f : 1f, (i & 4) == 0 ? -1f : 1f)));
+                if (!any) local = new Bounds(corner, Vector3.zero);
+                else local.Encapsulate(corner);
+                any = true;
+            }
+        }
+        // Renderer AABBs of a rotated mesh overstate the body: keep 90 %.
+        if (any) footprintHalf = new Vector2(local.extents.x, local.extents.z) * 0.9f;
+        else footprintHalf = Vector2.one * KartStats.Radius;
+        footprintCenter = any ? new Vector2(local.center.x, local.center.z) : Vector2.zero;
     }
 
     /// <summary>Ignore collisions between this sphere and every collider of the given roots (drivers, cabins).</summary>
@@ -211,9 +271,60 @@ public sealed class GymRaceKart : MonoBehaviour
         UpdateVisual(blend);
     }
 
+    // Another machine drives this kart (co-op race): a kinematic body that follows the last reported state.
+    private const float RemoteMaxExtrapolation = 0.25f;
+    private const float RemoteSnapDistance = 20f;
+    private Vector3 remotePosition;
+    private Vector3 remoteHeading = Vector3.forward;
+    private float remoteSpeed;
+    private float remoteStamp;
+    public bool RemoteDriven { get; private set; }
+
+    public void SetRemoteDriven()
+    {
+        RemoteDriven = true;
+        body.isKinematic = true;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        remotePosition = body.position;
+        remoteHeading = heading;
+        remoteStamp = Time.time;
+    }
+
+    /// <summary>Latest reported sphere centre, travel direction and forward speed of a remotely driven kart.</summary>
+    public void SetRemoteState(Vector3 position, Vector3 forward, float speed)
+    {
+        Vector3 flat = new Vector3(forward.x, 0f, forward.z);
+        if (flat.sqrMagnitude > 1e-4f) remoteHeading = flat.normalized;
+        remoteSpeed = speed;
+        remotePosition = position;
+        remoteStamp = Time.time;
+        if ((body.position - position).sqrMagnitude > RemoteSnapDistance * RemoteSnapDistance)
+        {
+            body.position = position;
+            transform.position = position;
+        }
+    }
+
+    private void StepRemote(float dt)
+    {
+        previousHeading = heading;
+        ProbeGround();
+        float age = Mathf.Min(Time.time - remoteStamp, RemoteMaxExtrapolation);
+        Vector3 target = remotePosition + remoteHeading * (remoteSpeed * age);
+        body.MovePosition(Vector3.Lerp(body.position, target, 0.4f));
+        heading = Vector3.Slerp(heading, remoteHeading, 0.4f);
+        if (heading.sqrMagnitude < 1e-4f) heading = remoteHeading;
+        ForwardSpeed = remoteSpeed;
+    }
+
     private void FixedUpdate()
     {
         float dt = Time.fixedDeltaTime;
+        if (RemoteDriven)
+        {
+            StepRemote(dt);
+            return;
+        }
         previousHeading = heading;
         ProbeGround();
         Vector3 n = GroundNormal;
@@ -297,6 +408,7 @@ public sealed class GymRaceKart : MonoBehaviour
             vR *= Mathf.Exp(-(IsDrifting ? DriftGrip : KartStats.Grip) * dt);
             velocity = forward * vF + right * vR + n * vN;
             velocity = LimitClosingSpeed(velocity, dt);
+            velocity = SeparateBodies(velocity, dt);
             if (Time.fixedTime < kartContactUntil)
             {
                 float into = Vector3.Dot(velocity, kartContactNormal);
@@ -367,7 +479,7 @@ public sealed class GymRaceKart : MonoBehaviour
             }
         }
         DriftTier = tier;
-        BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.05f);
+        BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.05f * BoostFillScale);
     }
 
     private void EndDrift(bool reward)
@@ -421,7 +533,7 @@ public sealed class GymRaceKart : MonoBehaviour
     {
         if (MeterFilling && !IsBoosting)
         {
-            BoostMeter = Mathf.Min(1f, BoostMeter + dt / BoostFillSeconds);
+            BoostMeter = Mathf.Min(1f, BoostMeter + dt / BoostFillSecondsCurrent);
         }
         if (boostRequested && BoostMeter >= 1f && !IsBoosting)
         {
@@ -462,7 +574,7 @@ public sealed class GymRaceKart : MonoBehaviour
         slipstreamTimer = drafting ? slipstreamTimer + dt : 0f;
         if (InSlipstream && MeterFilling)
         {
-            BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.08f);
+            BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.08f * BoostFillScale);
         }
     }
 
@@ -488,7 +600,17 @@ public sealed class GymRaceKart : MonoBehaviour
         visualUp = up;
         body.position = roadPoint + up * (KartStats.Radius + 0.05f);
         transform.position = body.position;
-        body.linearVelocity = Vector3.zero;
+        if (RemoteDriven)
+        {
+            remotePosition = body.position;
+            remoteHeading = heading;
+            remoteSpeed = 0f;
+            remoteStamp = Time.time;
+        }
+        else
+        {
+            body.linearVelocity = Vector3.zero;
+        }
         UpdateVisual(1f);
     }
 
@@ -508,7 +630,7 @@ public sealed class GymRaceKart : MonoBehaviour
         if (collision.gameObject.layer == GymRaceTrackBuilder.RaceTrackLayer && Vector3.Dot(normal, GroundNormal) < 0.5f)
         {
             WallHits++;
-            body.linearVelocity *= WallSpeedKeep;
+            body.linearVelocity *= WallSpeedKeepAfterImpact;
             Bumped?.Invoke(point, strength, null);
         }
     }
@@ -554,6 +676,107 @@ public sealed class GymRaceKart : MonoBehaviour
         return velocity;
     }
 
+    /// <summary>
+    /// The sphere only covers the middle of a car; a drifting body swings
+    /// its ends out past it. Where the two body boxes would overlap after
+    /// this step, each kart takes half the push that keeps them touching.
+    /// </summary>
+    private Vector3 SeparateBodies(Vector3 velocity, float dt)
+    {
+        for (int i = 0; i < All.Count; i++)
+        {
+            GymRaceKart other = All[i];
+            if (other == this || other.body == null)
+            {
+                continue;
+            }
+            Vector3 otherVelocity = other.RemoteDriven ? Vector3.zero : other.body.linearVelocity;
+            float depth = Penetration(body.position + velocity * dt, bodyFacing, other, other.body.position + otherVelocity * dt, out Vector3 normal);
+            if (depth <= 0f)
+            {
+                continue;
+            }
+            float share = other.RemoteDriven ? 1f : 0.5f;
+            float closing = Vector3.Dot(velocity - otherVelocity, normal);
+            // Chaos: only the kart that is closing faster does the hitting;
+            // it drops the other one back and takes nothing itself.
+            float knockback = KnockbackFrom(closing);
+            bool ramming = knockback > 0.01f && other.body != null && !other.RemoteDriven &&
+                Vector3.Dot(velocity, -normal) > Vector3.Dot(otherVelocity, normal);
+            float overlap = Mathf.Min(depth / dt, 8f) * share;
+            // A chaos rammer takes no push at all, so the body that was hit
+            // carries the depenetration; without it the rammer drove into the
+            // rival's box and the two stayed overlapped by more than a metre.
+            if (ramming)
+            {
+                other.body.linearVelocity += -normal * (knockback + Mathf.Min(depth / dt, 8f));
+                other.body.linearVelocity = Vector3.ClampMagnitude(
+                    other.body.linearVelocity, other.KartStats.TopSpeed * 1.6f);
+                // The rammer keeps every bit of its speed, so a slower rival
+                // would otherwise sit inside its body box; the kart that was hit
+                // is what steps aside.
+                other.body.position += -normal * Mathf.Min(depth, 0.35f);
+            }
+            velocity += normal * (Mathf.Max(0f, -closing) * share * RamSelfPushScale +
+                overlap * RamSelfPushScale);
+            // The box push can keep the spheres from ever touching: count it as the bump.
+            if (Time.fixedTime >= kartContactUntil)
+            {
+                // Chaos moves the cost of a hit onto the kart that was hit: the
+                // one that rammed keeps its speed, the other loses some, unless
+                // the hit landed on its rear bumper (a drafting nudge, which
+                // costs neither of them anything).
+                if (ramming && RammedSpeedKeep < 0.999f &&
+                    Vector3.Dot(normal, other.bodyFacing) > -0.7f)
+                {
+                    other.body.linearVelocity *= RammedSpeedKeep;
+                }
+                KartHits++;
+                Bumped?.Invoke((body.position + other.body.position) * 0.5f, Mathf.Abs(closing), other);
+            }
+            NoteKartContact(other);
+        }
+        return velocity;
+    }
+
+    /// <summary>Ground-plane overlap of this body box at <paramref name="position"/> with the other's; the normal points from the other to this one.</summary>
+    private float Penetration(Vector3 position, Vector3 facing, GymRaceKart other, Vector3 otherPosition, out Vector3 normal)
+    {
+        normal = Vector3.zero;
+        Vector3 forwardA = facing;
+        Vector3 rightA = new Vector3(forwardA.z, 0f, -forwardA.x);
+        Vector3 forwardB = other.bodyFacing;
+        Vector3 rightB = new Vector3(forwardB.z, 0f, -forwardB.x);
+        Vector3 centerA = position + rightA * footprintCenter.x + forwardA * footprintCenter.y;
+        Vector3 centerB = otherPosition + rightB * other.footprintCenter.x + forwardB * other.footprintCenter.y;
+        Vector3 delta = centerA - centerB;
+        delta.y = 0f;
+        float reach = footprintHalf.magnitude + other.footprintHalf.magnitude;
+        if (delta.sqrMagnitude > reach * reach)
+        {
+            return 0f;
+        }
+        float depth = float.MaxValue;
+        for (int k = 0; k < 4; k++)
+        {
+            Vector3 axis = k == 0 ? rightA : k == 1 ? forwardA : k == 2 ? rightB : forwardB;
+            float extentA = Mathf.Abs(Vector3.Dot(rightA, axis)) * footprintHalf.x + Mathf.Abs(Vector3.Dot(forwardA, axis)) * footprintHalf.y;
+            float extentB = Mathf.Abs(Vector3.Dot(rightB, axis)) * other.footprintHalf.x + Mathf.Abs(Vector3.Dot(forwardB, axis)) * other.footprintHalf.y;
+            float along = Vector3.Dot(delta, axis);
+            float overlap = extentA + extentB - Mathf.Abs(along);
+            if (overlap <= 0f)
+            {
+                return 0f;
+            }
+            if (overlap < depth)
+            {
+                depth = overlap;
+                normal = along >= 0f ? axis : -axis;
+            }
+        }
+        return depth;
+    }
+
     private void NoteKartContact(GymRaceKart other)
     {
         Vector3 away = Vector3.ProjectOnPlane(body.position - other.body.position, GroundNormal);
@@ -574,10 +797,12 @@ public sealed class GymRaceKart : MonoBehaviour
         float dt = Mathf.Max(Time.deltaTime, 1e-4f);
         visualUp = Vector3.Slerp(visualUp, GroundNormal, 1f - Mathf.Exp(-dt * 12f)).normalized;
         Vector3 travel = Vector3.Slerp(previousHeading, heading, blend);
-        float targetDrift = IsDrifting ? DriftDirection * DriftVisualAngle : 0f;
+        float targetDrift = IsDrifting ? DriftDirection * KartStats.DriftAngle : 0f;
         driftVisual = Mathf.Lerp(driftVisual, targetDrift, 1f - Mathf.Exp(-dt * 9f));
         steerVisual = Mathf.Lerp(steerVisual, Mathf.Clamp(Input.Steer, -1f, 1f), 1f - Mathf.Exp(-dt * 8f));
         Vector3 facing = Quaternion.AngleAxis(driftVisual, visualUp) * Vector3.ProjectOnPlane(travel, visualUp).normalized;
+        Vector3 flatFacing = new Vector3(facing.x, 0f, facing.z);
+        if (flatFacing.sqrMagnitude > 1e-4f) bodyFacing = flatFacing.normalized;
         float roll = -steerVisual * 3f - (IsDrifting ? DriftDirection * 5f : 0f);
         Quaternion rotation = Quaternion.LookRotation(facing, visualUp) * Quaternion.Euler(0f, 0f, roll);
         Visual.SetPositionAndRotation(transform.position - visualUp * KartStats.Radius, rotation);

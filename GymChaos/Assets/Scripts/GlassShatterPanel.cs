@@ -14,6 +14,35 @@ public sealed class GlassShatterPanel : MonoBehaviour
     private bool hasShattered;
 
     public bool IsShattered => hasShattered;
+    private bool applyingNetwork;
+
+    private static readonly System.Collections.Generic.Dictionary<string, GlassShatterPanel> byId =
+        new System.Collections.Generic.Dictionary<string, GlassShatterPanel>(System.StringComparer.Ordinal);
+    private static float nextIndexTime;
+
+    /// <summary>The panel with this save id (cached; the scene is scanned again at most every 2 s on a miss).</summary>
+    public static GlassShatterPanel FindById(string id)
+    {
+        if (byId.TryGetValue(id, out GlassShatterPanel cached) && cached != null) return cached;
+        if (Time.unscaledTime < nextIndexTime) return null;
+        nextIndexTime = Time.unscaledTime + 2f;
+        byId.Clear();
+        foreach (GlassShatterPanel panel in FindObjectsByType<GlassShatterPanel>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+        {
+            byId[panel.StableId] = panel;
+        }
+        return byId.TryGetValue(id, out cached) ? cached : null;
+    }
+
+    /// <summary>Breaks the panel as the host decided; no request goes out and nothing is broadcast from here.</summary>
+    public bool ApplyNetworkShatter(Vector3 point, Vector3 normal, Vector3 velocity, float speed, float multiplier)
+    {
+        if (hasShattered) return false;
+        applyingNetwork = true;
+        Shatter(point, normal, velocity, speed, multiplier);
+        applyingNetwork = false;
+        return true;
+    }
 
     /// <summary>Content identity for saves: the generated name plus its grid position.</summary>
     public string StableId
@@ -72,7 +101,18 @@ public sealed class GlassShatterPanel : MonoBehaviour
         }
         StartCoroutine(GrowBackIntoFrame());
         Debug.Log($"GYMCHAOS_GLASS_REPAIRED panel={name}", this);
+        // Only the host's fixer repairs; the guests are told so their copy of the glass grows back too.
+        if (!applyingNetwork) GymNetInteractions.BroadcastRepair(StableId);
         return true;
+    }
+
+    /// <summary>The host repaired this panel: grow it back without telling anybody.</summary>
+    public bool ApplyNetworkRepair()
+    {
+        applyingNetwork = true;
+        bool repaired = RepairByFixer();
+        applyingNetwork = false;
+        return repaired;
     }
 
     private System.Collections.IEnumerator GrowBackIntoFrame()
@@ -116,6 +156,8 @@ public sealed class GlassShatterPanel : MonoBehaviour
     public static void ResetShatteredRegistry()
     {
         ShatteredIds.Clear();
+        byId.Clear();
+        nextIndexTime = 0f;
     }
 
     private void Awake()
@@ -218,9 +260,25 @@ public sealed class GlassShatterPanel : MonoBehaviour
             return;
         }
 
+        if (!applyingNetwork)
+        {
+            // A guest asks the host and waits for the result; the host tells the guests.
+            GymNetSession session = GymNetSession.Instance;
+            if (session != null && session.Client.CurrentPhase == GymNetClient.Phase.Lobby)
+            {
+                if (!session.Client.IsHost)
+                {
+                    GymNetInteractions.RequestGlass(StableId, impactPoint, impactNormal, impactVelocity, impactSpeed, impactMultiplier);
+                    return;
+                }
+                GymNetInteractions.BroadcastGlass(StableId, impactPoint, impactNormal, impactVelocity, impactSpeed, impactMultiplier);
+            }
+        }
+
         hasShattered = true;
         ShatteredIds.Add(StableId);
-        GymExperienceService.Active?.RegisterMirrorBreak(name);
+        // Credit only whoever broke it here, not every player of the room.
+        if (!applyingNetwork) GymExperienceService.Active?.RegisterMirrorBreak(name);
         Vector3 shatterSoundPosition = panelRenderer != null
             ? panelRenderer.bounds.center
             : transform.position;

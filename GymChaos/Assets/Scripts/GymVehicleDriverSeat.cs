@@ -29,6 +29,14 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     private const float GroundMatchStart = 0.62f;
     private const float WalkSpeed = 1.9f;
     private const float WalkTurnDegreesPerSecond = 300f;
+    // Walking to or from the car, the door is fully open while the body
+    // (root within this radius) is in its sweep and shut once this far clear.
+    private const float SweepBodyRadius = 0.45f;
+    private const float SweepRamp = 1.1f;
+    // A full door swing never takes less than this (no one-frame slams).
+    private const float DoorSwingSeconds = 0.45f;
+    // Inner face of the closed door: the leaf is about this thick.
+    private const float DoorInnerDepth = 0.06f;
     private const float RoofClearance = 0.05f;
 
     public enum SeatState
@@ -628,7 +636,7 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                 if (bone == null) continue;
                 Vector3 b = actor.InverseTransformPoint(bone.position) + result.AnchorLocal;
                 float alongDoor = (b.z - hingeZ) * Mathf.Sign(reach);
-                bool inSwing = side * b.x + 0.2f > doorOuter &&
+                bool inSwing = side * b.x > doorOuter - DoorInnerDepth &&
                     side * b.x < doorOuter + Mathf.Abs(reach) + 0.25f &&
                     alongDoor > -0.25f && alongDoor < Mathf.Abs(reach) + 0.25f;
                 if (inSwing)
@@ -735,8 +743,18 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         }
         doorOpenEnd = Mathf.Clamp(Mathf.Min(DoorOpenEnd, firstInSwing - 0.02f), 0.06f, 0.6f);
         doorOpenStart = Mathf.Clamp(Mathf.Min(DoorOpenStart, doorOpenEnd - 0.12f), 0.01f, doorOpenEnd - 0.05f);
-        doorCloseStart = Mathf.Clamp(Mathf.Max(DoorCloseStart, lastInSwing + 0.03f), doorOpenEnd + 0.05f, 0.95f);
-        doorCloseEnd = Mathf.Min(0.995f, doorCloseStart + (DoorCloseEnd - DoorCloseStart));
+        if (lastInSwing + 0.03f + (DoorCloseEnd - DoorCloseStart) > 0.995f)
+        {
+            // Still in the sweep when the clip ends: the door stays open and
+            // shuts while the driver walks clear (WalkingAway).
+            doorCloseStart = 1f;
+            doorCloseEnd = 1.2f;
+        }
+        else
+        {
+            doorCloseStart = Mathf.Clamp(Mathf.Max(DoorCloseStart, lastInSwing + 0.03f), doorOpenEnd + 0.05f, 0.95f);
+            doorCloseEnd = Mathf.Min(0.995f, doorCloseStart + (DoorCloseEnd - DoorCloseStart));
+        }
         return rise;
     }
 
@@ -769,6 +787,25 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
         new List<(Vector3, Vector3, float)>();
     private float hipsOut;
     private Vector3 planShiftAxis;
+
+    // Distance from a seat-local point to the box the open door sweeps; 0 inside.
+    public float SweepGap(Vector3 local)
+    {
+        if (cabin == null || !cabin.TryGetMarker("Hinge", out Vector3 hinge)) return 10f;
+        float reach = Mathf.Abs(cabin.DoorReach);
+        float along = (local.z - hinge.z) * (cabin.DoorReach < 0f ? -1f : 1f);
+        float lateral = Mathf.Sign(hinge.x) * local.x;
+        float outer = Mathf.Abs(hinge.x);
+        float dx = Mathf.Max(0f, Mathf.Max(outer - DoorInnerDepth - lateral, lateral - (outer + reach + 0.25f)));
+        float dz = Mathf.Max(0f, Mathf.Max(-0.25f - along, along - (reach + 0.25f)));
+        return Mathf.Sqrt(dx * dx + dz * dz);
+    }
+
+    private float DoorStep(float target) =>
+        Mathf.MoveTowards(lastDoorOpen, target, Time.deltaTime * PlaybackSpeed / DoorSwingSeconds);
+
+    private float DoorForWalker() =>
+        1f - Smooth(SweepBodyRadius, SweepBodyRadius + SweepRamp, SweepGap(transform.InverseTransformPoint(anchor.position)));
 
     private float DoorAt(float t) => fit.DoorOpenEnd <= 0f
         ? Smooth(DoorOpenStart, DoorOpenEnd, t) * (1f - Smooth(DoorCloseStart, DoorCloseEnd, t))
@@ -823,7 +860,6 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                     // Stand on the walking root exactly where the clip ended.
                     anchor.SetPositionAndRotation(DoorPointWorld, transform.rotation * fit.DoorRotationLocal);
                     driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.None, 0f, Vector3.zero);
-                    cabin.SetDoorOpen01(0f);
                     walkTarget = LanePointWorld;
                     walkFinalRotation = Quaternion.identity;
                     State = SeatState.WalkingAway;
@@ -832,7 +868,13 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                 }
                 break;
             case SeatState.WalkingAway:
-                if (Walk(walkTarget, false))
+                bool away = Walk(walkTarget, false);
+                // Shut once clear of the sweep; never reopens. The driver
+                // waits at the lane point until it is shut: the seat stops
+                // driving the door once empty.
+                SetDoor(DoorStep(away ? 0f : Mathf.Min(lastDoorOpen, DoorForWalker())));
+                if (away) driver.SetMoving(false, 1f);
+                if (away && lastDoorOpen <= 0f)
                 {
                     IVehicleSeatOccupant standing = driver;
                     Action done = onFinished;
@@ -847,7 +889,11 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                 }
                 break;
             case SeatState.WalkingIn:
-                if (Walk(walkTarget, true))
+                bool atDoor = Walk(walkTarget, true);
+                // Open before the body reaches the sweep; never closes again
+                // here. At the door the driver waits until it is fully open.
+                SetDoor(DoorStep(Mathf.Max(lastDoorOpen, atDoor ? 1f : DoorForWalker())));
+                if (atDoor && lastDoorOpen >= 1f)
                 {
                     driver.SetMoving(false, 1f);
                     exitPhase = 1f;
@@ -862,10 +908,13 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
                 exitPhase = Mathf.Max(0f, exitPhase - step);
                 driver.SetVehiclePose(MixamoScanRetargetAnimator.VehiclePose.Exit, exitPhase,
                     ExitOffsetWorld(exitPhase), ScaleAt(exitPhase));
-                SetDoor(DoorAt(exitPhase));
+                // Held open from the walk in until the clip (reversed) shuts it
+                // after the legs are in.
+                float openEnd = fit.DoorOpenEnd > 0f ? fit.DoorOpenEnd : DoorOpenEnd;
+                SetDoor(exitPhase >= openEnd ? Mathf.Max(lastDoorOpen, DoorAt(exitPhase)) : DoorAt(exitPhase));
                 if (exitPhase <= 0f)
                 {
-                    cabin.SetDoorOpen01(0f);
+                    SetDoor(0f);
                     ApplySeat(true);
                     State = SeatState.Seated;
                     Action done = onFinished;

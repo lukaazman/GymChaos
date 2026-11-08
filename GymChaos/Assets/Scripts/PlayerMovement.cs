@@ -740,6 +740,26 @@ public partial class PlayerMovement : MonoBehaviour
         }
     }
 
+    /// <summary>A punch from another player: it hurts like an enemy punch and can kill.</summary>
+    public void ReceivePlayerPunch(float damage, Vector3 impulse)
+    {
+        if (IsDead || damage <= 0f) return;
+        ReceiveEnemyPunch(damage, impulse, null);
+    }
+
+    /// <summary>Where the player last died (for a respawn in place).</summary>
+    public Vector3 LastDeathPosition { get; private set; }
+
+    /// <summary>Back on its feet at a place, rested: used after a death in a room that stays up.</summary>
+    public void RespawnAt(Vector3 position, float facingDegrees)
+    {
+        float capacity = GymExperienceService.Active != null ? GymExperienceService.Active.GetSprintCapacity() : 100f;
+        RestoreSessionState(true, position, facingDegrees, maxHealth, capacity);
+        deathReturnRequested = false;
+        lastDamageTime = Time.time - 100f;
+        CaptureCursorForGameplay();
+    }
+
     public void RestoreHealth(float amount)
     {
         if (IsDead || amount <= 0f)
@@ -886,6 +906,7 @@ public partial class PlayerMovement : MonoBehaviour
         }
 
         IsDead = true;
+        LastDeathPosition = transform.position;
         diedAtUnscaled = Time.unscaledTime;
         deathReturnRequested = false;
         currentHealth = 0f;
@@ -1164,6 +1185,7 @@ public partial class PlayerMovement : MonoBehaviour
         Vector3 aimPoint = origin + playerCamera.transform.forward * punchRange +
                            playerCamera.transform.up * PlayerPunchAimLift;
         Vector3 direction = (aimPoint - origin).normalized;
+        GymNetPvp.LocalPunch(origin, direction);
         if (!TryResolvePunchHit(origin, ref direction, out RaycastHit hit))
         {
             return;
@@ -2995,6 +3017,8 @@ public partial class PlayerMovement : MonoBehaviour
 
     private void DrawDeathOverlay()
     {
+        // The death menu brings its own veil and title.
+        if (GymPauseMenu.IsDeathMenuVisible) return;
         // The overlay deliberately remains translucent so the enemy that
         // delivered the contact punch can continue its Celebration clip behind
         // the death screen.
@@ -3038,6 +3062,8 @@ public partial class PlayerMovement : MonoBehaviour
             return;
         }
         deathReturnRequested = true;
+        // In a room the death has its own way out (the guest's death menu, the host's reload).
+        if (GymNetSession.HandleLocalDeath(this)) return;
         GymSessionService.ReturnToLoadList();
     }
 

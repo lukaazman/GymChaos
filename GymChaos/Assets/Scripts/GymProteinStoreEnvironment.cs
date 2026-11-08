@@ -336,6 +336,12 @@ public static class GymProteinStoreEnvironment
             return true;
         }
 
+        // The automatic door opens for anyone who walks the route.
+        if (AutoDoor != null && AutoDoor.OwnsCollider(collider))
+        {
+            return true;
+        }
+
         // The probe is for static route geometry. Runtime actors are expected
         // to move through this opening and must not turn a valid opening into
         // a false failure while a verifier is running.
@@ -1056,7 +1062,7 @@ public static class GymProteinStoreEnvironment
     /// Sliding glass door in the storefront opening, matching the black
     /// storefront frame: two leaves part sideways behind the fixed glass when
     /// someone comes near, with a frosted dot band, a header track and a
-    /// motion sensor over the opening. No colliders (see GymAutoDoor).
+    /// motion sensor over the opening. Leaf colliders: see GymAutoDoor.
     /// </summary>
     private static void CreateAutomaticDoor(Transform parent, float floorY, float entranceZ)
     {

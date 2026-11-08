@@ -139,6 +139,10 @@ public sealed class GymSaveRepository
         if (string.IsNullOrEmpty(data.classId)) data.classId = GymClassCatalog.BaselineId;
         if (!knownClasses.Contains(data.classId))
             return Fail(GymSaveFailure.UnknownClass, "The class '" + data.classId + "' is unavailable. The original save is preserved.");
+        // Version 0 and 1 files stored the world next to the character.
+        if (data.version < 2) data.hasWorld = true;
+        data.characterRevision = Math.Max(0, data.characterRevision);
+        data.worldRevision = Math.Max(0, data.worldRevision);
         data.version = GymCharacterSave.CurrentVersion;
         data.progression.Normalize();
         data.oneShotRewards = data.oneShotRewards ?? Array.Empty<string>();

@@ -1570,6 +1570,11 @@ public bool BeginDepartureForVerification(
         if (record.vehicle != null && record.vehicle.IsBus &&
             !record.vehicle.IsParked && !record.vehicle.IsDriving)
         {
+            if (RaceTrafficHold)
+            {
+                record.leaveAfter = Time.time + 0.5f;
+                return;
+            }
             // The arrival bus already completed its route and was hidden.
             // Bring it back only when Davie is leaving, then let the normal
             // pedestrian approach reach the authored front-side door point.
