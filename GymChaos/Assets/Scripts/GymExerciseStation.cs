@@ -1691,6 +1691,27 @@ public class GymExerciseStation : MonoBehaviour
             {
                 playerRotation = Quaternion.LookRotation(square.normalized, Vector3.up);
             }
+            if (type == GymExerciseType.BarbellSquat && across.sqrMagnitude > 0.01f)
+            {
+                // A rack is authored a couple of degrees off the room, so the
+                // member, the bar and the plates all read as leaning right.
+                // Within a few degrees of a gym axis, snap square to it: the
+                // set then faces the mirrors head-on, which is how the racks
+                // stand. A genuinely angled rack keeps its own facing.
+                Vector3 a = across.normalized;
+                Vector3 snapped = Mathf.Abs(a.x) > Mathf.Abs(a.z)
+                    ? new Vector3(Mathf.Sign(a.x), 0f, 0f)
+                    : new Vector3(0f, 0f, Mathf.Sign(a.z));
+                if (Vector3.Angle(a, snapped) < 6f)
+                {
+                    Vector3 head = Vector3.Cross(Vector3.up, snapped).normalized;
+                    if (Vector3.Dot(head, playerRotation * Vector3.forward) < 0f)
+                    {
+                        head = -head;
+                    }
+                    playerRotation = Quaternion.LookRotation(head, Vector3.up);
+                }
+            }
         }
         if (type == GymExerciseType.LatPulldown)
         {

@@ -148,6 +148,12 @@ public static class GymChaosRaceChaosVerifier
             $"Goku not standing at the countdown ({gokuBody.AnimationState})");
         float gokuGridHeight = gokuBody.transform.position.y - RoadY(goku.Kart);
         Require(Mathf.Abs(gokuGridHeight) < 0.3f, $"Goku stands {gokuGridHeight:F2} m off the road at the grid");
+        // Flying hitboxes: armed for the race, tight only once he is airborne.
+        EnemyMeshHitboxRig gokuHitboxes = gokuBody.GetComponent<EnemyMeshHitboxRig>();
+        Require(gokuHitboxes != null && gokuHitboxes.FlightProfileArmed,
+            "Goku's flight hitbox profile is not armed");
+        Require(Mathf.Abs(gokuHitboxes.FlightRadiusScaleFactor - 1f) < 0.001f,
+            $"Goku's hitboxes are already tightened on the grid ({gokuHitboxes.FlightRadiusScaleFactor:F2})");
 
         // Bus body box in its holder frame (Davie is not under the holder).
         Transform busHolder = director.Cars[bus.GridSlot].Holder;
@@ -156,6 +162,41 @@ public static class GymChaosRaceChaosVerifier
         MixamoScanRetargetAnimator davieAnimator = davie.VehicleBodyAnimator;
         Require(davieAnimator != null && davieAnimator.HasSittingIdleClip, "Davie has no sitting_idle clip");
         CheckDavieSeated(davieAnimator, busHolder, busLocal, "countdown");
+        // The bus covers the chase view: it fades while it is in the way and
+        // comes back solid the moment it is not.
+        GymRaceVehicleFade fade = busHolder.GetComponent<GymRaceVehicleFade>();
+        Require(fade != null, "the bus has no camera fade in chaos");
+        Vector3 busMiddle = busHolder.TransformPoint(busLocal.center);
+        Require(fade.EvaluateForVerification(busMiddle + Vector3.up * 8f, busMiddle - Vector3.up * 3f),
+            "the bus did not fade when it blocked the view");
+        Require(fade.CurrentAlpha <= GymRaceVehicleFade.FadedAlpha + 0.01f,
+            $"faded bus alpha {fade.CurrentAlpha:F2}");
+        Require(!fade.EvaluateForVerification(busMiddle + Vector3.right * 40f, busMiddle + Vector3.right * 60f),
+            "the bus faded while it was out of the way");
+        Require(fade.CurrentAlpha > 0.99f, $"clear bus alpha {fade.CurrentAlpha:F2}");
+        // Coming back to solid has to give each renderer its own shadow mode
+        // back: forcing the shadow-only proxy on drew a textureless white copy
+        // of the bus over its livery.
+        foreach (Renderer renderer in busHolder.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer.name != GymShadowProxy.ProxyName) continue;
+            Require(renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly,
+                "the bus shadow proxy turned into a visible white bus after the fade cleared");
+        }
+        // A car-sized body never fades, even when the camera is looking through it.
+        foreach (GymRaceVehicleFactory.Car other in director.Cars)
+        {
+            if (other.Holder == null || other.Holder == busHolder) continue;
+            Bounds body = LocalBounds(other.Holder);
+            if (body.size.z < 3f || body.size.z > 7f) continue;
+            GymRaceVehicleFade carFade = other.Holder.GetComponent<GymRaceVehicleFade>();
+            Require(carFade != null, $"{other.Holder.name} has no fade component");
+            Vector3 middle = other.Holder.TransformPoint(body.center);
+            Require(!carFade.EvaluateForVerification(middle + Vector3.up * 5f, middle - Vector3.up * 2f),
+                $"{other.Holder.name} (a car) faded like the bus");
+            break;
+        }
+        report.Append($"busFade=ok ");
         List<Transform> holders = new List<Transform>();
         List<Bounds> bodies = new List<Bounds>();
         for (int i = 0; i < director.Cars.Count; i++)
@@ -166,8 +207,52 @@ public static class GymChaosRaceChaosVerifier
             bodies.Add(local);
         }
         Capture(player, gokuBody.transform.position + gokuBody.transform.forward * 4f + Vector3.up * 1.5f, gokuBody.transform.position + Vector3.up, "race-chaos-grid-goku.png");
+        // The faded state must read as the same bus at half opacity: a shot
+        // from the chase side while the body covers the view.
+        Vector3 fadedEye = busHolder.TransformPoint(new Vector3(6.5f, 2.4f, busLocal.max.z + 8f));
+        Vector3 fadedFocus = busHolder.TransformPoint(busLocal.center);
+        Require(fade.EvaluateForVerification(fadedEye, fadedFocus), "the bus did not fade for its own capture");
+        // The shadow proxy stays shadow-only through the fade: any other cast
+        // mode shows that textureless white copy over the see-through body.
+        foreach (Renderer renderer in busHolder.GetComponentsInChildren<Renderer>(true))
+        {
+            if (renderer.name != GymShadowProxy.ProxyName) continue;
+            Require(renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly,
+                "the bus shadow proxy turned visible while the body was faded");
+        }
+        Capture(player, fadedEye, fadedFocus, "race-chaos-bus-fade.png");
+        Require(!fade.EvaluateForVerification(busMiddle + Vector3.right * 40f, busMiddle + Vector3.right * 60f),
+            "the bus stayed faded out of the way after its capture");
         Capture(player, busHolder.TransformPoint(new Vector3(-6f, 4.5f, busLocal.max.z + 6f)), davie.VehicleBodyAnimator.BodyRig.Hips.position, "race-chaos-grid-bus.png");
-        report.Append($"racers=8 gokuGrid={gokuGridHeight:F2} bus={busLocal.size.z:F1}m ");
+        report.Append($"racers=8 gokuGrid={gokuGridHeight:F2} bus={busLocal.size.z:F1}m roofSeat={LocalBounds(busHolder).max.y - busHolder.InverseTransformPoint(davieAnimator.BodyRig.Hips.position).y:F2} ");
+
+        // Chaos rules: boost refills three times faster, a crash into the
+        // scenery costs a third of the speed, and a ram throws the rival.
+        GymRaceRacer me = Find(director, "You");
+        Require(me != null && me.Kart != null, "no player kart");
+        GymRaceKart mine = me.Kart;
+        Require(Mathf.Abs(mine.BoostFillScale - GymRaceDirector.ChaosBoostFillScale) < 0.001f,
+            $"chaos boost fill x{mine.BoostFillScale:F2}");
+        Require(Mathf.Abs(mine.BoostFillSecondsCurrent - GymRaceKart.BoostFillSeconds / 3f) < 0.05f,
+            $"chaos boost refills in {mine.BoostFillSecondsCurrent:F2}s");
+        Require(Mathf.Abs(mine.ImpactSelfScale - GymRaceDirector.ChaosImpactSelfScale) < 0.001f,
+            $"chaos wall impact scale {mine.ImpactSelfScale:F3}");
+        Require(mine.WallSpeedKeepAfterImpact > 0.88f && mine.WallSpeedKeepAfterImpact < 0.96f,
+            $"chaos wall keeps {mine.WallSpeedKeepAfterImpact:F3} of the speed");
+        // Closing speed is negative while approaching (the normal points at us).
+        Require(mine.RamSelfPushScale < 0.001f, $"chaos ram pushes back x{mine.RamSelfPushScale:F2}");
+        Require(Mathf.Abs(mine.BumpKnockback - GymRaceDirector.ChaosBumpKnockback) < 0.001f &&
+            mine.KnockbackFrom(-30f) > 18f,
+            $"chaos ram throws {mine.KnockbackFrom(-30f):F1} m/s of a 30 m/s hit");
+        // The hit costs the kart that was hit, never the one that hit it.
+        Require(Mathf.Abs(mine.RammedSpeedKeep - GymRaceDirector.ChaosRammedSpeedKeep) < 0.001f &&
+            mine.RammedSpeedKeep > 0.4f && mine.RammedSpeedKeep < 0.75f,
+            $"a rammed kart keeps {mine.RammedSpeedKeep:F2} of its speed");
+        float expectedTop = GymRaceKart.Stats.Default.TopSpeed *
+            GymRaceDirector.SpeedScaleFor(director.CurrentDifficulty) * GymRaceDirector.ChaosTopSpeedScale;
+        Require(Mathf.Abs(mine.KartStats.TopSpeed - expectedTop) < 0.05f,
+            $"chaos top speed {mine.KartStats.TopSpeed:F2}, expected {expectedTop:F2}");
+        report.Append($"boost={mine.BoostFillSecondsCurrent:F1}s wallKeep={mine.WallSpeedKeepAfterImpact:F2} ram={mine.KnockbackFrom(-30f):F1} top={mine.KartStats.TopSpeed:F1} ");
 
         // -------------------------------------------------------------- racing
         while (director.CurrentPhase != GymRaceDirector.Phase.Racing) yield return null;
@@ -181,6 +266,7 @@ public static class GymChaosRaceChaosVerifier
         string worstPair = "-";
         int busDriftSamples = 0;
         int samples = 0;
+        float flightHitboxes = 1f;
         float startLoop = davieAnimator.VehicleLoopTimeForVerification;
         bool gokuShot = false;
         bool busShot = false;
@@ -194,6 +280,7 @@ public static class GymChaosRaceChaosVerifier
             if (flying)
             {
                 samples++;
+                flightHitboxes = Mathf.Min(flightHitboxes, gokuHitboxes.FlightRadiusScaleFactor);
                 worstRoad = Mathf.Max(worstRoad, GymRaceTrackLayout.SignedDistanceToRoad(goku.Kart.Body.position));
                 maxLift = Mathf.Max(maxLift, gokuBody.transform.position.y - RoadY(goku.Kart));
                 if (goku.Kart.ForwardSpeed > 4f)
@@ -236,10 +323,12 @@ public static class GymChaosRaceChaosVerifier
         Require(worstRoad < 0.3f, $"Goku left the road by {worstRoad:F2} m");
         Require(maxLift < 0.6f, $"Goku flew {maxLift:F2} m above the road (root)");
         Require(worstFacing > 0.85f, $"Goku faced away from his travel ({worstFacing:F2})");
+        Require(flightHitboxes <= 0.81f, $"Goku's flying hitboxes stayed at x{flightHitboxes:F2}");
         Require(busDriftSamples > 0, "bus never drifted");
         Require(loops > 1f, $"sitting_idle played {loops:F2} loops in the race");
         Require(worstOverlap < 0.3f, $"car bodies overlapped {worstOverlap:F2} m ({worstPair})");
-        report.Append($"road={worstRoad:F2} lift={maxLift:F2} facing={worstFacing:F2} busDrift={busDriftSamples} loops={loops:F1} overlap={worstOverlap:F2} ");
+        report.Append($"road={worstRoad:F2} lift={maxLift:F2} facing={worstFacing:F2} flyHitbox=x{flightHitboxes:F2} " +
+            $"busDrift={busDriftSamples} loops={loops:F1} overlap={worstOverlap:F2} ");
 
         // ------------------------------------------------------------ teardown
         director.ForceResultsForVerification();
@@ -260,8 +349,11 @@ public static class GymChaosRaceChaosVerifier
         Require(animator.CurrentVehiclePose == MixamoScanRetargetAnimator.VehiclePose.SittingIdle,
             $"{when}: Davie pose {animator.CurrentVehiclePose}, expected SittingIdle");
         Vector3 hips = busHolder.InverseTransformPoint(animator.BodyRig.Hips.position);
-        Require(hips.y > busLocal.max.y - 0.1f && hips.y < busLocal.max.y + 0.6f,
-            $"{when}: Davie hips {hips.y:F2} not on the roof (top {busLocal.max.y:F2})");
+        // The roof crowns towards the middle: he has to sit on the panels
+        // under him, so compare against the roof at his own x/z.
+        float roof = GymRaceVehicleFactory.RoofHeightAt(busHolder, hips.x, hips.z, busLocal.max.y);
+        Require(hips.y > roof - 0.05f && hips.y < roof + 0.32f,
+            $"{when}: Davie hips {hips.y:F2} not on the roof under him ({roof:F2}, bus top {busLocal.max.y:F2})");
         Require(hips.z > busLocal.center.z + busLocal.extents.z * 0.4f && hips.z < busLocal.max.z,
             $"{when}: Davie hips z={hips.z:F2} not on the front of the roof ({busLocal.center.z:F2}..{busLocal.max.z:F2})");
         Require(Mathf.Abs(hips.x - busLocal.center.x) < busLocal.extents.x * 0.6f, $"{when}: Davie off the roof side ({hips.x:F2})");

@@ -1,6 +1,7 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -283,6 +284,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 MeasureStretch(legs, loadout.BottomShellRenderer, $"pants_{clip}_{phase:F2}");
             }
         }
+        MeasureShape(loadout.BottomShellRenderer, "pants", true);
         service.EquipBottom(GymBottomStyle.Shorts);
         yield return WaitBottom(loadout);
         float shortsLow = loadout.BottomShellRenderer.bounds.min.y;
@@ -299,6 +301,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         service.EquipTop(GymTopStyle.Oversized);
         yield return WaitShell(loadout);
         ExportShell(loadout, GymTopStyle.Oversized, "oversized");
+        MeasureShape(loadout.TopShellRenderer, "oversized", false);
 
         // ---- evidence
         if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null)
@@ -454,7 +457,8 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         {
             BoneWeight w = shell.sharedMesh.boneWeights[worstIndex];
             throw new InvalidOperationException($"{clip}: shell vertex {worstIndex} {worst:F3} from the body " +
-                $"rest={shell.sharedMesh.vertices[worstIndex]} weights={w.boneIndex0}:{w.weight0:F2} " +
+                $"bones={Bones(shell, worstIndex)} " +
+                $"rest={shell.sharedMesh.vertices[worstIndex].ToString("F4")} weights={w.boneIndex0}:{w.weight0:F2} " +
                 $"{w.boneIndex1}:{w.weight1:F2} {w.boneIndex2}:{w.weight2:F2} {w.boneIndex3}:{w.weight3:F2} " +
                 $"baked={sm.MultiplyPoint3x4(sv[worstIndex])} bodyCentre={body.bounds.center} quality={shell.quality}/{body.quality}");
         }
@@ -531,6 +535,83 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         service.EquipBottom(GymBottomStyle.Shorts);
         Destroy(lightObject);
         Destroy(camera.gameObject);
+    }
+
+    /// <summary>Shape gates: no interior holes in the fabric submesh, an
+    /// A-line silhouette (no balloon from thigh to hem) and no sharp creases
+    /// from a stepped radius. Edges are sorted, not hashed: the editor asmdef
+    /// does not always carry System.Collections.Generic into this file.</summary>
+    private void MeasureShape(SkinnedMeshRenderer shell, string label, bool pants)
+    {
+        Require(shell != null && shell.sharedMesh != null, $"{label}: no shell mesh");
+        Mesh mesh = shell.sharedMesh;
+        Vector3[] v = mesh.vertices;
+        int[] t = mesh.GetTriangles(0);
+        Require(t.Length > 0, $"{label}: fabric submesh is empty");
+        int faces = t.Length / 3;
+        long[] edgeKeys = new long[t.Length];
+        int[] edgeFace = new int[t.Length];
+        for (int i = 0, f = 0; i < t.Length; i += 3, f++)
+            for (int k = 0; k < 3; k++)
+            {
+                int a = t[i + k], b = t[i + (k + 1) % 3];
+                edgeKeys[i + k] = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                edgeFace[i + k] = f;
+            }
+        int[] order = new int[edgeKeys.Length];
+        for (int i = 0; i < order.Length; i++) order[i] = i;
+        long[] keys = edgeKeys;
+        int[] slot = order;
+        Array.Sort((long[])keys.Clone(), slot);
+        Vector3[] faceNormals = new Vector3[faces];
+        for (int i = 0, f = 0; i < t.Length; i += 3, f++)
+            faceNormals[f] = Vector3.Cross(v[t[i + 1]] - v[t[i]], v[t[i + 2]] - v[t[i]]).normalized;
+        int open = 0;
+        float longestOpen = 0f;
+        int sharp = 0;
+        for (int i = 0; i < keys.Length; i++)
+        {
+            if (i > 0 && keys[i] == keys[i - 1]) continue;
+            int run = 1;
+            int last = edgeFace[slot[i]];
+            for (int j = i + 1; j < keys.Length && keys[j] == keys[i]; j++)
+            {
+                if (edgeFace[slot[j]] != last)
+                {
+                    if (Vector3.Angle(faceNormals[last], faceNormals[edgeFace[slot[j]]]) > 60f) sharp++;
+                    last = edgeFace[slot[j]];
+                }
+                run++;
+            }
+            if (run == 1)
+            {
+                open++;
+                int a = (int)(keys[i] >> 32), b = (int)(keys[i] & 0xffffffff);
+                longestOpen = Mathf.Max(longestOpen, (v[a] - v[b]).magnitude);
+            }
+        }
+
+        // Silhouette: half widths along the garment, up is +z in this mesh.
+        Bounds bounds = mesh.bounds;
+        float Height(Vector3 p) => (p.z - bounds.min.z) / Mathf.Max(bounds.size.z, 1e-6f);
+        float Width(float level)
+        {
+            float widest = 0f;
+            for (int i = 0; i < v.Length; i++)
+                if (Mathf.Abs(Height(v[i]) - level) < 0.05f)
+                    widest = Mathf.Max(widest, Mathf.Abs(v[i].x));
+            return widest;
+        }
+        float hip = Width(0.72f), thigh = Width(0.55f), knee = Width(0.35f), hem = Width(0.08f);
+        if (pants)
+        {
+            Require(hem <= thigh * 1.05f && knee <= thigh * 1.02f,
+                $"{label}: silhouette balloons (thigh={thigh:F4} knee={knee:F4} hem={hem:F4})");
+        }
+        Require(sharp <= Mathf.Max(8, faces / 400),
+            $"{label}: {sharp} sharp creases over 60 deg of {faces} faces");
+        notes.Add($"{label}Shape open={open} longestOpen={longestOpen:F4} sharp={sharp} " +
+            $"hip={hip:F4} thigh={thigh:F4} knee={knee:F4} hem={hem:F4}");
     }
 
     private static void Capture(Camera camera, string path)

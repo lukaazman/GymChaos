@@ -8,9 +8,10 @@ from .tools/player-uvpos.npz (T-pose, height 1, front -Y, Z up). Garment
 coverage and print are then designed in 3D, so they stay continuous across
 the scan's fragmented UV islands:
 
-- Oversized: torso from below the shorts' waistband to a crew neck, sleeves
-  to just above the elbow, no front logo, "KING" arched across the upper
-  back in a fixed grey whatever the shirt colour.
+- Oversized: torso from below the shorts' waistband to a ribbed crew neck,
+  sleeves to just above the elbow, a small white bull-head mark on the left
+  chest and "KING" arched across the upper back in a fixed grey whatever the
+  shirt colour.
 - Onyx: compression top to mid-biceps, always black with the chosen colour
   as accent: honeycomb knit panels (V panel on the chest, inverted triangle
   on the back), raglan seams and sleeve cuffs, no front logo.
@@ -68,7 +69,8 @@ COLLAR_SLOPE = 0.17
 # Onyx reaches past the tank top's hem so the tank never shows below it.
 ONYX_HEM = 0.505
 TORSO_HALF_WIDTH = 0.135
-OVERSIZED_SLEEVE_END = 0.285
+# The reference sleeve ends just above the elbow, wide and straight.
+OVERSIZED_SLEEVE_END = 0.315
 # Onyx: short cap sleeve that ends below the deltoid, most of the biceps bare.
 ONYX_SLEEVE_END = 0.192
 PAINT_MARGIN = 0.01
@@ -330,7 +332,7 @@ def main():
     heather = cv2.GaussianBlur(rng.normal(0, 1, lum.shape).astype(np.float32), (0, 0), 3.0)
     heather /= max(heather.std(), 1e-6)
     wales = np.sin(x * 2600 + 0.6 * np.sin(z * 900)) * 0.5 + 0.5
-    jersey = 1 + 0.018 * heather + 0.022 * (wales - 0.5) + 0.03 * (weave - 1)
+    jersey = 1 + 0.022 * heather + 0.034 * (wales - 0.5) + 0.038 * (weave - 1)
     # Seams: shoulder line from neck to sleeve head, side seams, set-in
     # sleeve ring; a faint darker stitch line each.
     shoulder = polyline_distance(ax, z, [(OVERSIZED_NECK_RADIUS, 0.79), (0.15, 0.765)])
@@ -344,6 +346,28 @@ def main():
     folds = 1 + (folds - 1) * 0.7
     drape = folds * jersey * (1 - 0.1 * seam)
     drape *= 1 - 0.08 * smoothstep(0.56, 0.5, z)
+    # Ribbed crew collar: the band stands off the chest, so give it vertical
+    # wales instead of the body knit (it read as a plain rolled edge before).
+    collar_ring = over & (z > 0.771) & (np.hypot(x, y - NECK_CENTER_Y) < 0.10) & (over_edge < 0.024)
+    if collar_ring.any():
+        rib = 1 + 0.06 * np.sin(np.arctan2(y - NECK_CENTER_Y, x) * 30.0)
+        drape = np.where(collar_ring, drape * rib, drape)
+
+    # Chest mark: a small embroidered bull head on the wearer's left pec, the
+    # way the reference tee carries its logo. Line art, so it reads white on
+    # every shirt colour and never turns into a dark blob from a distance.
+    logo_x, logo_z, logo_scale = 0.052, 0.712, 0.0115
+    lu = (x - logo_x) / logo_scale
+    lv = (z - logo_z) / logo_scale
+    logo_edge = np.minimum.reduce([
+        polyline_distance(lu, lv, [(-0.58, 0.36), (-0.30, 0.02), (0.0, -0.62)]),
+        polyline_distance(lu, lv, [(0.58, 0.36), (0.30, 0.02), (0.0, -0.62)]),
+        polyline_distance(lu, lv, [(-0.58, 0.36), (-0.92, 0.60), (-1.08, 0.38)]),
+        polyline_distance(lu, lv, [(0.58, 0.36), (0.92, 0.60), (1.08, 0.38)]),
+        np.minimum(np.hypot(lu + 0.27, lv - 0.10), np.hypot(lu - 0.27, lv - 0.10)) - 0.10,
+    ])
+    logo = np.clip((0.085 - logo_edge) / 0.085, 0, 1)
+    logo *= (ny < -0.30) & (z > 0.645) & (z < 0.765)
     # Hemmed edges: a slightly darker 8 mm turn-up along every open edge.
     hem_band = over & (over_edge < 0.008)
     # Soft falloff, not a hard 0.86 step: the step traced the mesh's ragged
@@ -364,6 +388,8 @@ def main():
         fabric = np.array(color, np.float32)[None, None, :] * (0.92 * drape)[..., None]
         text = KING_GREY[None, None, :] * (0.96 * folds)[..., None]
         shirt = fabric * (1 - king_mask[..., None]) + text * king_mask[..., None]
+        mark = np.array((0.93, 0.93, 0.90), np.float32)[None, None, :]
+        shirt = shirt * (1 - logo[..., None]) + mark * logo[..., None]
         out[over] = shirt[over]
         Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / f'oversized_{name}.png')
 
@@ -419,8 +445,10 @@ def main():
     # ---------------------------------------------------------- shell
     # Relaxed, not balloon: the cloth follows shoulder and hip width and
     # stands off the waist and sleeves only a little.
-    inflate = 0.007 + 0.006 * smoothstep(0.74, 0.52, z)
-    sleeve_inflate = 0.010 + 0.006 * smoothstep(0.15, 0.27, ax)
+    inflate = 0.009 + 0.007 * smoothstep(0.74, 0.52, z)
+    # A boxy sleeve, not a puffed cap: the reference sleeve hangs straight off
+    # the shoulder to just past mid-biceps instead of ballooning over the arm.
+    sleeve_inflate = 0.0045 + 0.0075 * smoothstep(0.22, 0.315, ax)
     inflate = np.where(ax > 0.12, np.maximum(inflate * (1 - smoothstep(0.12, 0.16, ax)),
                                              sleeve_inflate * smoothstep(0.11, 0.15, ax)), inflate)
     # Keep the collar close to the neck.

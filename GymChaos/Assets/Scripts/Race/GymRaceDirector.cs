@@ -632,9 +632,24 @@ public sealed partial class GymRaceDirector : MonoBehaviour
     private int difficulty;
     public int CurrentDifficulty => difficulty;
 
+    /// <summary>Top speed multiplier of a difficulty level (easy = 1).</summary>
+    public static float SpeedScaleFor(int level) =>
+        DifficultySpeed[Mathf.Clamp(level, 0, DifficultySpeed.Length - 1)];
+
+    // Chaos rules: the boost refills three times faster, a crash into the
+    // scenery costs a third of the usual speed and a ram throws the rival.
+    public const float ChaosTopSpeedScale = 1.25f;
+    public const float ChaosBoostFillScale = 3f;
+    public const float ChaosImpactSelfScale = 1f / 3f;
+    // Hard enough to shove a rival off its line; the spheres still keep the
+    // cars from clipping through each other.
+    public const float ChaosBumpKnockback = 0.7f;
+    // A ram costs the kart that was hit, not the one that hit it.
+    public const float ChaosRammedSpeedKeep = 0.55f;
+
     public static GymRaceKart.Stats ScaleStats(GymRaceKart.Stats stats, int level)
     {
-        float speed = DifficultySpeed[Mathf.Clamp(level, 0, DifficultySpeed.Length - 1)];
+        float speed = SpeedScaleFor(level);
         stats.TopSpeed *= speed;
         stats.Acceleration *= speed;
         stats.Grip *= speed;
@@ -722,10 +737,31 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         return pose;
     }
 
+    /// <summary>Stats for a racer: difficulty, then the chaos top speed.</summary>
+    private GymRaceKart.Stats ScaledStats(RacerSpec spec)
+    {
+        GymRaceKart.Stats stats = ScaleStats(spec.Stats, difficulty);
+        if (mode == RaceMode.Chaos)
+        {
+            stats.TopSpeed *= ChaosTopSpeedScale;
+        }
+        return stats;
+    }
+
+    private void ApplyChaosTuning(GymRaceKart kart)
+    {
+        bool chaos = mode == RaceMode.Chaos;
+        kart.BoostFillScale = chaos ? ChaosBoostFillScale : 1f;
+        kart.ImpactSelfScale = chaos ? ChaosImpactSelfScale : 1f;
+        kart.BumpKnockback = chaos ? ChaosBumpKnockback : 0f;
+        kart.RammedSpeedKeep = chaos ? ChaosRammedSpeedKeep : 1f;
+    }
+
     private void ApplyDifficulty(GymRaceRacer racer)
     {
         RacerSpec spec = specs[racer.GridSlot];
-        racer.Kart.KartStats = ScaleStats(spec.Stats, difficulty);
+        racer.Kart.KartStats = ScaledStats(spec);
+        ApplyChaosTuning(racer.Kart);
         GymRaceAIDriver ai = racer.Kart.GetComponent<GymRaceAIDriver>();
         if (ai != null && !spec.Player)
         {
@@ -856,7 +892,8 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             GymRaceVehicleFactory.Car car = cars[slot];
             Pose pose = GridPose(slot);
             Bounds local = LocalBounds(car.Holder);
-            GymRaceKart kart = GymRaceKart.Create("Race Kart - " + spec.Name, pose.position, pose.rotation * Vector3.forward, ScaleStats(spec.Stats, difficulty), car.Holder);
+            GymRaceKart kart = GymRaceKart.Create("Race Kart - " + spec.Name, pose.position, pose.rotation * Vector3.forward, ScaledStats(spec), car.Holder);
+            ApplyChaosTuning(kart);
             kart.transform.SetParent(transform, true);
             kart.ControlsEnabled = false;
             kart.MeterFilling = false;
@@ -896,6 +933,13 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             {
                 kart.SetFootprint(0.45f, 1.1f);
                 driver.BeginVisitorVehicleRide(car.Holder);
+                // In the air his body is flat and compact: size the compound
+                // hitboxes to the flying silhouette, not the standing one.
+                EnemyMeshHitboxRig hitboxes = driver.GetComponent<EnemyMeshHitboxRig>();
+                if (hitboxes != null)
+                {
+                    hitboxes.ArmFlightHitboxProfile(true);
+                }
             }
             else if (driver != null)
             {
@@ -913,6 +957,28 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             }
         }
         IgnoreOwnColliders();
+        AttachChaosVehicleFade();
+    }
+
+    /// <summary>Chaos: a body as long as the bus covers the chase view when it
+    /// crosses the camera, so it fades while it is in the way.</summary>
+    private void AttachChaosVehicleFade()
+    {
+        if (mode != RaceMode.Chaos || playerRacer == null)
+        {
+            return;
+        }
+        if (chase == null)
+        {
+            return;
+        }
+        // Every car gets the component; only a bus-sized body reacts to it, so
+        // the model's load order cannot leave the bus without one.
+        for (int i = 0; i < cars.Count; i++)
+        {
+            if (cars[i].Holder == null) continue;
+            GymRaceVehicleFade.Attach(cars[i].Holder, chase, playerRacer.Kart.transform);
+        }
     }
 
     private void IgnoreOwnColliders()

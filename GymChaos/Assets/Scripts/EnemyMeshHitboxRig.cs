@@ -30,6 +30,32 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
     private readonly HashSet<Collider> combatColliders = new HashSet<Collider>();
     private readonly List<(Transform center, float radius)> spheres = new List<(Transform, float)>();
     private SkinnedMeshRenderer bodyRenderer;
+    private EnemyFighter fighter;
+    // Racing flight: the capsules follow the flying pose, which is far more
+    // compact than the standing skin fit they were sized against.
+    private bool flightProfileArmed;
+    public float FlightRadiusScale = 0.8f;
+    // The visual (and with it this rig) is built before EnemyFighter is
+    // added, so the fighter has to be resolved on demand.
+    private bool FlightTight
+    {
+        get
+        {
+            if (!flightProfileArmed) return false;
+            if (fighter == null) fighter = GetComponent<EnemyFighter>();
+            return fighter != null && fighter.IsFlying;
+        }
+    }
+
+    /// <summary>Arm the tighter flying hitbox profile (chaos race).</summary>
+    public void ArmFlightHitboxProfile(bool armed)
+    {
+        flightProfileArmed = armed;
+    }
+
+    public bool FlightProfileArmed => flightProfileArmed;
+    /// <summary>Multiplier the capsules are taking right now (1 = standing fit).</summary>
+    public float FlightRadiusScaleFactor => FlightTight ? FlightRadiusScale : 1f;
     private Mesh bakedSurface;
     private Transform leftThighAnchor;
     private Transform rightThighAnchor;
@@ -51,6 +77,7 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
     private void Build(BodybuilderEnemyVisual.Rig rig, SkinnedMeshRenderer renderer)
     {
         bodyRenderer = renderer;
+        fighter = GetComponent<EnemyFighter>();
         float height = Mathf.Max(1f, renderer.bounds.size.y);
         segments.Clear();
         combatColliders.Clear();
@@ -451,7 +478,7 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
             }
 
             Vector3 delta = segment.end.position - segment.start.position;
-            float radius = segment.baseRadius;
+            float radius = segment.baseRadius * (FlightTight ? FlightRadiusScale : 1f);
             if (segment.keepsLegGapOpen && hasLegGap)
             {
                 // In a punch/landing pose the knees can rotate inward. Keep

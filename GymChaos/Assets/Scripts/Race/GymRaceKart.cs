@@ -61,6 +61,27 @@ public sealed class GymRaceKart : MonoBehaviour
     public bool MeterFilling = true;
     /// <summary>Director-set catch-up factor on top speed (rubber band).</summary>
     public float SpeedScale = 1f;
+    /// <summary>Chaos: how much faster the boost meter refills (3 = three times).</summary>
+    public float BoostFillScale = 1f;
+    /// <summary>Chaos: share of the speed a crash takes off us (1 = normal, 1/3 = softer).</summary>
+    public float ImpactSelfScale = 1f;
+    /// <summary>Chaos: share of the closing speed a ram hands to the rival (0 = a fair bump).</summary>
+    public float BumpKnockback = 0f;
+    /// <summary>Chaos: share of its speed the kart that gets rammed keeps. The
+    /// kart doing the hitting keeps all of its own; a hit on the rear bumper
+    /// costs the other kart nothing either.</summary>
+    public float RammedSpeedKeep = 1f;
+
+    /// <summary>Seconds this kart needs to refill an empty boost meter.</summary>
+    public float BoostFillSecondsCurrent => BoostFillSeconds / Mathf.Max(0.01f, BoostFillScale);
+    /// <summary>Share of the speed kept after a crash into the scenery.</summary>
+    public float WallSpeedKeepAfterImpact => Mathf.Lerp(1f, WallSpeedKeep, Mathf.Clamp01(ImpactSelfScale));
+    /// <summary>Speed a ram hands to the rival it hits at <paramref name="closingSpeed"/>.</summary>
+    public float KnockbackFrom(float closingSpeed) => Mathf.Max(0f, -closingSpeed) * BumpKnockback;
+    /// <summary>How much of a bump comes back at the kart doing the hitting.
+    /// Chaos throws only the rival, so it is 0 there and 1 (a fair shared
+    /// push) in the normal race.</summary>
+    public float RamSelfPushScale => BumpKnockback > 0f ? 0f : 1f;
     public Transform Visual;
 
     public event Action<Vector3, float, GymRaceKart> Bumped;
@@ -458,7 +479,7 @@ public sealed class GymRaceKart : MonoBehaviour
             }
         }
         DriftTier = tier;
-        BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.05f);
+        BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.05f * BoostFillScale);
     }
 
     private void EndDrift(bool reward)
@@ -512,7 +533,7 @@ public sealed class GymRaceKart : MonoBehaviour
     {
         if (MeterFilling && !IsBoosting)
         {
-            BoostMeter = Mathf.Min(1f, BoostMeter + dt / BoostFillSeconds);
+            BoostMeter = Mathf.Min(1f, BoostMeter + dt / BoostFillSecondsCurrent);
         }
         if (boostRequested && BoostMeter >= 1f && !IsBoosting)
         {
@@ -553,7 +574,7 @@ public sealed class GymRaceKart : MonoBehaviour
         slipstreamTimer = drafting ? slipstreamTimer + dt : 0f;
         if (InSlipstream && MeterFilling)
         {
-            BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.08f);
+            BoostMeter = Mathf.Min(1f, BoostMeter + dt * 0.08f * BoostFillScale);
         }
     }
 
@@ -609,7 +630,7 @@ public sealed class GymRaceKart : MonoBehaviour
         if (collision.gameObject.layer == GymRaceTrackBuilder.RaceTrackLayer && Vector3.Dot(normal, GroundNormal) < 0.5f)
         {
             WallHits++;
-            body.linearVelocity *= WallSpeedKeep;
+            body.linearVelocity *= WallSpeedKeepAfterImpact;
             Bumped?.Invoke(point, strength, null);
         }
     }
@@ -677,10 +698,39 @@ public sealed class GymRaceKart : MonoBehaviour
             }
             float share = other.RemoteDriven ? 1f : 0.5f;
             float closing = Vector3.Dot(velocity - otherVelocity, normal);
-            velocity += normal * ((Mathf.Max(0f, -closing) + Mathf.Min(depth / dt, 8f)) * share);
+            // Chaos: only the kart that is closing faster does the hitting;
+            // it drops the other one back and takes nothing itself.
+            float knockback = KnockbackFrom(closing);
+            bool ramming = knockback > 0.01f && other.body != null && !other.RemoteDriven &&
+                Vector3.Dot(velocity, -normal) > Vector3.Dot(otherVelocity, normal);
+            float overlap = Mathf.Min(depth / dt, 8f) * share;
+            // A chaos rammer takes no push at all, so the body that was hit
+            // carries the depenetration; without it the rammer drove into the
+            // rival's box and the two stayed overlapped by more than a metre.
+            if (ramming)
+            {
+                other.body.linearVelocity += -normal * (knockback + Mathf.Min(depth / dt, 8f));
+                other.body.linearVelocity = Vector3.ClampMagnitude(
+                    other.body.linearVelocity, other.KartStats.TopSpeed * 1.6f);
+                // The rammer keeps every bit of its speed, so a slower rival
+                // would otherwise sit inside its body box; the kart that was hit
+                // is what steps aside.
+                other.body.position += -normal * Mathf.Min(depth, 0.35f);
+            }
+            velocity += normal * (Mathf.Max(0f, -closing) * share * RamSelfPushScale +
+                overlap * RamSelfPushScale);
             // The box push can keep the spheres from ever touching: count it as the bump.
             if (Time.fixedTime >= kartContactUntil)
             {
+                // Chaos moves the cost of a hit onto the kart that was hit: the
+                // one that rammed keeps its speed, the other loses some, unless
+                // the hit landed on its rear bumper (a drafting nudge, which
+                // costs neither of them anything).
+                if (ramming && RammedSpeedKeep < 0.999f &&
+                    Vector3.Dot(normal, other.bodyFacing) > -0.7f)
+                {
+                    other.body.linearVelocity *= RammedSpeedKeep;
+                }
                 KartHits++;
                 Bumped?.Invoke((body.position + other.body.position) * 0.5f, Mathf.Abs(closing), other);
             }
