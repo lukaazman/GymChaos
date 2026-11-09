@@ -121,6 +121,15 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
         }
     }
 
+    /// <summary>Screen pixel just above the name tag as drawn this frame; false when the tag is hidden.</summary>
+    public bool TryGetTopScreen(out Vector2 top)
+    {
+        top = default;
+        if (root == null || !root.gameObject.activeSelf || !nameRect.gameObject.activeSelf) return false;
+        top = root.anchoredPosition + new Vector2(0f, nameRect.anchoredPosition.y + NameHeight);
+        return true;
+    }
+
     private bool TryGetScreenAnchor(out Vector3 screen, out bool showName, out bool showHealth)
     {
         screen = default;

@@ -191,41 +191,42 @@ public sealed class GymStartScreen : MonoBehaviour
 
     // WebGL only: a speech bubble over the receptionist saying this is a trimmed build.
     private RectTransform webNotice;
+    private GymSpeechBubble webBubble;
     private Transform noticeTarget;
+    private ScreenSpaceCharacterLabel noticeLabel;
     private float noticeHeadHeight;
+    private const float NoticeWidth = 390f;
+    private const float NoticeBoxHeight = 176f;
+    private const float NoticeTail = 34f;
+    // The bubble stays on the scene side of the menu: right of the zigzag that cuts the menu art.
+    private const float NoticeLeftLimit = 0.69f;
+    private const float NoticeRightLimit = 0.985f;
 
     private void CreateWebNotice(Font font)
     {
         GameObject root = new GameObject("Web Build Notice", typeof(RectTransform));
         root.transform.SetParent(transform, false);
         webNotice = root.GetComponent<RectTransform>();
-        webNotice.pivot = new Vector2(0.5f, 0f);
-        webNotice.sizeDelta = new Vector2(430f, 168f);
+        webNotice.anchorMin = webNotice.anchorMax = Vector2.zero;
+        webNotice.sizeDelta = new Vector2(NoticeWidth, NoticeBoxHeight + NoticeTail);
 
-        const float tail = 30f;
-        PersonaShape outline = PersonaMenuStyle.CreateShape("Outline", root.transform, Accent);
-        SetAnchors(outline.rectTransform, Vector2.zero, Vector2.one, -4f, tail - 4f, -4f, -4f);
-        PersonaShape face = PersonaMenuStyle.CreateShape("Face", root.transform, PersonaMenuStyle.ButtonIdle);
-        SetAnchors(face.rectTransform, Vector2.zero, Vector2.one, 0f, tail, 0f, 0f);
-        PersonaShape wedgeOutline = PersonaMenuStyle.CreateShape("Tail Outline", root.transform, Accent);
-        SetAnchors(wedgeOutline.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), -26f, 0f, -26f, 0f);
-        wedgeOutline.rectTransform.sizeDelta = new Vector2(52f, tail + 8f);
-        wedgeOutline.rectTransform.anchoredPosition = new Vector2(0f, (tail + 8f) * 0.5f - 4f);
-        wedgeOutline.SetCorners(new Vector2(0.5f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.5f, 0f));
-        PersonaShape wedge = PersonaMenuStyle.CreateShape("Tail", root.transform, PersonaMenuStyle.ButtonIdle);
-        SetAnchors(wedge.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f));
-        wedge.rectTransform.sizeDelta = new Vector2(40f, tail + 6f);
-        wedge.rectTransform.anchoredPosition = new Vector2(0f, (tail + 6f) * 0.5f - 1f);
-        wedge.SetCorners(new Vector2(0.5f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.5f, 0f));
-        outline.raycastTarget = face.raycastTarget = wedge.raycastTarget = wedgeOutline.raycastTarget = false;
+        GameObject shape = new GameObject("Bubble", typeof(RectTransform), typeof(GymSpeechBubble));
+        shape.transform.SetParent(root.transform, false);
+        webBubble = shape.GetComponent<GymSpeechBubble>();
+        SetAnchors(webBubble.rectTransform, Vector2.zero, Vector2.one);
+        webBubble.color = PersonaMenuStyle.ButtonIdle;
+        webBubble.OutlineColor = Accent;
+        webBubble.Stroke = 4f;
+        webBubble.TailHeight = NoticeTail;
+        webBubble.raycastTarget = false;
 
         Text head = GymRuntimeSettings.CreateText("Notice Heading", root.transform, font, "WEB DEMO", 30,
             Accent, FontStyle.Normal, TextAnchor.UpperLeft, Vector2.zero, Vector2.one);
-        SetAnchors(head.rectTransform, Vector2.zero, Vector2.one, 22f, tail, 22f, 14f);
+        SetAnchors(head.rectTransform, Vector2.zero, Vector2.one, 22f, NoticeTail, 22f, 14f);
         Text body = GymRuntimeSettings.CreateText("Notice Body", root.transform, font,
             "A trimmed-down version, tuned for the browser. For the full experience, play the PC build.",
             25, Color.white, FontStyle.Normal, TextAnchor.UpperLeft, Vector2.zero, Vector2.one);
-        SetAnchors(body.rectTransform, Vector2.zero, Vector2.one, 22f, tail, 22f, 50f);
+        SetAnchors(body.rectTransform, Vector2.zero, Vector2.one, 22f, NoticeTail, 22f, 50f);
         body.horizontalOverflow = HorizontalWrapMode.Wrap;
         root.SetActive(false);
     }
@@ -238,22 +239,40 @@ public sealed class GymStartScreen : MonoBehaviour
             noticeTarget != null && view != null;
         if (show)
         {
-            // The WebGL build loads the receptionist's model late: measure again until it has a body, else the bubble lands on his chest.
-            if (noticeHeadHeight < 1.2f)
+            // Tip of the tail: just above his name tag; before the tag exists, above his head.
+            Vector2 tipViewport;
+            if (noticeLabel == null) noticeLabel = noticeTarget.GetComponentInChildren<ScreenSpaceCharacterLabel>();
+            if (noticeLabel != null && noticeLabel.TryGetTopScreen(out Vector2 tagTop))
+                tipViewport = new Vector2(tagTop.x / Screen.width, tagTop.y / Screen.height);
+            else
             {
-                Bounds bounds = new Bounds(noticeTarget.position, Vector3.zero);
-                foreach (Renderer renderer in noticeTarget.GetComponentsInChildren<Renderer>()) bounds.Encapsulate(renderer.bounds);
-                noticeHeadHeight = bounds.max.y - noticeTarget.position.y;
+                // The WebGL build loads his model late: measure again until it has a body.
+                if (noticeHeadHeight < 1.2f)
+                {
+                    Bounds bounds = new Bounds(noticeTarget.position, Vector3.zero);
+                    foreach (Renderer renderer in noticeTarget.GetComponentsInChildren<Renderer>()) bounds.Encapsulate(renderer.bounds);
+                    noticeHeadHeight = bounds.max.y - noticeTarget.position.y;
+                }
+                Vector3 viewport = view.WorldToViewportPoint(
+                    noticeTarget.position + Vector3.up * (Mathf.Max(noticeHeadHeight, 1.9f) + 0.35f));
+                show = viewport.z > 0f;
+                tipViewport = viewport;
             }
-            // 0.55 m clears his floating name tag; 1.9 m stands in until the model is measurable.
-            Vector3 viewport = view.WorldToViewportPoint(
-                noticeTarget.position + Vector3.up * (Mathf.Max(noticeHeadHeight, 1.9f) + 0.55f));
-            show = viewport.z > 0f;
             if (show)
             {
-                Vector2 anchor = new Vector2(Mathf.Clamp(viewport.x, 0.68f, 0.88f), Mathf.Clamp(viewport.y, 0.3f, 0.74f));
-                webNotice.anchorMin = webNotice.anchorMax = anchor;
-                webNotice.anchoredPosition = Vector2.zero;
+                Vector2 size = ((RectTransform)transform).rect.size;
+                // The tip points a little beside the tag, so the bubble is not stacked over his head.
+                float tipX = (tipViewport.x + 0.025f) * size.x;
+                float tipY = tipViewport.y * size.y + 6f;
+                float left = Mathf.Clamp(tipX - 0.72f * NoticeWidth, NoticeLeftLimit * size.x, NoticeRightLimit * size.x - NoticeWidth);
+                float tipFraction = Mathf.Clamp((tipX - left) / NoticeWidth, 0.1f, 0.9f);
+                if (!Mathf.Approximately(webBubble.TipFraction, tipFraction))
+                {
+                    webBubble.TipFraction = tipFraction;
+                    webBubble.SetVerticesDirty();
+                }
+                webNotice.pivot = new Vector2(tipFraction, 0f);
+                webNotice.anchoredPosition = new Vector2(left + tipFraction * NoticeWidth, tipY);
             }
         }
         if (webNotice.gameObject.activeSelf != show) webNotice.gameObject.SetActive(show);

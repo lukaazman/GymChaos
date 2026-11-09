@@ -23,6 +23,11 @@ public static class GymNetSocket
 {
     public static IGymNetSocket Open(string url)
     {
+        // Peer-to-peer rooms: the host's own client talks to the room logic in its game, a guest dials the host.
+        if (url.StartsWith(GymPeerHost.LoopbackUrl, StringComparison.Ordinal))
+            return GymPeerHost.Current != null ? GymPeerHost.Current.OpenLoopback() : GymLoopbackSocket.Dead();
+        if (url.StartsWith(GymPeerHost.GuestScheme, StringComparison.Ordinal))
+            return new GymPeerGuestSocket(url.Substring(GymPeerHost.GuestScheme.Length));
 #if UNITY_WEBGL && !UNITY_EDITOR
         return new BrowserSocket(url);
 #else

@@ -5,7 +5,8 @@
         "Unity.InputSystem",
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
-        "UnityEngine.UI"
+        "UnityEngine.UI",
+        "Unity.WebRTC"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

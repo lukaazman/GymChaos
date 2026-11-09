@@ -12,23 +12,8 @@ using UnityEngine.UI;
 /// </summary>
 public sealed class GymNetSession : MonoBehaviour
 {
-    public const string LocalRelayUrl = "ws://127.0.0.1:8787";
-    private static string defaultRelayUrl;
-
-    /// <summary>Resources/RelayUrl.txt (the public room server of a web build) when it holds an address, else the local one.</summary>
-    public static string DefaultRelayUrl
-    {
-        get
-        {
-            if (defaultRelayUrl == null)
-            {
-                TextAsset file = Resources.Load<TextAsset>("RelayUrl");
-                string configured = file != null ? file.text.Trim() : string.Empty;
-                defaultRelayUrl = configured.StartsWith("ws", StringComparison.OrdinalIgnoreCase) ? configured : LocalRelayUrl;
-            }
-            return defaultRelayUrl;
-        }
-    }
+    /// <summary>Peer-to-peer rooms (WebRTC): no server of ours. A ws:// or wss:// address still reaches a Server/relay room server.</summary>
+    public const string DefaultRelayUrl = "peer://";
     public const float SendIntervalSeconds = 1f / 12f;
     private const char PoseTag = 'p';
 
@@ -190,27 +175,35 @@ public sealed class GymNetSession : MonoBehaviour
         Instance.relayUrl = url;
         Instance.joinCode = joinCode;
         Instance.reconnect = null;
+        bool peer = IsPeerUrl(url);
         if (joinCode == null)
         {
-            // Hosting on this machine: a room server has to be listening first.
-            GymLocalRelay.EnsureRunning(url);
             // After a death the host asks for its old code back.
-            if (HasRecovery && RecoveryUrl == url) Instance.Client.Host(url, character, RecoveryCode, recoveryToken);
-            else Instance.Client.Host(url, character);
+            bool recover = HasRecovery && RecoveryUrl == url;
+            if (peer) GymPeerHost.Start(recover ? RecoveryCode : null);
+            if (recover && !peer) Instance.Client.Host(url, character, RecoveryCode, recoveryToken);
+            else Instance.Client.Host(HostSocketUrl(url), character);
         }
         else
         {
-            Instance.Client.Join(url, joinCode, character);
-            Instance.reconnect = new GymNetReconnect(Instance.Client, url, joinCode, character);
+            string dial = peer ? GymPeerHost.GuestScheme + joinCode.ToUpperInvariant() : url;
+            Instance.Client.Join(dial, joinCode, character);
+            Instance.reconnect = new GymNetReconnect(Instance.Client, dial, joinCode, character);
             Instance.reconnect.Reconnected += Instance.OnReconnected;
         }
         return Instance;
     }
 
+    private static bool IsPeerUrl(string url) => url != null && url.StartsWith("peer", StringComparison.Ordinal);
+
+    // A peer room's host talks to the room logic in its own game.
+    private static string HostSocketUrl(string url) => IsPeerUrl(url) ? GymPeerHost.LoopbackUrl : url;
+
     public static void End()
     {
         if (Instance == null) return;
         Instance.Reset();
+        GymPeerHost.Stop();
         Application.runInBackground = Instance.previousRunInBackground;
         // A Join scene never loaded this character's world: it must not write one. Only the menu return clears Join.
         if (GymSessionService.Active == null || GymSessionService.Context != GymSaveContext.Join)
@@ -267,7 +260,7 @@ public sealed class GymNetSession : MonoBehaviour
             code = pendingCode;
         }
         // The page link is untrusted: only websocket URLs.
-        if (!url.StartsWith("ws://", StringComparison.Ordinal) && !url.StartsWith("wss://", StringComparison.Ordinal)) return false;
+        if (!IsPeerUrl(url) && !url.StartsWith("ws://", StringComparison.Ordinal) && !url.StartsWith("wss://", StringComparison.Ordinal)) return false;
         return mode == "host" || (mode == "join" && !string.IsNullOrEmpty(code));
     }
 
@@ -322,10 +315,15 @@ public sealed class GymNetSession : MonoBehaviour
         avatars.Clear();
     }
 
-    private void OnPeerJoined(int id) => EnsureAvatar(id);
+    private void OnPeerJoined(int id)
+    {
+        Debug.Log($"GYMCHAOS_NET_PEER joined id={id} players={Client.Peers.Count + 1}");
+        EnsureAvatar(id);
+    }
 
     private void OnPeerLeft(int id)
     {
+        Debug.Log($"GYMCHAOS_NET_PEER left id={id}");
         GymNetPvp.Forget(id);
         GymNetInteractions.Forget(id);
         GymNetRace.PeerLeft(id, Client.IsHost);
@@ -397,6 +395,7 @@ public sealed class GymNetSession : MonoBehaviour
 
     private void Update()
     {
+        GymPeerHost.Current?.Pump();
         Client.Tick();
         if (Client.CurrentPhase != reportedPhase)
         {
@@ -417,9 +416,7 @@ public sealed class GymNetSession : MonoBehaviour
             string reason = string.IsNullOrEmpty(Client.Error) ? "UNKNOWN" : Client.Error.ToUpperInvariant();
             // Nothing on this machine starts a relay: "could not connect" is
             // an empty address, never a room the host did wrong.
-            notice = reason == "COULD NOT CONNECT" && !string.IsNullOrEmpty(relayUrl)
-                ? "NO ROOM SERVER FOUND"
-                : "ROOM FAILED - " + reason;
+            notice = reason == "COULD NOT CONNECT" ? "ROOM NOT FOUND OR BLOCKED" : "ROOM FAILED - " + reason;
             GymSessionService.ReturnToMenu();
             return;
         }
@@ -431,7 +428,7 @@ public sealed class GymNetSession : MonoBehaviour
             if (Time.unscaledTime >= hostRetryAt && Time.unscaledTime < hostRetryUntil)
             {
                 hostRetryAt = Time.unscaledTime + 3f;
-                Client.Host(relayUrl, GymSessionService.Active?.slotId, lastRoomCode, lastRoomToken);
+                Client.Host(HostSocketUrl(relayUrl), GymSessionService.Active?.slotId, lastRoomCode, lastRoomToken);
             }
         }
         if (reconnect != null && GymSessionService.HasActive)

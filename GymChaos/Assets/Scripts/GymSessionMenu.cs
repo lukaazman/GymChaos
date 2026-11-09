@@ -435,11 +435,9 @@ public sealed class GymSessionMenu : MonoBehaviour
     }
 
     // One save either way: solo and host load world + character, joining loads only the character.
-    private const string RelayPref = "GymChaos.RelayUrl";
     private int roomMode;
     private Text roomModeLabel;
     private Text roomHint;
-    private InputField relayInput;
     private InputField codeInput;
 
     private void BuildRoomControls()
@@ -449,18 +447,12 @@ public sealed class GymSessionMenu : MonoBehaviour
         Button mode = PersonaMenuStyle.CreateButton(choicePage.transform, "Room Mode Button", bodyFont,
             string.Empty, 1316f, 584f, 336f, 64f, 50, -2f, () => { roomMode = (roomMode + 1) % 3; ApplyRoom(); });
         roomModeLabel = mode.transform.Find("Label").GetComponent<Text>();
-        relayInput = CreateRoomInput("Relay Input", "Relay address", 1318f, 664f, 380f, 52f, 120);
-        codeInput = CreateRoomInput("Room Code Input", "Room code", 1318f, 738f, 380f, 52f, 8);
+        codeInput = CreateRoomInput("Room Code Input", "Room code", 1318f, 690f, 380f, 52f, 8);
         codeInput.onValidateInput = (_, __, c) => char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '\0';
         roomHint = PersonaMenuStyle.CreateLabel(choicePage.transform, "Room Hint", bodyFont, string.Empty,
             1322f, 800f, 420f, 40f, 22, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
-        relayInput.text = PlayerPrefs.GetString(RelayPref, GymNetSession.DefaultRelayUrl);
-        // A host that died picks up where it was: hosting again, same relay (the code comes back by itself).
-        if (GymNetSession.HasRecovery)
-        {
-            roomMode = 1;
-            relayInput.text = GymNetSession.RecoveryUrl;
-        }
+        // A host that died picks up where it was: hosting again, same room code.
+        if (GymNetSession.HasRecovery) roomMode = 1;
         ApplyRoom();
         string leftover = GymNetSession.TakeNotice();
         if (!string.IsNullOrEmpty(leftover)) roomNotice = leftover;
@@ -491,15 +483,12 @@ public sealed class GymSessionMenu : MonoBehaviour
     // Live: the launch context must be known before the character is created or loaded.
     private void ApplyRoom()
     {
-        if (roomModeLabel == null || relayInput == null || codeInput == null) return;
+        if (roomModeLabel == null || codeInput == null) return;
         roomModeLabel.text = roomMode == 1 ? "ROOM: HOST" : roomMode == 2 ? "ROOM: JOIN" : "ROOM: SOLO";
-        relayInput.gameObject.SetActive(roomMode != 0);
         codeInput.gameObject.SetActive(roomMode == 2);
-        string url = relayInput.text.Trim();
-        if (url.Length == 0) url = GymNetSession.DefaultRelayUrl;
+        string url = GymNetSession.DefaultRelayUrl;
         string code = codeInput.text.Trim().ToUpperInvariant();
         bool joinReady = roomMode == 2 && code.Length > 0;
-        if (roomMode != 0) PlayerPrefs.SetString(RelayPref, url);
         GymNetSession.SetPending(roomMode == 1 ? "host" : joinReady ? "join" : null, url, code);
         roomHint.text = roomMode == 1 ? "YOUR WORLD. THE CODE SHOWS IN GAME" :
             roomMode == 2 ? (joinReady ? "THEIR WORLD, YOUR CHARACTER" : "ENTER THE HOST'S CODE, ELSE SOLO") :
