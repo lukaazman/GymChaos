@@ -73,7 +73,7 @@ public sealed class GymRaceRacer : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (Headshot != null)
+        if (Headshot != null && !GymRaceHeadshot.IsFixed(Headshot))
         {
             Destroy(Headshot);
         }

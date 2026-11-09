@@ -10,6 +10,31 @@ using UnityEngine.Rendering;
 public static class GymRaceHeadshot
 {
     private const int Size = 128;
+    private static readonly Dictionary<string, Texture2D> fixedHeads = new Dictionary<string, Texture2D>();
+
+    /// <summary>The bake tool sets this to render live instead of loading the committed portraits.</summary>
+    public static bool LiveOnly;
+
+    public static string FileKey(string racerName)
+    {
+        System.Text.StringBuilder key = new System.Text.StringBuilder(racerName.Length);
+        foreach (char c in racerName) key.Append(char.IsLetterOrDigit(c) ? c : '_');
+        return key.ToString();
+    }
+
+    /// <summary>The committed head-on portrait (black eye bar) of this racer, shared and never destroyed; null when none is baked.</summary>
+    public static Texture2D Fixed(string racerName)
+    {
+        if (LiveOnly) return null;
+        if (!fixedHeads.TryGetValue(racerName, out Texture2D head) || head == null)
+        {
+            head = Resources.Load<Texture2D>("UI/RaceHeads/" + FileKey(racerName));
+            fixedHeads[racerName] = head;
+        }
+        return head;
+    }
+
+    public static bool IsFixed(Texture2D texture) => texture != null && fixedHeads.ContainsValue(texture);
     private const int CaptureLayer = GymProductInspectView.PreviewLayer;
 
     /// <summary>Returns a transparent head portrait, or null when nothing rendered (no GPU, no body).</summary>
@@ -21,13 +46,16 @@ public static class GymRaceHeadshot
         DarkFeatures
     }
 
-    public static Texture2D Capture(Transform character, Vector3 facing)
+    /// <param name="faceFollowsFacing">True when the model faces its travel direction (the flyer); car rigs face sideways and are told apart by the bar's offset from the head.</param>
+    public static Texture2D Capture(Transform character, Vector3 facing, bool faceFollowsFacing = false)
     {
         if (character == null)
         {
             return null;
         }
-        Renderer[] renderers = character.GetComponentsInChildren<Renderer>(false);
+        // Goku's aura sheets are effects around the body: they would fill the frame.
+        Renderer[] renderers = System.Array.FindAll(character.GetComponentsInChildren<Renderer>(false),
+            r => r.name.IndexOf("Aura", System.StringComparison.OrdinalIgnoreCase) < 0);
         // The black eye bar sits on the face, parented to the head bone: the
         // line from the head to the bar is the face direction on every rig.
         FaceCensorSettings bar = character.GetComponentInChildren<FaceCensorSettings>(false);
@@ -39,21 +67,30 @@ public static class GymRaceHeadshot
             Vector3 headBone = FindHead(renderers, character);
             // The bar is a flat strip across the eyes: its normal is exactly
             // where the face looks, whatever the bone offsets are.
-            Vector3 front = Vector3.ProjectOnPlane(BarNormal(barRenderer), Vector3.up);
+            // Which way the face looks: the bar sits only a little in front of the head bone (and above it on a
+            // tilted head), so travel direction decides first, the bar offset only when none is given.
             Vector3 outward = Vector3.ProjectOnPlane(barCenter - headBone, Vector3.up);
-            if (front.sqrMagnitude < 1e-4f)
+            Vector3 look = Vector3.ProjectOnPlane(facing, Vector3.up);
+            if (TryBarFrame(barRenderer, faceFollowsFacing && look.sqrMagnitude > 1e-4f || outward.sqrMagnitude < 1e-4f ? look : outward, out Vector3 normal, out Vector3 barUp))
             {
-                front = outward;
-            }
-            else if (Vector3.Dot(front, outward.sqrMagnitude > 1e-4f ? outward : facing) < 0f)
-            {
-                front = -front;
-            }
-            if (front.sqrMagnitude > 1e-4f)
-            {
-                front.Normalize();
-                // Eyes a little above the middle of the frame, whatever the hair does.
-                return Capture(renderers, front, character, FaceSearch.None, barCenter - front * 0.1f - Vector3.up * EyeDrop);
+                // Head-on to the bar: the camera looks straight along its normal with the strip level,
+                // so a tilted or bowed head (seated driver, flyer) still gives a straight portrait.
+                camUp = barUp;
+                fullFront = true;
+                // Goku's bar is half as wide again (bigger hair): step back a little, the face itself is no bigger.
+                shotScale = Mathf.Max(1f, Mathf.Sqrt(barRenderer.GetComponent<MeshFilter>().sharedMesh.bounds.size.x * barRenderer.transform.lossyScale.x / 0.31f));
+                try
+                {
+                    // Eyes a little above the middle of the frame, whatever the hair does.
+                    return Capture(renderers, normal.normalized, character, FaceSearch.None,
+                        barCenter - normal.normalized * 0.1f - barUp * EyeDrop);
+                }
+                finally
+                {
+                    camUp = Vector3.up;
+                    fullFront = false;
+                    shotScale = 1f;
+                }
             }
         }
         return Capture(renderers, facing, character, FaceSearch.None);
@@ -68,7 +105,7 @@ public static class GymRaceHeadshot
             return null;
         }
         Vector3 head = headCenter ?? FindHead(renderers, skeleton);
-        Vector3 forward = Vector3.ProjectOnPlane(facing, Vector3.up);
+        Vector3 forward = fullFront ? facing : Vector3.ProjectOnPlane(facing, Vector3.up);
         if (forward.sqrMagnitude < 0.01f)
         {
             forward = Vector3.forward;
@@ -173,10 +210,10 @@ public static class GymRaceHeadshot
             if (result != null && TryFrameOffset(result, out float right, out float up))
             {
                 Object.Destroy(result);
-                Vector3 cameraRight = Vector3.Cross(Vector3.up, -front).normalized;
+                Vector3 cameraRight = Vector3.Cross(camUp, -front).normalized;
                 // A known eye line keeps its height; only an unmarked head is
                 // framed by its top.
-                head += cameraRight * right + (headCenter.HasValue ? Vector3.zero : Vector3.up * up);
+                head += cameraRight * right + (headCenter.HasValue ? Vector3.zero : camUp * up);
                 result = Shoot(camera, rig.transform, lightObject.transform, target, overBlack, overWhite, head, front);
             }
         }
@@ -207,33 +244,44 @@ public static class GymRaceHeadshot
         Texture2D overBlack, Texture2D overWhite, Vector3 head, Vector3 view)
     {
         // Level camera at head height: no look down onto the hair.
-        rig.position = head + view * ShotDistance;
-        rig.rotation = Quaternion.LookRotation(-view, Vector3.up);
-        light.position = head + view * 0.7f + Vector3.up * 0.4f + Vector3.Cross(Vector3.up, view) * 0.3f;
+        rig.position = head + view * (ShotDistance * shotScale);
+        rig.rotation = Quaternion.LookRotation(-view, camUp);
+        light.position = head + view * 0.7f + camUp * 0.4f + Vector3.Cross(camUp, view) * 0.3f;
         Render(camera, target, Color.black, overBlack);
         Render(camera, target, Color.white, overWhite);
         return Matte(overBlack, overWhite);
     }
 
-    /// <summary>World normal of the eye bar's face.</summary>
-    private static Vector3 BarNormal(Renderer bar)
+    // Camera up and view mode of the shot in progress (the bar's level and the full 3D head-on direction).
+    private static Vector3 camUp = Vector3.up;
+    private static bool fullFront;
+    private static float shotScale = 1f;
+
+    /// <summary>
+    /// The eye bar is a box: longest side across the eyes, shortest its height, the middle one its depth.
+    /// Returns the face direction (depth axis, turned outward from the head) and the bar's own up.
+    /// </summary>
+    private static bool TryBarFrame(Renderer bar, Vector3 outward, out Vector3 normal, out Vector3 up)
     {
+        normal = outward;
+        up = Vector3.up;
         MeshFilter filter = bar.GetComponent<MeshFilter>();
         Mesh mesh = filter != null ? filter.sharedMesh : null;
-        if (mesh != null && mesh.isReadable)
-        {
-            Vector3 sum = Vector3.zero;
-            foreach (Vector3 normal in mesh.normals)
-            {
-                sum += normal;
-            }
-            if (sum.sqrMagnitude > 1e-6f)
-            {
-                return bar.transform.TransformDirection(sum).normalized;
-            }
-        }
-        return bar.transform.forward;
+        if (mesh == null) return false;
+        Vector3 size = mesh.bounds.size;
+        int longest = size.x >= size.y && size.x >= size.z ? 0 : size.y >= size.z ? 1 : 2;
+        int shortest = size.x <= size.y && size.x <= size.z ? 0 : size.y <= size.z ? 1 : 2;
+        if (longest == shortest) return false;
+        int depth = 3 - longest - shortest;
+        normal = bar.transform.TransformDirection(Axis(depth)).normalized;
+        up = bar.transform.TransformDirection(Axis(shortest)).normalized;
+        if (Vector3.Dot(normal, outward) < 0f) normal = -normal;
+        if (Vector3.Dot(up, Vector3.up) < 0f) up = -up;
+        return true;
     }
+
+    private static Vector3 Axis(int index) => index == 0 ? Vector3.right : index == 1 ? Vector3.up : Vector3.forward;
+
 
     private const float ShotDistance = 1.05f;
     // Frame centre below the eye line (m): eyes sit at about 60 % height.

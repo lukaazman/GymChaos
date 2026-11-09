@@ -12,7 +12,23 @@ using UnityEngine.UI;
 /// </summary>
 public sealed class GymNetSession : MonoBehaviour
 {
-    public const string DefaultRelayUrl = "ws://127.0.0.1:8787";
+    public const string LocalRelayUrl = "ws://127.0.0.1:8787";
+    private static string defaultRelayUrl;
+
+    /// <summary>Resources/RelayUrl.txt (the public room server of a web build) when it holds an address, else the local one.</summary>
+    public static string DefaultRelayUrl
+    {
+        get
+        {
+            if (defaultRelayUrl == null)
+            {
+                TextAsset file = Resources.Load<TextAsset>("RelayUrl");
+                string configured = file != null ? file.text.Trim() : string.Empty;
+                defaultRelayUrl = configured.StartsWith("ws", StringComparison.OrdinalIgnoreCase) ? configured : LocalRelayUrl;
+            }
+            return defaultRelayUrl;
+        }
+    }
     public const float SendIntervalSeconds = 1f / 12f;
     private const char PoseTag = 'p';
 
@@ -176,6 +192,8 @@ public sealed class GymNetSession : MonoBehaviour
         Instance.reconnect = null;
         if (joinCode == null)
         {
+            // Hosting on this machine: a room server has to be listening first.
+            GymLocalRelay.EnsureRunning(url);
             // After a death the host asks for its old code back.
             if (HasRecovery && RecoveryUrl == url) Instance.Client.Host(url, character, RecoveryCode, recoveryToken);
             else Instance.Client.Host(url, character);
@@ -400,7 +418,7 @@ public sealed class GymNetSession : MonoBehaviour
             // Nothing on this machine starts a relay: "could not connect" is
             // an empty address, never a room the host did wrong.
             notice = reason == "COULD NOT CONNECT" && !string.IsNullOrEmpty(relayUrl)
-                ? "NO ROOM SERVER AT " + relayUrl.ToUpperInvariant()
+                ? "NO ROOM SERVER FOUND"
                 : "ROOM FAILED - " + reason;
             GymSessionService.ReturnToMenu();
             return;

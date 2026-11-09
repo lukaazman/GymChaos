@@ -1068,6 +1068,12 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         for (int i = 0; i < racers.Count; i++)
         {
             GymRaceRacer racer = racers[i];
+            // The opponents always use their baked portraits.
+            if (!racer.IsPlayer && (racer.Headshot = GymRaceHeadshot.Fixed(racer.DisplayName)) != null)
+            {
+                captured++;
+                continue;
+            }
             Transform character = racer.IsPlayer ? player.transform : drivers[racer.GridSlot] != null ? drivers[racer.GridSlot].transform : null;
             if (character == null || !character.gameObject.activeInHierarchy)
             {
@@ -1082,7 +1088,7 @@ public sealed partial class GymRaceDirector : MonoBehaviour
                 racer.Headshot = rig != null && rig.RuntimeBodyRenderers.Count > 0
                     // The player head is a plain ball: find the side with the smiley face.
                     ? GymRaceHeadshot.Capture(new List<Renderer>(rig.RuntimeBodyRenderers), player.transform.forward, null, GymRaceHeadshot.FaceSearch.DarkFeatures)
-                    : GymRaceHeadshot.Capture(character, facing);
+                    : GymRaceHeadshot.Capture(character, facing, specs[racer.GridSlot].Flyer);
             }
             catch (System.Exception exception)
             {

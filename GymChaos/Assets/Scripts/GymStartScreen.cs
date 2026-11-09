@@ -192,7 +192,7 @@ public sealed class GymStartScreen : MonoBehaviour
     // WebGL only: a speech bubble over the receptionist saying this is a trimmed build.
     private RectTransform webNotice;
     private Transform noticeTarget;
-    private float noticeHeadHeight = -1f;
+    private float noticeHeadHeight;
 
     private void CreateWebNotice(Font font)
     {
@@ -238,17 +238,20 @@ public sealed class GymStartScreen : MonoBehaviour
             noticeTarget != null && view != null;
         if (show)
         {
-            if (noticeHeadHeight < 0f)
+            // The WebGL build loads the receptionist's model late: measure again until it has a body, else the bubble lands on his chest.
+            if (noticeHeadHeight < 1.2f)
             {
                 Bounds bounds = new Bounds(noticeTarget.position, Vector3.zero);
                 foreach (Renderer renderer in noticeTarget.GetComponentsInChildren<Renderer>()) bounds.Encapsulate(renderer.bounds);
                 noticeHeadHeight = bounds.max.y - noticeTarget.position.y;
             }
-            Vector3 viewport = view.WorldToViewportPoint(noticeTarget.position + Vector3.up * (noticeHeadHeight + 0.2f));
+            // 0.55 m clears his floating name tag; 1.9 m stands in until the model is measurable.
+            Vector3 viewport = view.WorldToViewportPoint(
+                noticeTarget.position + Vector3.up * (Mathf.Max(noticeHeadHeight, 1.9f) + 0.55f));
             show = viewport.z > 0f;
             if (show)
             {
-                Vector2 anchor = new Vector2(Mathf.Clamp(viewport.x, 0.68f, 0.88f), Mathf.Min(viewport.y, 0.74f));
+                Vector2 anchor = new Vector2(Mathf.Clamp(viewport.x, 0.68f, 0.88f), Mathf.Clamp(viewport.y, 0.3f, 0.74f));
                 webNotice.anchorMin = webNotice.anchorMax = anchor;
                 webNotice.anchoredPosition = Vector2.zero;
             }
