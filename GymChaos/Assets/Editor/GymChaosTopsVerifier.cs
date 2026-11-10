@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -103,6 +104,20 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
     private static void Require(bool condition, string message)
     {
         if (!condition) throw new InvalidOperationException(message);
+    }
+
+    /// <summary>Depth-first child lookup: the crest rides the chest bone.</summary>
+    private static Transform FindChild(Transform parent, string name)
+    {
+        if (parent == null) return null;
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform child = parent.GetChild(i);
+            if (child.name == name) return child;
+            Transform found = FindChild(child, name);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private IEnumerator Verify()
@@ -206,9 +221,57 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                         "shell does not share the body's bones");
                     Require(shell.gameObject.layer == bodyRenderer.gameObject.layer, "shell layer differs from the body");
                     Require(shell.sharedMesh.vertexCount > 5000, $"shell has {shell.sharedMesh.vertexCount} vertices");
-                    Require(shell.sharedMaterials.Length == 2 &&
-                        shell.sharedMaterials[0].GetTexture("_BaseMap") == loadout.CurrentTexture, "shell texture differs");
-                    Require(shell.sharedMesh.subMeshCount == 2, "shell has no edge submesh");
+                    Require(shell.sharedMaterials.Length == shell.sharedMesh.subMeshCount,
+                        "shell submeshes and materials disagree");
+                    Texture shellMap = shell.sharedMaterials[0].GetTexture("_BaseMap");
+                    if (top == GymTopStyle.Oversized)
+                    {
+                        // The tee is lofted from the body: its own UVs on a
+                        // tiling jersey instead of the scan atlas. The crown is
+                        // shaped cloth in its own renderer, because Unity never
+                        // drew the crest as an extra submesh of the shell.
+                        Require(shell.sharedMesh.subMeshCount == 3, "oversized tee has no crest submesh");
+                        Require(shellMap != null && shellMap.name == "jersey_heavy",
+                            $"oversized {colour}: shell fabric {shellMap?.name}");
+                        Require(shell.sharedMesh.GetTriangles(2).Length >= 24,
+                            "oversized: the crest has no faces");
+                        // The crest rides the chest bone, so it lives under the
+                        // rig, not under the cloth object: look it up by name.
+                        Transform crest = PlayerTopShell.ActiveCrest;
+                        MeshRenderer crestRenderer = crest != null ? crest.GetComponent<MeshRenderer>() : null;
+                        MeshFilter crestFilter = crest != null ? crest.GetComponent<MeshFilter>() : null;
+                        Mesh crestMesh = crestFilter != null ? crestFilter.sharedMesh : null;
+                        Require(crest != null && crestRenderer != null && crestRenderer.enabled &&
+                            crest.gameObject.activeInHierarchy,
+                            "oversized: the crest is not drawn by its own renderer");
+                        Require(crestMesh != null && crestMesh.GetTriangles(0).Length >= 24,
+                            "oversized: the drawn crest has no faces");
+                        // World bounds, not mesh bounds: the chest bone's own
+                        // scale makes the local numbers meaningless.
+                        Bounds crestWorld = crestRenderer != null ? crestRenderer.bounds : default;
+                        Require(crestWorld.size.x > 0.10f && crestWorld.size.y > 0.05f,
+                            $"oversized: the crest is only {crestWorld.size} across");
+                        Require(crest != null && crest.gameObject.layer == shell.gameObject.layer,
+                            "crest layer differs from the cloth");
+                        Material crestInk = crestRenderer != null ? crestRenderer.sharedMaterial : null;
+                        Require(crestInk != null, "oversized: the crest has no material");
+                        Require(crestInk != null && (colour != GymShirtColor.Black || crestInk.color.grayscale > 0.5f),
+                            $"oversized {colour}: the crest ink is too dark to read on the cloth");
+                        if (crest != null && crestMesh != null && colour == GymShirtColor.Black)
+                        {
+                            // The crest must sit on the cloth in world space, not
+                            // a metre away on a bone the patch does not follow.
+                            Bounds crestBounds = crestRenderer.bounds;
+                            Bounds shellBounds = shell.bounds;
+                            Require(shellBounds.SqrDistance(crestBounds.center) < 0.01f,
+                                $"oversized: the crest sits {crestBounds.center} while the shirt is {shellBounds.center}");
+                        }
+                    }
+                    else
+                    {
+                        Require(shell.sharedMesh.subMeshCount == 2, "shell has no edge submesh");
+                        Require(shellMap == loadout.CurrentTexture, "shell texture differs");
+                    }
                 }
                 else
                 {
@@ -302,6 +365,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         yield return WaitShell(loadout);
         ExportShell(loadout, GymTopStyle.Oversized, "oversized");
         MeasureShape(loadout.TopShellRenderer, "oversized", false);
+        MeasureTee(loadout.TopShellRenderer);
 
         // ---- evidence
         if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null)
@@ -507,6 +571,20 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 light.transform.rotation = Quaternion.LookRotation(-direction + Vector3.down * 0.6f + player.transform.right * 0.3f);
                 Capture(camera, Path.Combine(folder, $"{top}_{colour}_{side}.png".ToLowerInvariant()));
             }
+            if (top == GymTopStyle.Oversized && colour == GymShirtColor.Black)
+            {
+                // The print has to show on the chest: hide the body so a crest
+                // that ends up inside the skin cannot hide behind it.
+                body.enabled = false;
+                camera.orthographicSize = 0.24f;
+                camera.transform.position = chest + player.transform.forward * 3f;
+                camera.transform.LookAt(chest + player.transform.forward * 0.12f);
+                light.transform.rotation = Quaternion.LookRotation(
+                    -player.transform.forward + Vector3.down * 0.6f + player.transform.right * 0.3f);
+                Capture(camera, Path.Combine(folder, "oversized_crest.png"));
+                camera.orthographicSize = 0.62f;
+                body.enabled = true;
+            }
         }
         // Pants standing and mid-stride: nothing may hang between the legs.
         service.EquipTop(GymTopStyle.TankTop);
@@ -612,6 +690,43 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
             $"{label}: {sharp} sharp creases over 60 deg of {faces} faces");
         notes.Add($"{label}Shape open={open} longestOpen={longestOpen:F4} sharp={sharp} " +
             $"hip={hip:F4} thigh={thigh:F4} knee={knee:F4} hem={hem:F4}");
+    }
+
+    /// <summary>
+    /// The oversized tee hangs off the body: the hem falls as wide as the
+    /// chest and the waist never pinches in under it. A balloon or an A-line
+    /// flare outside this band is a different garment than the reference.
+    /// </summary>
+    private void MeasureTee(SkinnedMeshRenderer shell)
+    {
+        Require(shell != null && shell.sharedMesh != null, "oversized: no shell mesh");
+        Mesh mesh = shell.sharedMesh;
+        Vector3[] v = mesh.vertices;
+        Bounds bounds = mesh.bounds;
+        float height = Mathf.Max(bounds.size.z, 1e-6f);
+        float Width(float level)
+        {
+            float widest = 0f;
+            for (int i = 0; i < v.Length; i++)
+            {
+                float at = (v[i].z - bounds.min.z) / height;
+                if (Mathf.Abs(at - level) < 0.06f) widest = Mathf.Max(widest, Mathf.Abs(v[i].x));
+            }
+            return widest;
+        }
+        // Levels are fractions of the shell height. 0.72 sits on the sleeves,
+        // so it measures the shoulder span; 0.25 and 0.05 are below the cuff
+        // and measure the body of the tee alone.
+        float hem = Width(0.05f), waist = Width(0.25f), shoulders = Width(0.72f);
+        Require(waist > 0f, "oversized: the tee measured no waist width");
+        Require(hem >= waist * 0.92f && hem <= waist * 1.15f,
+            $"oversized: hem {hem:F4} against waist {waist:F4} is not a boxy fall");
+        Require(shoulders >= hem * 1.10f,
+            $"oversized: shoulders {shoulders:F4} are not wider than the hem {hem:F4}");
+        // Half width in shell units, where the body is 1 unit tall: 0.0021 is a
+        // 40 cm half width on a 1.9 m body, well past any tee into a tent.
+        Require(hem <= 0.0021f, $"oversized: hem {hem:F4} is a tent, not a tee");
+        notes.Add($"teeWidth hem={hem:F4} waist={waist:F4} shoulders={shoulders:F4}");
     }
 
     private static void Capture(Camera camera, string path)

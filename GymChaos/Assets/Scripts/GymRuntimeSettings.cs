@@ -36,6 +36,7 @@ public static class GymRuntimeSettings
     private static float contrast = 0.5f;
     private static Volume gradeVolume;
     private static ColorAdjustments grade;
+    private static bool gradeActive;
 
     private static float masterVolume = 1f;
     private static float musicVolume = 1f;
@@ -57,6 +58,9 @@ public static class GymRuntimeSettings
 
     /// <summary>The color grade the brightness and contrast sliders drive (null before the first apply).</summary>
     internal static ColorAdjustments Grade => grade;
+
+    /// <summary>Verifier access: the grade volume stays on whatever POST FX says.</summary>
+    internal static bool GradeVolumeEnabled => gradeVolume != null && gradeVolume.enabled;
 
     internal static void ConfigureBalancedCanvasScaler(CanvasScaler scaler)
     {
@@ -310,6 +314,19 @@ public static class GymRuntimeSettings
         SetAnchors(rule.rectTransform, new Vector2(LabelMinX + 0.07f, y + 0.017f),
             new Vector2(ControlMaxX, y + 0.021f));
         rule.SetSlant(0.004f);
+    }
+
+    /// <summary>
+    /// Saved grade at boot: the start menu shows the live gym before any
+    /// settings page exists, so brightness and contrast have to hold from the
+    /// first frame, and keep holding across the scene reloads of a new game.
+    /// </summary>
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void RestoreSavedGrade()
+    {
+        brightness = Mathf.Clamp01(PlayerPrefs.GetFloat(BrightnessKey, 0.5f));
+        contrast = Mathf.Clamp01(PlayerPrefs.GetFloat(ContrastKey, 0.5f));
+        ApplyColorGrade();
     }
 
     public static void ApplyPersistedSettings()
@@ -894,9 +911,11 @@ public static class GymRuntimeSettings
         Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsSortMode.None);
         for (int i = 0; i < volumes.Length; i++)
         {
+            // The grade is not owned by this switch: brightness and contrast
+            // stay live with POST FX off, over the scene's own effects only.
             if (volumes[i] != null)
             {
-                volumes[i].enabled = enabled;
+                volumes[i].enabled = enabled || volumes[i] == gradeVolume;
             }
         }
         Camera[] cameras = Object.FindObjectsByType<Camera>(FindObjectsSortMode.None);
@@ -904,7 +923,7 @@ public static class GymRuntimeSettings
         {
             if (cameras[i] != null && cameras[i].TryGetComponent(out UniversalAdditionalCameraData data))
             {
-                data.renderPostProcessing = enabled;
+                data.renderPostProcessing = enabled || gradeActive;
             }
         }
     }
@@ -1011,10 +1030,15 @@ public static class GymRuntimeSettings
             grade = profile.Add<ColorAdjustments>(true);
             gradeVolume.sharedProfile = profile;
         }
-        // Post FX off disables every volume, this one included: it comes back with it.
-        gradeVolume.enabled = PlayerPrefs.GetInt(PostProcessingKey, 1) != 0;
+        gradeVolume.enabled = true;
         grade.postExposure.Override(Mathf.Lerp(-1.6f, 1.6f, brightness));
         grade.contrast.Override(Mathf.Lerp(-40f, 40f, contrast));
+        // Only an off-centre grade needs the camera's post pass: at neutral
+        // the POST FX toggle alone decides whether it runs.
+        bool active = Mathf.Abs(brightness - 0.5f) > 0.002f || Mathf.Abs(contrast - 0.5f) > 0.002f;
+        bool changed = active != gradeActive;
+        gradeActive = active;
+        if (changed) ApplyPostProcessing(PlayerPrefs.GetInt(PostProcessingKey, 1) != 0);
     }
 
 #if UNITY_EDITOR

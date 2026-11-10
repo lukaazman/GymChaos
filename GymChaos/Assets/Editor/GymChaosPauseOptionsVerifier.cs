@@ -320,6 +320,29 @@ public static class GymChaosPauseOptionsVerifier
             $"Neutral brightness/contrast is not neutral: ev={grade.postExposure.value} " +
             $"contrast={grade.contrast.value}");
 
+        // The grade must not depend on the POST FX toggle: on a first WebGL
+        // visit POST FX starts off, and the sliders still have to move the
+        // picture (menu camera and the receptionist view alike).
+        GameObject probeObject = new GameObject("Grade Camera Probe");
+        Camera probeCamera = probeObject.AddComponent<Camera>();
+        UniversalAdditionalCameraData probeData =
+            probeObject.AddComponent<UniversalAdditionalCameraData>();
+        probeData.renderPostProcessing = false;
+        Toggle postFx = RequireToggle(menuRoot, "Post FX Toggle");
+        postFx.isOn = false;
+        brightness.value = 0.25f;
+        Require(probeData.renderPostProcessing,
+            "Brightness did not reach the camera with POST FX off.");
+        Require(GymRuntimeSettings.GradeVolumeEnabled,
+            "The color grade volume is disabled with POST FX off.");
+        Require(Mathf.Abs(PlayerPrefs.GetFloat(BrightnessKey, -1f) - 0.25f) < 0.001f,
+            "Brightness was not saved as it was set: " + PlayerPrefs.GetFloat(BrightnessKey, -1f));
+        brightness.value = 0.5f;
+        Require(!probeData.renderPostProcessing,
+            "A neutral grade left the camera in post processing with POST FX off.");
+        postFx.isOn = true;
+        UnityEngine.Object.DestroyImmediate(probeObject);
+
         Dropdown aa = RequireDropdown(menuRoot, "Anti Aliasing Dropdown");
         aa.value = aa.options.Count - 1;
         UniversalRenderPipelineAsset runtime =

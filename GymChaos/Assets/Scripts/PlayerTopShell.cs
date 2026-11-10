@@ -63,15 +63,13 @@ public static class PlayerTopShell
     public static readonly Style Oversized = new Style
     {
         Name = ShellObjectName, MaskResource = "Player/Outfits/oversized_shell",
-        SmoothIterations = 28, Lambda = 0.6f, EdgeOverhang = 0.012f,
-        DrapeSmoothing = 190f, DrapeRadius = 0.034f,
-        // Oversized, not oppressed: loose cloth over a sewn crew neck that sits
-        // close to the neck like the scan's own tank top. Slick polyester knit,
-        // so the cloth catches light instead of reading as flat carpet.
-        // Dropped shoulders and a rib band that stands up: the reference tee
-        // hangs off the traps instead of printing them through the cloth.
-        ExtraEase = 0.016f, ShoulderEase = 0.014f, CollarLift = 0.0065f,
-        CollarRadius = 0.052f, Smoothness = 0.16f
+        // Lofted from the body's own measurements (BuildLooseTee): a copy of
+        // the scan ballooned over the muscles and printed the traps through
+        // the cloth. The loft hangs off the shoulder line instead, so the tee
+        // reads as heavyweight cotton with a crew neck and dropped sleeves.
+        LoftedTee = true, FabricResource = "Player/Outfits/jersey_heavy",
+        // A little sheen so the folds read as cotton instead of a black cutout.
+        Smoothness = 0.28f
     };
     // Compression knit: a few mm off the skin, smoothed just enough to hide
     // the sculpted tank-top neckline and hem ridges in the scan.
@@ -244,16 +242,49 @@ public static class PlayerTopShell
 
         Material source = body.sharedMaterial;
         Material[] materials = renderer.sharedMaterials;
-        if (materials.Length != 2 || materials[0] == null || source == null || materials[0].shader != source.shader)
+        int needed = shell.subMeshCount;
+        if (materials.Length != needed || materials[0] == null || source == null || materials[0].shader != source.shader)
         {
             if (source == null) return renderer;
-            materials = new[] { new Material(source), new Material(source) };
+            materials = new Material[needed];
+            for (int i = 0; i < needed; i++) materials[i] = new Material(source);
             materials[0].name = style.Name;
             materials[1].name = style.Name + " Band";
             // Edge strips can fold over on the scan's zig-zag cut; drawn from
             // both sides a fold reads as cloth, not as a hole.
             if (materials[1].HasProperty("_Cull")) materials[1].SetFloat("_Cull", (float)CullMode.Off);
+            if (needed > 2)
+            {
+                // The crest is a print, not cloth: matte, and cut out by alpha.
+                materials[2].name = style.Name + " Crest";
+                // 0.5 ate the crown's thin strokes once the mip chain averaged
+                // their alpha; a print only needs the paper gone.
+                if (materials[2].HasProperty("_Cutoff")) materials[2].SetFloat("_Cutoff", 0.30f);
+                if (materials[2].HasProperty("_AlphaClip")) materials[2].SetFloat("_AlphaClip", 1f);
+                if (materials[2].HasProperty("_Cull")) materials[2].SetFloat("_Cull", (float)CullMode.Off);
+                materials[2].EnableKeyword("_ALPHATEST_ON");
+
+            }
             renderer.sharedMaterials = materials;
+        }
+        if (materials.Length > 2)
+        {
+            Texture2D crest = Resources.Load<Texture2D>(CrestResource);
+            if (crest != null)
+            {
+                if (materials[2].HasProperty("_BaseMap")) materials[2].SetTexture("_BaseMap", crest);
+                if (materials[2].HasProperty("_MainTex")) materials[2].SetTexture("_MainTex", crest);
+            }
+            // White on dark cloth, near-black on light cloth; without the
+            // texture the patch takes the cloth colour and disappears. The
+            // cloth is the tinted colour, not the style's untinted base: a
+            // black shirt tinted at runtime still read as light here, so the
+            // crest printed near-black on black and vanished.
+            Color clothInk = tint ?? bandColor;
+            Color ink = crest == null ? bandColor
+                : clothInk.grayscale <= 0.35f ? Color.white : new Color(0.06f, 0.06f, 0.07f);
+            if (materials[2].HasProperty("_BaseColor")) materials[2].SetColor("_BaseColor", ink);
+            materials[2].color = ink;
         }
         if (texture != null)
         {
@@ -309,7 +340,150 @@ public static class PlayerTopShell
         if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", null);
         if (materials[1].HasProperty("_BaseColor")) materials[1].SetColor("_BaseColor", bandColor);
         materials[1].color = bandColor;
+        AttachCrest(renderer, body, style, bandColor, tint);
         return renderer;
+    }
+
+    public const string CrestObjectName = "Oversized Crest Print";
+
+    /// <summary>The crest currently riding a worn top, for checks and debugging.</summary>
+    public static Transform ActiveCrest { get; private set; }
+    private const string CrestMeshName = "Oversized Crest";
+
+    /// <summary>
+    /// The crown crest as its own rigid mesh riding the chest bone. Unity never
+    /// drew it as a third submesh of the cloth, and as a skinned child its
+    /// weights tore it into slivers, so it is baked in the rest pose instead.
+    /// </summary>
+    private static void AttachCrest(SkinnedMeshRenderer shell, SkinnedMeshRenderer body, Style style,
+        Color bandColor, Color? tint)
+    {
+        // The trouser shell shares this call, so nothing may be removed before
+        // the style is known: that would delete the crest the tee just attached.
+        if (style != Oversized || shell == null || shell.sharedMesh == null ||
+            shell.sharedMesh.subMeshCount < 3 || body == null || body.sharedMaterial == null) return;
+        Transform chest = CrestBone(shell);
+        if (chest == null) return;
+        Transform old = shell.transform.Find(CrestObjectName);
+        if (old != null) UnityEngine.Object.DestroyImmediate(old.gameObject);
+        old = chest.Find(CrestObjectName);
+        if (old != null) UnityEngine.Object.DestroyImmediate(old.gameObject);
+        Mesh crestMesh = BuildCrestMesh(shell, chest);
+        if (crestMesh == null) return;
+        GameObject print = new GameObject(CrestObjectName);
+        print.layer = shell.gameObject.layer;
+        print.transform.SetParent(chest, false);
+        print.transform.localPosition = Vector3.zero;
+        print.transform.localRotation = Quaternion.identity;
+        print.transform.localScale = Vector3.one;
+        print.AddComponent<MeshFilter>().sharedMesh = crestMesh;
+        ActiveCrest = print.transform;
+        MeshRenderer crest = print.AddComponent<MeshRenderer>();
+        crest.shadowCastingMode = shell.shadowCastingMode;
+        crest.receiveShadows = shell.receiveShadows;
+
+        // Plain ink on shaped cloth: no texture, no alpha clip, so nothing
+        // about the material can make the crest disappear.
+        Material ink = new Material(body.sharedMaterial);
+        ink.name = CrestObjectName;
+        Color cloth = tint ?? bandColor;
+        Color colour = cloth.grayscale <= 0.35f ? new Color(0.92f, 0.92f, 0.88f) : new Color(0.06f, 0.06f, 0.07f);
+        // A generated white tile, not null: the body shader may sample its
+        // texture and ignore the colour, and a null map renders as nothing.
+        Texture2D white = InkWhite();
+        if (ink.HasProperty("_BaseMap")) ink.SetTexture("_BaseMap", white);
+        if (ink.HasProperty("_MainTex")) ink.SetTexture("_MainTex", white);
+        ink.mainTexture = white;
+        if (ink.HasProperty("_BaseColor")) ink.SetColor("_BaseColor", colour);
+        if (ink.HasProperty("_Color")) ink.SetColor("_Color", colour);
+        ink.color = colour;
+        if (ink.HasProperty("_AlphaClip")) ink.SetFloat("_AlphaClip", 0f);
+        if (ink.HasProperty("_Cutoff")) ink.SetFloat("_Cutoff", 0f);
+        if (ink.HasProperty("_Cull")) ink.SetFloat("_Cull", (float)CullMode.Off);
+        if (ink.HasProperty("_Smoothness")) ink.SetFloat("_Smoothness", style.Smoothness * 0.4f);
+        if (ink.HasProperty("_Glossiness")) ink.SetFloat("_Glossiness", style.Smoothness * 0.4f);
+        ink.DisableKeyword("_ALPHATEST_ON");
+        crest.sharedMaterial = ink;
+    }
+
+    private static Transform CrestBone(SkinnedMeshRenderer shell)
+    {
+        Transform[] bones = shell.bones;
+        if (bones == null || bones.Length == 0) return shell.rootBone != null ? shell.rootBone : shell.transform;
+        string[] wanted = { "breast", "chest", "spine.003", "spine.002", "spine" };
+        for (int w = 0; w < wanted.Length; w++)
+            for (int i = 0; i < bones.Length; i++)
+                if (bones[i] != null &&
+                    bones[i].name.ToLowerInvariant().Contains(wanted[w]))
+                    return bones[i];
+        return shell.rootBone != null ? shell.rootBone : shell.transform;
+    }
+
+    private static Texture2D inkWhite;
+
+    private static Texture2D InkWhite()
+    {
+        if (inkWhite != null) return inkWhite;
+        inkWhite = new Texture2D(4, 4, TextureFormat.RGBA32, false) { name = "Crest Ink White" };
+        Color[] pixels = new Color[16];
+        for (int i = 0; i < pixels.Length; i++) pixels[i] = Color.white;
+        inkWhite.SetPixels(pixels);
+        inkWhite.wrapMode = TextureWrapMode.Clamp;
+        inkWhite.filterMode = FilterMode.Bilinear;
+        inkWhite.Apply(false, true);
+        return inkWhite;
+    }
+
+    /// <summary>
+    /// The crown in the rest pose, in chest-bone space: the skinned pose is
+    /// baked once, so no weights can tear the patch afterwards.
+    /// </summary>
+    private static Mesh BuildCrestMesh(SkinnedMeshRenderer shell, Transform bone)
+    {
+        Mesh source = shell.sharedMesh;
+        int[] triangles = source.GetTriangles(2);
+        if (triangles.Length == 0) return null;
+        // The cloth is authored in the bind pose, so the shell's own transform
+        // maps its vertices to the world; baking the skinned mesh returned
+        // degenerate positions.
+        Matrix4x4 toBone = bone.worldToLocalMatrix * shell.transform.localToWorldMatrix;
+        Vector3[] positions = source.vertices;
+        Vector3[] normals = source.normals;
+        Dictionary<int, int> map = new Dictionary<int, int>();
+        List<Vector3> outPositions = new List<Vector3>();
+        List<Vector3> outNormals = new List<Vector3>();
+        int[] remap = new int[triangles.Length];
+        for (int i = 0; i < triangles.Length; i++)
+        {
+            int from = triangles[i];
+            if (!map.TryGetValue(from, out int to))
+            {
+                to = outPositions.Count;
+                map[from] = to;
+                outPositions.Add(toBone.MultiplyPoint3x4(positions[from]));
+                outNormals.Add(normals.Length > from
+                    ? (toBone.MultiplyVector(normals[from])).normalized
+                    : Vector3.forward);
+            }
+            remap[i] = to;
+        }
+        // A lit shader paints a zero-length normal black, and on a black shirt
+        // that hides the crest entirely: keep the outward face as a fallback.
+        Vector3 centre = Vector3.zero;
+        for (int i = 0; i < outPositions.Count; i++) centre += outPositions[i];
+        if (outPositions.Count > 0) centre /= outPositions.Count;
+        for (int i = 0; i < outNormals.Count; i++)
+        {
+            if (outNormals[i].sqrMagnitude > 0.5f) continue;
+            Vector3 away = outPositions[i] - centre;
+            outNormals[i] = away.sqrMagnitude > 1e-10f ? away.normalized : Vector3.forward;
+        }
+        Mesh mesh = new Mesh { name = CrestMeshName };
+        mesh.SetVertices(outPositions);
+        mesh.SetNormals(outNormals);
+        mesh.SetTriangles(remap, 0);
+        mesh.RecalculateBounds();
+        return mesh;
     }
 
     /// <summary>Hides a shell (both top styles when none is given).</summary>
@@ -364,6 +538,7 @@ public static class PlayerTopShell
         public BoneWeight[] Weights;
         public List<int> Fabric;
         public List<int> Band;
+        public List<int> Mark;
         public string Log;
     }
 
@@ -383,9 +558,11 @@ public static class PlayerTopShell
         shell.vertices = data.Vertices;
         shell.normals = data.Normals;
         shell.uv = data.Uv;
-        shell.subMeshCount = 2;
+        bool crest = data.Mark != null && data.Mark.Count > 0;
+        shell.subMeshCount = crest ? 3 : 2;
         shell.SetTriangles(data.Fabric, 0);
         shell.SetTriangles(data.Band, 1);
+        if (crest) shell.SetTriangles(data.Mark, 2);
         if (data.Weights != null) shell.boneWeights = data.Weights;
         shell.bindposes = body.bindposes;
         shell.RecalculateTangents();
@@ -575,6 +752,35 @@ public static class PlayerTopShell
             kept = pruned;
             if (done) break;
         }
+        // Compact: pruned teeth and stray parts leave unreferenced vertices.
+        {
+            int[] compact = new int[count];
+            for (int i = 0; i < count; i++) compact[i] = -1;
+            List<int> usedSource = new List<int>(count);
+            List<int> usedWeld = new List<int>(count);
+            for (int k = 0; k < kept.Count; k++)
+            {
+                int v = kept[k];
+                if (compact[v] < 0)
+                {
+                    compact[v] = usedSource.Count;
+                    usedSource.Add(sourceIndex[v]);
+                    usedWeld.Add(weld[v]);
+                }
+                kept[k] = compact[v];
+            }
+            sourceIndex = usedSource;
+            weld = usedWeld.ToArray();
+            count = usedSource.Count;
+        }
+        // The lofted tee measures and skins from the garment's own vertices, so
+        // it runs on the pruned component: atlas bleed onto the thighs used to
+        // pull thigh bones into the hem. It also skips the copy's smoothing.
+        if (style.LoftedTee)
+        {
+            return BuildLooseTee(welded, weld, sourceIndex, weights, scale);
+        }
+
         CountEdges();
         int triCount = kept.Count / 3;
         int[] wt = new int[kept.Count];
@@ -811,35 +1017,6 @@ public static class PlayerTopShell
         }
         laps += "folds=" + folded + " ";
 
-        // Compact: pruned teeth and stray parts leave unreferenced vertices.
-        {
-            int[] compact = new int[count];
-            for (int i = 0; i < count; i++) compact[i] = -1;
-            List<int> usedSource = new List<int>(count);
-            List<int> usedWeld = new List<int>(count);
-            for (int k = 0; k < kept.Count; k++)
-            {
-                int v = kept[k];
-                if (compact[v] < 0)
-                {
-                    compact[v] = usedSource.Count;
-                    usedSource.Add(sourceIndex[v]);
-                    usedWeld.Add(weld[v]);
-                }
-                kept[k] = compact[v];
-            }
-            sourceIndex = usedSource;
-            weld = usedWeld.ToArray();
-            count = usedSource.Count;
-        }
-        // The lofted tee measures and skins from the garment's own vertices, so
-        // it runs on the pruned component: atlas bleed onto the thighs used to
-        // pull 62 % of a thigh bone into the hem.
-        if (style.LoftedTee)
-        {
-            return BuildLooseTee(welded, weld, sourceIndex, weights, scale);
-        }
-
         Vector3[] outVertices = new Vector3[count];
         Vector3[] outNormals = new Vector3[count];
         Vector2[] outUv = new Vector2[count];
@@ -960,10 +1137,39 @@ public static class PlayerTopShell
     // slope to the rib collar band, sleeves as tubes out of the shoulders,
     // boxy ease and its own UVs on the tiling jersey.
     private const float TeeTile = 0.12f;
-    private const float TeeNeckRadius = 0.049f;
+    private const float TeeNeckRadius = 0.045f;
+    // Chest crest sits this far off the cloth, so it reads as a print and
+    // never z-fights the fabric under it.
+    private const float CrestLift = 0.0075f;
+    private const string CrestResource = "Player/Outfits/crown_mark";
     // Vertices inside this half-width are torso; the arms hang outside it and
     // must not widen the chest.
     private const float TeeTorsoHalf = 0.19f;
+
+    /// <summary>
+    /// Direction of the arm in the scan's rest pose: least-squares fit of the
+    /// upper arm's height against its distance from the torso. The rest arms
+    /// are nearly horizontal, so a fixed downward sleeve cut into the biceps.
+    /// </summary>
+    private static Vector3 ArmDirection(List<Vector3> body, float cx, float shoulderZ, float sign)
+    {
+        double sx = 0d, sz = 0d, sxx = 0d, sxz = 0d;
+        int samples = 0;
+        for (int i = 0; i < body.Count; i++)
+        {
+            Vector3 p = body[i];
+            float ax = (p.x - cx) * sign;
+            if (ax < TeeTorsoHalf * 0.95f || ax > TeeTorsoHalf + 0.14f) continue;
+            if (p.z < shoulderZ - 0.10f || p.z > shoulderZ + 0.04f) continue;
+            sx += ax; sz += p.z; sxx += ax * ax; sxz += ax * p.z;
+            samples++;
+        }
+        double denominator = samples * sxx - sx * sx;
+        if (samples < 40 || Mathf.Abs((float)denominator) < 1e-9f)
+            return new Vector3(sign, 0f, -0.25f).normalized;
+        float slope = (float)((samples * sxz - sx * sz) / denominator);
+        return new Vector3(sign, 0f, Mathf.Clamp(slope, -0.5f, 0.2f)).normalized;
+    }
 
     private static ShellData BuildLooseTee(List<Vector3> body, int[] weld, List<int> sourceIndex,
         BoneWeight[] weights, float scale)
@@ -979,7 +1185,9 @@ public static class PlayerTopShell
         for (int i = 1; i < n; i++) { min = Vector3.Min(min, body[i]); max = Vector3.Max(max, body[i]); }
         float height = max.z - min.z;
         if (height < 0.12f) return null;
-        float hemZ = max.z - height * 0.97f;
+        // The scan's top region stops at the waist, but the reference tee runs
+        // to the hip: the loft carries on below the mask's bottom edge.
+        float hemZ = max.z - height * 1.15f;
         float shoulderZ = max.z - height * 0.10f;
         float neckZ = max.z - height * 0.02f;
         float cx = 0f, cy = 0f;
@@ -1010,24 +1218,33 @@ public static class PlayerTopShell
         float[,] radius = new float[rings, sides];
         float[] row = new float[sides];
         float[] chest = new float[sides];
+        // The tee's width is the chest, not the deltoid span: a garment as wide
+        // as the shoulders all the way down is a tent, and its hem swings a
+        // long way off the body as soon as the torso turns.
+        int chestRing = Mathf.Clamp(Mathf.RoundToInt((0.66f - hemZ) / stepZ), 0, torsoRings - 1);
         for (int s = 0; s < sides; s++)
         {
-            float widest = 0f;
-            for (int r = 0; r < torsoRings; r++) widest = Mathf.Max(widest, reach[r, s]);
+            float widest = reach[chestRing, s];
+            if (widest <= 0f)
+            {
+                for (int r = 0; r < torsoRings; r++) widest = Mathf.Max(widest, reach[r, s]);
+            }
             chest[s] = widest;
         }
         for (int r = 0; r < torsoRings; r++)
         {
-            float t = r / (float)(torsoRings - 1);
-            // Boxy, not compressed: a little ease at the hem, most over the
-            // chest, snug at the shoulder, so the sides hang straight instead
-            // of tracing the lats.
-            float ease = Mathf.Lerp(0.022f, 0.026f, Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.15f, 0.7f, t)));
-            ease = Mathf.Lerp(ease, 0.015f, Mathf.InverseLerp(0.85f, 1f, t));
             for (int s = 0; s < sides; s++)
             {
-                float bodyReach = reach[r, s] > 0f ? reach[r, s] : chest[s] * 0.85f;
-                row[s] = Mathf.Max(bodyReach + ease, (chest[s] + 0.026f) * 0.96f);
+                // Below the mask's bottom edge there is no body data to follow,
+                // so the garment keeps its boxy width instead of tapering in.
+                float bodyReach = reach[r, s] > 0f ? reach[r, s] : chest[s];
+                // One constant, boxy width down the whole garment: the chest
+                // measurement plus the ease a heavyweight tee carries. Where
+                // the body is wider than that (the deltoid at the shoulder
+                // ring) the cloth only clears it by a finger, so the shoulder
+                // reads dropped instead of puffing into a cap. Adding the ease
+                // to the deltoid instead is what made the old shirt inflate.
+                row[s] = Mathf.Max(chest[s] + 0.050f, bodyReach + 0.014f);
             }
             SmoothRing(row, 3);
             for (int s = 0; s < sides; s++) radius[r, s] = row[s];
@@ -1038,6 +1255,24 @@ public static class PlayerTopShell
                 for (int s = 0; s < sides; s++)
                     radius[r, s] = Mathf.Max(radius[r, s],
                         (radius[r - 1, s] + radius[r, s] * 2f + radius[r + 1, s]) * 0.25f);
+
+        // A hint of chest through the cloth and nothing below it: the pecs
+        // lift the front a few millimetres, the abdomen stays flat and loose.
+        for (int r = 0; r < torsoRings; r++)
+        {
+            float z = hemZ + r * stepZ;
+            float lift = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.66f, 0.70f, z)) *
+                (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.75f, 0.78f, z)));
+            if (lift <= 0f) continue;
+            for (int s = 0; s < sides; s++)
+            {
+                float angle = s * Mathf.PI * 2f / sides;
+                // Front is -y; the sides already hang past the chest, so the
+                // swell only needs to reach the panels facing forward.
+                float front = Mathf.Max(0f, -Mathf.Sin(angle));
+                radius[r, s] += 0.0045f * lift * front * front;
+            }
+        }
 
         // Shoulder slope: the shoulder ring narrows into the neck.
         for (int k = 1; k <= shoulderRings; k++)
@@ -1080,7 +1315,10 @@ public static class PlayerTopShell
                 // Long drape lines down the sides and a soft break at the hem:
                 // smooth functions of the angle, never per-vertex noise.
                 float angle = s * Mathf.PI * 2f / sides;
-                float drape = 0.0035f * Mathf.Sin(angle * 6f) * Mathf.Clamp01((shoulderZ - z) / 0.2f);
+                // Heavyweight cotton breaks in long, soft folds; without them a
+                // black shirt renders as one flat silhouette.
+                float drape = (0.0040f * Mathf.Sin(angle * 6f) + 0.0016f * Mathf.Sin(angle * 11f + 1.3f)) *
+                    Mathf.Clamp01((shoulderZ - z) / 0.2f);
                 float rS = radius[r, s] + drape;
                 float px = cx + Mathf.Cos(angle) * rS, py = cy + Mathf.Sin(angle) * rS;
                 verts.Add(new Vector3(float.IsNaN(px) ? cx : px, float.IsNaN(py) ? cy : py, z));
@@ -1092,27 +1330,151 @@ public static class PlayerTopShell
         }
         Loft(0, rings, sides, fabric, band, 1, collarRings);
 
-        // Sleeves: tubes from inside the shoulder out over the upper arm. Their
-        // first ring is buried in the torso, so the armhole reads as a seam.
+        // Chest crest: the crown print on the wearer's left pec, its own
+        // alpha-clipped submesh lifted off the cloth, so it keeps its own
+        // colour on every shirt colour.
+        List<int> mark = new List<int>();
+        // Source vertex of every print vertex, so the print can take the cloth's
+        // own bones below instead of relying on the nearest-vertex search.
+        List<int> markSource = new List<int>();
+        int markStart = 0;
+        {
+            float centreAngle = -Mathf.PI * 0.5f + 0.42f;
+            int centreSector = Mathf.RoundToInt(
+                (centreAngle < 0f ? centreAngle + Mathf.PI * 2f : centreAngle) /
+                (Mathf.PI * 2f) * sides);
+            const int markSides = 10;
+            const int markRows = 5;
+            // On the pec, not the upper chest: higher up the cloth curves back
+            // towards the armpit and the print ends up half inside it.
+            int firstRing = Mathf.Clamp(
+                Mathf.RoundToInt((0.660f - hemZ) / stepZ), 0, torsoRings - 1 - markRows);
+            int firstSector = (centreSector - markSides / 2 + sides) % sides;
+            markStart = verts.Count;
+            // A simple five-point crown as shaped cloth, not a printed patch:
+            // a print needs a texture, alpha clip and mips to line up, and the
+            // crown has to stay readable on every shirt colour.
+            Vector2[] outline =
+            {
+                new Vector2(0.04f, 0.10f), new Vector2(0.30f, 0.09f), new Vector2(0.60f, 0.09f),
+                new Vector2(0.96f, 0.10f), new Vector2(0.88f, 0.88f), new Vector2(0.69f, 0.50f),
+                new Vector2(0.50f, 0.96f), new Vector2(0.31f, 0.50f), new Vector2(0.12f, 0.88f)
+            };
+            Vector3 Surface(float u, float v)
+            {
+                float row = firstRing + v * markRows;
+                int rowA = Mathf.Clamp(Mathf.FloorToInt(row), 0, torsoRings - 1);
+                int rowB = Mathf.Min(rowA + 1, torsoRings - 1);
+                float fv = Mathf.Clamp01(row - rowA);
+                float sector = firstSector + u * markSides;
+                int columnA = ((Mathf.FloorToInt(sector) % sides) + sides) % sides;
+                int columnB = ((Mathf.FloorToInt(sector) + 1) % sides + sides) % sides;
+                float fu = sector - Mathf.FloorToInt(sector);
+                Vector3 a = verts[rowA * columns + columnA];
+                Vector3 b = verts[rowA * columns + columnB];
+                Vector3 c = verts[rowB * columns + columnA];
+                Vector3 d = verts[rowB * columns + columnB];
+                Vector3 p = Vector3.Lerp(Vector3.Lerp(a, b, fu), Vector3.Lerp(c, d, fu), fv);
+                markSource.Add(rowA * columns + columnA);
+                float dx = p.x - cx, dy = p.y - cy;
+                float radial = Mathf.Sqrt(dx * dx + dy * dy);
+                float lift = radial > 1e-5f ? (radial + CrestLift) / radial : 1f;
+                return new Vector3(cx + dx * lift, cy + dy * lift, p.z);
+            }
+            // Rings of quads rather than one fan: a single fan's long triangles
+            // chord straight through the curved chest and only their tips show.
+            Vector2 crownPivot = new Vector2(0.5f, 0.42f);
+            const int crownRings = 2;
+            int crownCentre = verts.Count;
+            verts.Add(Surface(crownPivot.x, crownPivot.y));
+            uvList.Add(crownPivot);
+            int crownFirst = verts.Count;
+            for (int ring = 1; ring <= crownRings; ring++)
+            {
+                float t = ring / (float)crownRings;
+                for (int i = 0; i < outline.Length; i++)
+                {
+                    Vector2 point = Vector2.Lerp(crownPivot, outline[i], t);
+                    verts.Add(Surface(point.x, point.y));
+                    uvList.Add(point);
+                }
+            }
+            for (int i = 0; i < outline.Length; i++)
+            {
+                int next = (i + 1) % outline.Length;
+                int innerA = crownFirst + i, innerB = crownFirst + next;
+                mark.Add(crownCentre); mark.Add(innerB); mark.Add(innerA);
+                int outerA = crownFirst + outline.Length + i;
+                int outerB = crownFirst + outline.Length + next;
+                mark.Add(innerA); mark.Add(innerB); mark.Add(outerA);
+                mark.Add(innerB); mark.Add(outerB); mark.Add(outerA);
+            }
+            // The print has to face the same way as the cloth it sits on: a
+            // patch wound backwards lights black and vanishes on a dark shirt.
+            Vector3 faceSum = Vector3.zero;
+            for (int i = 0; i < mark.Count; i += 3)
+            {
+                Vector3 a = verts[mark[i]], b = verts[mark[i + 1]], c = verts[mark[i + 2]];
+                faceSum += Vector3.Cross(b - a, c - a);
+            }
+            Vector3 first = verts[mark[0]];
+            faceSum.z = 0f;
+            if (Vector3.Dot(faceSum, new Vector3(first.x - cx, first.y - cy, 0f)) < 0f) Flip(mark);
+        }
+
+        // Sleeves: tubes down the arm the body actually has. The axis and the
+        // width of every ring are measured from it, which is what gives the
+        // dropped shoulder and the loose, straight sleeve of the reference.
         int sleeveStart = verts.Count;
         const int sleeveSides = 40;
         const int sleeveRings = 12;
-        const float sleeveStep = 0.0125f;
+        const float sleeveStep = 0.0140f;
         float sleeveU = Mathf.PI * 2f * 0.070f / TeeTile;
+        float[] sleeveWidth = new float[sleeveRings];
+        int[] sleeveFirstRing = new int[2];
+        Vector3[] sleeveStartPoint = new Vector3[2];
         for (int side = 0; side < 2; side++)
         {
             float sign = side == 0 ? -1f : 1f;
-            Vector3 direction = new Vector3(sign, 0f, -0.62f).normalized;
-            Vector3 e1 = Vector3.Cross(direction, new Vector3(0f, 0f, 1f)).normalized;
+            Vector3 direction = ArmDirection(body, cx, shoulderZ, sign);
+            Vector3 e1 = Vector3.Cross(direction, Vector3.up);
+            if (e1.sqrMagnitude < 1e-4f) e1 = Vector3.right;
+            e1.Normalize();
             Vector3 e2 = Vector3.Cross(direction, e1).normalized;
-            Vector3 shoulder = new Vector3(cx + sign * (TeeTorsoHalf * 0.86f), cy, shoulderZ - 0.045f);
-            Vector3 start = shoulder - direction * 0.030f;
+            // The seam sits outboard of the deltoid, so the cloth drops off the
+            // trap instead of tracing the shoulder muscle.
+            Vector3 shoulder = new Vector3(cx + sign * (TeeTorsoHalf * 0.96f), cy, shoulderZ - 0.012f);
+            // Start two rings inboard of the seam: the open ring then sits
+            // inside the torso instead of poking out as a sliver at the armpit.
+            Vector3 start = shoulder - direction * 0.075f;
+            sleeveFirstRing[side] = verts.Count;
+            sleeveStartPoint[side] = start;
             for (int r = 0; r < sleeveRings; r++)
             {
                 Vector3 centre = start + direction * (r * sleeveStep);
-                float t = r / (float)(sleeveRings - 1);
-                // Relaxed short sleeve: widens off the shoulder to the hem.
-                float sleeveRadius = Mathf.Lerp(0.060f, 0.079f, Mathf.SmoothStep(0f, 1f, t));
+                float armReach = 0f;
+                for (int i = 0; i < n; i++)
+                {
+                    if ((body[i].x - cx) * sign < TeeTorsoHalf * 0.9f) continue;
+                    Vector3 d = body[i] - centre;
+                    float along = Vector3.Dot(d, direction);
+                    if (Mathf.Abs(along) > sleeveStep * 0.8f) continue;
+                    armReach = Mathf.Max(armReach, (d - direction * along).magnitude);
+                }
+                // Loose over the biceps, never a balloon: the reference cuff
+                // is a straight opening, not a puffed cap.
+                sleeveWidth[r] = Mathf.Clamp(armReach + 0.010f, 0.046f, 0.062f);
+            }
+            SmoothRing(sleeveWidth, 4);
+            // A hanging sleeve only widens towards the cuff.
+            for (int r = 1; r < sleeveRings; r++)
+                sleeveWidth[r] = Mathf.Max(sleeveWidth[r], sleeveWidth[r - 1] * 0.995f);
+            sleeveWidth[0] *= 0.55f;
+            sleeveWidth[1] *= 0.80f;
+            for (int r = 0; r < sleeveRings; r++)
+            {
+                Vector3 centre = start + direction * (r * sleeveStep);
+                float sleeveRadius = sleeveWidth[r];
                 for (int s = 0; s < sleeveSides; s++)
                 {
                     float angle = s * Mathf.PI * 2f / sleeveSides;
@@ -1126,6 +1488,22 @@ public static class PlayerTopShell
                 fabric, band, 1, 0);
         }
 
+        // Cap both sleeve start rings. They are buried in the torso, but a
+        // closed tube cannot show a one-sided sliver at the armpit.
+        for (int side = 0; side < 2; side++)
+        {
+            int centre = verts.Count;
+            verts.Add(sleeveStartPoint[side]);
+            uvList.Add(new Vector2(0f, 0f));
+            int ring = sleeveFirstRing[side];
+            for (int s = 0; s < sleeveSides; s++)
+            {
+                fabric.Add(centre);
+                fabric.Add(ring + s);
+                fabric.Add(ring + (s + 1) % sleeveSides);
+            }
+        }
+
         // Outward winding: flip the whole cloth when the first torso triangle
         // faces inward (the sleeves use the same ring handedness).
         {
@@ -1136,6 +1514,7 @@ public static class PlayerTopShell
             {
                 Flip(fabric);
                 Flip(band);
+                if (mark.Count > 0) Flip(mark);
             }
         }
 
@@ -1171,13 +1550,23 @@ public static class PlayerTopShell
             // off the body), and a sleeve takes only its own arm.
             bool sleeve = v >= sleeveStart;
             int side = sleeve ? (p.x >= cx ? 1 : 0) : -1;
+            // Cloth below the chest hangs off the hips: letting it take bones
+            // from up the chest made the hem swing out during a punch.
+            bool low = !sleeve && p.z < shoulderZ - 0.14f;
             Vector3Int c = Cell(p);
             int best = -1;
             float bestDistance = float.MaxValue;
-            for (int attempt = 0; attempt < 2 && best < 0; attempt++)
+            // Three attempts: strict band, then the same torso filter without
+            // the height band (a hem vertex has to reach up to the waist for
+            // its bones), then any weighted body vertex.
+            for (int attempt = 0; attempt < 3 && best < 0; attempt++)
             {
-                bool restricted = attempt == 0;
-                for (int radiusSearch = 1; radiusSearch <= 5 && best < 0; radiusSearch++)
+                bool restricted = attempt < 2;
+                bool banded = attempt == 0;
+                // Search the whole neighbourhood and keep the nearest match: an
+                // early exit took the first ring that had *any* vertex, so a
+                // hem point could take a bone from 9 cm up the chest.
+                for (int radiusSearch = 1; radiusSearch <= 5; radiusSearch++)
                 {
                     for (int x = -radiusSearch; x <= radiusSearch; x++)
                         for (int y = -radiusSearch; y <= radiusSearch; y++)
@@ -1197,13 +1586,20 @@ public static class PlayerTopShell
                                         // The mask's bottom edge sits on the
                                         // thighs; a hem vertex that copied
                                         // one followed DEF-thigh.R 33 cm off
-                                        // the body in a punch.
-                                        else if (body[list[k]].z < hemZ + 0.05f) continue;
+                                        // the body in a punch. Keep the cloth
+                                        // above the hip crease, on waist bones.
+                                        else if (body[list[k]].z < hemZ + 0.075f) continue;
                                         // Same height band only: an unweighted
                                         // patch at the hem otherwise made the
                                         // search jump 20 cm up to the chest and
                                         // the hem hung on DEF-breast.
-                                        else if (Mathf.Abs(body[list[k]].z - p.z) > 0.06f) continue;
+                                        // Low cloth may not reach up into the
+                                        // chest: a hem vertex that took a pec
+                                        // bone swung out of the body in a punch.
+                                        else if (banded
+                                            ? (body[list[k]].z - p.z > (low ? 0.02f : 0.06f) ||
+                                                p.z - body[list[k]].z > 0.06f)
+                                            : body[list[k]].z - p.z > (low ? 0.05f : 0.08f)) continue;
                                     }
                                     if (!Weighted(list[k])) continue;
                                     float d = (body[list[k]] - p).sqrMagnitude;
@@ -1233,23 +1629,29 @@ public static class PlayerTopShell
         // grid so the shoulder slope and the hem do not crease.
         if (outWeights != null)
         {
-            SmoothWeights(outWeights, 0, rings, columns, 6);
+            SmoothWeights(outWeights, 0, rings, columns, 4);
             for (int side = 0; side < 2; side++)
                 SmoothWeights(outWeights, sleeveStart + side * sleeveRings * (sleeveSides + 1),
                     sleeveRings, sleeveSides + 1, 6);
+            // The print rides the cloth: give it exactly the bones of the panel
+            // it was lifted from, so it can never end up unweighted and collapse
+            // to the root, where nothing on the chest would ever draw it.
+            for (int i = 0; i < markSource.Count; i++)
+                outWeights[markStart + i] = outWeights[markSource[i]];
         }
 
         Vector3[] outNormals = new Vector3[count];
         AddFaceNormals(outVertices, fabric, outNormals);
         AddFaceNormals(outVertices, band, outNormals);
+        AddFaceNormals(outVertices, mark, outNormals);
         for (int v = 0; v < count; v++) outNormals[v] = outNormals[v].normalized;
 
         return new ShellData
         {
             Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,
-            Fabric = fabric, Band = band,
+            Fabric = fabric, Band = band, Mark = mark,
             Log = $"looseTee vertices={count} rings={rings} hem={hemZ:F3} shoulder={shoulderZ:F3} " +
-                $"neck={TeeNeckRadius:F3} torsoHalf={TeeTorsoHalf:F3}"
+                $"neck={TeeNeckRadius:F3} torsoHalf={TeeTorsoHalf:F3} crest={mark.Count / 3}"
         };
     }
 
