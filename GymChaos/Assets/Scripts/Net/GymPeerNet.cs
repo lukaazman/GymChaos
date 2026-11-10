@@ -17,6 +17,9 @@ public sealed class GymPeerHost
     private const float PendingTimeout = 25f;
     private const float RegisterTimeout = 15f;
     private const float ReRegisterSeconds = 3f;
+    private const float OfferResendSeconds = 2f;
+    // A host with no players gives up after this many dead registrations (a blocked broker).
+    private const int ReRegisterAttempts = 5;
 
     private sealed class Pending
     {
@@ -24,6 +27,11 @@ public sealed class GymPeerHost
         public string Cid;
         public IGymRtcLink Link;
         public float Born;
+        // Kept so the answer can be repeated: a signal the broker drops while the
+        // host is re-registering would otherwise cost the guest its whole 25 s wait.
+        public string Offer;
+        public string Answer;
+        public float NextResend;
     }
 
     public static GymPeerHost Current { get; private set; }
@@ -34,6 +42,7 @@ public sealed class GymPeerHost
     private float registerStarted;
     private float reRegisterAt;
     private int codeAttempts;
+    private int registerFailures;
 
     public string Code { get; private set; }
     /// <summary>The code is registered with the broker: guests can dial it.</summary>
@@ -59,6 +68,14 @@ public sealed class GymPeerHost
     {
         Relay = new GymPeerRelay(this);
         Code = string.IsNullOrEmpty(preferredCode) ? NewCode() : preferredCode.ToUpperInvariant();
+        if (!GymRtc.Available)
+        {
+            // The page is not a secure context, or the browser has WebRTC blocked:
+            // no guest could ever be introduced, so the room says so instead of waiting.
+            Failed = true;
+            GymLog.Diag("GYMCHAOS_PEER_NO_WEBRTC code=" + Code);
+            return;
+        }
         Register();
     }
 
@@ -93,23 +110,45 @@ public sealed class GymPeerHost
 
     private void PumpSignal()
     {
+        if (signal == null) return;
         signal.Pump();
-        if (signal.State == 0 && Time.realtimeSinceStartup - registerStarted > RegisterTimeout) signal.Close();
+        if (signal.State == 1) registerFailures = 0;
+        if (signal.State == 0)
+        {
+            if (Time.realtimeSinceStartup - registerStarted <= RegisterTimeout) return;
+            signal.Close();
+        }
         if (signal.State != 2) return;
         // Taken id (a two-in-a-hundred-million clash): pick another code, up to three times, while nobody has it yet.
-        if (signal.IdTaken && Relay.PlayerCount == 0 && ++codeAttempts <= 3)
+        if (signal.IdTaken)
         {
-            Code = NewCode();
-            Register();
+            if (Relay.PlayerCount == 0 && ++codeAttempts <= 3)
+            {
+                Code = NewCode();
+                Register();
+                GymLog.Diag("GYMCHAOS_PEER_CODE_RETRY code=" + Code);
+                return;
+            }
+            if (Relay.PlayerCount == 0) Failed = true;
+            GymLog.Diag($"GYMCHAOS_PEER_ID_TAKEN code={Code} players={Relay.PlayerCount}");
+            // shortcut: a held code needs a new one that guests can read, and a running
+            // room cannot show it yet; only reachable on a real id clash (rare).
             return;
         }
-        if (Relay.PlayerCount == 0 && !signal.IdTaken) Failed = true;
-        // The broker dropped a room that is running: take the same address again, guests already inside are unaffected.
-        if (Relay.PlayerCount > 0 && Time.realtimeSinceStartup >= reRegisterAt)
+        // The registration is gone (the broker dropped it, or it never answered).
+        // Registering again on a healthy socket every few seconds used to leave a
+        // window in which a guest's offer reached nobody and the join timed out;
+        // now the address is only claimed again when it is really lost.
+        if (++registerFailures > ReRegisterAttempts && Relay.PlayerCount == 0)
         {
-            reRegisterAt = Time.realtimeSinceStartup + ReRegisterSeconds;
-            Register();
+            Failed = true;
+            GymLog.Diag($"GYMCHAOS_PEER_BROKER_UNREACHABLE code={Code} attempts={registerFailures}");
+            return;
         }
+        if (Time.realtimeSinceStartup < reRegisterAt) return;
+        reRegisterAt = Time.realtimeSinceStartup + ReRegisterSeconds;
+        Register();
+        GymLog.Diag($"GYMCHAOS_PEER_RE_REGISTER code={Code} players={Relay.PlayerCount} failures={registerFailures}");
     }
 
     private void PumpGuests()
@@ -119,21 +158,34 @@ public sealed class GymPeerHost
             // Every signal travels as the broker's CANDIDATE type: it forwards that one reliably, and the
             // kind is inside the data. A first message from an unknown guest must be its offer.
             if (message.Type != "CANDIDATE" || string.IsNullOrEmpty(message.Data)) continue;
-            Pending found = pending.Find(p => p.Src == message.Src && p.Cid == message.Cid);
+            Pending found = null;
+            for (int i = 0; i < pending.Count && found == null; i++)
+            {
+                if (pending[i].Src == message.Src && pending[i].Cid == message.Cid) found = pending[i];
+            }
             if (found == null)
             {
                 GymRtcSignal first = JsonUtility.FromJson<GymRtcSignal>(message.Data);
                 if (first.k != "sdp" || first.type != "offer" || pending.Count >= 8) continue;
-                found = new Pending { Src = message.Src, Cid = message.Cid, Link = GymRtc.Create(false), Born = Time.realtimeSinceStartup };
+                found = new Pending
+                {
+                    Src = message.Src, Cid = message.Cid, Link = GymRtc.Create(false),
+                    Born = Time.realtimeSinceStartup, Offer = message.Data
+                };
                 pending.Add(found);
+                GymLog.Diag($"GYMCHAOS_PEER_GUEST_PENDING cid={message.Cid} pending={pending.Count}");
             }
+            else if (found.Offer == message.Data) continue;
             found.Link.Signal(message.Data);
         }
         for (int i = pending.Count - 1; i >= 0; i--)
         {
             Pending guest = pending[i];
             while (guest.Link.TryTakeSignal(out string text))
+            {
+                if (text.IndexOf("\"type\":\"answer\"", StringComparison.Ordinal) >= 0) guest.Answer = text;
                 signal.Send("CANDIDATE", guest.Src, guest.Cid, text);
+            }
             int state = guest.Link.State;
             if (state == 1)
             {
@@ -142,11 +194,22 @@ public sealed class GymPeerHost
                 guest.Link.Send(HelloText);
                 Relay.Add(guest.Link);
                 pending.RemoveAt(i);
+                GymLog.Diag($"GYMCHAOS_PEER_GUEST_OPEN cid={guest.Cid} players={Relay.PlayerCount}");
+                continue;
             }
-            else if (state == 2 || Time.realtimeSinceStartup - guest.Born > PendingTimeout)
+            if (state == 2 || Time.realtimeSinceStartup - guest.Born > PendingTimeout)
             {
                 guest.Link.Close();
                 pending.RemoveAt(i);
+                GymLog.Diag($"GYMCHAOS_PEER_GUEST_LOST cid={guest.Cid} state={state}");
+                continue;
+            }
+            // The guest repeats its offer while it waits for this answer, so the
+            // answer is repeated the same way: one dropped signal costs one round.
+            if (guest.Answer != null && Time.realtimeSinceStartup >= guest.NextResend)
+            {
+                guest.NextResend = Time.realtimeSinceStartup + OfferResendSeconds;
+                signal.Send("CANDIDATE", guest.Src, guest.Cid, guest.Answer);
             }
         }
     }
@@ -164,6 +227,7 @@ public sealed class GymPeerHost
 public sealed class GymPeerGuestSocket : IGymNetSocket
 {
     private const float Timeout = 25f;
+    private const float OfferResendSeconds = 2f;
 
     private readonly GymPeerSignal signal;
     private readonly IGymRtcLink link;
@@ -172,10 +236,20 @@ public sealed class GymPeerGuestSocket : IGymNetSocket
     private readonly float born = Time.realtimeSinceStartup;
     private int state;
     private bool hostListening;
+    // The offer, repeated until the host answers: the broker drops what arrives
+    // while the host is re-registering, and a single lost offer used to end the join.
+    private string offer;
+    private float nextOfferAt;
 
     public GymPeerGuestSocket(string code)
     {
         hostId = GymPeerHost.IdFor(code);
+        if (!GymRtc.Available)
+        {
+            GymLog.Diag("GYMCHAOS_PEER_GUEST_NO_WEBRTC code=" + code);
+            state = 2;
+            return;
+        }
         signal = new GymPeerSignal("gc" + GymPeerSignal.RandomText(14));
         link = GymRtc.Create(true);
     }
@@ -197,14 +271,19 @@ public sealed class GymPeerGuestSocket : IGymNetSocket
     public bool TryReceive(out string text)
     {
         Pump();
+        if (link == null)
+        {
+            text = null;
+            return false;
+        }
         return link.TryReceive(out text);
     }
 
     public void Close()
     {
         state = 2;
-        signal.Close();
-        link.Close();
+        signal?.Close();
+        link?.Close();
     }
 
     private void Pump()
@@ -225,7 +304,19 @@ public sealed class GymPeerGuestSocket : IGymNetSocket
         if (signal.State == 1)
         {
             while (link.TryTakeSignal(out string text))
+            {
+                if (offer == null && text.IndexOf("\"type\":\"offer\"", StringComparison.Ordinal) >= 0)
+                {
+                    offer = text;
+                    nextOfferAt = Time.realtimeSinceStartup + OfferResendSeconds;
+                }
                 signal.Send("CANDIDATE", hostId, connectionId, text);
+            }
+            if (offer != null && link.State == 0 && Time.realtimeSinceStartup >= nextOfferAt)
+            {
+                nextOfferAt = Time.realtimeSinceStartup + OfferResendSeconds;
+                signal.Send("CANDIDATE", hostId, connectionId, offer);
+            }
         }
         while (signal.TryTake(out GymPeerSignal.Incoming message))
         {

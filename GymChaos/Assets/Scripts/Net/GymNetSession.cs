@@ -62,7 +62,9 @@ public sealed class GymNetSession : MonoBehaviour
     // The room chosen in the session menu; command line and page query still apply when this is unset.
     private static string pendingMode, pendingUrl, pendingCode;
     private Text roomLabel;
-    private int roomLabelKey = -1;
+    private Text roomStatus;
+    private int roomLabelKey = int.MinValue;
+    private string roomLabelCode;
 
     // This session's room: who it plays as and where, so a guest can find the room again.
     private string relayUrl;
@@ -364,7 +366,8 @@ public sealed class GymNetSession : MonoBehaviour
 
     private static bool IsFinite(float value) => !float.IsNaN(value) && Mathf.Abs(value) < 100000f;
 
-    // The host reads the code from here to tell friends; guests see which room they are in.
+    // The room code is the invitation: it is the biggest thing on screen while a
+    // room is live, with the room status right under it.
     private void UpdateRoomLabel()
     {
         if (!Application.isPlaying) return;
@@ -374,23 +377,53 @@ public sealed class GymNetSession : MonoBehaviour
         if (roomLabel == null)
         {
             if (!show) return;
-            GameObject canvasObject = new GameObject("Room Label", typeof(Canvas));
+            GameObject canvasObject = new GameObject("Room Label", typeof(Canvas), typeof(CanvasScaler));
             canvasObject.transform.SetParent(transform, false);
             canvasObject.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
+            GymRuntimeSettings.ConfigureBalancedCanvasScaler(canvasObject.GetComponent<CanvasScaler>());
             Font font = PersonaMenuStyle.LoadButtonFont(Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
-            roomLabel = GymRuntimeSettings.CreateText("Room Text", canvasObject.transform, font, string.Empty, 34,
-                PersonaMenuStyle.Ink, FontStyle.Normal, TextAnchor.UpperCenter, new Vector2(0.3f, 0.93f), new Vector2(0.7f, 0.99f));
-            roomLabel.raycastTarget = false;
+            Font heading = PersonaMenuStyle.LoadTitleFont(Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+            GymRuntimeSettings.CreateText("Room Caption", canvasObject.transform, font, "ROOM CODE", 28,
+                PersonaMenuStyle.Gold, FontStyle.Normal, TextAnchor.LowerCenter,
+                new Vector2(0.2f, 0.935f), new Vector2(0.8f, 0.975f));
+            roomLabel = GymRuntimeSettings.CreateText("Room Text", canvasObject.transform, heading, string.Empty, 96,
+                PersonaMenuStyle.Ink, FontStyle.Normal, TextAnchor.MiddleCenter,
+                new Vector2(0.2f, 0.845f), new Vector2(0.8f, 0.94f));
+            roomStatus = GymRuntimeSettings.CreateText("Room Status", canvasObject.transform, font, string.Empty, 30,
+                PersonaMenuStyle.Muted, FontStyle.Normal, TextAnchor.UpperCenter,
+                new Vector2(0.2f, 0.785f), new Vector2(0.8f, 0.845f));
         }
         roomLabel.transform.parent.gameObject.SetActive(show);
-        if (!show) return;
-        // Only rebuilt when the text would change (a count or a second), not every frame.
-        int key = reconnecting ? 1000 + Mathf.FloorToInt(reconnect.Elapsed(Time.unscaledTime)) : avatars.Count + 1;
-        if (key == roomLabelKey && roomLabel.text.Length > 0) return;
+        if (!show)
+        {
+            roomLabelKey = int.MinValue;
+            return;
+        }
+        // 0 no broker of our own, 1 opening, 2 unreachable.
+        GymPeerHost host = Client.IsHost ? GymPeerHost.Current : null;
+        int broker = host == null || host.Ready ? 0 : host.Failed ? 2 : 1;
+        // A number first: the two strings are only built when it or the code changed.
+        int key = reconnecting
+            ? 1000 + Mathf.FloorToInt(reconnect.Elapsed(Time.unscaledTime))
+            : (avatars.Count + 1) + 10 * broker;
+        if (key == roomLabelKey && Client.RoomCode == roomLabelCode) return;
         roomLabelKey = key;
-        roomLabel.text = reconnecting
-            ? "HOST DOWN - RECONNECTING " + (key - 1000) + "s"
-            : "ROOM " + Client.RoomCode + "   " + key + "/" + GymNetClient.MaxPlayers;
+        roomLabelCode = Client.RoomCode;
+        string code = string.IsNullOrEmpty(Client.RoomCode) ? "----" : Client.RoomCode;
+        string status;
+        if (reconnecting)
+            status = "HOST DOWN - RECONNECTING " + Mathf.FloorToInt(reconnect.Elapsed(Time.unscaledTime)) + "s";
+        else if (broker == 2) status = "BROKER UNREACHABLE - CHECK YOUR CONNECTION";
+        else if (broker == 1) status = "OPENING THE ROOM...";
+        else
+        {
+            int players = avatars.Count + 1;
+            status = players + "/" + GymNetClient.MaxPlayers +
+                (Client.IsHost ? " PLAYERS - SHARE THIS CODE" : " PLAYERS - YOU JOINED THIS ROOM");
+        }
+        roomLabel.text = code;
+        roomStatus.text = status;
+        Debug.Log("GYMCHAOS_ROOM_LABEL code=" + code + " status=" + status);
     }
 
     private void Update()

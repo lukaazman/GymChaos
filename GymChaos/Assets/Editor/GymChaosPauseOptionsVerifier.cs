@@ -39,11 +39,16 @@ public static class GymChaosPauseOptionsVerifier
         ShadowQualityKey
     };
 
+    private const string BrightnessKey = "GymChaos.UI.Brightness.v1";
+    private const string ContrastKey = "GymChaos.UI.Contrast.v1";
+
     private static readonly string[] FloatPreferenceKeys =
     {
         MasterVolumeKey,
         MusicVolumeKey,
-        EffectsVolumeKey
+        EffectsVolumeKey,
+        BrightnessKey,
+        ContrastKey
     };
 
     private sealed class CameraState
@@ -250,6 +255,8 @@ public static class GymChaosPauseOptionsVerifier
         RequireSlider(menuRoot, "Master Volume Slider");
         RequireSlider(menuRoot, "Music Volume Slider");
         RequireSlider(menuRoot, "Effects Volume Slider");
+        RequireSlider(menuRoot, "Brightness Slider");
+        RequireSlider(menuRoot, "Contrast Slider");
         RequireButton(menuRoot, "Options Back Button");
     }
 
@@ -288,6 +295,30 @@ public static class GymChaosPauseOptionsVerifier
             "Effects volume did not scale AudioListener.volume: " + AudioListener.volume);
         Require(Mathf.Abs(GymRuntimeSettings.MusicVolume - 0.2f) < 0.01f,
             "Music volume is not master x music: " + GymRuntimeSettings.MusicVolume);
+
+        // Brightness and contrast drive one global color grade: the middle is
+        // neutral, and each end has to move the picture visibly.
+        Slider brightness = RequireSlider(menuRoot, "Brightness Slider");
+        Slider contrast = RequireSlider(menuRoot, "Contrast Slider");
+        ColorAdjustments grade = GymRuntimeSettings.Grade;
+        Require(grade != null, "Brightness and contrast are not wired to a color grade.");
+        brightness.value = 1f;
+        Require(grade.postExposure.value > 1f,
+            "Brightness did not raise exposure: " + grade.postExposure.value);
+        brightness.value = 0f;
+        Require(grade.postExposure.value < -1f,
+            "Brightness did not lower exposure: " + grade.postExposure.value);
+        contrast.value = 1f;
+        Require(grade.contrast.value > 30f,
+            "Contrast did not rise: " + grade.contrast.value);
+        contrast.value = 0f;
+        Require(grade.contrast.value < -30f,
+            "Contrast did not fall: " + grade.contrast.value);
+        brightness.value = 0.5f;
+        contrast.value = 0.5f;
+        Require(Mathf.Abs(grade.postExposure.value) < 0.01f && Mathf.Abs(grade.contrast.value) < 0.1f,
+            $"Neutral brightness/contrast is not neutral: ev={grade.postExposure.value} " +
+            $"contrast={grade.contrast.value}");
 
         Dropdown aa = RequireDropdown(menuRoot, "Anti Aliasing Dropdown");
         aa.value = aa.options.Count - 1;
@@ -412,6 +443,9 @@ public static class GymChaosPauseOptionsVerifier
         {
             UnityEngine.Object.DestroyImmediate(menuRoot);
         }
+        // The color grade lives in its own object so it survives scene reloads;
+        // in the editor it would otherwise stay behind in the edited scene.
+        GymRuntimeSettings.ResetGradeVolume();
 
         HashSet<EventSystem> existingEventSystems = new HashSet<EventSystem>();
         if (snapshot.ExistingEventSystems != null)

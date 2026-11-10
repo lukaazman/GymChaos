@@ -36,6 +36,19 @@ public static class GymRtc
 {
     public static readonly string[] StunServers = { "stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302" };
 
+    /// <summary>False when this page cannot use WebRTC (not a secure context, or blocked): no room can form.</summary>
+    public static bool Available
+    {
+        get
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return BrowserLink.IsAvailable();
+#else
+            return true;
+#endif
+        }
+    }
+
     /// <summary>The offering end opens the data channel; the answering end receives it.</summary>
     public static IGymRtcLink Create(bool offering)
     {
@@ -56,6 +69,9 @@ public static class GymRtc
         [DllImport("__Internal")] private static extern void GymRtcSignalIn(int id, string json);
         [DllImport("__Internal")] private static extern int GymRtcSignalOut(int id, byte[] buffer, int size);
         [DllImport("__Internal")] private static extern void GymRtcClose(int id);
+        [DllImport("__Internal")] private static extern int GymChaosWebRtcAvailable();
+
+        public static bool IsAvailable() => GymChaosWebRtcAvailable() != 0;
 
         private readonly int id;
         private byte[] buffer = new byte[4096];
@@ -96,6 +112,8 @@ public static class GymRtc
         private RTCSetSessionDescriptionAsyncOperation localOp;
         private RTCSetSessionDescriptionAsyncOperation remoteOp;
         private bool remoteSet;
+        // A repeated description is ignored: applying it twice aborts the connection.
+        private string lastRemoteSdp;
         private bool disposed;
         private int state;
 
@@ -155,6 +173,8 @@ public static class GymRtc
             GymRtcSignal signal = JsonUtility.FromJson<GymRtcSignal>(json);
             if (signal.k == "sdp")
             {
+                if (signal.sdp == lastRemoteSdp) return;
+                lastRemoteSdp = signal.sdp;
                 RTCSessionDescription description = new RTCSessionDescription
                 {
                     type = signal.type == "offer" ? RTCSdpType.Offer : RTCSdpType.Answer, sdp = signal.sdp

@@ -6,7 +6,7 @@ mergeInto(LibraryManager.library, {
     var stun = UTF8ToString(stunPtr).split(',');
     if (!Module.gymRtc) { Module.gymRtc = { next: 1, links: {} }; }
     var id = Module.gymRtc.next++;
-    var entry = { pc: null, ch: null, state: 0, inbox: [], signals: [], early: [], remoteSet: false };
+    var entry = { pc: null, ch: null, state: 0, inbox: [], signals: [], early: [], remoteSet: false, lastRemoteSdp: null };
     Module.gymRtc.links[id] = entry;
     try {
       entry.pc = new RTCPeerConnection({ iceServers: [{ urls: stun }] });
@@ -73,6 +73,10 @@ mergeInto(LibraryManager.library, {
     try { signal = JSON.parse(UTF8ToString(jsonPtr)); } catch (e) { return; }
     var pc = entry.pc;
     if (signal.k === 'sdp') {
+      // Both ends repeat their description until the channel opens: an identical
+      // repeat must not be applied twice, which would abort the connection.
+      if (entry.lastRemoteSdp === signal.sdp) { return; }
+      entry.lastRemoteSdp = signal.sdp;
       pc.setRemoteDescription({ type: signal.type, sdp: signal.sdp })
         .then(function () {
           entry.remoteSet = true;
@@ -100,6 +104,11 @@ mergeInto(LibraryManager.library, {
     entry.signals.shift();
     stringToUTF8(text, bufferPtr, bufferSize);
     return needed - 1;
+  },
+  // 1 when the page may use WebRTC at all: it needs a secure context (https or
+  // localhost), and some browsers or extensions block it outright.
+  GymChaosWebRtcAvailable: function () {
+    return typeof RTCPeerConnection === 'undefined' ? 0 : 1;
   },
   GymRtcClose: function (id) {
     var entry = Module.gymRtc && Module.gymRtc.links[id];

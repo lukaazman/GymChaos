@@ -712,10 +712,6 @@ public sealed class GymRaceKart : MonoBehaviour
                 other.body.linearVelocity += -normal * (knockback + Mathf.Min(depth / dt, 8f));
                 other.body.linearVelocity = Vector3.ClampMagnitude(
                     other.body.linearVelocity, other.KartStats.TopSpeed * 1.6f);
-                // The rammer keeps every bit of its speed, so a slower rival
-                // would otherwise sit inside its body box; the kart that was hit
-                // is what steps aside.
-                other.body.position += -normal * Mathf.Min(depth, 0.35f);
             }
             velocity += normal * (Mathf.Max(0f, -closing) * share * RamSelfPushScale +
                 overlap * RamSelfPushScale);

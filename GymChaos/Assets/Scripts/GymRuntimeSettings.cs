@@ -27,7 +27,15 @@ public static class GymRuntimeSettings
     private const string EffectsVolumeKey = "GymChaos.UI.EffectsVolume.v1";
     private const string RenderScaleKey = "GymChaos.UI.RenderScale.v1";
     private const string ShadowQualityKey = "GymChaos.UI.ShadowQuality.v1";
+    private const string BrightnessKey = "GymChaos.UI.Brightness.v1";
+    private const string ContrastKey = "GymChaos.UI.Contrast.v1";
     private const int MsaaOption = 4;
+
+    // 0.5 is neutral: the sliders push exposure and contrast either way from there.
+    private static float brightness = 0.5f;
+    private static float contrast = 0.5f;
+    private static Volume gradeVolume;
+    private static ColorAdjustments grade;
 
     private static float masterVolume = 1f;
     private static float musicVolume = 1f;
@@ -46,6 +54,9 @@ public static class GymRuntimeSettings
 
     private static readonly Color Ink = new Color(0.91f, 0.94f, 0.98f, 1f);
     private static readonly Color Accent = new Color(0.98f, 0.34f, 0.13f, 1f);
+
+    /// <summary>The color grade the brightness and contrast sliders drive (null before the first apply).</summary>
+    internal static ColorAdjustments Grade => grade;
 
     internal static void ConfigureBalancedCanvasScaler(CanvasScaler scaler)
     {
@@ -80,7 +91,7 @@ public static class GymRuntimeSettings
         Stretch(veil.rectTransform);
         CreateSettingsSheet(panel.transform, titleFont);
 
-        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.775f);
+        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.768f);
         float up = RowsHiddenShift;
         // WebGL: the page owns the canvas size and the template's button owns
         // fullscreen; a fullscreen request from here can be refused by the
@@ -92,11 +103,23 @@ public static class GymRuntimeSettings
         CreateDropdown("Render Scale Dropdown", panel.transform, labelFont,
             RenderScaleLabels(), StoredRenderScaleIndex(), RowY(renderScaleRow), ApplyRenderScale);
 
-        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.572f + up);
-        CreateRowLabel(panel.transform, labelFont, "TEXTURE", RowY(3));
-        CreateRowLabel(panel.transform, labelFont, "SHADOWS", RowY(4));
-        CreateRowLabel(panel.transform, labelFont, "ANTI-ALIASING", RowY(5));
-        CreateRowLabel(panel.transform, labelFont, "POST FX", RowY(6));
+        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.6f + up);
+        CreateSliderRow(panel.transform, labelFont, "BRIGHTNESS", "Brightness", " Slider", 3, brightness,
+            FormatGrade, value =>
+            {
+                brightness = value;
+                ApplyColorGrade();
+            });
+        CreateSliderRow(panel.transform, labelFont, "CONTRAST", "Contrast", " Slider", 4, contrast,
+            FormatGrade, value =>
+            {
+                contrast = value;
+                ApplyColorGrade();
+            });
+        CreateRowLabel(panel.transform, labelFont, "TEXTURE", RowY(5));
+        CreateRowLabel(panel.transform, labelFont, "SHADOWS", RowY(6));
+        CreateRowLabel(panel.transform, labelFont, "ANTI-ALIASING", RowY(7));
+        CreateRowLabel(panel.transform, labelFont, "POST FX", RowY(8));
 
         // Quarter is the floor: at 1/8 posters and signs turn into unreadable blocks.
         string[] textureLabels = { "FULL", "HALF", "QUARTER" };
@@ -104,10 +127,10 @@ public static class GymRuntimeSettings
             textureLabels,
             Mathf.Clamp(PlayerPrefs.GetInt(TextureQualityKey,
                 QualitySettings.globalTextureMipmapLimit), 0, textureLabels.Length - 1),
-            RowY(3), ApplyTextureQuality);
+            RowY(5), ApplyTextureQuality);
 
         CreateDropdown("Shadow Quality Dropdown", panel.transform, labelFont,
-            new[] { "LOW", "MEDIUM", "HIGH" }, StoredShadowQuality(), RowY(4), ApplyShadowQuality);
+            new[] { "LOW", "MEDIUM", "HIGH" }, StoredShadowQuality(), RowY(6), ApplyShadowQuality);
 
         // WebGL has no headroom for 4x MSAA on top of the browser's own canvas.
         string[] aaLabels = IsWeb
@@ -115,38 +138,41 @@ public static class GymRuntimeSettings
             : new[] { "OFF", "FXAA", "SMAA", "TAA", "MSAA 4X" };
         CreateDropdown("Anti Aliasing Dropdown", panel.transform, labelFont, aaLabels,
             Mathf.Clamp(GetStoredAntiAliasing(), 0, aaLabels.Length - 1),
-            RowY(5), ApplyAntiAliasing);
+            RowY(7), ApplyAntiAliasing);
 
         bool postEnabled = PlayerPrefs.GetInt(PostProcessingKey, 1) != 0;
         Text postValue = CreateText("Post FX Value", panel.transform, labelFont,
             postEnabled ? "ON" : "OFF", 26, Ink, FontStyle.Normal,
-            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(6)),
-            new Vector2(ControlMaxX, RowY(6) + RowHeight));
+            TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(8)),
+            new Vector2(ControlMaxX, RowY(8) + RowHeight));
         Toggle postToggle = CreateToggle("Post FX Toggle", panel.transform, postEnabled,
-            new Vector2(ControlMinX, RowY(6) + 0.006f),
-            new Vector2(ControlMinX + 0.035f, RowY(6) + RowHeight - 0.006f));
+            new Vector2(ControlMinX, RowY(8) + 0.006f),
+            new Vector2(ControlMinX + 0.035f, RowY(8) + RowHeight - 0.006f));
         postToggle.onValueChanged.AddListener(value =>
         {
             postValue.text = value ? "ON" : "OFF";
             ApplyPostProcessing(value);
         });
 
-        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.323f + up);
-        CreateVolumeRow(panel.transform, labelFont, "MASTER", "Master", 7, masterVolume, value =>
-        {
-            masterVolume = value;
-            ApplyVolumes();
-        });
-        CreateVolumeRow(panel.transform, labelFont, "MUSIC", "Music", 8, musicVolume, value =>
-        {
-            musicVolume = value;
-            ApplyVolumes();
-        });
-        CreateVolumeRow(panel.transform, labelFont, "EFFECTS", "Effects", 9, effectsVolume, value =>
-        {
-            effectsVolume = value;
-            ApplyVolumes();
-        });
+        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.308f + up);
+        CreateSliderRow(panel.transform, labelFont, "MASTER", "Master", " Volume Slider", 9, masterVolume,
+            FormatVolume, value =>
+            {
+                masterVolume = value;
+                ApplyVolumes();
+            });
+        CreateSliderRow(panel.transform, labelFont, "MUSIC", "Music", " Volume Slider", 10, musicVolume,
+            FormatVolume, value =>
+            {
+                musicVolume = value;
+                ApplyVolumes();
+            });
+        CreateSliderRow(panel.transform, labelFont, "EFFECTS", "Effects", " Volume Slider", 11, effectsVolume,
+            FormatVolume, value =>
+            {
+                effectsVolume = value;
+                ApplyVolumes();
+            });
 
         // Downscaled copy of the menu buttons, centred under the sheet.
         Button back = PersonaMenuStyle.CreateButton(panel.transform, "Options Back Button",
@@ -169,13 +195,15 @@ public static class GymRuntimeSettings
     private const float ControlMinX = 0.49f;
     private const float ControlMaxX = 0.665f;
     private const float ValueMinX = 0.61f;
-    private const float RowHeight = 0.04f;
+    private const float RowHeight = 0.036f;
+    // Pitch 0.040 and two 0.052 header gaps keep the last of the twelve rows on the
+    // bottom row the sheet already ended at.
     private static readonly float[] RowBottoms =
-        { 0.72f, 0.674f, 0.628f, 0.517f, 0.471f, 0.425f, 0.379f, 0.268f, 0.222f, 0.176f };
+        { 0.72f, 0.68f, 0.64f, 0.548f, 0.508f, 0.468f, 0.428f, 0.388f, 0.348f, 0.256f, 0.216f, 0.176f };
     private static readonly Color OptionsVeil = new Color(0.012f, 0.05f, 0.13f, 0.72f);
     private static readonly Color SheetColor = new Color(0.03f, 0.036f, 0.058f, 1f);
 
-    // Three display rows, four graphics rows, three audio rows.
+    // Three display rows, six graphics rows, three audio rows.
     private static float RowY(int row)
     {
         return RowBottoms[Mathf.Clamp(row, 0, RowBottoms.Length - 1)] + (row >= 3 ? RowsHiddenShift : 0f);
@@ -215,18 +243,18 @@ public static class GymRuntimeSettings
             });
     }
 
-    private static void CreateVolumeRow(Transform parent, Font font, string label, string name,
-        int row, float initial, UnityAction<float> onChanged)
+    private static void CreateSliderRow(Transform parent, Font font, string label, string name,
+        string sliderSuffix, int row, float initial, System.Func<float, string> format, UnityAction<float> onChanged)
     {
         CreateRowLabel(parent, font, label, RowY(row));
-        Text value = CreateText(name + " Value", parent, font, FormatVolume(initial), 26, Ink,
+        Text value = CreateText(name + " Value", parent, font, format(initial), 26, Ink,
             FontStyle.Normal, TextAnchor.MiddleRight, new Vector2(ValueMinX, RowY(row)),
             new Vector2(ControlMaxX, RowY(row) + RowHeight));
-        CreateSlider(name + " Volume Slider", parent, initial,
+        CreateSlider(name + sliderSuffix, parent, initial,
             new Vector2(ControlMinX, RowY(row) + 0.009f),
             new Vector2(ValueMinX - 0.008f, RowY(row) + RowHeight - 0.009f), v =>
             {
-                value.text = FormatVolume(v);
+                value.text = format(v);
                 onChanged(v);
             });
     }
@@ -321,6 +349,9 @@ public static class GymRuntimeSettings
         musicVolume = Mathf.Clamp01(PlayerPrefs.GetFloat(MusicVolumeKey, 1f));
         effectsVolume = Mathf.Clamp01(PlayerPrefs.GetFloat(EffectsVolumeKey, 1f));
         ApplyVolumes();
+        brightness = Mathf.Clamp01(PlayerPrefs.GetFloat(BrightnessKey, 0.5f));
+        contrast = Mathf.Clamp01(PlayerPrefs.GetFloat(ContrastKey, 0.5f));
+        ApplyColorGrade();
     }
 
 #if UNITY_EDITOR
@@ -952,4 +983,51 @@ public static class GymRuntimeSettings
     {
         return Mathf.RoundToInt(Mathf.Clamp01(value) * 100f) + "%";
     }
+
+    private static string FormatGrade(float value)
+    {
+        return Mathf.RoundToInt((value - 0.5f) * 200f).ToString("+0;-0;0") + "%";
+    }
+
+    // One global URP grade: no material, texture or scene object is touched, so the
+    // whole picture lifts or darkens together.
+    private static void ApplyColorGrade()
+    {
+        brightness = Mathf.Clamp01(brightness);
+        contrast = Mathf.Clamp01(contrast);
+        PlayerPrefs.SetFloat(BrightnessKey, brightness);
+        PlayerPrefs.SetFloat(ContrastKey, contrast);
+        // Saved per change: a WebGL tab can close without BACK ever being pressed.
+        PlayerPrefs.Save();
+        if (grade == null)
+        {
+            // A volume of its own: it survives scene reloads and runs after the scene's.
+            gradeVolume = new GameObject("Gym Color Grade Volume", typeof(Volume)).GetComponent<Volume>();
+            if (Application.isPlaying) Object.DontDestroyOnLoad(gradeVolume.gameObject);
+            gradeVolume.isGlobal = true;
+            gradeVolume.priority = 100f;
+            VolumeProfile profile = ScriptableObject.CreateInstance<VolumeProfile>();
+            profile.hideFlags = HideFlags.DontSave;
+            grade = profile.Add<ColorAdjustments>(true);
+            gradeVolume.sharedProfile = profile;
+        }
+        // Post FX off disables every volume, this one included: it comes back with it.
+        gradeVolume.enabled = PlayerPrefs.GetInt(PostProcessingKey, 1) != 0;
+        grade.postExposure.Override(Mathf.Lerp(-1.6f, 1.6f, brightness));
+        grade.contrast.Override(Mathf.Lerp(-40f, 40f, contrast));
+    }
+
+#if UNITY_EDITOR
+    /// <summary>Verifier cleanup: takes the grade volume back out of the edited scene.</summary>
+    internal static void ResetGradeVolume()
+    {
+        if (gradeVolume != null)
+        {
+            Object.DestroyImmediate(gradeVolume.sharedProfile);
+            Object.DestroyImmediate(gradeVolume.gameObject);
+        }
+        gradeVolume = null;
+        grade = null;
+    }
+#endif
 }
