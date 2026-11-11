@@ -106,7 +106,59 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    /// <summary>Depth-first child lookup: the crest rides the chest bone.</summary>
+    /// <summary>
+    /// How far the crest print stands off the cloth it was lifted from, in mesh
+    /// space. A screen print is a film of ink on the fabric; a badge is not.
+    /// </summary>
+    private static float MaxCrestLift(Mesh mesh)
+    {
+        Vector3[] points = mesh.vertices;
+        int[] fabric = mesh.GetTriangles(0);
+        int[] crest = mesh.GetTriangles(2);
+        float worst = 0f;
+        // Every eighth print vertex is enough to catch a print that floats, and
+        // keeps the triangle sweep quick. Distance is to the cloth surface, not
+        // to its vertices: a print sits between them.
+        for (int t = 0; t < crest.Length; t += 24)
+        {
+            Vector3 print = points[crest[t]];
+            float nearest = float.MaxValue;
+            for (int f = 0; f < fabric.Length; f += 3)
+            {
+                Vector3 a = points[fabric[f]], b = points[fabric[f + 1]], c = points[fabric[f + 2]];
+                if ((a - print).sqrMagnitude > 0.01f && (b - print).sqrMagnitude > 0.01f &&
+                    (c - print).sqrMagnitude > 0.01f) continue;
+                nearest = Mathf.Min(nearest, (ClosestOnTriangle(print, a, b, c) - print).magnitude);
+            }
+            worst = Mathf.Max(worst, nearest);
+        }
+        return worst;
+    }
+
+    /// <summary>Closest point to p on the triangle abc, in the triangle's plane.</summary>
+    private static Vector3 ClosestOnTriangle(Vector3 p, Vector3 a, Vector3 b, Vector3 c)
+    {
+        Vector3 ab = b - a, ac = c - a, ap = p - a;
+        float d1 = Vector3.Dot(ab, ap), d2 = Vector3.Dot(ac, ap);
+        if (d1 <= 0f && d2 <= 0f) return a;
+        Vector3 bp = p - b;
+        float d3 = Vector3.Dot(ab, bp), d4 = Vector3.Dot(ac, bp);
+        if (d3 >= 0f && d4 <= d3) return b;
+        float vc = d1 * d4 - d3 * d2;
+        if (vc <= 0f && d1 >= 0f && d3 <= 0f) return a + ab * (d1 / (d1 - d3));
+        Vector3 cp = p - c;
+        float d5 = Vector3.Dot(ab, cp), d6 = Vector3.Dot(ac, cp);
+        if (d6 >= 0f && d5 <= d6) return c;
+        float vb = d5 * d2 - d1 * d6;
+        if (vb <= 0f && d2 >= 0f && d6 <= 0f) return a + ac * (d2 / (d2 - d6));
+        float va = d3 * d6 - d5 * d4;
+        if (va <= 0f && (d4 - d3) >= 0f && (d5 - d6) >= 0f)
+            return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+        float denom = 1f / (va + vb + vc);
+        return a + ab * (vb * denom) + ac * (vc * denom);
+    }
+
+    /// <summary>Depth-first child lookup.</summary>
     private static Transform FindChild(Transform parent, string name)
     {
         if (parent == null) return null;
@@ -228,43 +280,34 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                     {
                         // The tee is lofted from the body: its own UVs on a
                         // tiling jersey instead of the scan atlas. The crown is
-                        // shaped cloth in its own renderer, because Unity never
-                        // drew the crest as an extra submesh of the shell.
+                        // shaped cloth in submesh 2, printed in flat ink.
                         Require(shell.sharedMesh.subMeshCount == 3, "oversized tee has no crest submesh");
                         Require(shellMap != null && shellMap.name == "jersey_heavy",
                             $"oversized {colour}: shell fabric {shellMap?.name}");
-                        Require(shell.sharedMesh.GetTriangles(2).Length >= 24,
-                            "oversized: the crest has no faces");
-                        // The crest rides the chest bone, so it lives under the
-                        // rig, not under the cloth object: look it up by name.
-                        Transform crest = PlayerTopShell.ActiveCrest;
-                        MeshRenderer crestRenderer = crest != null ? crest.GetComponent<MeshRenderer>() : null;
-                        MeshFilter crestFilter = crest != null ? crest.GetComponent<MeshFilter>() : null;
-                        Mesh crestMesh = crestFilter != null ? crestFilter.sharedMesh : null;
-                        Require(crest != null && crestRenderer != null && crestRenderer.enabled &&
-                            crest.gameObject.activeInHierarchy,
-                            "oversized: the crest is not drawn by its own renderer");
-                        Require(crestMesh != null && crestMesh.GetTriangles(0).Length >= 24,
-                            "oversized: the drawn crest has no faces");
-                        // World bounds, not mesh bounds: the chest bone's own
-                        // scale makes the local numbers meaningless.
-                        Bounds crestWorld = crestRenderer != null ? crestRenderer.bounds : default;
-                        Require(crestWorld.size.x > 0.10f && crestWorld.size.y > 0.05f,
-                            $"oversized: the crest is only {crestWorld.size} across");
-                        Require(crest != null && crest.gameObject.layer == shell.gameObject.layer,
-                            "crest layer differs from the cloth");
-                        Material crestInk = crestRenderer != null ? crestRenderer.sharedMaterial : null;
-                        Require(crestInk != null, "oversized: the crest has no material");
+                        int[] crestFaces = shell.sharedMesh.GetTriangles(2);
+                        Require(crestFaces.Length >= 24, "oversized: the crest has no faces");
+                        // A print is ink on cloth, not a badge: unlit, so it keeps
+                        // its own colour whatever the light on the fabric is.
+                        Material crestInk = shell.sharedMaterials[2];
+                        Require(crestInk != null && crestInk.shader != null &&
+                            crestInk.shader.name.IndexOf("Unlit", StringComparison.OrdinalIgnoreCase) >= 0,
+                            $"oversized: the crest is drawn by {crestInk?.shader?.name}, not a print shader");
                         Require(crestInk != null && (colour != GymShirtColor.Black || crestInk.color.grayscale > 0.5f),
                             $"oversized {colour}: the crest ink is too dark to read on the cloth");
-                        if (crest != null && crestMesh != null && colour == GymShirtColor.Black)
+                        // The ink has to contrast with the cloth it is printed on,
+                        // whichever way round: white on black, dark on red.
+                        Color clothTint = shell.sharedMaterials[0].color;
+                        Require(crestInk != null &&
+                            Mathf.Abs(clothTint.grayscale - crestInk.color.grayscale) > 0.25f,
+                            $"oversized {colour}: ink {crestInk?.color} does not contrast with cloth {clothTint}");
+                        if (colour == GymShirtColor.Black)
                         {
-                            // The crest must sit on the cloth in world space, not
-                            // a metre away on a bone the patch does not follow.
-                            Bounds crestBounds = crestRenderer.bounds;
-                            Bounds shellBounds = shell.bounds;
-                            Require(shellBounds.SqrDistance(crestBounds.center) < 0.01f,
-                                $"oversized: the crest sits {crestBounds.center} while the shirt is {shellBounds.center}");
+                            // The print has to lie on the cloth, not float in
+                            // front of it: measure it against the fabric it was
+                            // lifted from, in the mesh's own space.
+                            float hug = MaxCrestLift(shell.sharedMesh);
+                            Require(hug <= 0.006f,
+                                $"oversized: the crest floats {hug:F4} off the cloth");
                         }
                     }
                     else
