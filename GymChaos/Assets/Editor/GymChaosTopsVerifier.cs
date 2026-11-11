@@ -110,6 +110,39 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
     /// How far the crest print stands off the cloth it was lifted from, in mesh
     /// space. A screen print is a film of ink on the fabric; a badge is not.
     /// </summary>
+    /// <summary>
+    /// Mean dot between the mesh's own normals and the normals Unity derives
+    /// from its triangle winding. A negative value means the cloth is lit from
+    /// the inside: black under a lit shader while the unlit print still shows.
+    /// </summary>
+    private static float WindingAgreement(Mesh mesh)
+    {
+        Mesh probe = new Mesh { indexFormat = mesh.indexFormat };
+        probe.vertices = mesh.vertices;
+        probe.subMeshCount = mesh.subMeshCount;
+        for (int sub = 0; sub < mesh.subMeshCount; sub++) probe.SetTriangles(mesh.GetTriangles(sub), sub);
+        probe.RecalculateNormals();
+        Vector3[] ours = mesh.normals, auto = probe.normals;
+        float sum = 0f;
+        int count = 0;
+        for (int i = 0; i < ours.Length && i < auto.Length; i += 7)
+        {
+            sum += Vector3.Dot(ours[i], auto[i]);
+            count++;
+        }
+        UnityEngine.Object.DestroyImmediate(probe);
+        return count > 0 ? sum / count : 0f;
+    }
+
+    /// <summary>Mean magnitude of the mesh's own normals.</summary>
+    private static float NormalMean(Mesh mesh)
+    {
+        Vector3[] normals = mesh.normals;
+        float sum = 0f;
+        for (int i = 0; i < normals.Length; i++) sum += normals[i].magnitude;
+        return normals.Length > 0 ? sum / normals.Length : 0f;
+    }
+
     private static float MaxCrestLift(Mesh mesh)
     {
         Vector3[] points = mesh.vertices;
@@ -292,14 +325,32 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                         Require(crestInk != null && crestInk.shader != null &&
                             crestInk.shader.name.IndexOf("Unlit", StringComparison.OrdinalIgnoreCase) >= 0,
                             $"oversized: the crest is drawn by {crestInk?.shader?.name}, not a print shader");
-                        Require(crestInk != null && (colour != GymShirtColor.Black || crestInk.color.grayscale > 0.5f),
-                            $"oversized {colour}: the crest ink is too dark to read on the cloth");
-                        // The ink has to contrast with the cloth it is printed on,
-                        // whichever way round: white on black, dark on red.
+                        // The crown is white on every shirt colour except the
+                        // white tee, where white ink would vanish and it prints
+                        // black.
+                        bool whiteTee = colour == GymShirtColor.White;
+                        Require(crestInk != null && (whiteTee
+                                ? crestInk.color.grayscale < 0.4f
+                                : crestInk.color.grayscale > 0.6f),
+                            $"oversized {colour}: crest ink {crestInk?.color} is not white ink for this cloth");
+                        // The rest of the shirt is the colour the player picked.
+                        // The material carries the tint, so the fabric grey comes
+                        // back out of it.
                         Color clothTint = shell.sharedMaterials[0].color;
-                        Require(crestInk != null &&
-                            Mathf.Abs(clothTint.grayscale - crestInk.color.grayscale) > 0.25f,
-                            $"oversized {colour}: ink {crestInk?.color} does not contrast with cloth {clothTint}");
+                        Color cloth = clothTint * PlayerTopShell.BottomsFabricLevel;
+                        Color wanted = PlayerCosmeticLoadout.GetSwatchColor(colour);
+                        float off = Vector3.Distance(new Vector3(cloth.r, cloth.g, cloth.b),
+                            new Vector3(wanted.r, wanted.g, wanted.b));
+                        Require(off < 0.12f,
+                            $"oversized {colour}: the cloth is {cloth}, not the selected colour {wanted}");
+                        // Cloth with no normals, or normals facing into the
+                        // shirt, shades black under every lit shader whatever
+                        // colour it is: they have to agree with the winding the
+                        // renderer actually draws.
+                        float normalMean = NormalMean(shell.sharedMesh);
+                        float agreement = WindingAgreement(shell.sharedMesh);
+                        Require(normalMean > 0.5f && agreement > 0.3f,
+                            $"oversized {colour}: cloth normals are wrong (mean={normalMean:F3} agreement={agreement:F3})");
                         if (colour == GymShirtColor.Black)
                         {
                             // The print has to lie on the cloth, not float in

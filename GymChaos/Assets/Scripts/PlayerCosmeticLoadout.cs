@@ -130,8 +130,11 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     private SkinnedMeshRenderer AttachShell(SkinnedMeshRenderer body)
     {
         bool oversized = currentTop == GymTopStyle.Oversized;
+        // The lofted tee divides its tint by the fabric's own grey, so it takes
+        // the shirt colour undimmed and the cloth comes out as the colour the
+        // player picked; the scan shell still needs the darker edge colour.
         return PlayerTopShell.Attach(body, CurrentShellStyle, currentTexture,
-            oversized ? GetShirtColor(currentShirt) * 0.85f : new Color(0.03f, 0.03f, 0.034f));
+            oversized ? GetShirtColor(currentShirt) : new Color(0.03f, 0.03f, 0.034f));
     }
 
     private PlayerTopShell.Style CurrentBottomStyle =>

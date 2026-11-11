@@ -274,12 +274,13 @@ public static class PlayerTopShell
         }
         if (materials.Length > 2)
         {
-            // White on dark cloth, near-black on light cloth. The cloth is the
-            // tinted colour, not the style's untinted base: a black shirt tinted
-            // at runtime still read as light here, so the crest printed
-            // near-black on black and vanished.
+            // The crown is white on every colour except the white tee, where
+            // white ink would vanish and it prints black instead. Brightness is
+            // not enough to tell them apart (gold is bright too), so the cloth
+            // has to be light in every channel.
             Color clothInk = tint ?? bandColor;
-            Color ink = clothInk.grayscale <= 0.35f ? PrintInkLight : PrintInkDark;
+            bool whiteCloth = Mathf.Min(clothInk.r, Mathf.Min(clothInk.g, clothInk.b)) > WhiteClothLevel;
+            Color ink = whiteCloth ? PrintInkDark : PrintInkLight;
             if (materials[2].HasProperty("_BaseColor")) materials[2].SetColor("_BaseColor", ink);
             if (materials[2].HasProperty("_Color")) materials[2].SetColor("_Color", ink);
             materials[2].color = ink;
@@ -1002,6 +1003,9 @@ public static class PlayerTopShell
     private const string PrintShader = "Universal Render Pipeline/Unlit";
     private static readonly Color PrintInkLight = new Color(0.92f, 0.92f, 0.88f);
     private static readonly Color PrintInkDark = new Color(0.06f, 0.06f, 0.07f);
+    // Every channel above this means the tee itself is white, which is the only
+    // shirt the white print cannot be read on.
+    private const float WhiteClothLevel = 0.55f;
     // Vertices inside this half-width are torso; the arms hang outside it and
     // must not widen the chest.
     private const float TeeTorsoHalf = 0.19f;
@@ -1537,11 +1541,26 @@ public static class PlayerTopShell
                 outWeights[markStart + i] = outWeights[markSource[i]];
         }
 
+        // Normals in rest units: the scaled positions are small enough that
+        // every face normal fell under normalise()'s epsilon and came out zero,
+        // so the cloth shaded black under the lit fabric shader whatever colour
+        // it was. The winding decides which way it faces; the torso's own radial
+        // direction says whether that came out as the inside of the shirt.
         Vector3[] outNormals = new Vector3[count];
-        AddFaceNormals(outVertices, fabric, outNormals);
-        AddFaceNormals(outVertices, band, outNormals);
-        AddFaceNormals(outVertices, mark, outNormals);
+        AddFaceNormals(verts.ToArray(), fabric, outNormals);
+        AddFaceNormals(verts.ToArray(), band, outNormals);
+        AddFaceNormals(verts.ToArray(), mark, outNormals);
         for (int v = 0; v < count; v++) outNormals[v] = outNormals[v].normalized;
+        float facing = 0f;
+        for (int r = 0; r < torsoRings; r++)
+            for (int col = 0; col < sides; col++)
+            {
+                int v = r * columns + col;
+                Vector3 radial = new Vector3(outVertices[v].x - cx, outVertices[v].y - cy, 0f);
+                if (radial.sqrMagnitude < 1e-8f) continue;
+                facing += Vector3.Dot(outNormals[v], radial.normalized);
+            }
+        if (facing < 0f) for (int v = 0; v < count; v++) outNormals[v] = -outNormals[v];
 
         return new ShellData
         {
