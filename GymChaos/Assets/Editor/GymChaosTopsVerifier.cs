@@ -351,6 +351,26 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                         float agreement = WindingAgreement(shell.sharedMesh);
                         Require(normalMean > 0.5f && agreement > 0.3f,
                             $"oversized {colour}: cloth normals are wrong (mean={normalMean:F3} agreement={agreement:F3})");
+                        // Cloth motion: the hem and cuffs trail a moving body, come
+                        // back onto it when it stops, and never swing into it.
+                        PlayerTopShellCloth clothMotion = shell.GetComponent<PlayerTopShellCloth>();
+                        Require(clothMotion != null && clothMotion.IsConfigured,
+                            $"oversized {colour}: the tee has no cloth motion");
+                        clothMotion.ResetForVerification();
+                        for (int step = 0; step < 60; step++)
+                            clothMotion.AdvanceForVerification(player.transform.forward * 3.2f, 1f / 60f);
+                        float trail = clothMotion.CurrentLag;
+                        Require(trail > 0.004f, $"oversized: the cloth does not trail the body ({trail:F4} m)");
+                        Require(trail <= PlayerTopShellCloth.HemMaxLag + 1e-4f,
+                            $"oversized: the cloth trails {trail:F4} m, further than it may");
+                        Require(clothMotion.InwardDepthForVerification < 0.0005f,
+                            $"oversized: the cloth swings {clothMotion.InwardDepthForVerification:F4} m into the body");
+                        for (int step = 0; step < 180; step++)
+                            clothMotion.AdvanceForVerification(Vector3.zero, 1f / 60f);
+                        Require(clothMotion.CurrentLag < 0.001f,
+                            $"oversized: the cloth does not settle back onto the body ({clothMotion.CurrentLag:F4} m)");
+                        notes.Add($"clothTrail={trail:F4} settle={clothMotion.CurrentLag:F4}");
+                        clothMotion.ResetForVerification();
                         if (colour == GymShirtColor.Black)
                         {
                             // The print has to lie on the cloth, not float in
@@ -678,6 +698,21 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 Capture(camera, Path.Combine(folder, "oversized_crest.png"));
                 camera.orthographicSize = 0.62f;
                 body.enabled = true;
+                // The cloth motion sheet: the hem trailing a run, from the side.
+                PlayerTopShellCloth motion = loadout.TopShellRenderer != null
+                    ? loadout.TopShellRenderer.GetComponent<PlayerTopShellCloth>() : null;
+                if (motion != null)
+                {
+                    motion.ResetForVerification();
+                    for (int step = 0; step < 60; step++)
+                        motion.AdvanceForVerification(player.transform.forward * 3.2f, 1f / 60f);
+                    camera.orthographicSize = 0.72f;
+                    camera.transform.position = chest + player.transform.right * 3f;
+                    camera.transform.LookAt(chest - Vector3.up * 0.08f);
+                    Capture(camera, Path.Combine(folder, "oversized_cloth_lag.png"));
+                    camera.orthographicSize = 0.62f;
+                    motion.ResetForVerification();
+                }
             }
         }
         // Pants standing and mid-stride: nothing may hang between the legs.

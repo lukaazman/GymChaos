@@ -239,6 +239,14 @@ public static class PlayerTopShell
         Bounds bounds = body.localBounds;
         bounds.Expand(bounds.size.magnitude * 0.05f);
         renderer.localBounds = bounds;
+        // Lofted cloth with rings that hang free gets a little motion, so a run
+        // and a stop do not leave the tee standing still against the body.
+        if (clothRings.TryGetValue(shell, out int[] layout))
+        {
+            PlayerTopShellCloth cloth = renderer.GetComponent<PlayerTopShellCloth>();
+            if (cloth == null) cloth = renderer.gameObject.AddComponent<PlayerTopShellCloth>();
+            cloth.Configure(shell, renderer, layout);
+        }
 
         Material source = body.sharedMaterial;
         Material[] materials = renderer.sharedMaterials;
@@ -395,8 +403,13 @@ public static class PlayerTopShell
         public List<int> Fabric;
         public List<int> Band;
         public List<int> Mark;
+        // Cloth motion rings: start, count, vertices per row, fade rows (signed).
+        public int[] Cloth;
         public string Log;
     }
+
+    /// <summary>Cloth ring layout per lofted shell mesh, for PlayerTopShellCloth.</summary>
+    private static readonly Dictionary<Mesh, int[]> clothRings = new Dictionary<Mesh, int[]>();
 
     /// <summary>
     /// Copies the body's arrays on the main thread and runs the smoothing on
@@ -419,6 +432,7 @@ public static class PlayerTopShell
         shell.SetTriangles(data.Fabric, 0);
         shell.SetTriangles(data.Band, 1);
         if (crest) shell.SetTriangles(data.Mark, 2);
+        if (data.Cloth != null) clothRings[shell] = data.Cloth;
         if (data.Weights != null) shell.boneWeights = data.Weights;
         shell.bindposes = body.bindposes;
         shell.RecalculateTangents();
@@ -1562,10 +1576,20 @@ public static class PlayerTopShell
             }
         if (facing < 0f) for (int v = 0; v < count; v++) outNormals[v] = -outNormals[v];
 
+        // Cloth motion: the hem rows hang free and both cuff rings do too, so
+        // those are what trails the body. Everything else stays where the rig
+        // puts it.
+        int cuff = (sleeveRings - 2) * (sleeveSides + 1);
+        int cuffCount = 2 * (sleeveSides + 1);
+        int[] cloth = new int[12];
+        cloth[0] = 0; cloth[1] = 3 * columns; cloth[2] = columns; cloth[3] = 3;
+        cloth[4] = sleeveFirstRing[0] + cuff; cloth[5] = cuffCount; cloth[6] = sleeveSides + 1; cloth[7] = -2;
+        cloth[8] = sleeveFirstRing[1] + cuff; cloth[9] = cuffCount; cloth[10] = sleeveSides + 1; cloth[11] = -2;
+
         return new ShellData
         {
             Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,
-            Fabric = fabric, Band = band, Mark = mark,
+            Fabric = fabric, Band = band, Mark = mark, Cloth = cloth,
             Log = $"looseTee vertices={count} rings={rings} hem={hemZ:F3} shoulder={shoulderZ:F3} " +
                 $"neck={TeeNeckRadius:F3} torsoHalf={TeeTorsoHalf:F3} crest={mark.Count / 3}"
         };
