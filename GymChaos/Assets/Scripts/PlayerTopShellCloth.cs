@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 /// <summary>
 /// Minimal cloth motion for the lofted oversized tee: the hem and the sleeve
@@ -181,7 +182,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
             {
                 System.Array.Copy(rest, ring.Start, current, ring.Start, ring.Count);
                 ring.Offset = false;
-                Flush();
+                Flush(ring);
             }
             return;
         }
@@ -211,7 +212,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
         }
         InwardDepthForVerification = Mathf.Max(InwardDepthForVerification, inward);
         ring.Offset = true;
-        Flush();
+        Flush(ring);
     }
 
     private Matrix4x4 ToWorld(Ring ring) => ring.Anchor.localToWorldMatrix * ring.BindPose;
@@ -222,25 +223,25 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
         ring.Smoothed = ring.TargetWorld;
     }
 
-    // The whole vertex array goes up, not a ring range: a partial
-    // SetVertexBufferData on this runtime-built mesh left vertices outside the
-    // range metres off the body, which the tops verifier caught as a fit
-    // failure. The upload only happens while the cloth is actually moving.
-    private void Flush() => mesh.SetVertices(current);
+    // A ring range, through the whole-array SetVertices overload: a partial
+    // SetVertexBufferData on this runtime-built mesh displaced vertices outside
+    // the range, which the tops verifier caught as a fit failure. Only the free
+    // hem rows move, so this touches a fraction of the mesh, and only while the
+    // cloth is actually moving.
+    private void Flush(Ring ring) =>
+        mesh.SetVertices(current, ring.Start, ring.Count, MeshUpdateFlags.DontRecalculateBounds);
 
     private void Restore()
     {
         if (mesh == null) return;
-        bool restored = false;
         for (int r = 0; r < rings.Length; r++)
         {
             Ring ring = rings[r];
             if (ring == null || !ring.Offset) continue;
             System.Array.Copy(rest, ring.Start, current, ring.Start, ring.Count);
             ring.Offset = false;
-            restored = true;
+            Flush(ring);
         }
-        if (restored) Flush();
     }
 
     private static void AddWeight(int index, float weight, ref int dominant, ref float best)

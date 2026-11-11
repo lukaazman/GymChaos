@@ -1071,7 +1071,7 @@ public static class PlayerTopShell
         // shoulder slopes instead of running flat across like a pad.
         float collarTopZ = max.z - height * 0.02f - 0.008f;
         float neckZ = collarTopZ - 0.008f;
-        float shoulderZ = neckZ - 0.040f;
+        float shoulderZ = neckZ - 0.050f;
         float cx = 0f, cy = 0f;
         for (int i = 0; i < n; i++) { cx += body[i].x; cy += body[i].y; }
         cx /= n; cy /= n;
@@ -1079,7 +1079,10 @@ public static class PlayerTopShell
         const int sides = 120;
         const int columns = sides + 1;
         const int torsoRings = 30;
-        const int shoulderRings = 4;
+        // Enough rings that the slope from the sleeve seam up to the neck is a
+        // curve: four rings met the collar in a crease that shaded as a seam
+        // between the shoulders and the neckline.
+        const int shoulderRings = 8;
         const int collarRings = 4;
         int rings = torsoRings + shoulderRings + collarRings;
         float stepZ = (shoulderZ - hemZ) / (torsoRings - 1);
@@ -1117,7 +1120,10 @@ public static class PlayerTopShell
         // trapezius slopes in towards the neck and down into the sleeve seam,
         // and holding the chest width all the way up is what turned the
         // shoulders into shoulder pads.
-        const int taperRings = 6;
+        // A long taper: the cloth has to leave the chest and start climbing to
+        // the neck over many rings, otherwise the yoke lights up as a panel
+        // sitting on the shirt instead of as part of it.
+        const int taperRings = 11;
         int taperStart = Mathf.Max(chestRing, torsoRings - 1 - taperRings);
         float taperSpan = Mathf.Max(1, torsoRings - 1 - taperStart);
         for (int r = 0; r < torsoRings; r++)
@@ -1195,15 +1201,18 @@ public static class PlayerTopShell
                 ringHeight[r, s] = Mathf.Lerp(seamZ, rimZ[s], f);
             }
         }
-        // Rib crew band: stands a few mm off the neck and turns over at the top.
+        // Rib crew band: a shallow fold over the rim, not a wall standing off
+        // the shoulders. It rolls in as it rises, so the rim never overhangs
+        // the neck and the collar reads as the top of the shirt rather than a
+        // separate yoke sitting above it.
         for (int k = 1; k <= collarRings; k++)
         {
             int r = torsoRings - 1 + shoulderRings + k;
             float t = k / (float)collarRings;
             for (int s = 0; s < sides; s++)
             {
-                radius[r, s] = TeeNeckRadius + 0.0030f * (1f - t * 0.5f);
-                ringHeight[r, s] = Mathf.Lerp(rimZ[s], rimZ[s] + 0.008f, t);
+                radius[r, s] = TeeNeckRadius + 0.0020f * (1f - t * 1.5f);
+                ringHeight[r, s] = Mathf.Lerp(rimZ[s], rimZ[s] + 0.0035f, t);
             }
         }
 
@@ -1576,15 +1585,11 @@ public static class PlayerTopShell
             }
         if (facing < 0f) for (int v = 0; v < count; v++) outNormals[v] = -outNormals[v];
 
-        // Cloth motion: the hem rows hang free and both cuff rings do too, so
-        // those are what trails the body. Everything else stays where the rig
-        // puts it.
-        int cuff = (sleeveRings - 2) * (sleeveSides + 1);
-        int cuffCount = 2 * (sleeveSides + 1);
-        int[] cloth = new int[12];
-        cloth[0] = 0; cloth[1] = 3 * columns; cloth[2] = columns; cloth[3] = 3;
-        cloth[4] = sleeveFirstRing[0] + cuff; cloth[5] = cuffCount; cloth[6] = sleeveSides + 1; cloth[7] = -2;
-        cloth[8] = sleeveFirstRing[1] + cuff; cloth[9] = cuffCount; cloth[10] = sleeveSides + 1; cloth[11] = -2;
+        // Cloth motion, hem only: the free rows at the bottom trail the hips
+        // while the rest of the shirt stays where the rig puts it. Moving the
+        // sleeves as well dragged cloth up near the shoulder and opened the
+        // collar away from the neck, so the top of the shirt stays bolted on.
+        int[] cloth = { 0, 3 * columns, columns, 3 };
 
         return new ShellData
         {

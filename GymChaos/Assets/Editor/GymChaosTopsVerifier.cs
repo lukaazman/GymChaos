@@ -698,6 +698,13 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 Capture(camera, Path.Combine(folder, "oversized_crest.png"));
                 camera.orthographicSize = 0.62f;
                 body.enabled = true;
+                // Crew neck over the traps: the collar has to sit on the
+                // shoulders without a ledge, a notch or a strip of skin.
+                camera.orthographicSize = 0.30f;
+                camera.transform.position = chest + player.transform.forward * 3f + Vector3.up * 0.24f;
+                camera.transform.LookAt(chest + player.transform.forward * 0.12f + Vector3.up * 0.24f);
+                Capture(camera, Path.Combine(folder, "oversized_neck.png"));
+                camera.orthographicSize = 0.62f;
                 // The cloth motion sheet: the hem trailing a run, from the side.
                 PlayerTopShellCloth motion = loadout.TopShellRenderer != null
                     ? loadout.TopShellRenderer.GetComponent<PlayerTopShellCloth>() : null;
