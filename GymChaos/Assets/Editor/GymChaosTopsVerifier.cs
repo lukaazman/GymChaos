@@ -712,6 +712,14 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 camera.transform.position = shoulderAim + shoulderFrom * 3f;
                 camera.transform.LookAt(shoulderAim);
                 Capture(camera, Path.Combine(folder, "oversized_shoulder.png"));
+                // The underside of the armhole from behind and below: the
+                // triceps must not show between the sleeve and the torso.
+                camera.orthographicSize = 0.30f;
+                Vector3 pitAim = chest + Vector3.down * 0.10f;
+                Vector3 pitFrom = (-player.transform.forward + player.transform.right * 0.6f).normalized;
+                camera.transform.position = pitAim + pitFrom * 3f + Vector3.down * 0.35f;
+                camera.transform.LookAt(pitAim);
+                Capture(camera, Path.Combine(folder, "oversized_armpit.png"));
                 camera.orthographicSize = 0.62f;
                 // The cloth motion sheet: the hem trailing a run, from the side.
                 PlayerTopShellCloth motion = loadout.TopShellRenderer != null

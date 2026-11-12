@@ -312,6 +312,17 @@ public static class PlayerTopShell
                 cloth.a = 1f;
                 if (materials[0].HasProperty("_BaseColor")) materials[0].SetColor("_BaseColor", cloth);
                 materials[0].color = cloth;
+                // The edge strips (collar rib, hem and cuff edges, sleeve caps,
+                // waistband) share the cloth colour and the cloth's own tile.
+                // Left on the body material they read as bare skin: a pale
+                // collar and hem on a black shirt.
+                if (materials.Length > 1)
+                {
+                    if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", fabric);
+                    if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", fabric);
+                    if (materials[1].HasProperty("_BaseColor")) materials[1].SetColor("_BaseColor", cloth);
+                    materials[1].color = cloth;
+                }
             }
         }
         // Cloth is matte: the body's skin smoothness read as plastic on the
@@ -1368,10 +1379,10 @@ public static class PlayerTopShell
             // The seam sits outboard of the deltoid, so the cloth drops off the
             // trap instead of tracing the shoulder muscle, and a little below
             // the shoulder line so the slope overhangs it like a dropped seam.
-            Vector3 shoulder = new Vector3(cx + sign * (TeeTorsoHalf * 0.88f), cy, shoulderZ - 0.028f);
+            Vector3 shoulder = new Vector3(cx + sign * (TeeTorsoHalf * 0.88f), cy, shoulderZ - 0.010f);
             // Start the tube inside the torso: a sleeve that begins just outside
             // the cloth leaves its open ring showing at the armhole.
-            Vector3 start = shoulder - direction * 0.145f;
+            Vector3 start = shoulder - direction * 0.115f;
             sleeveFirstRing[side] = verts.Count;
             sleeveStartPoint[side] = start;
             for (int r = 0; r < sleeveRings; r++)
@@ -1394,13 +1405,13 @@ public static class PlayerTopShell
             // A hanging sleeve only widens towards the cuff.
             for (int r = 1; r < sleeveRings; r++)
                 sleeveWidth[r] = Mathf.Max(sleeveWidth[r], sleeveWidth[r - 1] * 0.995f);
-            // No ring is narrower than the arm: narrowing the ones over the
-            // deltoid let the shoulder show through as a sliver of skin at the
-            // armhole. The two rings at the mouth are a little wider instead, so
-            // the sleeve tucks over the deltoid and the torso seam where the two
-            // pieces meet is cloth on cloth.
-            sleeveWidth[0] *= 1.08f;
-            sleeveWidth[1] *= 1.03f;
+            // Read the tube down into the shoulder instead of capping it: a
+            // full-width first ring is the shoulder pad this is trying not to
+            // be. Only the rings inside the torso are narrowed: a mouth flared
+            // wider than the arm reads as a pointed pad on the shoulder.
+            sleeveWidth[0] *= 0.60f;
+            sleeveWidth[1] *= 0.80f;
+            sleeveWidth[2] *= 0.92f;
             // Read the tube down into the shoulder instead of capping it: a
             // full-width first ring is the shoulder pad this is trying not to be.
             for (int r = 0; r < sleeveRings; r++)
@@ -1421,7 +1432,10 @@ public static class PlayerTopShell
         }
 
         // Cap both sleeve start rings. They are buried in the torso, but a
-        // closed tube cannot show a one-sided sliver at the armpit.
+        // closed tube cannot show a one-sided sliver at the armpit. The caps go
+        // in the edge submesh, which is drawn from both sides: seen from behind
+        // the mouth, a one sided cap vanished and the arm skin showed through
+        // the armhole.
         for (int side = 0; side < 2; side++)
         {
             int centre = verts.Count;
@@ -1430,9 +1444,9 @@ public static class PlayerTopShell
             int ring = sleeveFirstRing[side];
             for (int s = 0; s < sleeveSides; s++)
             {
-                fabric.Add(centre);
-                fabric.Add(ring + s);
-                fabric.Add(ring + (s + 1) % sleeveSides);
+                band.Add(centre);
+                band.Add(ring + s);
+                band.Add(ring + (s + 1) % sleeveSides);
             }
         }
 
