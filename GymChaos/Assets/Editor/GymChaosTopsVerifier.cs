@@ -462,6 +462,16 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
             }
         }
         MeasureShape(loadout.BottomShellRenderer, "pants", true);
+        // The side stripes: ink on both outer seams, white on every colour of
+        // trousers and black on the white pair.
+        service.EquipBottomColor(GymShirtColor.Blue);
+        yield return WaitBottom(loadout);
+        MeasurePantsStripe(loadout.BottomShellRenderer, GymShirtColor.Blue);
+        service.EquipBottomColor(GymShirtColor.White);
+        yield return WaitBottom(loadout);
+        MeasurePantsStripe(loadout.BottomShellRenderer, GymShirtColor.White);
+        service.EquipBottomColor(GymShirtColor.Blue);
+        yield return WaitBottom(loadout);
         service.EquipBottom(GymBottomStyle.Shorts);
         yield return WaitBottom(loadout);
         float shortsLow = loadout.BottomShellRenderer.bounds.min.y;
@@ -742,7 +752,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         service.EquipTop(GymTopStyle.TankTop);
         service.EquipBottom(GymBottomStyle.Pants);
         camera.orthographicSize = 0.8f;
-        foreach (GymShirtColor colour in new[] { GymShirtColor.Black, GymShirtColor.Blue })
+        foreach (GymShirtColor colour in new[] { GymShirtColor.Black, GymShirtColor.Blue, GymShirtColor.White })
         {
             service.EquipBottomColor(colour);
             yield return WaitBottom(loadout);
@@ -771,6 +781,39 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
     /// A-line silhouette (no balloon from thigh to hem) and no sharp creases
     /// from a stepped radius. Edges are sorted, not hashed: the editor asmdef
     /// does not always carry System.Collections.Generic into this file.</summary>
+    /// <summary>Side stripes: a third, ink-printed submesh down both outer
+    /// seams, white on every colour of trousers and black on the white pair.</summary>
+    private void MeasurePantsStripe(SkinnedMeshRenderer shell, GymShirtColor colour)
+    {
+        Require(shell != null && shell.sharedMesh != null, $"pants {colour}: no shell for the side stripe");
+        Mesh mesh = shell.sharedMesh;
+        Require(mesh.subMeshCount >= 3, $"pants {colour}: {mesh.subMeshCount} submeshes, no side stripe");
+        int[] stripe = mesh.GetTriangles(2);
+        Require(stripe.Length >= 96, $"pants {colour}: side stripe has {stripe.Length / 3} triangles");
+        Color ink = shell.sharedMaterials[2].color;
+        bool white = colour == GymShirtColor.White;
+        Require(white ? ink.grayscale < 0.45f : ink.grayscale > 0.55f,
+            $"pants {colour}: stripe ink {ink} is the wrong ink for these trousers");
+        Vector3[] v = mesh.vertices;
+        Bounds bounds = mesh.bounds;
+        // The pants shell is built in the body's frame: X is left/right and Z
+        // runs up the leg (Y is front to back).
+        float minX = float.MaxValue, maxX = float.MinValue, minZ = float.MaxValue, maxZ = float.MinValue;
+        foreach (int i in stripe)
+        {
+            minX = Mathf.Min(minX, v[i].x);
+            maxX = Mathf.Max(maxX, v[i].x);
+            minZ = Mathf.Min(minZ, v[i].z);
+            maxZ = Mathf.Max(maxZ, v[i].z);
+        }
+        float half = bounds.size.x * 0.5f;
+        Require(minX < bounds.center.x - half * 0.4f && maxX > bounds.center.x + half * 0.4f,
+            $"pants {colour}: stripe runs down one leg only (x {minX:F4}..{maxX:F4})");
+        Require(maxZ - minZ > bounds.size.z * 0.55f,
+            $"pants {colour}: stripe covers {(maxZ - minZ) / bounds.size.z:F2} of the leg");
+        notes.Add($"pantsStripe {colour} tris={stripe.Length / 3} ink={ink.grayscale:F2} length={(maxZ - minZ) / bounds.size.z:F2}");
+    }
+
     private void MeasureShape(SkinnedMeshRenderer shell, string label, bool pants)
     {
         Require(shell != null && shell.sharedMesh != null, $"{label}: no shell mesh");

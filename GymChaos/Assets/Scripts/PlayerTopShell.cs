@@ -1654,6 +1654,8 @@ public static class PlayerTopShell
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
     private const float Clearance = 0.002f;
+    // Side stripes sit this far off the leg's own cloth (rest units).
+    private const float StripeLift = 0.0006f;
     // The seat needs more room than a leg tube: the scan's old shorts rim is a
     // raised lip, and at 3 mm it poked through as small dark holes on the hips.
     private const float SeatClearance = 0.008f;
@@ -1757,6 +1759,7 @@ public static class PlayerTopShell
         List<Vector2> uvList = new List<Vector2>();
         List<int> fabric = new List<int>();
         List<int> band = new List<int>();
+        List<int> mark = new List<int>();
         int capRing = Mathf.RoundToInt((ThighCap - PantsHem) / RingStep);
         float[] row = new float[LegSides];
         float[] top = new float[LegSides];
@@ -1835,6 +1838,42 @@ public static class PlayerTopShell
                 }
             }
             Loft(start, legRings, LegSides, fabric, band, 1, 0);
+
+            // Side stripe: ink cloth laid on the leg's own rings and lifted a
+            // hair off them, so it follows every crease and fold instead of
+            // cutting straight through them. It lives in the mark submesh,
+            // which is printed in ink: white on every colour of trousers and
+            // black on the white pair.
+            Vector2 outward = axis[leg] - pelvis;
+            float seamAngle = Mathf.Atan2(outward.y, outward.x);
+            float seamColumn = (seamAngle < 0f ? seamAngle + Mathf.PI * 2f : seamAngle) / (Mathf.PI * 2f) * LegSides;
+            int stripeStart = verts.Count;
+            for (int r = 0; r < legRings; r++)
+            {
+                float z = PantsHem + r * RingStep;
+                for (int k = 0; k <= 2; k++)
+                {
+                    // Three columns across one and a half cells of the leg: a
+                    // stripe about 2 cm wide at the thigh.
+                    float column = seamColumn - 0.75f + k * 0.75f;
+                    float wrapped = ((column % LegSides) + LegSides) % LegSides;
+                    int stripeColumn = Mathf.FloorToInt(wrapped);
+                    int stripeRow = start + r * (LegSides + 1);
+                    Vector3 cloth = Vector3.Lerp(verts[stripeRow + stripeColumn],
+                        verts[stripeRow + (stripeColumn + 1) % LegSides], wrapped - stripeColumn);
+                    Vector3 radial = cloth - Point(z, axis[leg]);
+                    verts.Add(radial.sqrMagnitude > 1e-12f ? cloth + radial.normalized * StripeLift : cloth);
+                    uvList.Add(new Vector2(k / 2f * 2f / FabricTile, z / FabricTile));
+                }
+            }
+            for (int r = 0; r < legRings - 1; r++)
+                for (int k = 0; k < 2; k++)
+                {
+                    int s0 = stripeStart + r * 3 + k;
+                    int s1 = s0 + 1, s2 = s0 + 3, s3 = s2 + 1;
+                    mark.Add(s0); mark.Add(s1); mark.Add(s2);
+                    mark.Add(s1); mark.Add(s3); mark.Add(s2);
+                }
         }
 
         // Yoke: covers the leg tops at the crotch, then follows the hips with
@@ -2013,6 +2052,7 @@ public static class PlayerTopShell
         Vector3[] outNormals = new Vector3[count];
         AddFaceNormals(rest, fabric, outNormals);
         AddFaceNormals(rest, band, outNormals);
+        AddFaceNormals(rest, mark, outNormals);
         for (int v = 0; v < count; v++) outNormals[v] = outNormals[v].normalized;
         // The seat's bottom rings take the legs' shading where they meet, so
         // the join reads as one cloth.
@@ -2028,8 +2068,8 @@ public static class PlayerTopShell
         return new ShellData
         {
             Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,
-            Fabric = fabric, Band = band,
-            Log = $"straightPants vertices={count} legRings={legRings} yokeRings={yokeRings} axis={axis[0]}/{axis[1]}"
+            Fabric = fabric, Band = band, Mark = mark,
+            Log = $"straightPants vertices={count} legRings={legRings} yokeRings={yokeRings} stripe={mark.Count / 3} axis={axis[0]}/{axis[1]}"
         };
     }
 
