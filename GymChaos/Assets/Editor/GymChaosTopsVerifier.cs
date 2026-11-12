@@ -462,6 +462,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
             }
         }
         MeasureShape(loadout.BottomShellRenderer, "pants", true);
+        MeasurePantsFabric(loadout.BottomShellRenderer);
         // The side stripes: ink on both outer seams, white on every colour of
         // trousers and black on the white pair.
         service.EquipBottomColor(GymShirtColor.Blue);
@@ -770,6 +771,21 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                     light.transform.rotation = Quaternion.LookRotation(-direction + Vector3.down * 0.6f + player.transform.right * 0.3f);
                     Capture(camera, Path.Combine(folder, $"pants_{colour}_{clip}_{side}.png".ToLowerInvariant()));
                 }
+                if (colour == GymShirtColor.Blue && clip == "idle1")
+                {
+                    // Close enough to see the knit and the waistband rib as two
+                    // different cloths rather than one flat colour.
+                    camera.orthographicSize = 0.15f;
+                    camera.transform.position = hips + player.transform.right * 2f;
+                    camera.transform.LookAt(hips + Vector3.down * 0.06f);
+                    Capture(camera, Path.Combine(folder, "pants_knit_closeup.png"));
+                    camera.orthographicSize = 0.22f;
+                    Vector3 waist = hips + Vector3.up * 0.16f;
+                    camera.transform.position = waist + (player.transform.right + player.transform.forward * 0.4f).normalized * 2f;
+                    camera.transform.LookAt(waist);
+                    Capture(camera, Path.Combine(folder, "pants_waistband_closeup.png"));
+                    camera.orthographicSize = 0.8f;
+                }
             }
         }
         service.EquipBottom(GymBottomStyle.Shorts);
@@ -781,6 +797,37 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
     /// A-line silhouette (no balloon from thigh to hem) and no sharp creases
     /// from a stepped radius. Edges are sorted, not hashed: the editor asmdef
     /// does not always carry System.Collections.Generic into this file.</summary>
+    /// <summary>The cloth tile a material samples, whichever slot its shader uses.</summary>
+    private static Texture TileOf(Material material)
+    {
+        if (material == null) return null;
+        if (material.HasProperty("_BaseMap") && material.GetTexture("_BaseMap") != null) return material.GetTexture("_BaseMap");
+        if (material.HasProperty("_MainTex") && material.GetTexture("_MainTex") != null) return material.GetTexture("_MainTex");
+        return null;
+    }
+
+    /// <summary>The trousers read as track knit with a ribbed waistband: the
+    /// legs and the band must carry different tiles, or the band is just more
+    /// trouser and there is no waistband at all.</summary>
+    private void MeasurePantsFabric(SkinnedMeshRenderer shell)
+    {
+        Require(shell != null && shell.sharedMaterials.Length > 1, "pants: no band material");
+        Material clothMaterial = shell.sharedMaterials[0];
+        Material bandMaterial = shell.sharedMaterials[1];
+        Texture cloth = TileOf(clothMaterial);
+        Texture band = TileOf(bandMaterial);
+        notes.Add($"pantsBand shader={bandMaterial.shader.name} base={bandMaterial.HasProperty("_BaseMap")} " +
+            $"main={bandMaterial.HasProperty("_MainTex")}");
+        Require(cloth != null && cloth.name.Contains("track_knit"),
+            $"pants: legs wear {cloth?.name ?? "no tile"}, not the track knit");
+        Require(band != null && band.name.Contains("rib_waistband"),
+            $"pants: waistband wears {band?.name ?? "no tile"}, not the rib");
+        Require(cloth != band, "pants: the waistband is wearing the trouser's own knit");
+        Require(cloth.width >= 512 && band.width >= 256,
+            $"pants: tiles are {cloth.width} and {band.width} texels");
+        notes.Add($"pantsFabric cloth={cloth.name} {cloth.width} band={band.name} {band.width}");
+    }
+
     /// <summary>Side stripes: a third, ink-printed submesh down both outer
     /// seams, white on every colour of trousers and black on the white pair.</summary>
     private void MeasurePantsStripe(SkinnedMeshRenderer shell, GymShirtColor colour)

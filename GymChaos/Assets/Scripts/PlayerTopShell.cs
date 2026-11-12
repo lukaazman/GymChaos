@@ -52,6 +52,8 @@ public static class PlayerTopShell
         public bool LoftedTee;
         // Resources path of the tiling fabric the lofted garment maps to.
         public string FabricResource;
+        // Optional second tile for the band submesh (the waistband's rib).
+        public string BandResource;
         internal Color32[] MaskPixels;
         internal int MaskWidth;
         internal int MaskHeight;
@@ -97,9 +99,10 @@ public static class PlayerTopShell
         Name = PantsObjectName, MaskResource = "Player/Outfits/pants_shell",
         SmoothIterations = 60, Lambda = 0.6f, EdgeOverhang = 0.006f,
         DrapeSmoothing = 450f, Bottom = true, StraightLegs = true, Smoothness = 0.18f,
-        // The lofted pants carry their own UVs, so they take the tiling brushed
-        // fleece instead of the old painted fabric atlas.
-        FabricResource = "Player/Outfits/fleece_brushed"
+        // The lofted pants carry their own UVs, so they take the tiling track
+        // knit instead of a painted atlas, and the waistband takes its own rib.
+        FabricResource = "Player/Outfits/track_knit",
+        BandResource = "Player/Outfits/rib_waistband"
     };
     private static readonly Style[] AllStyles = { Oversized, Onyx, Shorts, Pants };
 
@@ -318,8 +321,16 @@ public static class PlayerTopShell
                 // collar and hem on a black shirt.
                 if (materials.Length > 1)
                 {
-                    if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", fabric);
-                    if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", fabric);
+                    // A garment may give its band its own tile: the sweatpants'
+                    // waistband is rib, not the knit the legs are cut from.
+                    Texture bandTile = fabric;
+                    if (!string.IsNullOrEmpty(style.BandResource))
+                    {
+                        Texture2D rib = Resources.Load<Texture2D>(style.BandResource);
+                        if (rib != null) bandTile = rib;
+                    }
+                    if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", bandTile);
+                    if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", bandTile);
                     if (materials[1].HasProperty("_BaseColor")) materials[1].SetColor("_BaseColor", cloth);
                     materials[1].color = cloth;
                 }
@@ -354,8 +365,15 @@ public static class PlayerTopShell
             if (materials[0].HasProperty("_BaseColor")) materials[0].SetColor("_BaseColor", tint.Value);
             materials[0].color = tint.Value;
         }
-        if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", null);
-        if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", null);
+        // Scan-derived shells have no tile of their own, and a band left sampling
+        // the body atlas wears a patch of skin: flat colour is the cloth there.
+        // A lofted garment's band does have a tile (the tee shares the cloth's,
+        // the sweatpants wear rib), so it keeps it.
+        if (string.IsNullOrEmpty(style.FabricResource))
+        {
+            if (materials[1].HasProperty("_BaseMap")) materials[1].SetTexture("_BaseMap", null);
+            if (materials[1].HasProperty("_MainTex")) materials[1].SetTexture("_MainTex", null);
+        }
         if (materials[1].HasProperty("_BaseColor")) materials[1].SetColor("_BaseColor", bandColor);
         materials[1].color = bandColor;
         return renderer;
@@ -1890,7 +1908,7 @@ public static class PlayerTopShell
             // Tucked inside the legs at the seat's bottom edge: an edge that
             // stood a few millimetres outside them drew a shelf across the
             // thighs and its open rim read as a second waistband.
-            float overLegs = r == 0 ? -0.0040f : r == 1 ? -0.0020f : 0f;
+            float overLegs = r == 0 ? 0.0010f : r == 1 ? 0.0006f : 0f;
             for (int s = 0; s < YokeSides; s++)
             {
                 float angle = s * Mathf.PI * 2f / YokeSides;
@@ -1917,7 +1935,7 @@ public static class PlayerTopShell
             float z = YokeBottom + r * RingStep;
             if (z > LegTop + 0.005f) break;
             int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
-            float over = r == 0 ? -0.0040f : r == 1 ? -0.0020f : 0f;
+            float over = r == 0 ? 0.0010f : r == 1 ? 0.0006f : 0f;
             for (int s2 = 0; s2 < YokeSides; s2++)
             {
                 float angle = s2 * Mathf.PI * 2f / YokeSides;
@@ -2041,6 +2059,9 @@ public static class PlayerTopShell
             for (int i = 0; i < seatOnLeg.Length; i++)
                 if (seatOnLeg[i] >= 0) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
             SmoothWeights(outWeights, yokeStart, yokeRings, YokeSides + 1, 10);
+            // The seat's hem takes the weights of the leg beneath it, as the
+            // body's own crotch does: the bridge between the legs is cloth the
+            // scan has too, and it moves with them.
             for (int i = 0; i < 2 * (YokeSides + 1); i++)
                 if (seatOnLeg[i] >= 0) outWeights[yokeStart + i] = outWeights[seatOnLeg[i]];
         }
