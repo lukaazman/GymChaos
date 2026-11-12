@@ -223,13 +223,14 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
         ring.Smoothed = ring.TargetWorld;
     }
 
-    // A ring range, through the whole-array SetVertices overload: a partial
+    // The whole array, through the plain overload. The ranged overload
+    // (start, count) sets the mesh's vertex count to that range, so every
+    // triangle past it then points at a vertex that no longer exists and Unity
+    // logs "Mesh.vertices is too small" on every flush; a partial
     // SetVertexBufferData on this runtime-built mesh displaced vertices outside
-    // the range, which the tops verifier caught as a fit failure. Only the free
-    // hem rows move, so this touches a fraction of the mesh, and only while the
-    // cloth is actually moving.
-    private void Flush(Ring ring) =>
-        mesh.SetVertices(current, ring.Start, ring.Count, MeshUpdateFlags.DontRecalculateBounds);
+    // the range instead. current holds the rest pose everywhere the cloth is
+    // not moving, so writing all of it changes nothing but the rings.
+    private void Flush(Ring ring) => mesh.SetVertices(current);
 
     private void Restore()
     {
