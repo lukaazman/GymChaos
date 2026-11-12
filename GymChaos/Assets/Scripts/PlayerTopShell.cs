@@ -1914,8 +1914,15 @@ public static class PlayerTopShell
                 float angle = s * Mathf.PI * 2f / YokeSides;
                 Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
                 int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
-                float legs = Mathf.Max(RayToLeg(pelvis, dir, axis[0], legOutline, 0, legRing, overLegs),
-                    RayToLeg(pelvis, dir, axis[1], legOutline, 1, legRing, overLegs));
+                // The leg on this side of the crotch owns the direction: taking
+                // the wider of both legs pushed the seat out past the inner side
+                // of one leg, where its edge then showed as a line down the
+                // inside of the thigh.
+                int owner = pelvis.x + dir.x >= centre ? 1 : 0;
+                float own = RayToLeg(pelvis, dir, axis[owner], legOutline, owner, legRing, overLegs);
+                float legs = own > 0f
+                    ? own
+                    : RayToLeg(pelvis, dir, axis[1 - owner], legOutline, 1 - owner, legRing, overLegs);
                 // No body in this sector (the top rings pass the mask's waist):
                 // keep the ring below, or the waistband collapsed into a cone.
                 // Room over the hips, flush at the waistband so the shirt hem
@@ -1940,8 +1947,11 @@ public static class PlayerTopShell
             {
                 float angle = s2 * Mathf.PI * 2f / YokeSides;
                 Vector2 dir = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-                float legs = Mathf.Max(RayToLeg(pelvis, dir, axis[0], legOutline, 0, legRing, over),
-                    RayToLeg(pelvis, dir, axis[1], legOutline, 1, legRing, over));
+                int owner = pelvis.x + dir.x >= centre ? 1 : 0;
+                float own = RayToLeg(pelvis, dir, axis[owner], legOutline, owner, legRing, over);
+                float legs = own > 0f
+                    ? own
+                    : RayToLeg(pelvis, dir, axis[1 - owner], legOutline, 1 - owner, legRing, over);
                 yokeRadius[r, s2] = Mathf.Max(yokeRadius[r, s2], legs);
             }
         }

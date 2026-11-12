@@ -784,6 +784,14 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                     camera.transform.position = waist + (player.transform.right + player.transform.forward * 0.4f).normalized * 2f;
                     camera.transform.LookAt(waist);
                     Capture(camera, Path.Combine(folder, "pants_waistband_closeup.png"));
+                    // The inside of the thigh from below: the seat's edge must
+                    // not surface there.
+                    camera.orthographicSize = 0.20f;
+                    Vector3 inner = hips + Vector3.down * 0.04f;
+                    camera.transform.position = inner + Vector3.down * 0.5f +
+                        (player.transform.forward * 0.6f + player.transform.right * 0.8f).normalized * 2f;
+                    camera.transform.LookAt(inner);
+                    Capture(camera, Path.Combine(folder, "pants_inner_thigh.png"));
                     camera.orthographicSize = 0.8f;
                 }
             }
