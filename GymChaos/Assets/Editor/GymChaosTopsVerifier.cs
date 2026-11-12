@@ -837,6 +837,10 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         {
             Require(hem <= thigh * 1.05f && knee <= thigh * 1.02f,
                 $"{label}: silhouette balloons (thigh={thigh:F4} knee={knee:F4} hem={hem:F4})");
+            // Straight leg: the hem hangs as wide as the thigh, not narrower
+            // into a kink above the knee and not bell-shaped over the shoe.
+            Require(hem >= thigh * 0.88f && knee >= thigh * 0.90f,
+                $"{label}: leg is not straight (thigh={thigh:F4} knee={knee:F4} hem={hem:F4})");
         }
         Require(sharp <= Mathf.Max(8, faces / 400),
             $"{label}: {sharp} sharp creases over 60 deg of {faces} faces");

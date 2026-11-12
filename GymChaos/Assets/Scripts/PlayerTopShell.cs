@@ -1640,18 +1640,20 @@ public static class PlayerTopShell
     // pressed front crease, a few long drape lines and a soft break over the
     // shoe. Not tight, not a balloon.
     // Sportswear, not a parachute: a few millimetres of ease only.
-    private const float ThighEase = 0.0025f;
-    private const float HemEase = 0.004f;
+    private const float ThighEase = 0.0015f;
+    private const float HemEase = 0.003f;
     private const float ThighCap = 0.31f;
     // Straight leg: near the upper thigh's width, barely tapered.
     private const float HemTaper = 0.96f;
-    private const float HemFlare = 0.002f;
-    private const float HemBreak = 0.003f;
-    private const float CreaseDepth = 0.0025f;
-    private const float DrapeDepth = 0.0022f;
+    // A straight leg ends as wide as it hangs: a flare at the hem is what made
+    // the old pair bell out over the shoe.
+    private const float HemFlare = 0.0006f;
+    private const float HemBreak = 0.0012f;
+    private const float CreaseDepth = 0.0018f;
+    private const float DrapeDepth = 0.0014f;
     // Fabric texture tile (pants_fabric.png) in rest units.
     private const float FabricTile = 0.06f;
-    private const float Clearance = 0.003f;
+    private const float Clearance = 0.002f;
     // The seat needs more room than a leg tube: the scan's old shorts rim is a
     // raised lip, and at 3 mm it poked through as small dark holes on the hips.
     private const float SeatClearance = 0.008f;
@@ -1791,9 +1793,11 @@ public static class PlayerTopShell
                 float z = PantsHem + r * RingStep;
                 float taper = Mathf.Lerp(HemTaper, 1f, Mathf.Clamp01((z - PantsHem) / (ThighCap - PantsHem)));
                 for (int s = 0; s < LegSides; s++)
-                    // Slim, not baggy: the tube only ever adds to the body's
-                    // own width, so trimming it here cannot cut into the leg.
-                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper * 0.95f);
+                    // Straight leg: the thigh's width in one fall to the hem.
+                    // The old floor multiplied that width by a further 0.95 on
+                    // top of the taper, so every ring below the thigh stayed
+                    // near the widest part of the leg and the pants puffed out.
+                    legRadius[r, s] = Mathf.Max(legRadius[r, s], top[s] * taper);
             }
             for (int pass = 0; pass < 4; pass++)
                 for (int r = 1; r < legRings - 1; r++)
@@ -1810,9 +1814,10 @@ public static class PlayerTopShell
                 float z = PantsHem + r * RingStep;
                 float hem = 1f - Mathf.Clamp01((z - PantsHem) / 0.06f);
                 float drapeFade = 1f - Mathf.Clamp01((z - (ThighCap - 0.06f)) / 0.08f);
-                // Under the seat the leg tucks just inside it, with the plain
-                // outline the seat's bottom edge follows (no crease or drape).
-                float tuck = 0.011f * Mathf.Clamp01((z - YokeBottom) / RingStep);
+                // The leg keeps its full width up to the seat's bottom edge and
+                // the seat is tucked inside it instead: pulling the leg in under
+                // the seat left the seat's rim standing proud as a shelf across
+                // the thighs.
                 float creaseFade = 1f - Mathf.Clamp01((z - (YokeBottom - 0.05f)) / 0.04f);
                 for (int s = 0; s <= LegSides; s++)
                 {
@@ -1824,7 +1829,7 @@ public static class PlayerTopShell
                     float crease = CreaseDepth * creaseFade * Mathf.Pow(Mathf.Max(0f, front), 40f);
                     float drape = DrapeDepth * drapeFade * Mathf.Sin(angle * 5f + leg * 1.3f) * (1f - Mathf.Max(0f, front));
                     float radius = legRadius[r, s % LegSides] * (1f + drape) + crease +
-                        hem * (HemFlare + HemBreak * Mathf.Sin(angle * 3f + z * 120f)) - tuck;
+                        hem * (HemFlare + HemBreak * Mathf.Sin(angle * 3f + z * 120f));
                     verts.Add(Point(z, axis[leg] + dir * radius));
                     uvList.Add(new Vector2(s / (float)LegSides * circumference / FabricTile, z / FabricTile));
                 }
@@ -1843,7 +1848,10 @@ public static class PlayerTopShell
         {
             float z = YokeBottom + r * RingStep;
             float wrap = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(LegTop, LegTop + 0.05f, z));
-            float overLegs = r == 0 ? 0.0030f : r == 1 ? 0.0035f : 0.0040f;
+            // Tucked inside the legs at the seat's bottom edge: an edge that
+            // stood a few millimetres outside them drew a shelf across the
+            // thighs and its open rim read as a second waistband.
+            float overLegs = r == 0 ? -0.0040f : r == 1 ? -0.0020f : 0f;
             for (int s = 0; s < YokeSides; s++)
             {
                 float angle = s * Mathf.PI * 2f / YokeSides;
@@ -1870,7 +1878,7 @@ public static class PlayerTopShell
             float z = YokeBottom + r * RingStep;
             if (z > LegTop + 0.005f) break;
             int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
-            float over = r == 0 ? 0.0030f : r == 1 ? 0.0035f : 0.0040f;
+            float over = r == 0 ? -0.0040f : r == 1 ? -0.0020f : 0f;
             for (int s2 = 0; s2 < YokeSides; s2++)
             {
                 float angle = s2 * Mathf.PI * 2f / YokeSides;
