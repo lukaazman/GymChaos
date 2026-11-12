@@ -238,11 +238,19 @@ public static class GymChaosFixerVerifier
         bool officerReturning = false;
         bool capturedFall = false, capturedCast = false, capturedRainbow = false, capturedFlight = false;
         int fixedBefore = fixers.FixedCount;
+        // Where the first person arm root sits relative to the camera in play:
+        // after the shot it has to be back there, not metres away catching up.
+        PlayerHandRig arms = player.GetComponentInChildren<PlayerHandRig>(true);
+        Vector3 armsHome = Vector3.zero;
+        bool hasArmsHome = arms != null && arms.TryGetFirstPersonRootCameraLocal(out armsHome);
         Vector3 eyeBefore = player.playerCamera.transform.localPosition;
         bool shotDuringExit = false;
         bool titleSeen = false;
         bool playerLockedInShot = false;
         bool deskChecked = false;
+        bool shotWasActive = false;
+        int handbackFrames = -1;
+        float handbackArms = -1f;
         while (fixers.IsVisitActive)
         {
             // Larry's grid keeps him out of the receptionist's strip behind the desk.
@@ -257,6 +265,19 @@ public static class GymChaosFixerVerifier
             GymFixerArrivalCamera shot = dog.ArrivalCamera;
             if (shot.IsActive && (dog.State == GymFixerAgent.FixerState.Exiting ||
                 dog.State == GymFixerAgent.FixerState.Flying)) shotDuringExit = true;
+            // The first person hands have to come back onto the camera with the
+            // shot, not swing in from wherever the cutscene left them.
+            if (shot.IsActive)
+            {
+                shotWasActive = true;
+            }
+            else if (shotWasActive && handbackArms < 0f)
+            {
+                if (handbackFrames < 0) handbackFrames = 2;
+                if (--handbackFrames <= 0 && hasArmsHome &&
+                    arms.TryGetFirstPersonRootCameraLocal(out Vector3 armsBack))
+                    handbackArms = Vector3.Distance(armsBack, armsHome);
+            }
             if (shot.IsTitleVisible && !titleSeen)
             {
                 titleSeen = true;
@@ -316,6 +337,8 @@ public static class GymChaosFixerVerifier
         Require(dog.ArrivalShotEndState == "Running" || dog.ArrivalShotEndState == "Casting",
             $"Arrival shot ended in {dog.ArrivalShotEndState}, not when he started moving");
         Require(playerLockedInShot, "Player was not held still during the arrival shot");
+        Require(handbackArms >= 0f && handbackArms < 0.25f,
+            $"First person arms settled {handbackArms:F2} m from where they sit in play after the arrival shot");
         Require(!shotDuringExit, "A camera shot played on his departure");
         Require(!dog.ArrivalCamera.IsActive && !player.IsCinematicLocked &&
             (player.playerCamera.transform.localPosition - eyeBefore).sqrMagnitude < 0.0025f,

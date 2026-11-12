@@ -1129,6 +1129,13 @@ public static class PlayerTopShell
         for (int r = 0; r < torsoRings; r++)
         {
             float ease = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((r - taperStart) / taperSpan));
+            float z = hemZ + r * stepZ;
+            // A whisper of waist between the chest and the hem. Five centimetres
+            // of ease at the bust and waist made a sack wide enough for the
+            // shirt's own body to cross the arms; the tee stays loose, it just
+            // follows the trunk enough to read as a garment.
+            float waist = Mathf.Clamp01(Mathf.InverseLerp(0.50f, 0.60f, z) *
+                (1f - Mathf.InverseLerp(0.66f, 0.76f, z)));
             for (int s = 0; s < sides; s++)
             {
                 // Below the mask's bottom edge there is no body data to follow,
@@ -1137,7 +1144,8 @@ public static class PlayerTopShell
                 // The chest measurement plus the ease a heavyweight tee
                 // carries, easing back over the shoulders so the silhouette
                 // slopes instead of squaring off.
-                float boxy = Mathf.Lerp(chest[s] + 0.050f, chest[s] + 0.012f, ease);
+                float boxy = Mathf.Lerp(chest[s] + 0.034f, chest[s] + 0.012f, ease);
+                boxy *= 1f - 0.030f * waist;
                 row[s] = Mathf.Max(boxy, bodyReach + Mathf.Lerp(0.014f, 0.009f, ease));
             }
             SmoothRing(row, 3);
@@ -1363,7 +1371,7 @@ public static class PlayerTopShell
             Vector3 shoulder = new Vector3(cx + sign * (TeeTorsoHalf * 0.88f), cy, shoulderZ - 0.028f);
             // Start the tube inside the torso: a sleeve that begins just outside
             // the cloth leaves its open ring showing at the armhole.
-            Vector3 start = shoulder - direction * 0.115f;
+            Vector3 start = shoulder - direction * 0.145f;
             sleeveFirstRing[side] = verts.Count;
             sleeveStartPoint[side] = start;
             for (int r = 0; r < sleeveRings; r++)
@@ -1386,13 +1394,13 @@ public static class PlayerTopShell
             // A hanging sleeve only widens towards the cuff.
             for (int r = 1; r < sleeveRings; r++)
                 sleeveWidth[r] = Mathf.Max(sleeveWidth[r], sleeveWidth[r - 1] * 0.995f);
-            // Read the tube down into the shoulder instead of capping it: a
-            // full-width first ring is the shoulder pad this is trying not to
-            // be. Only the rings inside the torso are narrowed, never enough to
-            // cut into the arm, or the deltoid shows through the sleeve.
-            sleeveWidth[0] *= 0.60f;
-            sleeveWidth[1] *= 0.80f;
-            sleeveWidth[2] *= 0.92f;
+            // No ring is narrower than the arm: narrowing the ones over the
+            // deltoid let the shoulder show through as a sliver of skin at the
+            // armhole. The two rings at the mouth are a little wider instead, so
+            // the sleeve tucks over the deltoid and the torso seam where the two
+            // pieces meet is cloth on cloth.
+            sleeveWidth[0] *= 1.08f;
+            sleeveWidth[1] *= 1.03f;
             // Read the tube down into the shoulder instead of capping it: a
             // full-width first ring is the shoulder pad this is trying not to be.
             for (int r = 0; r < sleeveRings; r++)

@@ -53,6 +53,8 @@ public sealed class PlayerHandRig : MonoBehaviour
     private readonly Dictionary<SkinnedMeshRenderer, Material[]> stableFirstPersonMaterials =
         new Dictionary<SkinnedMeshRenderer, Material[]>();
     private GameObject firstPersonModelRoot;
+    private Vector3 lastPresentationCameraPosition;
+    private bool wasFirstPersonVisible = true;
     private Transform[] firstPersonPoseSources = new Transform[0];
     private Transform[] firstPersonPoseTargets = new Transform[0];
     private Transform firstPersonLeftHand;
@@ -2262,10 +2264,23 @@ public sealed class PlayerHandRig : MonoBehaviour
         }
 
         // Blend the whole FP presentation root as well as the bones so entering
-        // and leaving a punch cannot visually teleport the arms.
-        float presentationBlend = Application.isPlaying
-            ? 1f - Mathf.Exp(-Mathf.Max(0.0001f, Time.deltaTime) / AuthoredTransitionDuration)
-            : 1f;
+        // and leaving a punch cannot visually teleport the arms. The follow must
+        // never have to catch up over metres, though: a cinematic hands the
+        // camera back in a single frame several metres from the shot, and a
+        // lagging arm rig then swings the arms in from the side. So the follow
+        // snaps to the camera when the camera jumps, on the frame the first
+        // person layer comes back, and while the arms are out of frame at all.
+        bool firstPersonVisible =
+            (playerCamera.cullingMask & (1 << PlanarGymMirror.FirstPersonPlayerLayer)) != 0;
+        bool layerReturned = firstPersonVisible && !wasFirstPersonVisible;
+        wasFirstPersonVisible = firstPersonVisible;
+        Vector3 cameraPosition = playerCamera.transform.position;
+        float cameraJump = (cameraPosition - lastPresentationCameraPosition).magnitude;
+        lastPresentationCameraPosition = cameraPosition;
+        bool caughtUp = !Application.isPlaying || !firstPersonVisible || layerReturned || cameraJump > 1f;
+        float presentationBlend = caughtUp
+            ? 1f
+            : 1f - Mathf.Exp(-Mathf.Max(0.0001f, Time.deltaTime) / AuthoredTransitionDuration);
         Vector3 desiredPresentationPosition = firstPersonModelRoot.transform.position + presentationOffset;
         firstPersonModelRoot.transform.position = Vector3.Lerp(
             firstPersonModelRoot.transform.position, desiredPresentationPosition, presentationBlend);
@@ -2288,6 +2303,19 @@ public sealed class PlayerHandRig : MonoBehaviour
                 playerCamera.transform.TransformPoint(new Vector3(rightSign * 0.34f, neutralHeight, neutralDepth)));
         }
     }
+    /// <summary>
+    /// Where the first person arm root sits in camera space. In play it is a
+    /// steady offset; a cinematic that moves the camera must not leave it metres
+    /// away, or the arms swing back in from the side when the layer returns.
+    /// </summary>
+    public bool TryGetFirstPersonRootCameraLocal(out Vector3 cameraLocal)
+    {
+        cameraLocal = Vector3.zero;
+        if (firstPersonModelRoot == null || playerCamera == null) return false;
+        cameraLocal = playerCamera.transform.InverseTransformPoint(firstPersonModelRoot.transform.position);
+        return true;
+    }
+
     public bool TryGetFirstPersonHandCameraPositions(
         out Vector3 leftCameraLocal, out Vector3 rightCameraLocal)
     {
