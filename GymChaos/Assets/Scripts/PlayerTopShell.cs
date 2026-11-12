@@ -1905,10 +1905,10 @@ public static class PlayerTopShell
         {
             float z = YokeBottom + r * RingStep;
             float wrap = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(LegTop, LegTop + 0.05f, z));
-            // Tucked inside the legs at the seat's bottom edge: an edge that
-            // stood a few millimetres outside them drew a shelf across the
-            // thighs and its open rim read as a second waistband.
-            float overLegs = r == 0 ? 0.0010f : r == 1 ? 0.0006f : 0f;
+            // Tucked inside the legs at the seat's bottom edge: the seat's rim
+            // does not carry the leg's drape folds, so anywhere it stood proud
+            // of them it cut across them as a wavy line over both thighs.
+            float overLegs = r == 0 ? -0.0025f : r == 1 ? -0.0012f : 0f;
             for (int s = 0; s < YokeSides; s++)
             {
                 float angle = s * Mathf.PI * 2f / YokeSides;
@@ -1933,9 +1933,9 @@ public static class PlayerTopShell
         for (int r = 0; r < yokeRings; r++)
         {
             float z = YokeBottom + r * RingStep;
-            if (z > LegTop + 0.005f) break;
+            if (z > LegTop + 0.005f || r < 5) continue;
             int legRing = Mathf.Clamp(Mathf.RoundToInt((z - PantsHem) / RingStep), 0, legRings - 1);
-            float over = r == 0 ? 0.0010f : r == 1 ? 0.0006f : 0f;
+            float over = 0f;
             for (int s2 = 0; s2 < YokeSides; s2++)
             {
                 float angle = s2 * Mathf.PI * 2f / YokeSides;
