@@ -1783,6 +1783,14 @@ public static class PlayerTopShell
         float[] top = new float[LegSides];
         float[,] legRadius = new float[legRings, LegSides];
         float[,,] legOutline = new float[2, legRings, LegSides];
+        int[] legStart = new int[2];
+        // Stripes are built here and appended after the seat: sitting in the
+        // middle of the mesh they shifted every vertex after them, so the leg
+        // and seat skinning landed one grid row off and a raised leg left its
+        // stripe hanging in the air.
+        List<Vector3> stripePts = new List<Vector3>();
+        List<Vector2> stripeUv = new List<Vector2>();
+        List<int> stripeTris = new List<int>();
         for (int leg = 0; leg < 2; leg++)
         {
             // Body + ease per ring (above the cap the thigh's width holds).
@@ -1855,6 +1863,7 @@ public static class PlayerTopShell
                     uvList.Add(new Vector2(s / (float)LegSides * circumference / FabricTile, z / FabricTile));
                 }
             }
+            legStart[leg] = start;
             Loft(start, legRings, LegSides, fabric, band, 1, 0);
 
             // Side stripe: ink cloth laid on the leg's own rings and lifted a
@@ -1865,7 +1874,7 @@ public static class PlayerTopShell
             Vector2 outward = axis[leg] - pelvis;
             float seamAngle = Mathf.Atan2(outward.y, outward.x);
             float seamColumn = (seamAngle < 0f ? seamAngle + Mathf.PI * 2f : seamAngle) / (Mathf.PI * 2f) * LegSides;
-            int stripeStart = verts.Count;
+            int stripeStart = stripePts.Count;
             for (int r = 0; r < legRings; r++)
             {
                 float z = PantsHem + r * RingStep;
@@ -1880,8 +1889,8 @@ public static class PlayerTopShell
                     Vector3 cloth = Vector3.Lerp(verts[stripeRow + stripeColumn],
                         verts[stripeRow + (stripeColumn + 1) % LegSides], wrapped - stripeColumn);
                     Vector3 radial = cloth - Point(z, axis[leg]);
-                    verts.Add(radial.sqrMagnitude > 1e-12f ? cloth + radial.normalized * StripeLift : cloth);
-                    uvList.Add(new Vector2(k / 2f * 2f / FabricTile, z / FabricTile));
+                    stripePts.Add(radial.sqrMagnitude > 1e-12f ? cloth + radial.normalized * StripeLift : cloth);
+                    stripeUv.Add(new Vector2(k / 2f * 2f / FabricTile, z / FabricTile));
                 }
             }
             for (int r = 0; r < legRings - 1; r++)
@@ -1889,8 +1898,8 @@ public static class PlayerTopShell
                 {
                     int s0 = stripeStart + r * 3 + k;
                     int s1 = s0 + 1, s2 = s0 + 3, s3 = s2 + 1;
-                    mark.Add(s0); mark.Add(s1); mark.Add(s2);
-                    mark.Add(s1); mark.Add(s3); mark.Add(s2);
+                    stripeTris.Add(s0); stripeTris.Add(s1); stripeTris.Add(s2);
+                    stripeTris.Add(s1); stripeTris.Add(s3); stripeTris.Add(s2);
                 }
         }
 
@@ -1976,6 +1985,13 @@ public static class PlayerTopShell
             }
         }
         Loft(yokeStart, yokeRings, YokeSides, fabric, band, 0, 2);
+
+        // The stripes join the mesh after the seat, so every leg and seat
+        // vertex keeps the index its skinning was written for.
+        int stripeBase = verts.Count;
+        verts.AddRange(stripePts);
+        uvList.AddRange(stripeUv);
+        foreach (int index in stripeTris) mark.Add(index + stripeBase);
 
         // Outward winding: flip if the first leg's faces point inward.
         Vector3 face = Vector3.Cross(verts[fabric[1]] - verts[fabric[0]], verts[fabric[2]] - verts[fabric[0]]);
@@ -2096,6 +2112,25 @@ public static class PlayerTopShell
             outNormals[l] = outNormals[yokeStart + i];
             outNormals[l - (LegSides + 1)] = Vector3.Slerp(outNormals[l - (LegSides + 1)], outNormals[l], 0.5f).normalized;
         }
+        // Each stripe vertex hangs on the leg cloth it was sampled from. Skinned
+        // from the body's nearest vertex instead, it pulled away from the leg and
+        // a raised knee trailed its stripe through the air.
+        if (outWeights != null)
+            for (int i = 0; i < stripePts.Count; i++)
+            {
+                Vector3 p = verts[stripeBase + i];
+                int nearest = -1;
+                float nearestDistance = float.MaxValue;
+                for (int leg = 0; leg < 2; leg++)
+                    for (int r = 0; r < legRings; r++)
+                        for (int c = 0; c < LegSides; c++)
+                        {
+                            int v = legStart[leg] + r * (LegSides + 1) + c;
+                            float d = (verts[v] - p).sqrMagnitude;
+                            if (d < nearestDistance) { nearestDistance = d; nearest = v; }
+                        }
+                if (nearest >= 0) outWeights[stripeBase + i] = outWeights[nearest];
+            }
         return new ShellData
         {
             Vertices = outVertices, Normals = outNormals, Uv = outUv, Weights = outWeights,

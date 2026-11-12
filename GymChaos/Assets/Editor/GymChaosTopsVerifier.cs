@@ -468,6 +468,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         service.EquipBottomColor(GymShirtColor.Blue);
         yield return WaitBottom(loadout);
         MeasurePantsStripe(loadout.BottomShellRenderer, GymShirtColor.Blue);
+        MeasurePantsStripeFit(loadout.BottomShellRenderer);
         service.EquipBottomColor(GymShirtColor.White);
         yield return WaitBottom(loadout);
         MeasurePantsStripe(loadout.BottomShellRenderer, GymShirtColor.White);
@@ -812,6 +813,63 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         if (material.HasProperty("_BaseMap") && material.GetTexture("_BaseMap") != null) return material.GetTexture("_BaseMap");
         if (material.HasProperty("_MainTex") && material.GetTexture("_MainTex") != null) return material.GetTexture("_MainTex");
         return null;
+    }
+
+    /// <summary>The side stripes hang on the leg cloth, one on each outer side,
+    /// symmetric and down to the hem. A stripe skinned from the body instead
+    /// pulled off the leg in a stride and trailed through the air like a wire.</summary>
+    private void MeasurePantsStripeFit(SkinnedMeshRenderer shell)
+    {
+        Mesh mesh = shell.sharedMesh;
+        int[] stripe = mesh.GetTriangles(2);
+        Require(stripe.Length > 0, "pants: the stripe submesh is empty");
+        Vector3[] v = mesh.vertices;
+        BoneWeight[] weights = mesh.boneWeights;
+        bool[] isStripe = new bool[v.Length];
+        foreach (int index in stripe) isStripe[index] = true;
+        float lo = mesh.bounds.min.z, hi = mesh.bounds.max.z;
+        float leftLow = float.MaxValue, rightLow = float.MaxValue;
+        float leftOut = 0f, rightOut = 0f;
+        int leftCount = 0, rightCount = 0;
+        float drift = 0f;
+        for (int i = 0; i < v.Length; i++)
+        {
+            if (!isStripe[i]) continue;
+            if (v[i].x < 0f)
+            {
+                leftLow = Mathf.Min(leftLow, v[i].z);
+                leftOut = Mathf.Max(leftOut, -v[i].x);
+                leftCount++;
+            }
+            else
+            {
+                rightLow = Mathf.Min(rightLow, v[i].z);
+                rightOut = Mathf.Max(rightOut, v[i].x);
+                rightCount++;
+            }
+            int nearest = -1;
+            float best = float.MaxValue;
+            for (int j = 0; j < v.Length; j++)
+            {
+                if (isStripe[j]) continue;
+                float d = (v[j] - v[i]).sqrMagnitude;
+                if (d < best) { best = d; nearest = j; }
+            }
+            Require(nearest >= 0, "pants: no cloth under a stripe vertex");
+            drift = Mathf.Max(drift,
+                Mathf.Abs(weights[i].weight0 - weights[nearest].weight0) +
+                Mathf.Abs(weights[i].weight1 - weights[nearest].weight1) +
+                Mathf.Abs(weights[i].weight2 - weights[nearest].weight2) +
+                Mathf.Abs(weights[i].weight3 - weights[nearest].weight3) +
+                (weights[i].boneIndex0 != weights[nearest].boneIndex0 ? 1f : 0f));
+        }
+        Require(leftCount > 0 && rightCount > 0, $"pants: stripes on one leg only ({leftCount}/{rightCount})");
+        Require(drift < 0.02f, $"pants: a stripe is not skinned with the leg under it (drift {drift:F3})");
+        Require(leftLow < lo + (hi - lo) * 0.02f && rightLow < lo + (hi - lo) * 0.02f,
+            $"pants: stripes stop short of the hem ({leftLow:F4}/{rightLow:F4} against {lo:F4})");
+        Require(Mathf.Abs(leftOut - rightOut) < (hi - lo) * 0.02f,
+            $"pants: stripes are not symmetric (x {leftOut:F4} against {rightOut:F4})");
+        notes.Add($"pantsStripeFit verts={leftCount}/{rightCount} hem={leftLow:F4}/{rightLow:F4} drift={drift:F3}");
     }
 
     /// <summary>The trousers read as track knit with a ribbed waistband: the
