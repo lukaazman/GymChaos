@@ -911,11 +911,9 @@ public static class GymRuntimeSettings
         Volume[] volumes = Object.FindObjectsByType<Volume>(FindObjectsSortMode.None);
         for (int i = 0; i < volumes.Length; i++)
         {
-            // The grade is not owned by this switch: brightness and contrast
-            // stay live with POST FX off, over the scene's own effects only.
             if (volumes[i] != null)
             {
-                volumes[i].enabled = enabled || volumes[i] == gradeVolume;
+                volumes[i].enabled = enabled;
             }
         }
         Camera[] cameras = Object.FindObjectsByType<Camera>(FindObjectsSortMode.None);
@@ -923,7 +921,10 @@ public static class GymRuntimeSettings
         {
             if (cameras[i] != null && cameras[i].TryGetComponent(out UniversalAdditionalCameraData data))
             {
-                data.renderPostProcessing = enabled || gradeActive;
+                // One switch for the whole post stack: the grade rides it too,
+                // so a neutral or missing scene volume cannot leave post on by
+                // itself and the toggle always has a visible effect.
+                data.renderPostProcessing = enabled;
             }
         }
     }
@@ -1030,9 +1031,14 @@ public static class GymRuntimeSettings
             grade = profile.Add<ColorAdjustments>(true);
             gradeVolume.sharedProfile = profile;
         }
-        gradeVolume.enabled = true;
-        grade.postExposure.Override(Mathf.Lerp(-1.6f, 1.6f, brightness));
-        grade.contrast.Override(Mathf.Lerp(-40f, 40f, contrast));
+        // POST FX governs the whole post stack, this grade included: a toggle
+        // that left the grade running looked like it did nothing.
+        gradeVolume.enabled = PlayerPrefs.GetInt(PostProcessingKey, 1) != 0;
+        // Ranges sized like a television's: a full sweep either way is a
+        // noticeable lift or crush, not the over-exposed picture the old
+        // 1.6 stops of exposure and 40 points of contrast gave at the ends.
+        grade.postExposure.Override(Mathf.Lerp(-0.9f, 0.9f, brightness));
+        grade.contrast.Override(Mathf.Lerp(-22f, 22f, contrast));
         // Only an off-centre grade needs the camera's post pass: at neutral
         // the POST FX toggle alone decides whether it runs.
         bool active = Mathf.Abs(brightness - 0.5f) > 0.002f || Mathf.Abs(contrast - 0.5f) > 0.002f;

@@ -302,27 +302,30 @@ public static class GymChaosPauseOptionsVerifier
         Slider contrast = RequireSlider(menuRoot, "Contrast Slider");
         ColorAdjustments grade = GymRuntimeSettings.Grade;
         Require(grade != null, "Brightness and contrast are not wired to a color grade.");
+        // Each end has to move the picture visibly, and the ends also have to
+        // stay inside a television-like grade: the old 1.6 stops and 40 points
+        // of contrast washed the scene out long before the slider reached the top.
         brightness.value = 1f;
-        Require(grade.postExposure.value > 1f,
-            "Brightness did not raise exposure: " + grade.postExposure.value);
+        Require(grade.postExposure.value > 0.6f && grade.postExposure.value <= 1.0f,
+            "Brightness did not lift exposure into its range: " + grade.postExposure.value);
         brightness.value = 0f;
-        Require(grade.postExposure.value < -1f,
-            "Brightness did not lower exposure: " + grade.postExposure.value);
+        Require(grade.postExposure.value < -0.6f && grade.postExposure.value >= -1.0f,
+            "Brightness did not lower exposure into its range: " + grade.postExposure.value);
         contrast.value = 1f;
-        Require(grade.contrast.value > 30f,
-            "Contrast did not rise: " + grade.contrast.value);
+        Require(grade.contrast.value > 15f && grade.contrast.value <= 25f,
+            "Contrast did not rise into its range: " + grade.contrast.value);
         contrast.value = 0f;
-        Require(grade.contrast.value < -30f,
-            "Contrast did not fall: " + grade.contrast.value);
+        Require(grade.contrast.value < -15f && grade.contrast.value >= -25f,
+            "Contrast did not fall into its range: " + grade.contrast.value);
         brightness.value = 0.5f;
         contrast.value = 0.5f;
         Require(Mathf.Abs(grade.postExposure.value) < 0.01f && Mathf.Abs(grade.contrast.value) < 0.1f,
             $"Neutral brightness/contrast is not neutral: ev={grade.postExposure.value} " +
             $"contrast={grade.contrast.value}");
 
-        // The grade must not depend on the POST FX toggle: on a first WebGL
-        // visit POST FX starts off, and the sliders still have to move the
-        // picture (menu camera and the receptionist view alike).
+        // POST FX owns the whole post stack, this grade included: off means no
+        // grade reaches the camera, on means an off-centre slider does. A grade
+        // that stayed live with the toggle off made the toggle look broken.
         GameObject probeObject = new GameObject("Grade Camera Probe");
         Camera probeCamera = probeObject.AddComponent<Camera>();
         UniversalAdditionalCameraData probeData =
@@ -331,16 +334,20 @@ public static class GymChaosPauseOptionsVerifier
         Toggle postFx = RequireToggle(menuRoot, "Post FX Toggle");
         postFx.isOn = false;
         brightness.value = 0.25f;
-        Require(probeData.renderPostProcessing,
-            "Brightness did not reach the camera with POST FX off.");
-        Require(GymRuntimeSettings.GradeVolumeEnabled,
-            "The color grade volume is disabled with POST FX off.");
+        Require(!GymRuntimeSettings.GradeVolumeEnabled,
+            "The color grade survives POST FX off.");
+        Require(!probeData.renderPostProcessing,
+            "Brightness reached the camera with POST FX off.");
         Require(Mathf.Abs(PlayerPrefs.GetFloat(BrightnessKey, -1f) - 0.25f) < 0.001f,
             "Brightness was not saved as it was set: " + PlayerPrefs.GetFloat(BrightnessKey, -1f));
-        brightness.value = 0.5f;
-        Require(!probeData.renderPostProcessing,
-            "A neutral grade left the camera in post processing with POST FX off.");
         postFx.isOn = true;
+        Require(GymRuntimeSettings.GradeVolumeEnabled,
+            "The color grade stayed off with POST FX on.");
+        Require(probeData.renderPostProcessing,
+            "An off-centre grade did not reach the camera with POST FX on.");
+        brightness.value = 0.5f;
+        Require(probeData.renderPostProcessing,
+            "POST FX on did not leave the camera rendering post processing.");
         UnityEngine.Object.DestroyImmediate(probeObject);
 
         Dropdown aa = RequireDropdown(menuRoot, "Anti Aliasing Dropdown");
