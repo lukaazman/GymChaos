@@ -1757,7 +1757,7 @@ public static class PlayerTopShell
         float frontAngle = Mathf.Atan2(frontSign, 0f);
 
         // Body reach per direction and ring height, for legs and yoke.
-        int legRings = Mathf.CeilToInt((LegTop - PantsHem) / RingStep) + 1;
+                    int legRings = Mathf.CeilToInt((LegTop - PantsHem) / RingStep) + 1;
         float[,,] legReach = new float[2, legRings, LegSides];
         int yokeRings = Mathf.CeilToInt((PantsWaist - YokeBottom) / RingStep) + 1;
         float[,] yokeReach = new float[yokeRings, YokeSides];
@@ -1866,14 +1866,19 @@ public static class PlayerTopShell
                     // and a soft break over the shoe.
                     float crease = CreaseDepth * creaseFade * Mathf.Pow(Mathf.Max(0f, front), 40f);
                     float drape = DrapeDepth * drapeFade * Mathf.Sin(angle * 5f + leg * 1.3f) * (1f - Mathf.Max(0f, front));
-                    float radius = legRadius[r, s % LegSides] * (1f + drape) + crease +
-                        hem * (HemFlare + HemBreak * Mathf.Sin(angle * 3f + z * 120f));
+                    // The opening is a clean ring: the drape and the break are
+                    // faded out at the hem, because a rim that wanders in and out
+                    // around the leg reads as the trousers cut off at the back
+                    // instead of a hem that ends evenly all the way round.
+                    float radius = legRadius[r, s % LegSides] * (1f + drape * (1f - hem * 0.75f)) + crease +
+                        hem * HemFlare;
                     verts.Add(Point(z, axis[leg] + dir * radius));
                     uvList.Add(new Vector2(s / (float)LegSides * circumference / FabricTile, z / FabricTile));
                 }
             }
             legStart[leg] = start;
             Loft(start, legRings, LegSides, fabric, band, 1, 0);
+
 
             // Side stripe: ink cloth laid on the leg's own rings and lifted a
             // hair off them, so it follows every crease and fold instead of
