@@ -37,7 +37,9 @@ EDGE_RANGE = tops.EDGE_RANGE
 # Waistband reaches under every top's hem (tank 0.528, Onyx 0.505), so no
 # unpainted body band shows between them.
 WAIST = 0.545
-SHORTS_HEM = 0.33
+# The scan's own black shorts end at 0.335 and their trim shows as dark lines
+# under a coloured shell: the shell's hem reaches past the end, not to it.
+SHORTS_HEM = 0.305
 ANKLE = 0.055
 # Straight leg: tube round a vertical axis per leg (x = +-LEG_AXIS_X,
 # y = LEG_AXIS_Y), radius from HEM_RADIUS at the hem to THIGH_RADIUS at the

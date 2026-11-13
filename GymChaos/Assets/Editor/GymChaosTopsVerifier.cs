@@ -531,6 +531,45 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         yield return null;
     }
 
+    /// <summary>The shirt is worn over the trousers: where the two overlap, no
+    /// trouser vertex may sit outside the shirt's surface.</summary>
+    private void MeasureLayering(SkinnedMeshRenderer top, SkinnedMeshRenderer bottom, string label)
+    {
+        Require(top != null && bottom != null, $"{label}: missing shell for the layering check");
+        Mesh shirt = new Mesh();
+        Mesh trousers = new Mesh();
+        top.BakeMesh(shirt, true);
+        bottom.BakeMesh(trousers, true);
+        Vector3[] shirtPoints = shirt.vertices;
+        Vector3[] shirtNormals = shirt.normals;
+        Vector3[] trouserPoints = trousers.vertices;
+        float low = shirt.bounds.min.z, high = shirt.bounds.max.z;
+        int showing = 0;
+        float worst = 0f;
+        for (int i = 0; i < trouserPoints.Length; i++)
+        {
+            if (trouserPoints[i].z < low || trouserPoints[i].z > high) continue;
+            int nearest = -1;
+            float best = float.MaxValue;
+            for (int j = 0; j < shirtPoints.Length; j++)
+            {
+                float d = (shirtPoints[j] - trouserPoints[i]).sqrMagnitude;
+                if (d < best) { best = d; nearest = j; }
+            }
+            if (nearest < 0) continue;
+            float depth = Vector3.Dot(trouserPoints[i] - shirtPoints[nearest], shirtNormals[nearest]);
+            if (depth > 0.002f)
+            {
+                showing++;
+                worst = Mathf.Max(worst, depth);
+            }
+        }
+        Destroy(shirt);
+        Destroy(trousers);
+        Require(showing == 0, $"{label}: {showing} trouser vertices come through the shirt (worst {worst:F4})");
+        notes.Add($"layering_{label} covered");
+    }
+
     private static IEnumerator WaitBottom(PlayerCosmeticLoadout loadout)
     {
         float limit = Time.realtimeSinceStartup + 15f;
@@ -797,6 +836,21 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 }
             }
         }
+        // The shirt is the outer layer: standing and striding, no trouser
+        // vertex may surface through its lower part.
+        service.EquipTop(GymTopStyle.Oversized);
+        yield return WaitShell(loadout);
+        foreach (GymBottomStyle bottom in new[] { GymBottomStyle.Pants, GymBottomStyle.Shorts })
+        {
+            service.EquipBottom(bottom);
+            yield return WaitBottom(loadout);
+            foreach ((string clip, float phase) in new[] { ("idle1", 0f), ("walking", 0.2f), ("running", 0.45f), ("punch_left", 0.5f) })
+            {
+                rig.HoldStablePoseForVerification(clip, phase, out _);
+                yield return null;
+                MeasureLayering(loadout.TopShellRenderer, loadout.BottomShellRenderer, $"oversized_{bottom}_{clip}");
+            }
+        }
         service.EquipBottom(GymBottomStyle.Shorts);
         Destroy(lightObject);
         Destroy(camera.gameObject);
@@ -869,6 +923,33 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
             $"pants: stripes stop short of the hem ({leftLow:F4}/{rightLow:F4} against {lo:F4})");
         Require(Mathf.Abs(leftOut - rightOut) < (hi - lo) * 0.02f,
             $"pants: stripes are not symmetric (x {leftOut:F4} against {rightOut:F4})");
+        // Where the stripe sits round the leg, in the player's own frame: a side
+        // seam should look along right, not forward or back.
+        Vector3 axis = Vector3.zero;
+        int axisCount = 0;
+        for (int i = 0; i < v.Length; i++)
+        {
+            if (isStripe[i] || v[i].x < 0f) continue;
+            axis += v[i];
+            axisCount++;
+        }
+        if (axisCount > 0)
+        {
+            axis /= axisCount;
+            Vector3 outward = Vector3.zero;
+            for (int i = 0; i < v.Length; i++)
+            {
+                if (!isStripe[i] || v[i].x < 0f) continue;
+                outward += v[i] - axis;
+            }
+            outward.y = 0f;
+            if (outward.sqrMagnitude > 1e-9f)
+            {
+                outward.Normalize();
+                float fromRight = Vector3.SignedAngle(shell.transform.right, outward, Vector3.up);
+                notes.Add($"pantsStripeAngle {fromRight:F0}deg from right");
+            }
+        }
         notes.Add($"pantsStripeFit verts={leftCount}/{rightCount} hem={leftLow:F4}/{rightLow:F4} drift={drift:F3}");
     }
 

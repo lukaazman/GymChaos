@@ -18,7 +18,10 @@ mask = np.zeros((h, w), np.uint8)
 for tri in json.loads(Path('.tools/shirt-uv.json').read_text()):
     pts = np.array([[round(u * (w - 1)), round((1 - v) * (h - 1))] for u, v in tri], np.int32)
     cv2.fillConvexPoly(mask, pts, 255)
-mask = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+# Grown well past the shirt's islands: the tank's trim and seam lines sit a
+# few texels outside them, and left unpainted they show as bitten edges in
+# every colour but black (white showed them worst).
+mask = cv2.dilate(mask, np.ones((9, 9), np.uint8)) > 0
 f = im.astype(np.float32) / 255.
 lum = f.mean(2)
 # Cloth sits around 0.02-0.08: map it to a gentle 0.62-1.05 shading range.
