@@ -1673,7 +1673,7 @@ public static class PlayerTopShell
     private const float FabricTile = 0.06f;
     private const float Clearance = 0.002f;
     // Side stripes sit this far off the leg's own cloth (rest units).
-    private const float StripeLift = 0.0006f;
+    private const float StripeLift = 0.0012f;
     // The seat needs more room than a leg tube: the scan's old shorts rim is a
     // raised lip, and at 3 mm it poked through as small dark holes on the hips.
     private const float SeatClearance = 0.008f;
@@ -1872,7 +1872,13 @@ public static class PlayerTopShell
             // which is printed in ink: white on every colour of trousers and
             // black on the white pair.
             Vector2 outward = axis[leg] - pelvis;
-            float seamAngle = Mathf.Atan2(outward.y, outward.x);
+            outward.Normalize();
+            // A third of the way from the side towards the front: on the true
+            // lateral it is edge on from every camera that is not square to the
+            // side, which read as a stripe at the back. This sits on the side
+            // seam and still faces the player's front.
+            Vector2 seamDir = (outward + new Vector2(0f, frontSign) * 1.45f).normalized;
+            float seamAngle = Mathf.Atan2(seamDir.y, seamDir.x);
             float seamColumn = (seamAngle < 0f ? seamAngle + Mathf.PI * 2f : seamAngle) / (Mathf.PI * 2f) * LegSides;
             int stripeStart = stripePts.Count;
             for (int r = 0; r < legRings; r++)
@@ -1889,7 +1895,13 @@ public static class PlayerTopShell
                     Vector3 cloth = Vector3.Lerp(verts[stripeRow + stripeColumn],
                         verts[stripeRow + (stripeColumn + 1) % LegSides], wrapped - stripeColumn);
                     Vector3 radial = cloth - Point(z, axis[leg]);
-                    stripePts.Add(radial.sqrMagnitude > 1e-12f ? cloth + radial.normalized * StripeLift : cloth);
+                    // The cloth sample is a chord between two ring columns, so it
+                    // sits inside the curved surface by the sag of that chord.
+                    // Lifting only a fraction of a millimetre let the stripe sink
+                    // into the leg over the calf and the hem flare, which read as
+                    // a stripe cut off halfway down.
+                    float sag = radial.magnitude * (1f - Mathf.Cos(Mathf.PI / LegSides));
+                    stripePts.Add(radial.sqrMagnitude > 1e-12f ? cloth + radial.normalized * (StripeLift + sag) : cloth);
                     stripeUv.Add(new Vector2(k / 2f * 2f / FabricTile, z / FabricTile));
                 }
             }

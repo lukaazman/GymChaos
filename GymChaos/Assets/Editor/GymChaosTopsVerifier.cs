@@ -901,21 +901,33 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 rightOut = Mathf.Max(rightOut, v[i].x);
                 rightCount++;
             }
-            int nearest = -1;
-            float best = float.MaxValue;
+            // The three nearest cloth vertices: at the seat's edge the stripe's
+            // nearest could be a seat vertex rather than the leg it hangs on,
+            // and the stripe has to match at least the cloth right under it.
+            int[] near = { -1, -1, -1 };
+            float[] nearDistance = { float.MaxValue, float.MaxValue, float.MaxValue };
             for (int j = 0; j < v.Length; j++)
             {
                 if (isStripe[j]) continue;
                 float d = (v[j] - v[i]).sqrMagnitude;
-                if (d < best) { best = d; nearest = j; }
+                if (d >= nearDistance[2]) continue;
+                if (d < nearDistance[0]) { near[2] = near[1]; nearDistance[2] = nearDistance[1]; near[1] = near[0]; nearDistance[1] = nearDistance[0]; near[0] = j; nearDistance[0] = d; }
+                else if (d < nearDistance[1]) { near[2] = near[1]; nearDistance[2] = nearDistance[1]; near[1] = j; nearDistance[1] = d; }
+                else { near[2] = j; nearDistance[2] = d; }
             }
-            Require(nearest >= 0, "pants: no cloth under a stripe vertex");
-            drift = Mathf.Max(drift,
-                Mathf.Abs(weights[i].weight0 - weights[nearest].weight0) +
-                Mathf.Abs(weights[i].weight1 - weights[nearest].weight1) +
-                Mathf.Abs(weights[i].weight2 - weights[nearest].weight2) +
-                Mathf.Abs(weights[i].weight3 - weights[nearest].weight3) +
-                (weights[i].boneIndex0 != weights[nearest].boneIndex0 ? 1f : 0f));
+            Require(near[0] >= 0, "pants: no cloth under a stripe vertex");
+            float closest = float.MaxValue;
+            for (int k = 0; k < 3; k++)
+            {
+                if (near[k] < 0) continue;
+                closest = Mathf.Min(closest,
+                    Mathf.Abs(weights[i].weight0 - weights[near[k]].weight0) +
+                    Mathf.Abs(weights[i].weight1 - weights[near[k]].weight1) +
+                    Mathf.Abs(weights[i].weight2 - weights[near[k]].weight2) +
+                    Mathf.Abs(weights[i].weight3 - weights[near[k]].weight3) +
+                    (weights[i].boneIndex0 != weights[near[k]].boneIndex0 ? 1f : 0f));
+            }
+            drift = Mathf.Max(drift, closest);
         }
         Require(leftCount > 0 && rightCount > 0, $"pants: stripes on one leg only ({leftCount}/{rightCount})");
         Require(drift < 0.02f, $"pants: a stripe is not skinned with the leg under it (drift {drift:F3})");
@@ -942,12 +954,18 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 if (!isStripe[i] || v[i].x < 0f) continue;
                 outward += v[i] - axis;
             }
-            outward.y = 0f;
-            if (outward.sqrMagnitude > 1e-9f)
+            // Measured in the player's world frame: the mesh's own axes are not
+            // the transform's, so a local reading here means nothing.
+            Vector3 centre = shell.transform.TransformPoint(axis);
+            Vector3 seam = shell.transform.TransformPoint(axis + outward / Mathf.Max(1, 1f));
+            Vector3 offset = seam - centre;
+            offset.y = 0f;
+            if (offset.sqrMagnitude > 1e-9f)
             {
-                outward.Normalize();
-                float fromRight = Vector3.SignedAngle(shell.transform.right, outward, Vector3.up);
-                notes.Add($"pantsStripeAngle {fromRight:F0}deg from right");
+                offset.Normalize();
+                float fromRight = Vector3.SignedAngle(shell.transform.right, offset, Vector3.up);
+                float fromFront = Vector3.SignedAngle(shell.transform.forward, offset, Vector3.up);
+                notes.Add($"pantsStripeAngle {fromRight:F0}deg from right {fromFront:F0}deg from front");
             }
         }
         notes.Add($"pantsStripeFit verts={leftCount}/{rightCount} hem={leftLow:F4}/{rightLow:F4} drift={drift:F3}");
