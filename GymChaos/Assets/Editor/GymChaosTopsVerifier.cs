@@ -469,6 +469,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         yield return WaitBottom(loadout);
         MeasurePantsStripe(loadout.BottomShellRenderer, GymShirtColor.Blue);
         MeasurePantsStripeFit(loadout.BottomShellRenderer);
+        MeasureHemRim(loadout.BottomShellRenderer, "pants");
         service.EquipBottomColor(GymShirtColor.White);
         yield return WaitBottom(loadout);
         MeasurePantsStripe(loadout.BottomShellRenderer, GymShirtColor.White);
@@ -793,7 +794,7 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         service.EquipTop(GymTopStyle.TankTop);
         service.EquipBottom(GymBottomStyle.Pants);
         camera.orthographicSize = 0.8f;
-        foreach (GymShirtColor colour in new[] { GymShirtColor.Black, GymShirtColor.Blue, GymShirtColor.White })
+        foreach (GymShirtColor colour in new[] { GymShirtColor.Black, GymShirtColor.Blue, GymShirtColor.White, GymShirtColor.Red })
         {
             service.EquipBottomColor(colour);
             yield return WaitBottom(loadout);
@@ -810,6 +811,18 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                     camera.transform.LookAt(hips);
                     light.transform.rotation = Quaternion.LookRotation(-direction + Vector3.down * 0.6f + player.transform.right * 0.3f);
                     Capture(camera, Path.Combine(folder, $"pants_{colour}_{clip}_{side}.png".ToLowerInvariant()));
+                }
+                if (clip == "idle1")
+                {
+                    // The hem from behind and below, at the angle a player sees
+                    // their own trousers: where the back of the hem reads as cut.
+                    camera.orthographicSize = 0.45f;
+                    Vector3 hem = hips + Vector3.down * 0.17f;
+                    Vector3 behind = (-player.transform.forward + Vector3.down * 0.15f + player.transform.right * 0.55f).normalized;
+                    camera.transform.position = hem + behind * 2.4f;
+                    camera.transform.LookAt(hem);
+                    light.transform.rotation = Quaternion.LookRotation(-behind + Vector3.down * 0.4f);
+                    Capture(camera, Path.Combine(folder, $"pants_{colour}_hem_back.png".ToLowerInvariant()));
                 }
                 if (colour == GymShirtColor.Blue && clip == "idle1")
                 {
@@ -867,6 +880,51 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         if (material.HasProperty("_BaseMap") && material.GetTexture("_BaseMap") != null) return material.GetTexture("_BaseMap");
         if (material.HasProperty("_MainTex") && material.GetTexture("_MainTex") != null) return material.GetTexture("_MainTex");
         return null;
+    }
+
+    /// <summary>The hem is an open tube, so its rim must be one closed loop per
+    /// leg: a quad lost at the seam leaves a straight cut that reads as a
+    /// trouser leg sliced open at the back.</summary>
+    private void MeasureHemRim(SkinnedMeshRenderer shell, string label)
+    {
+        Mesh mesh = shell.sharedMesh;
+        Vector3[] points = mesh.vertices;
+        float low = float.MaxValue;
+        for (int i = 0; i < points.Length; i++) low = Mathf.Min(low, points[i].z);
+        Dictionary<long, int> edges = new Dictionary<long, int>();
+        for (int sub = 0; sub < mesh.subMeshCount; sub++)
+        {
+            int[] triangles = mesh.GetTriangles(sub);
+            for (int t = 0; t < triangles.Length; t += 3)
+            {
+                for (int e = 0; e < 3; e++)
+                {
+                    int a = triangles[t + e], b = triangles[t + (e + 1) % 3];
+                    long key = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                    edges.TryGetValue(key, out int seen);
+                    edges[key] = seen + 1;
+                }
+            }
+        }
+        Dictionary<int, int> rimUse = new Dictionary<int, int>();
+        int rim = 0;
+        foreach (KeyValuePair<long, int> pair in edges)
+        {
+            if (pair.Value != 1) continue;
+            int a = (int)(pair.Key >> 32);
+            int b = (int)(pair.Key & 0xffffffffL);
+            if (points[a].z > low + 0.01f || points[b].z > low + 0.01f) continue;
+            rim++;
+            rimUse.TryGetValue(a, out int aCount);
+            rimUse[a] = aCount + 1;
+            rimUse.TryGetValue(b, out int bCount);
+            rimUse[b] = bCount + 1;
+        }
+        int torn = 0;
+        foreach (KeyValuePair<int, int> pair in rimUse) if (pair.Value != 2) torn++;
+        Require(rim > 0, $"{label}: no hem rim at all");
+        Require(torn == 0, $"{label}: {torn} hem vertices are not on a closed rim (the hem is cut)");
+        notes.Add($"{label}HemRim edges={rim} torn={torn}");
     }
 
     /// <summary>The side stripes hang on the leg cloth, one on each outer side,

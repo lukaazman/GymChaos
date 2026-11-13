@@ -281,7 +281,16 @@ public static class PlayerTopShell
                 if (materials[2].HasProperty("_MainTex")) materials[2].SetTexture("_MainTex", null);
                 if (materials[2].HasProperty("_Cull")) materials[2].SetFloat("_Cull", (float)CullMode.Off);
             }
-            renderer.sharedMaterials = materials;
+            // The hems are open tubes. Seen from behind or from below, single sided
+        // cloth shows the hole as a straight cut across the back of the hem
+        // instead of the inside of the leg; drawn from both sides the opening
+        // reads as a trouser leg.
+        for (int i = 0; i < materials.Length; i++)
+        {
+            if (materials[i] != null && materials[i].HasProperty("_Cull"))
+                materials[i].SetFloat("_Cull", (float)CullMode.Off);
+        }
+        renderer.sharedMaterials = materials;
         }
         if (materials.Length > 2)
         {
