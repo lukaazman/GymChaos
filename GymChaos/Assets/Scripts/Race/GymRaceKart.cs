@@ -670,7 +670,19 @@ public sealed class GymRaceKart : MonoBehaviour
             float allowed = Mathf.Max(0f, distance - touching) / Mathf.Max(dt, 1e-4f);
             if (closing > allowed)
             {
-                velocity -= direction * ((closing - allowed) * 0.5f);
+                // Chaos: the kart doing the hitting keeps every metre per second
+                // it brought. Taking the closing speed off it made a ram feel
+                // like a wall, so the whole closing speed goes onto the kart
+                // that was hit, which is also what keeps the pair from sharing
+                // the same space for a step.
+                if (RamSelfPushScale <= 0f && other.body != null && !other.RemoteDriven)
+                {
+                    other.body.linearVelocity -= direction * ((closing - allowed) * 0.5f);
+                }
+                else
+                {
+                    velocity -= direction * ((closing - allowed) * 0.5f);
+                }
             }
         }
         return velocity;
@@ -709,12 +721,14 @@ public sealed class GymRaceKart : MonoBehaviour
             // rival's box and the two stayed overlapped by more than a metre.
             if (ramming)
             {
-                other.body.linearVelocity += -normal * (knockback + Mathf.Min(depth / dt, 8f));
+                other.body.linearVelocity += -normal * (knockback + Mathf.Min(depth / dt, 26f));
                 other.body.linearVelocity = Vector3.ClampMagnitude(
                     other.body.linearVelocity, other.KartStats.TopSpeed * 1.6f);
             }
-            velocity += normal * (Mathf.Max(0f, -closing) * share * RamSelfPushScale +
-                overlap * RamSelfPushScale);
+            // The push that keeps the two boxes apart is not a speed cost: it
+            // applies in chaos too, or the rammer ends up sharing the rival's
+            // space while it keeps all of its speed.
+            velocity += normal * (Mathf.Max(0f, -closing) * share * RamSelfPushScale + overlap);
             // The box push can keep the spheres from ever touching: count it as the bump.
             if (Time.fixedTime >= kartContactUntil)
             {
@@ -722,7 +736,10 @@ public sealed class GymRaceKart : MonoBehaviour
                 // one that rammed keeps its speed, the other loses some, unless
                 // the hit landed on its rear bumper (a drafting nudge, which
                 // costs neither of them anything).
-                if (ramming && RammedSpeedKeep < 0.999f &&
+                // Only a soft contact costs the kart that was hit: a hard ram
+                // throws it forward instead. Taking its speed away as well left
+                // the two boxes overlapped for the rest of the corner.
+                if (ramming && RammedSpeedKeep < 0.999f && -closing < 12f &&
                     Vector3.Dot(normal, other.bodyFacing) > -0.7f)
                 {
                     other.body.linearVelocity *= RammedSpeedKeep;

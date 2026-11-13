@@ -18,10 +18,20 @@ public sealed class GymRaceAIDriver : MonoBehaviour
     public int ShortcutChoice = -1;
 
     private const float LateralGrip = 17f;
+    /// <summary>Seconds off the line with no corner limit. The grid is tight:
+    /// a driver that lifts here is rear-ended before the first corner.</summary>
+    public const float LaunchSeconds = 1.4f;
+    /// <summary>Slowest a kart may crawl before the driver backs out of it.</summary>
+    private const float StuckSpeed = 1.6f;
+    private const float StuckSeconds = 1.2f;
+    private const float ReverseSeconds = 0.9f;
+
     private GymRaceRacer racer;
     private GymRaceKart kart;
     private int decidedForLap = -1;
     private float wobble;
+    private float stuckTimer;
+    private float reverseUntil = -1f;
 
     private void Awake()
     {
@@ -54,6 +64,38 @@ public sealed class GymRaceAIDriver : MonoBehaviour
         Vector3 to = Vector3.ProjectOnPlane(target - position, Vector3.up);
         float angle = Vector3.SignedAngle(kart.Heading, to, Vector3.up);
         input.Steer = Mathf.Clamp(angle / 28f, -1f, 1f);
+
+        // Wedged in a corner (a wall, a rival, the cheek of a kerb): back out
+        // steering the other way instead of grinding there for the race.
+        if (raceTime < reverseUntil)
+        {
+            input.Throttle = 0f;
+            input.Brake = 1f;
+            input.Steer = angle >= 0f ? -1f : 1f;
+            return input;
+        }
+        if (Mathf.Abs(kart.ForwardSpeed) < StuckSpeed && raceTime > LaunchSeconds + 1f)
+        {
+            stuckTimer += Time.deltaTime;
+            if (stuckTimer >= StuckSeconds)
+            {
+                stuckTimer = 0f;
+                reverseUntil = raceTime + ReverseSeconds;
+            }
+        }
+        else
+        {
+            stuckTimer = 0f;
+        }
+
+        // Off the line: everyone leaves the grid flat out.
+        if (raceTime < LaunchSeconds)
+        {
+            input.Throttle = 1f;
+            input.Brake = 0f;
+            input.DriftHeld = false;
+            return input;
+        }
 
         // Speed limit from the tightest curvature over the next stretch.
         float curvature = MaxCurvature(path, s + 4f, 10f + speed * 1.1f);
