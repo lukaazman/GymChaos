@@ -100,6 +100,15 @@ public sealed class GymExperienceService : MonoBehaviour
     public int LoyaltyStamps => state != null ? state.loyaltyStamps : 0;
     public int LoyaltyStampsEarnedToday =>
         state != null && state.loyaltyStampDay == state.gymDay ? state.loyaltyStampsToday : 0;
+    public int ExperienceToNextLevel =>
+        GetExperienceToNextLevel(state != null ? state.level : 1);
+
+    /// <summary>Journal copy: the goal's target and label without touching its private table.</summary>
+    public int DailyGoalTarget(int index) =>
+        DailyGoalTargets[Mathf.Clamp(index, 0, DailyGoalTargets.Length - 1)];
+
+    public string DailyGoalLabel(int index) =>
+        DailyGoalLabels[Mathf.Clamp(index, 0, DailyGoalLabels.Length - 1)];
     public bool AllStatsMaxed =>
         GetStatRank(GymStat.Strength) >= MaxStatRank &&
         GetStatRank(GymStat.Endurance) >= MaxStatRank &&
@@ -113,13 +122,26 @@ public sealed class GymExperienceService : MonoBehaviour
         {
             instance.player = targetPlayer != null ? targetPlayer : instance.player;
             instance.EnsureCosmetics();
+            EnsureTutorialHosts(targetPlayer != null ? targetPlayer : instance.player);
             return instance;
         }
 
         GameObject serviceObject = new GameObject("Gym Progression Service");
         instance = serviceObject.AddComponent<GymExperienceService>();
         instance.Initialize(targetPlayer);
+        EnsureTutorialHosts(targetPlayer);
         return instance;
+    }
+
+    /// <summary>The tutorial and the journal live beside the progression service.</summary>
+    private static void EnsureTutorialHosts(PlayerMovement targetPlayer)
+    {
+        if (targetPlayer == null)
+        {
+            return;
+        }
+        GymTutorialDirector.EnsureCreated(targetPlayer);
+        GymProgressionJournal.EnsureCreated(targetPlayer);
     }
 
     private void Initialize(PlayerMovement targetPlayer)
@@ -155,6 +177,7 @@ public sealed class GymExperienceService : MonoBehaviour
         state.lockerPrepCompleted = false;
         state.dailyProgress = new[] { 0, 0, 0 };
         state.dailyCompleted = new[] { false, false, false };
+        GymTutorialDirector.ArmForNewSave(state, !hasPreviousSave);
         SaveNow();
         EnsureCosmetics();
 
@@ -178,6 +201,8 @@ public sealed class GymExperienceService : MonoBehaviour
             ? JsonUtility.FromJson<GymProgressionState>(JsonUtility.ToJson(saved))
             : new GymProgressionState();
         state.Normalize();
+        GymTutorialDirector.ArmForNewSave(state,
+            saved == null || (state.totalExperience == 0 && state.raceStarts == 0 && state.gymDay <= 1));
         if (startNewDay)
         {
             state.gymDay = Mathf.Max(1, state.gymDay + 1);

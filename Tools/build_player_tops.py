@@ -466,6 +466,12 @@ def main():
     # Onyx hugs the skin at its edges (no step where it ends) and stands a
     # few mm off it inside, enough to cover the tank top's sculpted ridges.
     onyx_inflate = ONYX_INFLATE_EDGE + (ONYX_INFLATE - ONYX_INFLATE_EDGE) * smoothstep(0.0, 0.006, onyx_edge)
+    # Below the shorts' and sweatpants' waistband (build_player_bottoms.WAIST,
+    # their elastic waistbands stand 4-8 mm off the body there) the hem sits over the
+    # waistband instead of level with it: two shells at one height flickered
+    # through each other as black flakes on the shorts.
+    waist_lift = 0.012 * (1 - smoothstep(0.545, 0.60, z))
+    onyx_inflate = np.maximum(onyx_inflate, waist_lift)
     write_mask('onyx_shell.bytes', onyx_grown, onyx_inflate, onyx, onyx_edge)
 
     DEBUG.mkdir(parents=True, exist_ok=True)

@@ -38,6 +38,11 @@ public sealed class GymRaceHud : MonoBehaviour
     private Image boostFillImage;
     private RectTransform minimapRect;
     private GymRaceMinimapGraphic minimap;
+    // Gold diamond for the tutorial race objective; it never draws in a normal race.
+    private RectTransform minimapObjective;
+    private Image minimapObjectiveImage;
+    private Vector3 minimapObjectiveWorld;
+    private bool minimapObjectiveWanted;
     private readonly List<RectTransform> minimapDots = new List<RectTransform>();
     private readonly List<Image> minimapDotImages = new List<Image>();
     private readonly List<GymRaceRacer> shownOrder = new List<GymRaceRacer>();
@@ -50,6 +55,7 @@ public sealed class GymRaceHud : MonoBehaviour
     private Text centerText;
     private Text bannerText;
     private Text hintText;
+    private Text itemText;
     private GymRaceSpeedLines speedLines;
     private RectTransform resultsRoot;
     private Text resultsTitle;
@@ -138,6 +144,28 @@ public sealed class GymRaceHud : MonoBehaviour
         minimap = Stretch(new GameObject("Track", typeof(RectTransform), typeof(CanvasRenderer)), minimapRect).gameObject.AddComponent<GymRaceMinimapGraphic>();
         minimap.raycastTarget = false;
 
+        // The objective marker: the same diamond the racers use, in goal gold,
+        // with a dark core so it reads differently from a kart at a glance.
+        minimapObjective = new GameObject("Objective", typeof(RectTransform), typeof(Image))
+            .GetComponent<RectTransform>();
+        minimapObjective.SetParent(minimapRect, false);
+        minimapObjective.anchorMin = minimapObjective.anchorMax = Vector2.zero;
+        minimapObjective.sizeDelta = new Vector2(22f, 22f);
+        minimapObjective.localRotation = Quaternion.Euler(0f, 0f, 45f);
+        minimapObjectiveImage = minimapObjective.GetComponent<Image>();
+        minimapObjectiveImage.color = PersonaMenuStyle.Gold;
+        minimapObjectiveImage.raycastTarget = false;
+        RectTransform core = new GameObject("Core", typeof(RectTransform), typeof(Image))
+            .GetComponent<RectTransform>();
+        core.SetParent(minimapObjective, false);
+        core.anchorMin = Vector2.zero;
+        core.anchorMax = Vector2.one;
+        core.offsetMin = new Vector2(7f, 7f);
+        core.offsetMax = new Vector2(-7f, -7f);
+        core.GetComponent<Image>().color = new Color(0.01f, 0.03f, 0.08f, 1f);
+        core.GetComponent<Image>().raycastTarget = false;
+        minimapObjective.gameObject.SetActive(false);
+
         // Number, then its unit on its own line below, then the boost bar:
         // the title font's tall digits used to run into the KM/H label.
         RectTransform bottomRight = Corner("Speed", new Vector2(1f, 0f), new Vector2(-40f, 36f), new Vector2(420f, 200f));
@@ -165,6 +193,8 @@ public sealed class GymRaceHud : MonoBehaviour
         centerText = Label(center, "Countdown", title, string.Empty, new Vector2(-450f, 0f), new Vector2(900f, 240f), 210, PersonaMenuStyle.Ink, TextAnchor.MiddleCenter);
         RectTransform banner = Corner("Banner", new Vector2(0.5f, 0.5f), new Vector2(0f, -40f), new Vector2(900f, 120f));
         bannerText = Label(banner, "Banner", title, string.Empty, new Vector2(-450f, 0f), new Vector2(900f, 110f), 78, PersonaMenuStyle.Gold, TextAnchor.MiddleCenter);
+        RectTransform item = Corner("Item", new Vector2(0.5f, 1f), new Vector2(0f, -30f), new Vector2(700f, 70f));
+        itemText = Label(item, "Item", title, string.Empty, new Vector2(-350f, 0f), new Vector2(700f, 64f), 48, PersonaMenuStyle.Gold, TextAnchor.MiddleCenter);
         RectTransform hint = Corner("Hint", new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(1400f, 50f));
         hintText = Label(hint, "Controls", body, string.Empty, new Vector2(-700f, 0f), new Vector2(1400f, 44f), 28, PersonaMenuStyle.Muted, TextAnchor.MiddleCenter);
 
@@ -411,6 +441,17 @@ public sealed class GymRaceHud : MonoBehaviour
         hintText.text = text;
     }
 
+    public string ItemLabelForVerification => itemText.text;
+
+    /// <summary>The held chaos item, top centre; empty hides it.</summary>
+    public void SetItem(string label)
+    {
+        if (itemText.text != label)
+        {
+            itemText.text = label;
+        }
+    }
+
     public void UpdatePlayer(GymRaceRacer racer, float raceTime, bool showWrongWay)
     {
         if (racer == null)
@@ -506,6 +547,26 @@ public sealed class GymRaceHud : MonoBehaviour
         }
     }
 
+    /// <summary>Gold marker on the minimap for this race's objective, or off.</summary>
+    public void SetMinimapObjective(Vector3 worldPosition, bool visible)
+    {
+        minimapObjectiveWorld = worldPosition;
+        minimapObjectiveWanted = visible;
+        if (minimapObjective != null && minimapObjective.gameObject.activeSelf != visible)
+        {
+            minimapObjective.gameObject.SetActive(visible);
+        }
+    }
+
+    public bool MinimapObjectiveVisible => minimapObjective != null && minimapObjectiveWanted &&
+        minimapObjective.gameObject.activeSelf;
+
+    public Color MinimapObjectiveColor =>
+        minimapObjectiveImage != null ? minimapObjectiveImage.color : Color.clear;
+
+    public Vector2 MinimapObjectivePosition =>
+        minimapObjective != null ? minimapObjective.anchoredPosition : Vector2.zero;
+
     public void UpdateMinimap(IList<GymRaceRacer> racers)
     {
         while (minimapDots.Count < racers.Count)
@@ -538,6 +599,14 @@ public sealed class GymRaceHud : MonoBehaviour
             {
                 minimapDots[i].SetAsLastSibling();
             }
+        }
+        // The objective stays above every kart dot, including the player's.
+        if (minimapObjective != null && minimapObjectiveWanted)
+        {
+            Vector2 goal = minimap.Project(minimapObjectiveWorld);
+            minimapObjective.anchoredPosition = new Vector2(goal.x * size.x, goal.y * size.y);
+            minimapObjective.SetAsLastSibling();
+            minimapObjective.gameObject.SetActive(true);
         }
     }
 

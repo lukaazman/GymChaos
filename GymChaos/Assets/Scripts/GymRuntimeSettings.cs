@@ -59,6 +59,13 @@ public static class GymRuntimeSettings
     /// <summary>The color grade the brightness and contrast sliders drive (null before the first apply).</summary>
     internal static ColorAdjustments Grade => grade;
 
+    // Base look under ACES at neutral sliders. The grade volume outranks the scene
+    // profile, so the base lives here: +1 EV and a softer curve lift the ACES toe
+    // back to the brightness the gym has with POST FX off (measured on layout renders),
+    // while highlights roll off instead of clipping.
+    internal const float BaseExposure = 1f;
+    internal const float BaseContrast = -15f;
+
     /// <summary>Verifier access: the grade volume stays on whatever POST FX says.</summary>
     internal static bool GradeVolumeEnabled => gradeVolume != null && gradeVolume.enabled;
 
@@ -95,7 +102,7 @@ public static class GymRuntimeSettings
         Stretch(veil.rectTransform);
         CreateSettingsSheet(panel.transform, titleFont);
 
-        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", 0.768f);
+        CreateSectionHeader(panel.transform, labelFont, "Display Section", "DISPLAY", HeaderY(0));
         float up = RowsHiddenShift;
         // WebGL: the page owns the canvas size and the template's button owns
         // fullscreen; a fullscreen request from here can be refused by the
@@ -107,7 +114,7 @@ public static class GymRuntimeSettings
         CreateDropdown("Render Scale Dropdown", panel.transform, labelFont,
             RenderScaleLabels(), StoredRenderScaleIndex(), RowY(renderScaleRow), ApplyRenderScale);
 
-        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", 0.6f + up);
+        CreateSectionHeader(panel.transform, labelFont, "Graphics Section", "GRAPHICS", HeaderY(3));
         CreateSliderRow(panel.transform, labelFont, "BRIGHTNESS", "Brightness", " Slider", 3, brightness,
             FormatGrade, value =>
             {
@@ -158,7 +165,7 @@ public static class GymRuntimeSettings
             ApplyPostProcessing(value);
         });
 
-        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", 0.308f + up);
+        CreateSectionHeader(panel.transform, labelFont, "Audio Section", "AUDIO", HeaderY(9));
         CreateSliderRow(panel.transform, labelFont, "MASTER", "Master", " Volume Slider", 9, masterVolume,
             FormatVolume, value =>
             {
@@ -181,7 +188,7 @@ public static class GymRuntimeSettings
         // Downscaled copy of the menu buttons, centred under the sheet.
         Button back = PersonaMenuStyle.CreateButton(panel.transform, "Options Back Button",
             labelFont, "BACK", PersonaMenuStyle.ArtWidth * 0.5f,
-            PersonaMenuStyle.ArtHeight * (0.875f - up), 190f, 52f, 44, -1f, () =>
+            PersonaMenuStyle.ArtHeight * (0.929f - up), 190f, 52f, 44, -1f, () =>
             {
                 PlayerPrefs.Save();
                 backAction?.Invoke();
@@ -200,10 +207,14 @@ public static class GymRuntimeSettings
     private const float ControlMaxX = 0.665f;
     private const float ValueMinX = 0.61f;
     private const float RowHeight = 0.036f;
-    // Pitch 0.040 and two 0.052 header gaps keep the last of the twelve rows on the
-    // bottom row the sheet already ended at.
+    // Row pitch 0.040. A header box (0.040) sits 0.012 above its first row and
+    // 0.032 below the previous section, so each title reads as part of the rows under it.
     private static readonly float[] RowBottoms =
-        { 0.72f, 0.68f, 0.64f, 0.548f, 0.508f, 0.468f, 0.428f, 0.388f, 0.348f, 0.256f, 0.216f, 0.176f };
+        { 0.72f, 0.68f, 0.64f, 0.52f, 0.48f, 0.44f, 0.40f, 0.36f, 0.32f, 0.20f, 0.16f, 0.12f };
+    private const float HeaderGap = 0.012f;
+
+    // Header box bottom for a section whose first row is firstRow.
+    private static float HeaderY(int firstRow) => RowY(firstRow) + RowHeight + HeaderGap;
     private static readonly Color OptionsVeil = new Color(0.012f, 0.05f, 0.13f, 0.72f);
     private static readonly Color SheetColor = new Color(0.03f, 0.036f, 0.058f, 1f);
 
@@ -268,7 +279,7 @@ public static class GymRuntimeSettings
         GameObject sheet = new GameObject("Options Sheet", typeof(RectTransform));
         sheet.transform.SetParent(parent, false);
         RectTransform sheetRect = sheet.GetComponent<RectTransform>();
-        SetAnchors(sheetRect, new Vector2(SheetMinX, 0.085f + RowsHiddenShift), new Vector2(SheetMaxX, 0.905f));
+        SetAnchors(sheetRect, new Vector2(SheetMinX, 0.022f + RowsHiddenShift), new Vector2(SheetMaxX, 0.905f));
         sheetRect.localRotation = Quaternion.Euler(0f, 0f, -0.8f);
         PersonaShape edge = PersonaMenuStyle.CreateShape("Sheet Accent Edge", sheet.transform,
             PersonaMenuStyle.Accent);
@@ -1019,7 +1030,8 @@ public static class GymRuntimeSettings
         PlayerPrefs.SetFloat(ContrastKey, contrast);
         // Saved per change: a WebGL tab can close without BACK ever being pressed.
         PlayerPrefs.Save();
-        if (grade == null)
+        // The volume object can be gone while the profile lives on (an edit-mode scene reload).
+        if (grade == null || gradeVolume == null)
         {
             // A volume of its own: it survives scene reloads and runs after the scene's.
             gradeVolume = new GameObject("Gym Color Grade Volume", typeof(Volume)).GetComponent<Volume>();
@@ -1037,8 +1049,8 @@ public static class GymRuntimeSettings
         // Ranges sized like a television's: a full sweep either way is a
         // noticeable lift or crush, not the over-exposed picture the old
         // 1.6 stops of exposure and 40 points of contrast gave at the ends.
-        grade.postExposure.Override(Mathf.Lerp(-0.9f, 0.9f, brightness));
-        grade.contrast.Override(Mathf.Lerp(-22f, 22f, contrast));
+        grade.postExposure.Override(BaseExposure + Mathf.Lerp(-0.9f, 0.9f, brightness));
+        grade.contrast.Override(BaseContrast + Mathf.Lerp(-22f, 22f, contrast));
         // Only an off-centre grade needs the camera's post pass: at neutral
         // the POST FX toggle alone decides whether it runs.
         bool active = Mathf.Abs(brightness - 0.5f) > 0.002f || Mathf.Abs(contrast - 0.5f) > 0.002f;

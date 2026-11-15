@@ -153,8 +153,12 @@ public static class GymChaosLayoutDump
                         string[] v = parts[1].Split(',');
                         if (v.Length != 5) continue;
                         float F(int i) => float.Parse(v[i], CultureInfo.InvariantCulture);
-                        CapturePerspective(Path.Combine(directory, $"view-{parts[0]}.png"),
-                            new Vector3(F(0), F(1), F(2)), Quaternion.Euler(F(4), F(3), 0f));
+                        Vector3 at = new Vector3(F(0), F(1), F(2));
+                        Quaternion look = Quaternion.Euler(F(4), F(3), 0f);
+                        CapturePerspective(Path.Combine(directory, $"view-{parts[0]}.png"), at, look, false);
+                        // GYMCHAOS_LAYOUT_POST=1 adds the same view with the post stack (grade at the saved sliders).
+                        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GYMCHAOS_LAYOUT_POST")))
+                            CapturePerspective(Path.Combine(directory, $"view-{parts[0]}-post.png"), at, look, true);
                     }
                 }
             }
@@ -185,10 +189,11 @@ public static class GymChaosLayoutDump
         UnityEngine.Object.DestroyImmediate(host);
     }
 
-    private static void CapturePerspective(string path, Vector3 position, Quaternion rotation)
+    private static void CapturePerspective(string path, Vector3 position, Quaternion rotation, bool post)
     {
         GameObject host = new GameObject("Layout View Camera");
         Camera camera = host.AddComponent<Camera>();
+        host.AddComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>().renderPostProcessing = post;
         camera.fieldOfView = 70f;
         camera.transform.SetPositionAndRotation(position, rotation);
         camera.nearClipPlane = 0.05f;

@@ -189,7 +189,8 @@ public static class GymChaosRaceCaptureVerifier
             heads++;
             string headFolder = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "..", "Logs", "agent", "race");
             Directory.CreateDirectory(headFolder);
-            File.WriteAllBytes(Path.Combine(headFolder, "head_" + racer.DisplayName.Replace(' ', '_') + ".png"), racer.Headshot.EncodeToPNG());
+            byte[] png = EncodeHead(racer.Headshot);
+            if (png != null) File.WriteAllBytes(Path.Combine(headFolder, "head_" + racer.DisplayName.Replace(' ', '_') + ".png"), png);
             written.Add("head_" + racer.DisplayName);
         }
         if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Null && heads < 6)
@@ -480,6 +481,24 @@ public static class GymChaosRaceCaptureVerifier
         written.Add(name);
         Object.Destroy(rt);
         Object.Destroy(image);
+    }
+
+    // Fixed portraits are imported textures without CPU access: copy through the GPU.
+    private static byte[] EncodeHead(Texture2D head)
+    {
+        if (head.isReadable) return head.EncodeToPNG();
+        if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null) return null;
+        RenderTexture target = RenderTexture.GetTemporary(head.width, head.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+        RenderTexture previous = RenderTexture.active;
+        Graphics.Blit(head, target);
+        RenderTexture.active = target;
+        Texture2D copy = new Texture2D(head.width, head.height, TextureFormat.RGBA32, false);
+        copy.ReadPixels(new Rect(0, 0, head.width, head.height), 0, 0);
+        RenderTexture.active = previous;
+        RenderTexture.ReleaseTemporary(target);
+        byte[] png = copy.EncodeToPNG();
+        Object.DestroyImmediate(copy);
+        return png;
     }
 
     private static void Finish(int code, string detail)

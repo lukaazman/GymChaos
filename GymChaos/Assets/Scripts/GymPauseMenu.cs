@@ -18,6 +18,7 @@ public sealed class GymPauseMenu : MonoBehaviour
     private Button resumeButton;
     private Button saveButton;
     private Button saveAndReturnButton;
+    private Button skipTutorialButton;
     private Button retryButton;
     private Text saveStatus;
     private Text failureMessage;
@@ -149,6 +150,9 @@ public sealed class GymPauseMenu : MonoBehaviour
         saveAndReturnButton = PersonaMenuStyle.CreateButton(
             pausePage.transform, "Pause Save Return Button", buttonFont, "SAVE & RETURN TO MENU",
             300f, 508f, 510f, 68f, 52, -1.5f, SaveAndReturn);
+        skipTutorialButton = PersonaMenuStyle.CreateButton(
+            pausePage.transform, "Pause Skip Tutorial Button", buttonFont, "SKIP TUTORIAL",
+            386f, 596f, 420f, 62f, 46, -1.5f, SkipTutorial);
         saveStatus = PersonaMenuStyle.CreateLabel(
             pausePage.transform, "Pause Save Status", buttonFont, string.Empty,
             640f, 420f, 460f, 60f, 34, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
@@ -278,6 +282,20 @@ public sealed class GymPauseMenu : MonoBehaviour
         GymShared.Select(loadGameButton);
     }
 
+    /// <summary>The tutorial can be dismissed from here; the experience stays.</summary>
+    private void SkipTutorial()
+    {
+        GymExperienceService progression = GymExperienceService.Active;
+        if (progression == null || progression.State == null)
+        {
+            return;
+        }
+        GymTutorialDirector.SkipAll(progression.State);
+        if (skipTutorialButton != null) skipTutorialButton.gameObject.SetActive(false);
+        if (GymSessionService.HasActive) GymSessionService.RequestSave("skip-tutorial");
+        GymHud.Active?.PushNotice("Tutorial skipped. The gym is yours.", 3f, 1);
+    }
+
     private void ShowPausePage()
     {
         if (deathMode)
@@ -297,6 +315,12 @@ public sealed class GymPauseMenu : MonoBehaviour
         bool hasCharacter = GymSessionService.HasActive;
         saveButton.gameObject.SetActive(hasCharacter);
         saveAndReturnButton.gameObject.SetActive(hasCharacter);
+        if (skipTutorialButton != null)
+        {
+            GymExperienceService progression = GymExperienceService.Active;
+            skipTutorialButton.gameObject.SetActive(hasCharacter &&
+                GymTutorialDirector.IsActive(progression != null ? progression.State : null));
+        }
         saveStatus.gameObject.SetActive(hasCharacter);
         SetMenuVisible(true);
         GymShared.Select(resumeButton);

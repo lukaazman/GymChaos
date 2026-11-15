@@ -45,6 +45,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
     private Vector3[] current;
     private Ring[] rings = System.Array.Empty<Ring>();
     private bool verificationDriven;
+    private bool dirty;
 
     public bool IsConfigured => rings.Length > 0;
 
@@ -142,6 +143,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
             rings[r].TargetWorld += anchorVelocity * dt;
             Step(rings[r], dt);
         }
+        Flush();
     }
 
     /// <summary>Puts the cloth back on the body and hands the mesh back to the
@@ -166,6 +168,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
             ring.TargetWorld = ToWorld(ring).MultiplyPoint3x4(ring.RestCentre);
             Step(ring, dt);
         }
+        Flush();
     }
 
     private void Step(Ring ring, float dt)
@@ -182,7 +185,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
             {
                 System.Array.Copy(rest, ring.Start, current, ring.Start, ring.Count);
                 ring.Offset = false;
-                Flush(ring);
+                dirty = true;
             }
             return;
         }
@@ -212,7 +215,7 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
         }
         InwardDepthForVerification = Mathf.Max(InwardDepthForVerification, inward);
         ring.Offset = true;
-        Flush(ring);
+        dirty = true;
     }
 
     private Matrix4x4 ToWorld(Ring ring) => ring.Anchor.localToWorldMatrix * ring.BindPose;
@@ -229,8 +232,14 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
     // logs "Mesh.vertices is too small" on every flush; a partial
     // SetVertexBufferData on this runtime-built mesh displaced vertices outside
     // the range instead. current holds the rest pose everywhere the cloth is
-    // not moving, so writing all of it changes nothing but the rings.
-    private void Flush(Ring ring) => mesh.SetVertices(current);
+    // not moving, so writing all of it changes nothing but the rings. Once per
+    // step, however many rings moved.
+    private void Flush()
+    {
+        if (!dirty) return;
+        dirty = false;
+        mesh.SetVertices(current);
+    }
 
     private void Restore()
     {
@@ -241,8 +250,9 @@ public sealed class PlayerTopShellCloth : MonoBehaviour
             if (ring == null || !ring.Offset) continue;
             System.Array.Copy(rest, ring.Start, current, ring.Start, ring.Count);
             ring.Offset = false;
-            Flush(ring);
+            dirty = true;
         }
+        Flush();
     }
 
     private static void AddWeight(int index, float weight, ref int dominant, ref float best)

@@ -49,7 +49,9 @@ public sealed partial class GymRaceDirector : MonoBehaviour
     private RaceMode mode;
     public RaceMode CurrentMode => mode;
     // The 13 m bus starts behind the back row instead of on it.
-    private const float BusGridSetback = 3.5f;
+    // Thirteen metres of bus on a grid with 7.2 m rows: at 3.5 m it stood inside
+    // the row behind it (a kart measured 1.18 m inside its body on the grid).
+    private const float BusGridSetback = 8.5f;
 
     public static readonly int[] PlaceExperience = { 300, 200, 140, 100, 80, 60 };
     public const int FirstWinBonus = 250;
@@ -76,6 +78,9 @@ public sealed partial class GymRaceDirector : MonoBehaviour
     private readonly List<GymRaceRacer> racers = new List<GymRaceRacer>();
     private readonly List<GymRaceRacer> ordered = new List<GymRaceRacer>();
     private GymRaceRacer playerRacer;
+    // The in-race coach teaches one control at a time instead of a wall of text.
+    private GymRaceCoach coach;
+    private bool tutorialRace;
     private GymRaceVehicleFactory.Car playerCar;
     private PlayerVehicleOccupant playerOccupant;
     private bool playerSeated;
@@ -100,6 +105,13 @@ public sealed partial class GymRaceDirector : MonoBehaviour
     public IReadOnlyList<GymRaceVehicleFactory.Car> Cars => cars;
     public GymRaceChaseCamera ChaseCamera => chase;
     public GymRaceHud Hud => hud;
+    /// <summary>True from the flyover until the results close.</summary>
+    public bool RaceActive => phase != Phase.Idle;
+    /// <summary>The tutorial race: Easy, solo, and it leaves the record board alone.</summary>
+    public bool IsTutorialRace => tutorialRace;
+    private GymRacePickups pickups;
+    /// <summary>Chaos only: the item tubs on the road (null in a Normal race).</summary>
+    public GymRacePickups Pickups => pickups;
     public bool PlayerSeatedForVerification => playerSeated;
     public int LastAwardedExperience { get; private set; }
     public int LastPlayerPlace { get; private set; }
@@ -244,8 +256,20 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         int unlocked = UnlockedDifficulty;
         difficulty = netRole == NetRoleKind.Guest ? netDifficulty : 0;
         pickedDifficulty = 0;
+        // The first race on a new save is the tutorial: Easy, solo, no menus.
+        tutorialRace = netRole == NetRoleKind.None && !autopilot &&
+            GymTutorialDirector.TutorialRacePendingFor(GymExperienceService.Active?.State);
+        if (tutorialRace)
+        {
+            mode = RaceMode.Normal;
+            GymHud.Active?.PushNotice("Tutorial race: Easy. The coach shows one key at a time.", 4.5f, 2);
+        }
         // The sign first asks for the mode. Chaos is solo: a co-op room races Normal.
-        if (netRole != NetRoleKind.None)
+        if (tutorialRace)
+        {
+            mode = RaceMode.Normal;
+        }
+        else if (netRole != NetRoleKind.None)
         {
             mode = RaceMode.Normal;
         }
@@ -254,7 +278,7 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             yield return PickMode();
             player.SetCursorCaptured(true);
         }
-        if (pickedDifficulty >= 0 && unlocked > 0 && !autopilot && netRole != NetRoleKind.Guest)
+        if (!tutorialRace && pickedDifficulty >= 0 && unlocked > 0 && !autopilot && netRole != NetRoleKind.Guest)
         {
             yield return PickDifficulty(unlocked, false);
             player.SetCursorCaptured(true);
@@ -308,6 +332,11 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         PlayCrumbles();
 
         CreateKarts();
+        if (mode == RaceMode.Chaos)
+        {
+            pickups = GymRacePickups.Create(track.transform, racers);
+            pickups.Human = autopilot ? null : playerRacer;
+        }
         // No walk to the car: the player starts the race behind the wheel.
         SeatPlayerNow();
         CaptureHeadshots();
@@ -343,6 +372,13 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             if (netRole != NetRoleKind.Guest || LastPlayerPlace > 0)
             {
                 AwardResults(xp);
+            }
+            if (tutorialRace)
+            {
+                GymTutorialDirector.MarkTutorialRaceFinished(GymExperienceService.Active?.State);
+                tutorialRace = false;
+                GymHud.Active?.PushNotice("First race done. New difficulty is open at the sign.", 5f, 2);
+                Debug.Log("GYMCHAOS_TUTORIAL_RACE_COMPLETE");
             }
             RacesRunForVerification++;
             player.SetCursorCaptured(false);
@@ -405,7 +441,7 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         // ----------------------------------------------------------- countdown
         phase = Phase.Countdown;
         hud.SetRaceWidgetsVisible(true);
-        hud.SetHint(CountdownHint);
+        hud.SetHint(pickups != null ? "E   GRAB ITEM" : string.Empty);
         countdownStart = Time.time;
         firstThrottleAt = -1f;
         for (int i = 0; i < racers.Count; i++)
@@ -416,6 +452,8 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         yield return CountdownSequence();
         raceStartTime = Time.time;
         NetSendAll("Rg");
+        coach = new GymRaceCoach();
+        coach.Reset();
         StartRacing();
 
         // -------------------------------------------------------------- racing
@@ -424,7 +462,13 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         while (phase == Phase.Racing || phase == Phase.Finishing)
         {
             TickRace();
+            TickCoach();
             yield return null;
+        }
+        coach = null;
+        if (pickups != null)
+        {
+            pickups.Stop();
         }
     }
 
@@ -542,6 +586,10 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             racer.ResetProgress(Time.time);
         }
         ordered.Clear();
+        if (pickups != null)
+        {
+            pickups.ResetField();
+        }
         playerFinishTime = -1f;
         LastPlayerPlace = 0;
         track.SetCountdownLights(0, false);
@@ -1157,6 +1205,10 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         }
         lastPlayerCrossings = 0;
         playerFinishTime = -1f;
+        if (pickups != null)
+        {
+            pickups.Begin();
+        }
     }
 
     private void TickRace()
@@ -1177,6 +1229,10 @@ public sealed partial class GymRaceDirector : MonoBehaviour
                 {
                     racer.RespawnAtSafePoint();
                 }
+                if (input.ItemPressed && pickups != null)
+                {
+                    pickups.Use(racer);
+                }
             }
             else if (racer.RemoteHuman)
             {
@@ -1184,13 +1240,13 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             }
             else if (ai != null)
             {
-                kart.Input = ai.Think(now);
+                kart.Input = ai.Think(raceTime);
             }
             else
             {
                 // Player kart after the finish: the AI drives the cool-down lap.
                 ai = kart.gameObject.AddComponent<GymRaceAIDriver>();
-                kart.Input = ai.Think(now);
+                kart.Input = ai.Think(raceTime);
             }
 
             bool finished = racer.Tick(raceTime, Time.deltaTime, true);
@@ -1245,6 +1301,56 @@ public sealed partial class GymRaceDirector : MonoBehaviour
             }
         }
         return place;
+    }
+
+    /// <summary>One control at a time, into the same line the countdown used.</summary>
+    private void TickCoach()
+    {
+        if (coach == null || hud == null || phase != Phase.Racing ||
+            netRole == NetRoleKind.Guest)
+        {
+            return;
+        }
+        // The coach teaches the tutorial race and the first two after it; a
+        // seasoned driver only gets the ordinary notices.
+        GymProgressionState progression = GymExperienceService.Active != null
+            ? GymExperienceService.Active.State : null;
+        bool coachWanted = tutorialRace || (progression != null && progression.raceStarts <= 2);
+        if (!coachWanted)
+        {
+            hud.SetHint(string.Empty);
+            return;
+        }
+        GymRaceKart kart = playerRacer != null ? playerRacer.Kart : null;
+        if (kart == null)
+        {
+            return;
+        }
+        bool rivalBehind = false;
+        Vector3 me = kart.transform.position;
+        Vector3 heading = kart.Heading;
+        for (int i = 0; i < racers.Count; i++)
+        {
+            GymRaceRacer racer = racers[i];
+            if (racer.IsPlayer || racer.Kart == null) continue;
+            Vector3 offset = racer.Kart.transform.position - me;
+            offset.y = 0f;
+            if (offset.magnitude < 12f && Vector3.Dot(offset, heading) < 0f)
+            {
+                rivalBehind = true;
+                break;
+            }
+        }
+        if (playerRacer != null && playerRacer.CurrentLap >= GymRaceTrackLayout.Laps)
+        {
+            coach.NotifyFinalLap();
+        }
+        bool bendAhead = Mathf.Abs(kart.Input.Steer) > 0.55f;
+        bool stuck = kart.ForwardSpeed < 0.5f && Time.time - raceStartTime > 4f &&
+            playerRacer != null && !playerRacer.Finished;
+        string line = coach.Tick(Time.time, kart.ForwardSpeed, kart.Input.Steer,
+            kart.BoostMeter, bendAhead, rivalBehind, stuck);
+        hud.SetHint(line);
     }
 
     private void UpdateRubberBand()
@@ -1325,6 +1431,18 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         hud.UpdatePlayer(playerRacer, raceTime, playerRacer.WrongWay && phase == Phase.Racing);
         hud.UpdateStandings(ordered);
         hud.UpdateMinimap(racers);
+        // The tutorial race marks its goal gold; every other race keeps the plain map.
+        if (tutorialRace)
+        {
+            GymRaceTrackLayout.Main.Sample(GymRaceTrackLayout.StartLineDistance,
+                out Vector3 goal, out _, out _, out _);
+            hud.SetMinimapObjective(goal, true);
+        }
+        else
+        {
+            hud.SetMinimapObjective(Vector3.zero, false);
+        }
+        hud.SetItem(pickups != null ? pickups.Display(playerRacer) : string.Empty);
     }
 
     private void CoastAll()
@@ -1333,7 +1451,7 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         {
             GymRaceKart kart = racers[i].Kart;
             GymRaceAIDriver ai = racers[i].GetComponent<GymRaceAIDriver>();
-            GymRaceDriveInput input = ai != null ? ai.Think(Time.time) : new GymRaceDriveInput();
+            GymRaceDriveInput input = ai != null ? ai.Think(Time.time - raceStartTime) : new GymRaceDriveInput();
             input.Throttle = Mathf.Min(input.Throttle, 0.35f);
             input.BoostPressed = false;
             input.DriftHeld = false;
@@ -1450,12 +1568,14 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         {
             GymProgressionState state = progression.State;
             state.raceStarts++;
+            // The tutorial race teaches the controls; it must not sit on the record board.
             float bestLap = BestPlayerLap();
-            if (bestLap > 0f && (state.raceBestLapMs == 0 || bestLap * 1000f < state.raceBestLapMs))
+            if (!tutorialRace && bestLap > 0f &&
+                (state.raceBestLapMs == 0 || bestLap * 1000f < state.raceBestLapMs))
             {
                 state.raceBestLapMs = Mathf.RoundToInt(bestLap * 1000f);
             }
-            if (resultFinished)
+            if (resultFinished && !tutorialRace)
             {
                 int total = Mathf.RoundToInt(resultFinishTime * 1000f);
                 if (state.raceBestTotalMs == 0 || total < state.raceBestTotalMs)
@@ -1523,6 +1643,8 @@ public sealed partial class GymRaceDirector : MonoBehaviour
         cars.Clear();
         playerRacer = null;
         playerCar = null;
+        // The tubs live under the track and go with it.
+        pickups = null;
         if (track != null) Destroy(track.gameObject);
         track = null;
         GymRaceCityCarver.Restore();

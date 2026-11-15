@@ -37,9 +37,11 @@ EDGE_RANGE = tops.EDGE_RANGE
 # Waistband reaches under every top's hem (tank 0.528, Onyx 0.505), so no
 # unpainted body band shows between them.
 WAIST = 0.545
-# The scan's own black shorts end at 0.335 and their trim shows as dark lines
-# under a coloured shell: the shell's hem reaches past the end, not to it.
-SHORTS_HEM = 0.305
+# The scan's own black shorts end at 0.335 (dark share of the texels falls from
+# 0.7 to 0.01 between 0.34 and 0.328) and their trim shows as dark lines under a
+# coloured shell: the hem sits on that trim, a centimetre past the cloth, and no
+# lower: skin starts at 0.33 and used to be painted down to 0.285.
+SHORTS_HEM = 0.33
 ANKLE = 0.055
 # Straight leg: tube round a vertical axis per leg (x = +-LEG_AXIS_X,
 # y = LEG_AXIS_Y), radius from HEM_RADIUS at the hem to THIGH_RADIUS at the
@@ -94,9 +96,9 @@ def main():
 
     shorts_edge = np.where(legs, np.minimum(WAIST - z, z - SHORTS_HEM), -1.0)
     pants_edge = np.where(legs, np.minimum(WAIST - z, z - ANKLE), -1.0)
-    shorts_cover = shorts_edge > -0.012
+    shorts_cover = shorts_edge > -0.008
     pants_cover = pants_edge > -0.012
-    shorts_paint = shorts_edge >= -0.02
+    shorts_paint = shorts_edge >= -0.012
     pants_paint = pants_edge >= -0.02
 
     # Neutral track-pants tricot: smooth, faint heather, long straight fall,
@@ -112,7 +114,7 @@ def main():
     fall += 0.035 * np.sin(z * 260 + around * 2) * tops.smoothstep(ANKLE + 0.07, ANKLE + 0.01, z)
     seat = 0.02 * np.sin(x * 70 + 2.0 * np.sin(z * 22)) * tops.smoothstep(CROTCH - 0.02, CROTCH + 0.04, z)
     folds = 1 + fall + seat
-    waistband = 1 - 0.07 * tops.smoothstep(WAIST - 0.03, WAIST - 0.022, z)
+    waistband = 1 - 0.12 * tops.smoothstep(WAIST - 0.03, WAIST - 0.022, z)
     hem = 1 - 0.06 * tops.smoothstep(ANKLE + 0.012, ANKLE + 0.004, z)
     shade = np.clip(FABRIC_LEVEL * (1 + 0.012 * heather + 0.006 * fine) * folds * waistband * hem, 0, 1)
 
@@ -140,8 +142,11 @@ def main():
         ok, png = cv2.imencode('.png', shell[..., [2, 1, 0, 3]])
         (OUT / name).write_bytes(png.tobytes())
 
-    # Shorts: close at the waistband and hem, a little loose over the thigh.
-    shorts_inflate = 0.002 + 0.006 * tops.smoothstep(0.0, 0.03, shorts_edge)
+    # Shorts: close at the waistband and hem, a little loose over the thigh. The
+    # waistband keeps 8 mm: at 2 mm the body under it, painted with the top's
+    # colour, poked through the shell as specks below the hem.
+    shorts_inflate = (0.002 + 0.006 * tops.smoothstep(0.0, 0.03, shorts_edge) +
+                      0.006 * (1 - tops.smoothstep(0.0, 0.02, WAIST - z)))
     write_mask('shorts_shell.bytes', shorts_cover, shorts_inflate, shorts_paint, shorts_edge)
     # Straight leg: push every leg texel out to its tube, so the silhouette
     # is two straight lines from hip to hem whatever the muscles do; above
@@ -149,7 +154,8 @@ def main():
     tube_radius = HEM_RADIUS + (THIGH_RADIUS - HEM_RADIUS) * tops.smoothstep(ANKLE, CROTCH, z)
     leg_distance = np.hypot(ax - LEG_AXIS_X, y - LEG_AXIS_Y)
     leg = np.clip(tube_radius - leg_distance, TUBE_CLEARANCE, INFLATE_RANGE * 0.98)
-    hips = 0.004 + 0.012 * tops.smoothstep(0.0, 0.03, WAIST - z)
+    # The elastic waistband hugs the body; the seat loosens below it.
+    hips = 0.004 + 0.012 * tops.smoothstep(0.03, 0.06, WAIST - z)
     blend = tops.smoothstep(CROTCH - 0.03, CROTCH + 0.04, z)
     pants_inflate = leg * (1 - blend) + hips * blend
     write_mask('pants_shell.bytes', pants_cover, pants_inflate, pants_paint, pants_edge)

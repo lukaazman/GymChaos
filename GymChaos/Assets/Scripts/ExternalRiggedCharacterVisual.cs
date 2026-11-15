@@ -37,6 +37,16 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     private Mesh runtimeFaceCalibrationMesh;
     private bool runtimeFaceCalibrationSettled;
     private bool runtimeFaceRefreshLogged;
+    // One sample can land in a transition pose (Goku stepping off the cloud put
+    // the bar ~0.5 m in front of his face for the whole session), so the
+    // calibration only settles once two samples taken apart agree.
+    private const float FaceCalibrationAgreement = 0.03f;
+    private const float FaceCalibrationInterval = 0.75f;
+    private const int FaceCalibrationMaxSamples = 10;
+    private int faceCalibrationSamples;
+    private float nextFaceCalibrationTime;
+    private bool hasFaceCalibrationOffset;
+    private Vector3 faceCalibrationOffset;
     private Transform groundedLeftFoot;
     private Transform groundedRightFoot;
     private float groundedFootToMeshOffset;
@@ -177,6 +187,8 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             runtimeFaceCalibrationMesh.MarkDynamic();
         }
         runtimeFaceCalibrationSettled = false;
+        faceCalibrationSamples = 0;
+        hasFaceCalibrationOffset = false;
         groundedLeftFoot = rig.LeftFoot;
         groundedRightFoot = rig.RightFoot;
         // Allow a few idle frames for Unity to refresh the skinned bounds after
@@ -279,10 +291,12 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         // sample the visible pose once and keep the result for the session.
         if (!runtimeFaceCalibrationSettled &&
             heightCorrectionFrames == 0 &&
-            !workoutPoseLocked && !vehiclePose && !nimbusPose)
+            !workoutPoseLocked && !vehiclePose && !nimbusPose &&
+            Time.time >= nextFaceCalibrationTime)
         {
             RefreshRuntimeFaceCensor();
-            runtimeFaceCalibrationSettled = true;
+            runtimeFaceCalibrationSettled = FaceCalibrationAgrees();
+            nextFaceCalibrationTime = Time.time + FaceCalibrationInterval;
         }
     }
 
@@ -320,6 +334,29 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         return BodybuilderEnemyVisual.RefreshImportedFaceCensor(
             runtimeModelRoot, runtimeRenderer, runtimeRig, runtimeIdentity,
             runtimeFaceCensor, runtimeFaceCalibrationMesh);
+    }
+
+    // Records where this sample put the bar, in the head's unscaled frame, and
+    // reports whether it matches the previous sample (or the sample budget is spent).
+    private bool FaceCalibrationAgrees()
+    {
+        if (runtimeFaceCensor == null || runtimeRig == null || runtimeRig.Head == null)
+        {
+            return true;
+        }
+
+        Transform head = runtimeFaceCensor.transform.parent != null
+            ? runtimeFaceCensor.transform.parent
+            : runtimeRig.Head;
+        Vector3 offset = Quaternion.Inverse(head.rotation) *
+            (runtimeFaceCensor.transform.position - head.position);
+        bool agrees = hasFaceCalibrationOffset &&
+            (offset - faceCalibrationOffset).sqrMagnitude <=
+            FaceCalibrationAgreement * FaceCalibrationAgreement;
+        faceCalibrationOffset = offset;
+        hasFaceCalibrationOffset = true;
+        faceCalibrationSamples++;
+        return agrees || faceCalibrationSamples >= FaceCalibrationMaxSamples;
     }
 
     private void RefreshRuntimeFaceCensor()

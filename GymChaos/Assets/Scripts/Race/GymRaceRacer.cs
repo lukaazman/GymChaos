@@ -42,6 +42,11 @@ public sealed class GymRaceRacer : MonoBehaviour
     public bool NeedsRespawn { get; private set; }
     /// <summary>Set by the AI before the fork; the branch is confirmed from position.</summary>
     public bool PreferShortcut;
+    // Chaos pickups; the times are on the pickup field's clock.
+    public GymRaceItem Item;
+    public float ItemReadyAt;
+    public float ItemUseAt;
+    public float ShieldUntil;
     /// <summary>Head portrait for the standings (owned; null without a GPU).</summary>
     public Texture2D Headshot;
 

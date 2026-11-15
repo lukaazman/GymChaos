@@ -14,13 +14,15 @@ public struct GymRaceDriveInput
     public bool LookBack;
     public bool RespawnPressed;
     public bool HornPressed;
+    public bool ItemPressed;
 }
 
 /// <summary>
 /// Player race controls (Mario Kart style):
 /// W / Up / RT accelerate, S / Down / LT brake and reverse, A-D / arrows /
 /// left stick steer, Space / right mouse / RB drift, Left Shift / left mouse /
-/// gamepad A boost, Q / LB look back, R / Y respawn, H horn. Esc stays pause.
+/// gamepad A boost, E / gamepad X item (chaos), Q / LB look back, R / Y
+/// respawn, H horn. Esc stays pause.
 /// </summary>
 public static class GymRaceInput
 {
@@ -42,6 +44,7 @@ public static class GymRaceInput
             input.LookBack |= keyboard.qKey.isPressed;
             input.RespawnPressed |= keyboard.rKey.wasPressedThisFrame;
             input.HornPressed |= keyboard.hKey.wasPressedThisFrame;
+            input.ItemPressed |= keyboard.eKey.wasPressedThisFrame;
         }
         if (mouse != null)
         {
@@ -62,6 +65,7 @@ public static class GymRaceInput
             input.LookBack |= pad.leftShoulder.isPressed;
             input.RespawnPressed |= pad.buttonNorth.wasPressedThisFrame;
             input.HornPressed |= pad.leftStickButton.wasPressedThisFrame;
+            input.ItemPressed |= pad.buttonWest.wasPressedThisFrame;
         }
 #else
         if (Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow)) input.Throttle = 1f;
@@ -73,6 +77,7 @@ public static class GymRaceInput
         input.LookBack = Input.GetKey(KeyCode.Q);
         input.RespawnPressed = Input.GetKeyDown(KeyCode.R);
         input.HornPressed = Input.GetKeyDown(KeyCode.H);
+        input.ItemPressed = Input.GetKeyDown(KeyCode.E);
 #endif
         input.Steer = Mathf.Clamp(input.Steer, -1f, 1f);
         return input;

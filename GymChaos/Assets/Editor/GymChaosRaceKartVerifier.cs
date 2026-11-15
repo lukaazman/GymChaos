@@ -312,6 +312,53 @@ public static class GymChaosRaceKartVerifier
         report.Append($"driftOverlap={worstOverlap:F2} driftClosest={closest:F2} ");
         Object.Destroy(left.gameObject);
         Object.Destroy(right.gameObject);
+
+        // ------------------------------------------------------------ crest hop
+        // Karts are not glued to the road: a 10 degree ramp onto a flat deck at
+        // speed throws the kart, and gravity brings it back down onto the deck.
+        const float rampAngle = 10f, rampLength = 14f;
+        float rampZ = padTop.z + 90f;
+        float sin = Mathf.Sin(rampAngle * Mathf.Deg2Rad), cos = Mathf.Cos(rampAngle * Mathf.Deg2Rad);
+        Vector3 rampNormal = new Vector3(0f, cos, -sin);
+        Vector3 rampTopMid = new Vector3(0f, padTop.y + rampLength * 0.5f * sin, rampZ + rampLength * 0.5f * cos);
+        GameObject ramp = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        ramp.layer = GymRaceTrackBuilder.RaceTrackLayer;
+        ramp.transform.SetPositionAndRotation(rampTopMid - rampNormal * 0.5f, Quaternion.Euler(-rampAngle, 0f, 0f));
+        ramp.transform.localScale = new Vector3(8f, 1f, rampLength);
+        float deckY = padTop.y + rampLength * sin;
+        float deckZ = rampZ + rampLength * cos;
+        GameObject deck = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        deck.layer = GymRaceTrackBuilder.RaceTrackLayer;
+        deck.transform.position = new Vector3(0f, deckY - 0.5f, deckZ + 30f);
+        deck.transform.localScale = new Vector3(8f, 1f, 60f);
+        Physics.SyncTransforms();
+        GymRaceKart hopper = SpawnKart("Crest Kart", padTop + new Vector3(0f, 0f, -40f), Vector3.forward);
+        chase.SetKart(hopper);
+        float peak = 0f;
+        bool landed = false;
+        float crestSpeed = 0f;
+        t0 = Time.time;
+        while (Time.time - t0 < 12f && hopper.Body.position.z < deckZ + 55f)
+        {
+            hopper.Input = new GymRaceDriveInput { Throttle = 1f };
+            float z = hopper.Body.position.z;
+            if (z > deckZ)
+            {
+                if (crestSpeed == 0f) crestSpeed = hopper.ForwardSpeed;
+                float height = hopper.Body.position.y - hopper.Radius - deckY;
+                if (height > 0.4f && peak <= 0.4f) CaptureMain("crest_hop.png");
+                peak = Mathf.Max(peak, height);
+                landed |= peak > 0.25f && height < 0.08f;
+            }
+            yield return null;
+        }
+        Object.Destroy(hopper.gameObject);
+        Object.Destroy(ramp);
+        Object.Destroy(deck);
+        Require(crestSpeed > 20f, $"crest kart reached the deck at {crestSpeed:F1} m/s");
+        Require(peak > 0.25f, $"kart stayed glued over the crest (peak {peak:F2} m at {crestSpeed:F1} m/s)");
+        Require(landed, $"kart never came back down onto the deck (peak {peak:F2} m)");
+        report.Append($"crestHop={peak:F2}m@{crestSpeed:F0} ");
         Object.Destroy(pad);
         yield return null;
 
@@ -492,6 +539,27 @@ public static class GymChaosRaceKartVerifier
         Mathf.Abs(Vector3.Dot(Flat(box.forward), axis)) * box.lossyScale.z * 0.5f;
 
     private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
+
+    // With a graphics device: what the chase camera sees, into Logs/agent/race.
+    private static void CaptureMain(string file)
+    {
+        Camera camera = Camera.main;
+        if (camera == null || SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null) return;
+        RenderTexture target = RenderTexture.GetTemporary(1280, 720, 24);
+        RenderTexture previous = camera.targetTexture;
+        camera.targetTexture = target;
+        camera.Render();
+        camera.targetTexture = previous;
+        RenderTexture.active = target;
+        Texture2D image = new Texture2D(1280, 720, TextureFormat.RGB24, false);
+        image.ReadPixels(new Rect(0, 0, 1280, 720), 0, 0);
+        RenderTexture.active = null;
+        RenderTexture.ReleaseTemporary(target);
+        string folder = System.IO.Path.Combine(System.IO.Directory.GetParent(Application.dataPath).FullName, "..", "Logs", "agent", "race");
+        System.IO.Directory.CreateDirectory(folder);
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(folder, file), image.EncodeToPNG());
+        Object.DestroyImmediate(image);
+    }
 
     private static GymRaceKart SpawnKart(string name, Vector3 roadPoint, Vector3 forward)
     {

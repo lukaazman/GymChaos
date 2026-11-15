@@ -106,6 +106,7 @@ public static class GymChaosPauseOptionsVerifier
             ValidateEventSystem(snapshot);
             ValidatePauseControls(menuRoot);
             ValidateOptionsControls(menuRoot);
+            ValidateOptionsSpacing(menuRoot);
             ExerciseMenuPath(menuRoot);
             ExerciseSettingEffects(menuRoot, snapshot);
 
@@ -135,6 +136,39 @@ public static class GymChaosPauseOptionsVerifier
         {
             EditorApplication.Exit(exitCode);
         }
+    }
+
+    // A section title must sit clearly closer to its own rows than to the
+    // section above it, and BACK must clear the last row inside the sheet.
+    private static void ValidateOptionsSpacing(GameObject menuRoot)
+    {
+        RectTransform Rect(string name) => (RectTransform)RequireNamedTransform(menuRoot, name);
+        // Dropdown plates are inset 0.006 from their row.
+        float renderScaleRowBottom = Rect("Render Scale Dropdown").anchorMin.y - 0.006f;
+        float postFxRowBottom = Rect("Post FX Value").anchorMin.y;
+        CheckSection(Rect("Graphics Section"), renderScaleRowBottom, Rect("Brightness Value").anchorMax.y);
+        CheckSection(Rect("Audio Section"), postFxRowBottom, Rect("Master Value").anchorMax.y);
+        RectTransform display = Rect("Display Section");
+        RectTransform firstDisplay = Rect("Render Scale Dropdown");
+        float displayBelow = display.anchorMin.y - (firstDisplay.anchorMax.y + 0.006f);
+        Require(displayBelow > 0f, "DISPLAY title overlaps its rows: " + displayBelow);
+
+        RectTransform back = Rect("Options Back Button");
+        float backHalf = back.sizeDelta.y * 0.5f / 1080f;
+        float lastRowBottom = Rect("Effects Value").anchorMin.y;
+        float sheetBottom = Rect("Options Sheet").anchorMin.y;
+        Require(back.anchorMin.y + backHalf < lastRowBottom - 0.015f,
+            $"BACK crowds the last row: top={back.anchorMin.y + backHalf:F3} row={lastRowBottom:F3}");
+        Require(back.anchorMin.y - backHalf > sheetBottom + 0.01f,
+            $"BACK leaves the sheet: bottom={back.anchorMin.y - backHalf:F3} sheet={sheetBottom:F3}");
+    }
+
+    private static void CheckSection(RectTransform header, float previousRowBottom, float firstRowTop)
+    {
+        float above = previousRowBottom - header.anchorMax.y;
+        float below = header.anchorMin.y - firstRowTop;
+        Require(below > 0f && above >= 2f * below,
+            $"{header.name} spacing: above={above:F3} below={below:F3} (above must be at least twice below)");
     }
 
     private static Snapshot CaptureSnapshot()
@@ -305,22 +339,29 @@ public static class GymChaosPauseOptionsVerifier
         // Each end has to move the picture visibly, and the ends also have to
         // stay inside a television-like grade: the old 1.6 stops and 40 points
         // of contrast washed the scene out long before the slider reached the top.
+        // Neutral is the base look, not zero: the grade volume outranks the scene
+        // profile, and a zero exposure under ACES crushed the dim gym to black.
+        float baseEv = GymRuntimeSettings.BaseExposure;
+        float baseContrast = GymRuntimeSettings.BaseContrast;
+        Require(baseEv >= 0.7f && baseEv <= 1.3f,
+            "Base exposure does not offset the ACES toe: " + baseEv);
         brightness.value = 1f;
-        Require(grade.postExposure.value > 0.6f && grade.postExposure.value <= 1.0f,
+        Require(grade.postExposure.value - baseEv > 0.6f && grade.postExposure.value - baseEv <= 1.0f,
             "Brightness did not lift exposure into its range: " + grade.postExposure.value);
         brightness.value = 0f;
-        Require(grade.postExposure.value < -0.6f && grade.postExposure.value >= -1.0f,
+        Require(grade.postExposure.value - baseEv < -0.6f && grade.postExposure.value - baseEv >= -1.0f,
             "Brightness did not lower exposure into its range: " + grade.postExposure.value);
         contrast.value = 1f;
-        Require(grade.contrast.value > 15f && grade.contrast.value <= 25f,
+        Require(grade.contrast.value - baseContrast > 15f && grade.contrast.value - baseContrast <= 25f,
             "Contrast did not rise into its range: " + grade.contrast.value);
         contrast.value = 0f;
-        Require(grade.contrast.value < -15f && grade.contrast.value >= -25f,
+        Require(grade.contrast.value - baseContrast < -15f && grade.contrast.value - baseContrast >= -25f,
             "Contrast did not fall into its range: " + grade.contrast.value);
         brightness.value = 0.5f;
         contrast.value = 0.5f;
-        Require(Mathf.Abs(grade.postExposure.value) < 0.01f && Mathf.Abs(grade.contrast.value) < 0.1f,
-            $"Neutral brightness/contrast is not neutral: ev={grade.postExposure.value} " +
+        Require(Mathf.Abs(grade.postExposure.value - baseEv) < 0.01f
+                && Mathf.Abs(grade.contrast.value - baseContrast) < 0.1f,
+            $"Neutral brightness/contrast is not the base look: ev={grade.postExposure.value} " +
             $"contrast={grade.contrast.value}");
 
         // POST FX owns the whole post stack, this grade included: off means no
@@ -535,8 +576,7 @@ public static class GymChaosPauseOptionsVerifier
         }
         GymRuntimeSettings.RestoreProjectPipeline();
 
-        PlayerPrefs.Save();
-        QualitySettings.globalTextureMipmapLimit = snapshot.TextureMipmapLimit;
+        PlayerPrefs.Save();        QualitySettings.globalTextureMipmapLimit = snapshot.TextureMipmapLimit;
         AudioListener.volume = snapshot.AudioVolume;
         Time.timeScale = snapshot.TimeScale;
         Cursor.lockState = snapshot.CursorLockState;

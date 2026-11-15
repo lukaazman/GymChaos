@@ -715,7 +715,8 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
         light.intensity = 1.2f;
         (GymTopStyle, GymShirtColor)[] looks =
         {
-            (GymTopStyle.TankTop, GymShirtColor.Black), (GymTopStyle.Oversized, GymShirtColor.Black),
+            (GymTopStyle.TankTop, GymShirtColor.Black), (GymTopStyle.TankTop, GymShirtColor.White),
+            (GymTopStyle.TankTop, GymShirtColor.Red), (GymTopStyle.Oversized, GymShirtColor.Black),
             (GymTopStyle.Oversized, GymShirtColor.White), (GymTopStyle.Oversized, GymShirtColor.Red),
             (GymTopStyle.Onyx, GymShirtColor.Black), (GymTopStyle.Onyx, GymShirtColor.Blue),
             (GymTopStyle.Onyx, GymShirtColor.Gold)
@@ -736,6 +737,16 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                 camera.transform.LookAt(chest);
                 light.transform.rotation = Quaternion.LookRotation(-direction + Vector3.down * 0.6f + player.transform.right * 0.3f);
                 Capture(camera, Path.Combine(folder, $"{top}_{colour}_{side}.png".ToLowerInvariant()));
+            }
+            if (top == GymTopStyle.TankTop && colour == GymShirtColor.White)
+            {
+                // Light paint shows any black left in the texture: look close.
+                camera.transform.position = chest + player.transform.forward * 1.1f;
+                camera.transform.LookAt(chest);
+                light.transform.rotation = Quaternion.LookRotation(-player.transform.forward + Vector3.down * 0.6f + player.transform.right * 0.3f);
+                camera.orthographicSize = 0.3f;
+                Capture(camera, Path.Combine(folder, "tanktop_white_close.png"));
+                camera.orthographicSize = 0.62f;
             }
             if (top == GymTopStyle.Oversized && colour == GymShirtColor.Black)
             {
@@ -789,6 +800,28 @@ public sealed class GymChaosTopsVerifierRunner : MonoBehaviour
                     motion.ResetForVerification();
                 }
             }
+        }
+        // A shell top over the sweatpants' waistband: the hem must sit over it, not flicker through it.
+        service.EquipTop(GymTopStyle.Onyx);
+        service.EquipShirt(GymShirtColor.Black);
+        service.EquipBottom(GymBottomStyle.Pants);
+        service.EquipBottomColor(GymShirtColor.White);
+        yield return WaitShell(loadout);
+        yield return WaitBottom(loadout);
+        rig.HoldStablePoseForVerification("idle1", 0f, out _);
+        yield return null;
+        {
+            Bounds waistBody = FindBody(rig).bounds;
+            Vector3 waist = waistBody.center + Vector3.up * waistBody.size.y * 0.02f;
+            foreach ((string side, Vector3 direction) in new[] { ("front", player.transform.forward), ("side", (player.transform.forward + player.transform.right).normalized) })
+            {
+                camera.transform.position = waist + direction * 3f;
+                camera.transform.LookAt(waist);
+                light.transform.rotation = Quaternion.LookRotation(-direction + Vector3.down * 0.6f + player.transform.right * 0.3f);
+                camera.orthographicSize = 0.35f;
+                Capture(camera, Path.Combine(folder, $"onyx_pants_waist_{side}.png"));
+            }
+            camera.orthographicSize = 0.62f;
         }
         // Pants standing and mid-stride: nothing may hang between the legs.
         service.EquipTop(GymTopStyle.TankTop);

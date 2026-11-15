@@ -32,6 +32,7 @@ public sealed class GymRaceAIDriver : MonoBehaviour
     private float wobble;
     private float stuckTimer;
     private float reverseUntil = -1f;
+    private float lastRaceTime;
 
     private void Awake()
     {
@@ -47,6 +48,13 @@ public sealed class GymRaceAIDriver : MonoBehaviour
         {
             return input;
         }
+        // Seconds since GO. A rematch starts the clock again: forget the last race's reverse.
+        if (raceTime < lastRaceTime)
+        {
+            reverseUntil = -1f;
+            stuckTimer = 0f;
+        }
+        lastRaceTime = raceTime;
         DecideBranch();
         GymRaceTrackPath path = racer.OnShortcut ? GymRaceTrackLayout.Shortcut : GymRaceTrackLayout.Main;
         float s = racer.BranchDistance;
@@ -74,7 +82,8 @@ public sealed class GymRaceAIDriver : MonoBehaviour
             input.Steer = angle >= 0f ? -1f : 1f;
             return input;
         }
-        if (Mathf.Abs(kart.ForwardSpeed) < StuckSpeed && raceTime > LaunchSeconds + 1f)
+        // A spun-out kart is slow on purpose: it is not wedged.
+        if (Mathf.Abs(kart.ForwardSpeed) < StuckSpeed && raceTime > LaunchSeconds + 1f && kart.SpinTime <= 0f)
         {
             stuckTimer += Time.deltaTime;
             if (stuckTimer >= StuckSeconds)

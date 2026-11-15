@@ -36,6 +36,7 @@ public static class GymChaosNetRaceVerifier
     private static readonly List<string> inbox = new List<string>();
     private static bool driving;
     private static float driveS;
+    private static float nextKartSend;
     private static int driveRound;
 
     [InitializeOnLoadMethod]
@@ -138,8 +139,10 @@ public static class GymChaosNetRaceVerifier
 
     private static IEnumerator Hold(float seconds)
     {
-        float until = Time.realtimeSinceStartup + seconds;
-        while (Time.realtimeSinceStartup < until) yield return null;
+        // Game time: a batch run steps many game seconds per wall second, and the
+        // host's own waits (the 25 s ready timeout) run on the game clock.
+        float until = Time.time + seconds;
+        while (Time.time < until) yield return null;
     }
 
     private static int Count(string prefix)
@@ -182,6 +185,10 @@ public static class GymChaosNetRaceVerifier
     {
         if (guest == null || guest.CurrentPhase != GymNetClient.Phase.Lobby) return;
         driveS += DriveSpeed * Time.deltaTime;
+        // A real guest sends 12 poses a second; one per editor frame went past the
+        // relay's 200 messages a second and it dropped the guest mid-race.
+        if (Time.realtimeSinceStartup < nextKartSend) return;
+        nextKartSend = Time.realtimeSinceStartup + 0.05f;
         GymRaceTrackLayout.Main.Sample(driveS, out Vector3 center, out Vector3 tangent, out _, out _);
         guest.Send(0, GymNetRace.FormatKart(driveRound, center + Vector3.up * 1.2f, Mathf.Atan2(tangent.x, tangent.z) * Mathf.Rad2Deg, DriveSpeed));
     }

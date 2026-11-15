@@ -50,6 +50,27 @@ public sealed class GymRaceKart : MonoBehaviour
     private const float HopSpeed = 3.2f;
     private const float StickForce = 22f;
     private const float WallSpeedKeep = 0.72f;
+    private const float SpinDeceleration = 26f;
+    // The drawn body trails the physics body by one interpolated step and leans
+    // into drifts; the contact box keeps this much air so the drawn ones never meet.
+    private const float ContactSkin = 0.08f;
+    // Body-box depenetration given as velocity on the step it is found. It is
+    // taken back on the next step: a push kept as speed launched rammed karts
+    // (Goku went from 43 to 109 m/s and flew off the road).
+    private Vector3 pushVelocity;
+    // Velocity this kart gave itself last step. Where the main and shortcut road
+    // colliders overlap (fork, merge) PhysX finds ghost contacts on the mesh
+    // edges and threw karts up at 5-9 m/s on flat road. A road contact may stop
+    // the kart and bounce it back a little; the lift it adds beyond that is the
+    // ghost and is dropped. A crest still throws the kart: its own speed points
+    // up the slope it just left.
+    private Vector3 writtenVelocity;
+    private const float RoadBounce = 0.18f;
+    private const float GhostLiftMargin = 0.5f;
+    // Sphere actually on the road, not just within the probe's reach: only then
+    // does the stick force hold it; above the road gravity alone brings it down.
+    private bool touching;
+    private float pushStep = -1f;
 
     public static readonly List<GymRaceKart> All = new List<GymRaceKart>();
 
@@ -91,6 +112,9 @@ public sealed class GymRaceKart : MonoBehaviour
 
     private Rigidbody body;
     private SphereCollider sphere;
+    /// <summary>Half width/length of the body box the solver separates, for gates.</summary>
+    public Vector2 FootprintForVerification => footprintHalf;
+    public Vector2 FootprintCenterForVerification => footprintCenter;
     private Vector3 heading = Vector3.forward;
     private Vector3 previousHeading = Vector3.forward;
     private Vector3 visualUp = Vector3.up;
@@ -114,6 +138,9 @@ public sealed class GymRaceKart : MonoBehaviour
     public float BoostMeter { get; private set; }
     public float BoostTime { get; private set; }
     public bool IsBoosting => BoostTime > 0f;
+    /// <summary>Seconds left of a spin-out (an item hit): no steering, no drive.</summary>
+    public float SpinTime { get; private set; }
+    private float spinSeconds;
     public bool InSlipstream => slipstreamTimer > 0.8f;
     public float CurrentMaxSpeed { get; private set; }
     public float AirTime { get; private set; }
@@ -195,23 +222,37 @@ public sealed class GymRaceKart : MonoBehaviour
     {
         Bounds local = new Bounds();
         bool any = false;
+        // Mesh boxes carried through each part's own transform, not world AABBs:
+        // a spinning wheel's world AABB is twice the wheel, and measuring it here
+        // made the contact box grow and shrink with the animation. It also read
+        // smaller than the live car, so the solver separated a box that was not
+        // the body that gets drawn.
         foreach (Renderer renderer in Visual.GetComponentsInChildren<Renderer>(true))
         {
-            if (!renderer.enabled || renderer is ParticleSystemRenderer) continue;
-            Bounds world = renderer.bounds;
+            if (!renderer.enabled || renderer is ParticleSystemRenderer ||
+                renderer is TrailRenderer || renderer is LineRenderer) continue;
+            Bounds mesh = renderer.localBounds;
             for (int i = 0; i < 8; i++)
             {
-                Vector3 corner = Visual.InverseTransformPoint(world.center + Vector3.Scale(world.extents,
-                    new Vector3((i & 1) == 0 ? -1f : 1f, (i & 2) == 0 ? -1f : 1f, (i & 4) == 0 ? -1f : 1f)));
+                Vector3 corner = mesh.center + Vector3.Scale(mesh.extents,
+                    new Vector3((i & 1) == 0 ? -1f : 1f, (i & 2) == 0 ? -1f : 1f, (i & 4) == 0 ? -1f : 1f));
+                corner = Visual.InverseTransformPoint(renderer.transform.TransformPoint(corner));
                 if (!any) local = new Bounds(corner, Vector3.zero);
                 else local.Encapsulate(corner);
                 any = true;
             }
         }
-        // Renderer AABBs of a rotated mesh overstate the body: keep 90 %.
-        if (any) footprintHalf = new Vector2(local.extents.x, local.extents.z) * 0.9f;
+        // The solver works in world metres: the vehicle model is scaled to its real
+        // size, so its local box has to be carried through that scale.
+        Vector3 scale = Visual.lossyScale;
+        Vector2 world = new Vector2(Mathf.Abs(scale.x), Mathf.Abs(scale.z));
+        // Mesh boxes are the drawn body, not a rotated AABB: a shrink here let the
+        // visible bodies overlap before the solver saw contact.
+        if (any) footprintHalf = new Vector2(local.extents.x * world.x, local.extents.z * world.y);
         else footprintHalf = Vector2.one * KartStats.Radius;
-        footprintCenter = any ? new Vector2(local.center.x, local.center.z) : Vector2.zero;
+        footprintCenter = any
+            ? new Vector2(local.center.x * world.x, local.center.z * world.y)
+            : Vector2.zero;
     }
 
     /// <summary>Ignore collisions between this sphere and every collider of the given roots (drivers, cabins).</summary>
@@ -223,10 +264,11 @@ public sealed class GymRaceKart : MonoBehaviour
         }
         foreach (Collider other in root.GetComponentsInChildren<Collider>(true))
         {
-            if (other != sphere && !(other is SphereCollider && other.GetComponent<GymRaceKart>() != null))
+            if (other == sphere || (other is SphereCollider && other.GetComponent<GymRaceKart>() != null))
             {
-                Physics.IgnoreCollision(sphere, other, true);
+                continue;
             }
+            Physics.IgnoreCollision(sphere, other, true);
         }
     }
 
@@ -271,6 +313,7 @@ public sealed class GymRaceKart : MonoBehaviour
         UpdateVisual(blend);
     }
 
+
     // Another machine drives this kart (co-op race): a kinematic body that follows the last reported state.
     private const float RemoteMaxExtrapolation = 0.25f;
     private const float RemoteSnapDistance = 20f;
@@ -283,6 +326,7 @@ public sealed class GymRaceKart : MonoBehaviour
     public void SetRemoteDriven()
     {
         RemoteDriven = true;
+        pushVelocity = Vector3.zero;
         body.isKinematic = true;
         body.interpolation = RigidbodyInterpolation.Interpolate;
         remotePosition = body.position;
@@ -335,10 +379,18 @@ public sealed class GymRaceKart : MonoBehaviour
         }
         Vector3 right = Vector3.Cross(n, forward).normalized;
 
+        TakeBackPush();
         Vector3 velocity = body.linearVelocity;
         float vF = Vector3.Dot(velocity, forward);
         float vR = Vector3.Dot(velocity, right);
         float vN = Vector3.Dot(velocity, n);
+        float expectedN = Vector3.Dot(writtenVelocity, n);
+        float allowedLift = expectedN >= 0f ? expectedN : -RoadBounce * expectedN;
+        if (Grounded && vN > allowedLift + GhostLiftMargin)
+        {
+            velocity -= n * (vN - allowedLift);
+            vN = allowedLift;
+        }
 
         if (!ControlsEnabled)
         {
@@ -349,6 +401,14 @@ public sealed class GymRaceKart : MonoBehaviour
             return;
         }
 
+        if (SpinTime > 0f)
+        {
+            // Spun out: the driver's hands are off until the car comes round.
+            SpinTime = Mathf.Max(0f, SpinTime - dt);
+            Input = default;
+            boostRequested = false;
+        }
+        bool spinning = SpinTime > 0f;
         UpdateDrift(vF, dt);
         Steer(vF, n, dt);
         forward = Vector3.ProjectOnPlane(heading, n).normalized;
@@ -401,7 +461,7 @@ public sealed class GymRaceKart : MonoBehaviour
             }
             else
             {
-                vF = Mathf.MoveTowards(vF, 0f, CoastDeceleration * dt);
+                vF = Mathf.MoveTowards(vF, 0f, (spinning ? SpinDeceleration : CoastDeceleration) * dt);
             }
 
             // Exponential side grip: steady slip angle is atan(yaw rate / grip).
@@ -418,11 +478,13 @@ public sealed class GymRaceKart : MonoBehaviour
                 }
             }
             body.linearVelocity = velocity;
-            body.AddForce(-n * StickForce, ForceMode.Acceleration);
+            writtenVelocity = velocity;
+            body.AddForce(touching ? -n * StickForce : Physics.gravity * 0.6f, ForceMode.Acceleration);
         }
         else
         {
             AirTime += dt;
+            writtenVelocity = body.linearVelocity;
             body.AddForce(Physics.gravity * 0.6f, ForceMode.Acceleration);
         }
         ForwardSpeed = vF;
@@ -438,11 +500,13 @@ public sealed class GymRaceKart : MonoBehaviour
             hit.normal.y > 0.55f)
         {
             Grounded = true;
+            touching = hit.distance <= KartStats.Radius + 0.06f;
             GroundNormal = Vector3.Slerp(GroundNormal, hit.normal, 0.35f).normalized;
             return;
         }
         // Keep the last normal briefly; fall back to world up in the air.
         Grounded = false;
+        touching = false;
         GroundNormal = Vector3.Slerp(GroundNormal, Vector3.up, 0.06f).normalized;
     }
 
@@ -584,6 +648,26 @@ public sealed class GymRaceKart : MonoBehaviour
         MiniTurboTime = Mathf.Max(MiniTurboTime, seconds);
     }
 
+    /// <summary>Item boost: the full boost for a while, whatever the meter says.</summary>
+    public void StartBoost(float seconds)
+    {
+        BoostTime = Mathf.Max(BoostTime, seconds);
+        BoostStarted?.Invoke();
+    }
+
+    /// <summary>An item hit: the kart spins on the spot and loses its speed.</summary>
+    public void SpinOut(float seconds)
+    {
+        if (SpinTime > 0f || RemoteDriven)
+        {
+            return;
+        }
+        EndDrift(false);
+        BoostTime = 0f;
+        MiniTurboTime = 0f;
+        SpinTime = spinSeconds = seconds;
+    }
+
     public void SetBoostMeter(float value)
     {
         BoostMeter = Mathf.Clamp01(value);
@@ -594,6 +678,9 @@ public sealed class GymRaceKart : MonoBehaviour
         EndDrift(false);
         BoostTime = 0f;
         MiniTurboTime = 0f;
+        SpinTime = 0f;
+        pushVelocity = Vector3.zero;
+        writtenVelocity = Vector3.zero;
         heading = Vector3.ProjectOnPlane(forward, Vector3.up).normalized;
         previousHeading = heading;
         GroundNormal = up;
@@ -658,6 +745,7 @@ public sealed class GymRaceKart : MonoBehaviour
             {
                 continue;
             }
+            other.TakeBackPush();
             Vector3 offset = Vector3.ProjectOnPlane(other.body.position - body.position, GroundNormal);
             float distance = offset.magnitude;
             float touching = sphere.radius + other.sphere.radius;
@@ -702,8 +790,9 @@ public sealed class GymRaceKart : MonoBehaviour
             {
                 continue;
             }
+            other.TakeBackPush();
             Vector3 otherVelocity = other.RemoteDriven ? Vector3.zero : other.body.linearVelocity;
-            float depth = Penetration(body.position + velocity * dt, bodyFacing, other, other.body.position + otherVelocity * dt, out Vector3 normal);
+            float depth = Penetration(body.position + velocity * dt, PredictedFacing(dt), other, other.body.position + otherVelocity * dt, out Vector3 normal);
             if (depth <= 0f)
             {
                 continue;
@@ -715,13 +804,18 @@ public sealed class GymRaceKart : MonoBehaviour
             float knockback = KnockbackFrom(closing);
             bool ramming = knockback > 0.01f && other.body != null && !other.RemoteDriven &&
                 Vector3.Dot(velocity, -normal) > Vector3.Dot(otherVelocity, normal);
-            float overlap = Mathf.Min(depth / dt, 8f) * share;
+            // A bus closing at 20 m/s needs more than 8 m/s of separation to stay
+            // out of the kart it hits; the old cap let the boxes share two metres.
+            float overlap = Mathf.Min(depth / dt, 24f) * share;
             // A chaos rammer takes no push at all, so the body that was hit
             // carries the depenetration; without it the rammer drove into the
             // rival's box and the two stayed overlapped by more than a metre.
             if (ramming)
             {
-                other.body.linearVelocity += -normal * (knockback + Mathf.Min(depth / dt, 26f));
+                other.TakeBackPush();
+                Vector3 depenetration = -normal * Mathf.Min(depth / dt, 26f);
+                other.pushVelocity += depenetration;
+                other.body.linearVelocity += -normal * knockback + depenetration;
                 other.body.linearVelocity = Vector3.ClampMagnitude(
                     other.body.linearVelocity, other.KartStats.TopSpeed * 1.6f);
             }
@@ -729,6 +823,7 @@ public sealed class GymRaceKart : MonoBehaviour
             // applies in chaos too, or the rammer ends up sharing the rival's
             // space while it keeps all of its speed.
             velocity += normal * (Mathf.Max(0f, -closing) * share * RamSelfPushScale + overlap);
+            pushVelocity += normal * overlap;
             // The box push can keep the spheres from ever touching: count it as the bump.
             if (Time.fixedTime >= kartContactUntil)
             {
@@ -758,13 +853,13 @@ public sealed class GymRaceKart : MonoBehaviour
         normal = Vector3.zero;
         Vector3 forwardA = facing;
         Vector3 rightA = new Vector3(forwardA.z, 0f, -forwardA.x);
-        Vector3 forwardB = other.bodyFacing;
+        Vector3 forwardB = other.RemoteDriven ? other.bodyFacing : other.PredictedFacing(Time.fixedDeltaTime);
         Vector3 rightB = new Vector3(forwardB.z, 0f, -forwardB.x);
         Vector3 centerA = position + rightA * footprintCenter.x + forwardA * footprintCenter.y;
         Vector3 centerB = otherPosition + rightB * other.footprintCenter.x + forwardB * other.footprintCenter.y;
         Vector3 delta = centerA - centerB;
         delta.y = 0f;
-        float reach = footprintHalf.magnitude + other.footprintHalf.magnitude;
+        float reach = footprintHalf.magnitude + other.footprintHalf.magnitude + 2f * ContactSkin;
         if (delta.sqrMagnitude > reach * reach)
         {
             return 0f;
@@ -773,8 +868,8 @@ public sealed class GymRaceKart : MonoBehaviour
         for (int k = 0; k < 4; k++)
         {
             Vector3 axis = k == 0 ? rightA : k == 1 ? forwardA : k == 2 ? rightB : forwardB;
-            float extentA = Mathf.Abs(Vector3.Dot(rightA, axis)) * footprintHalf.x + Mathf.Abs(Vector3.Dot(forwardA, axis)) * footprintHalf.y;
-            float extentB = Mathf.Abs(Vector3.Dot(rightB, axis)) * other.footprintHalf.x + Mathf.Abs(Vector3.Dot(forwardB, axis)) * other.footprintHalf.y;
+            float extentA = Mathf.Abs(Vector3.Dot(rightA, axis)) * footprintHalf.x + Mathf.Abs(Vector3.Dot(forwardA, axis)) * footprintHalf.y + ContactSkin;
+            float extentB = Mathf.Abs(Vector3.Dot(rightB, axis)) * other.footprintHalf.x + Mathf.Abs(Vector3.Dot(forwardB, axis)) * other.footprintHalf.y + ContactSkin;
             float along = Vector3.Dot(delta, axis);
             float overlap = extentA + extentB - Mathf.Abs(along);
             if (overlap <= 0f)
@@ -788,6 +883,42 @@ public sealed class GymRaceKart : MonoBehaviour
             }
         }
         return depth;
+    }
+
+    /// <summary>Removes last step's depenetration push; this step's pushes stay until the next one.</summary>
+    private void TakeBackPush()
+    {
+        if (pushStep >= Time.fixedTime)
+        {
+            return;
+        }
+        float push = pushVelocity.magnitude;
+        if (push > 1e-4f && body != null && !body.isKinematic)
+        {
+            // Only what is left of it: a wall or the contact clamp may already have taken some.
+            Vector3 along = pushVelocity / push;
+            float left = Mathf.Clamp(Vector3.Dot(body.linearVelocity, along), 0f, push);
+            body.linearVelocity -= along * left;
+        }
+        pushVelocity = Vector3.zero;
+        pushStep = Time.fixedTime;
+    }
+
+    /// <summary>
+    /// Where the drawn body will face after this step: the new heading turned by
+    /// the drift angle UpdateVisual eases towards. The last drawn facing lags a
+    /// drift's swing-out, and the box ends swept into a neighbour unseen.
+    /// </summary>
+    private Vector3 PredictedFacing(float dt)
+    {
+        Vector3 flat = new Vector3(heading.x, 0f, heading.z);
+        if (flat.sqrMagnitude < 1e-4f)
+        {
+            return bodyFacing;
+        }
+        float target = IsDrifting ? DriftDirection * KartStats.DriftAngle : 0f;
+        float angle = driftVisual + (target - driftVisual) * (1f - Mathf.Exp(-dt * 9f));
+        return Quaternion.AngleAxis(angle, Vector3.up) * flat.normalized;
     }
 
     private void NoteKartContact(GymRaceKart other)
@@ -817,7 +948,9 @@ public sealed class GymRaceKart : MonoBehaviour
         Vector3 flatFacing = new Vector3(facing.x, 0f, facing.z);
         if (flatFacing.sqrMagnitude > 1e-4f) bodyFacing = flatFacing.normalized;
         float roll = -steerVisual * 3f - (IsDrifting ? DriftDirection * 5f : 0f);
-        Quaternion rotation = Quaternion.LookRotation(facing, visualUp) * Quaternion.Euler(0f, 0f, roll);
+        // Two full turns over a spin-out. Only the body turns: the contact box keeps facing the travel.
+        float spin = SpinTime > 0f ? 720f * (1f - SpinTime / spinSeconds) : 0f;
+        Quaternion rotation = Quaternion.LookRotation(facing, visualUp) * Quaternion.Euler(0f, spin, roll);
         Visual.SetPositionAndRotation(transform.position - visualUp * KartStats.Radius, rotation);
     }
 }

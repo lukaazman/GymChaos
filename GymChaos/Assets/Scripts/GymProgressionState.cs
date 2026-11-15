@@ -91,6 +91,11 @@ public sealed class GymProgressionState
     // Homeless Hank sells his gear once the friendly talk ends in a yes.
     public bool hankDealerUnlocked;
 
+    // First-save tutorial: 1..Count is the live lesson, 0 is a save that has
+    // never been asked (an old one), GymTutorialSteps.Done is finished.
+    public int tutorialStep;
+    public bool tutorialRaceDone;
+
     // City race minigame records (milliseconds; 0 = no time yet).
     public int raceStarts;
     public int raceWins;
@@ -120,6 +125,12 @@ public sealed class GymProgressionState
         raceBestLapMs = Mathf.Max(0, raceBestLapMs);
         raceBestTotalMs = Mathf.Max(0, raceBestTotalMs);
         raceDifficultyUnlocked = Mathf.Clamp(raceDifficultyUnlocked, 0, 2);
+        tutorialStep = Mathf.Clamp(tutorialStep, 0, GymTutorialSteps.Done);
+        // A save that has already played must never be taught the basics again.
+        if (tutorialStep == 0 && totalExperience > 0)
+        {
+            tutorialStep = GymTutorialSteps.Done;
+        }
         if (string.IsNullOrEmpty(bottom)) bottom = nameof(GymBottomStyle.Shorts);
         if (string.IsNullOrEmpty(bottomColor)) bottomColor = nameof(GymShirtColor.Black);
 

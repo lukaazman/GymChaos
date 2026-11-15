@@ -18,7 +18,11 @@ public sealed partial class GymRaceDirector
     private const float NetKartInterval = 1f / 12f;
     private const float NetReadyTimeout = 25f;
     private const float NetHostFinishGrace = 25f;
-    private const string CountdownHint = "W GAS   S BRAKE   A/D STEER   SPACE / RMB DRIFT   SHIFT / LMB BOOST   Q LOOK BACK   R RESPAWN";
+    // The countdown used to list every control here; the coach teaches them one
+    // at a time instead, so the slot starts empty.
+    private const string CountdownHint = "";
+
+    public static string CountdownHintForVerification => CountdownHint;
 
     private static readonly Color[] NetColors =
     {
@@ -509,7 +513,7 @@ public sealed partial class GymRaceDirector
                     // Cool-down lap after the finish, as in a solo race.
                     GymRaceAIDriver ai = kart.GetComponent<GymRaceAIDriver>();
                     if (ai == null) ai = kart.gameObject.AddComponent<GymRaceAIDriver>();
-                    kart.Input = ai.Think(now);
+                    kart.Input = ai.Think(raceTime);
                 }
             }
             racer.Tick(raceTime, Time.deltaTime, true);

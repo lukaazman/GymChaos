@@ -137,6 +137,10 @@ public static class GymChaosRaceChaosVerifier
             yield return null;
         }
         Require(director.Racers.Count == 8, $"{director.Racers.Count} racers, expected 8");
+        // This gate measures the flight, the bus and the rams; a spin-out from an
+        // item turns a body on purpose (GymChaosRacePickupVerifier covers the items).
+        Require(director.Pickups != null, "the chaos race has no pickups");
+        director.Pickups.AiUsesItems = false;
         GymRaceRacer goku = Find(director, "Goku");
         GymRaceRacer bus = Find(director, "Davie");
         Require(goku != null && bus != null, "no Goku or bus racer");
@@ -197,14 +201,24 @@ public static class GymChaosRaceChaosVerifier
             break;
         }
         report.Append($"busFade=ok ");
-        List<Transform> holders = new List<Transform>();
+        List<GymRaceKart> holders = new List<GymRaceKart>();
         List<Bounds> bodies = new List<Bounds>();
         for (int i = 0; i < director.Cars.Count; i++)
         {
-            Bounds local = LocalBounds(director.Cars[i].Holder);
-            if (local.size.sqrMagnitude < 0.1f) continue;
-            holders.Add(director.Cars[i].Holder);
-            bodies.Add(local);
+            // The body the race actually separates: kart footprint in world metres.
+            // Measuring renderers here was wrong twice over: world AABBs of spinning
+            // parts inflated it (a 2 m car read as 5.33 m wide), and the model is
+            // scaled, so local boxes are not metres on the road.
+            GymRaceKart body = director.Cars[i].Holder != null
+                ? director.Cars[i].Holder.GetComponentInParent<GymRaceKart>()
+                : null;
+            if (body == null) continue;
+            Vector2 half = body.FootprintForVerification;
+            if (half.sqrMagnitude < 0.01f) continue;
+            Vector2 centre = body.FootprintCenterForVerification;
+            holders.Add(body);
+            bodies.Add(new Bounds(new Vector3(centre.x, 1f, centre.y),
+                new Vector3(half.x * 2f, 2f, half.y * 2f)));
         }
         Capture(player, gokuBody.transform.position + gokuBody.transform.forward * 4f + Vector3.up * 1.5f, gokuBody.transform.position + Vector3.up, "race-chaos-grid-goku.png");
         // The faded state must read as the same bus at half opacity: a shot
@@ -309,6 +323,13 @@ public static class GymChaosRaceChaosVerifier
                 for (int b = a + 1; b < holders.Count; b++)
                 {
                     float overlap = Overlap(holders[a], bodies[a], holders[b], bodies[b]);
+                    if (overlap > 0.28f)
+                    {
+                        // Diagnostic only: the claim below stays at 0.3 m.
+                        Debug.Log("GYMCHAOS_CHAOS_OVERLAP_EVENT t=" + (Time.time - go).ToString("F2") +
+                            " depth=" + overlap.ToString("F2") + " " + holders[a].name + "/" + holders[b].name +
+                            " slotA=" + a + " slotB=" + b);
+                    }
                     if (overlap > worstOverlap)
                     {
                         worstOverlap = overlap;
@@ -326,6 +347,13 @@ public static class GymChaosRaceChaosVerifier
         Require(flightHitboxes <= 0.81f, $"Goku's flying hitboxes stayed at x{flightHitboxes:F2}");
         Require(busDriftSamples > 0, "bus never drifted");
         Require(loops > 1f, $"sitting_idle played {loops:F2} loops in the race");
+        for (int i = 0; i < holders.Count; i++)
+        {
+            Bounds measured = BodyBounds(holders[i].Visual);
+            GymRaceKart kart = holders[i];
+            Debug.Log("GYMCHAOS_CHAOS_BOX " + holders[i].name + " body=" + measured.size.ToString("F2") +
+                " center=" + measured.center.ToString("F2") + " physics=" + (kart != null ? kart.FootprintForVerification.ToString("F2") : "none"));
+        }
         Require(worstOverlap < 0.3f, $"car bodies overlapped {worstOverlap:F2} m ({worstPair})");
         report.Append($"road={worstRoad:F2} lift={maxLift:F2} facing={worstFacing:F2} flyHitbox=x{flightHitboxes:F2} " +
             $"busDrift={busDriftSamples} loops={loops:F1} overlap={worstOverlap:F2} ");
@@ -370,6 +398,41 @@ public static class GymChaosRaceChaosVerifier
 
     private static float RoadY(GymRaceKart kart) => kart.Body.position.y - kart.Radius;
 
+    /// <summary>
+    /// Tight body box in the holder frame for the overlap claim: each renderer's
+    /// mesh box carried through that part's own transform. The world AABB of a
+    /// spinning wheel or an open door is up to twice the part itself, so the old
+    /// box grew and shrank with the animation phase and reported overlaps that
+    /// were not there (a 2 m car read as 5.33 m wide, the 13 m bus as 17.56 m).
+    /// </summary>
+    private static Bounds BodyBounds(Transform holder)
+    {
+        Bounds bounds = new Bounds();
+        bool first = true;
+        foreach (Renderer renderer in holder.GetComponentsInChildren<Renderer>(true))
+        {
+            if (!renderer.enabled || renderer is ParticleSystemRenderer ||
+                renderer is TrailRenderer || renderer is LineRenderer) continue;
+            Bounds mesh = renderer.localBounds;
+            for (int i = 0; i < 8; i++)
+            {
+                Vector3 corner = mesh.center + Vector3.Scale(mesh.extents,
+                    new Vector3((i & 1) == 0 ? -1f : 1f, (i & 2) == 0 ? -1f : 1f, (i & 4) == 0 ? -1f : 1f));
+                Vector3 local = holder.InverseTransformPoint(renderer.transform.TransformPoint(corner));
+                if (first)
+                {
+                    bounds = new Bounds(local, Vector3.zero);
+                    first = false;
+                }
+                else
+                {
+                    bounds.Encapsulate(local);
+                }
+            }
+        }
+        return bounds;
+    }
+
     private static Bounds LocalBounds(Transform holder)
     {
         Bounds bounds = new Bounds();
@@ -390,17 +453,31 @@ public static class GymChaosRaceChaosVerifier
         return bounds;
     }
 
-    /// <summary>Ground-plane overlap depth of two body boxes held in their holders' frames, 0 when apart.</summary>
-    private static float Overlap(Transform a, Bounds la, Transform b, Bounds lb)
+    /// <summary>
+    /// Ground-plane overlap depth of two kart footprints, 0 when apart. The kart
+    /// rigidbody never rotates (FreezeRotation): the box faces the drawn body,
+    /// which is the facing the contact solver uses.
+    /// </summary>
+    private static float Overlap(GymRaceKart a, Bounds la, GymRaceKart b, Bounds lb)
     {
-        // World AABB corners blow a rotated mesh up: shrink to 85 % of the box.
-        Vector3 ca = a.TransformPoint(la.center), cb = b.TransformPoint(lb.center);
-        Vector3[] axes = { Flat(a.right).normalized, Flat(a.forward).normalized, Flat(b.right).normalized, Flat(b.forward).normalized };
+        // A flying racer above a car shares no space with it: the claim is about
+        // two bodies in the same place, so the boxes must also overlap in height.
+        float ay = a.transform.position.y + la.center.y, by = b.transform.position.y + lb.center.y;
+        if (ay + la.extents.y < by - lb.extents.y + 0.05f || by + lb.extents.y < ay - la.extents.y + 0.05f)
+        {
+            return 0f;
+        }
+        Vector3 fa = Flat(a.Visual.forward).normalized, fb = Flat(b.Visual.forward).normalized;
+        Vector3 ra = new Vector3(fa.z, 0f, -fa.x), rb = new Vector3(fb.z, 0f, -fb.x);
+        Vector3 ca = a.transform.position + ra * la.center.x + fa * la.center.z;
+        Vector3 cb = b.transform.position + rb * lb.center.x + fb * lb.center.z;
+        Vector3[] axes = { ra, fa, rb, fb };
         float depth = float.MaxValue;
         foreach (Vector3 axis in axes)
         {
-            float ea = (Mathf.Abs(Vector3.Dot(Flat(a.right).normalized, axis)) * la.extents.x + Mathf.Abs(Vector3.Dot(Flat(a.forward).normalized, axis)) * la.extents.z) * 0.85f;
-            float eb = (Mathf.Abs(Vector3.Dot(Flat(b.right).normalized, axis)) * lb.extents.x + Mathf.Abs(Vector3.Dot(Flat(b.forward).normalized, axis)) * lb.extents.z) * 0.85f;
+            // A rounded body is smaller than its box: shrink to 85 % of the box.
+            float ea = (Mathf.Abs(Vector3.Dot(ra, axis)) * la.extents.x + Mathf.Abs(Vector3.Dot(fa, axis)) * la.extents.z) * 0.85f;
+            float eb = (Mathf.Abs(Vector3.Dot(rb, axis)) * lb.extents.x + Mathf.Abs(Vector3.Dot(fb, axis)) * lb.extents.z) * 0.85f;
             float overlap = ea + eb - Mathf.Abs(Vector3.Dot(Flat(cb - ca), axis));
             if (overlap <= 0f) return 0f;
             depth = Mathf.Min(depth, overlap);

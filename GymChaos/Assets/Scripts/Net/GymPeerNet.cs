@@ -139,13 +139,14 @@ public sealed class GymPeerHost
         // Registering again on a healthy socket every few seconds used to leave a
         // window in which a guest's offer reached nobody and the join timed out;
         // now the address is only claimed again when it is really lost.
+        if (Time.realtimeSinceStartup < reRegisterAt) return;
+        // Counted per registration, not per frame spent waiting for the next one.
         if (++registerFailures > ReRegisterAttempts && Relay.PlayerCount == 0)
         {
+            if (!Failed) GymLog.Diag($"GYMCHAOS_PEER_BROKER_UNREACHABLE code={Code} attempts={registerFailures}");
             Failed = true;
-            GymLog.Diag($"GYMCHAOS_PEER_BROKER_UNREACHABLE code={Code} attempts={registerFailures}");
             return;
         }
-        if (Time.realtimeSinceStartup < reRegisterAt) return;
         reRegisterAt = Time.realtimeSinceStartup + ReRegisterSeconds;
         Register();
         GymLog.Diag($"GYMCHAOS_PEER_RE_REGISTER code={Code} players={Relay.PlayerCount} failures={registerFailures}");
@@ -153,6 +154,8 @@ public sealed class GymPeerHost
 
     private void PumpGuests()
     {
+        // No WebRTC on this page: there is no broker socket and no guest can arrive.
+        if (signal == null) return;
         while (signal.TryTake(out GymPeerSignal.Incoming message))
         {
             // Every signal travels as the broker's CANDIDATE type: it forwards that one reliably, and the
