@@ -42,6 +42,16 @@ public sealed class GymNetActorBodies
         public bool Running;
         public bool Frozen;
         public bool Lying;
+        public bool Attacking;
+        public bool Swinging;
+        // BodybuilderIdentity of this body (-1 unknown): a host actor binds to the same person, not the nearest one.
+        public int Identity = -1;
+        // Built here for a host actor this client never had (arrived later, or a response NPC): removed when the host drops it.
+        public bool Spawned;
+        // Hidden because the host does not list this actor right now.
+        public bool Hidden;
+        // Was not in the room when it was adopted: put back out of it when the room ends.
+        public bool WasAway;
         // Actors whose model has no authored locomotion animator (the homeless
         // man and the fixer load GLB bodies): their own script used to move them,
         // so the shared walk bob keeps them alive on the guest.
@@ -53,6 +63,7 @@ public sealed class GymNetActorBodies
     private readonly List<Body> bodies = new List<Body>(GymNetWorld.MaxActors);
     private readonly List<Component> frozenActors = new List<Component>(GymNetWorld.MaxActors);
     private bool directorsFrozen;
+    private bool snapshotSeen;
 
     /// <summary>Actors handed over to the host that are not carrying a host id right now.</summary>
     public int AdoptedCount { get; private set; }
@@ -62,6 +73,41 @@ public sealed class GymNetActorBodies
         {
             int count = 0;
             for (int i = 0; i < bodies.Count; i++) if (bodies[i].HostId != 0) count++;
+            return count;
+        }
+    }
+
+    /// <summary>Bodies this client built itself for host actors it never had.</summary>
+    public int SpawnedCount
+    {
+        get
+        {
+            int count = 0;
+            for (int i = 0; i < bodies.Count; i++) if (bodies[i].Spawned) count++;
+            return count;
+        }
+    }
+
+    /// <summary>Bodies built here that are drawn and carry a texture.</summary>
+    public int SpawnedDrawnCount
+    {
+        get
+        {
+            int count = 0;
+            for (int i = 0; i < bodies.Count; i++)
+                if (bodies[i].Spawned && IsDrawn(bodies[i].Root) && HasTexture(bodies[i].Root)) count++;
+            return count;
+        }
+    }
+
+    /// <summary>Bodies mid-swing because the host's actor is punching.</summary>
+    public int PunchingBodyCount
+    {
+        get
+        {
+            int count = 0;
+            for (int i = 0; i < bodies.Count; i++)
+                if (bodies[i].Animator != null && bodies[i].Animator.IsPunching) count++;
             return count;
         }
     }
@@ -187,9 +233,9 @@ public sealed class GymNetActorBodies
     {
         if (actor == null) return;
         GameObject host = actor.gameObject;
-        // Only actors that are in the room right now: a finished visitor or a
-        // parked car must not be brought back to life by the join.
-        if (!host.activeInHierarchy) return;
+        // An actor that is out of the room right now (a visitor not arrived yet) is
+        // adopted too, hidden: when the host lists it, it appears with its own body.
+        bool away = !host.activeInHierarchy;
         Freeze(host, kind);
         MixamoScanRetargetAnimator animator = host.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
         Transform bobTarget = null;
@@ -207,6 +253,10 @@ public sealed class GymNetActorBodies
         }
         bodies.Add(new Body
         {
+            Identity = actor is EnemyFighter fighter ? (int)fighter.Identity
+                : actor is GymVisitorVehicle vehicle ? (int)vehicle.Identity : -1,
+            Hidden = away,
+            WasAway = away,
             Kind = kind,
             Actor = actor,
             Root = host.transform,
@@ -252,8 +302,9 @@ public sealed class GymNetActorBodies
     /// Guest: one pose from the host. True when a real local body took it, so
     /// no stand-in is needed for this actor.
     /// </summary>
-    public bool TryDrive(int hostId, GymNetWorld.Kind kind, GymNetPose pose)
+    public bool TryDrive(int hostId, GymNetWorld.Kind kind, GymNetPose pose, int identity = -1, bool attacking = false)
     {
+        snapshotSeen = true;
         // A corpse is the same person as the fighter it used to be: it keeps the
         // real body, laid on its side, instead of growing a second stand-in next
         // to the one that was already standing there.
@@ -271,14 +322,17 @@ public sealed class GymNetActorBodies
             else
             {
                 body.Lying = kind == GymNetWorld.Kind.Corpse;
+                body.Attacking = attacking;
                 body.LastSeen = Time.unscaledTimeAsDouble;
                 body.Interpolator.Add(Time.unscaledTimeAsDouble, pose);
                 return true;
             }
         }
-        body = Bind(hostId, bodyKind, pose.Position);
+        body = Bind(hostId, bodyKind, pose.Position, identity) ?? Spawn(bodyKind, pose.Position, identity);
         if (body == null) return false;
+        if (body.Hidden) Show(body);
         body.HostId = hostId;
+        body.Attacking = attacking;
         body.Lying = kind == GymNetWorld.Kind.Corpse;
         body.LastSeen = Time.unscaledTimeAsDouble;
         body.Interpolator.Add(Time.unscaledTimeAsDouble, pose);
@@ -298,15 +352,18 @@ public sealed class GymNetActorBodies
     // Nearest free body of the same kind. Both clients built the same world, so
     // the nearest free actor is the one the host means; a plain index would
     // drift as soon as one side had spawned one more visitor.
-    private Body Bind(int hostId, GymNetWorld.Kind kind, Vector3 position)
+    private Body Bind(int hostId, GymNetWorld.Kind kind, Vector3 position, int identity)
     {
         Body best = null;
-        float bestDistance = kind == GymNetWorld.Kind.Vehicle ? VehicleBindRadius : PersonBindRadius;
+        // The same person wherever it stands; only an actor without an identity falls back to the nearest.
+        float bestDistance = identity >= 0 ? float.MaxValue
+            : kind == GymNetWorld.Kind.Vehicle ? VehicleBindRadius : PersonBindRadius;
         for (int i = 0; i < bodies.Count; i++)
         {
             Body candidate = bodies[i];
             if (candidate.HostId != 0 || candidate.Root == null) continue;
             if (candidate.Kind != kind) continue;
+            if (identity >= 0 && candidate.Identity != identity) continue;
             float distance = Vector3.Distance(candidate.Root.position, position);
             if (distance < bestDistance)
             {
@@ -315,6 +372,59 @@ public sealed class GymNetActorBodies
             }
         }
         return best;
+    }
+
+    /// <summary>
+    /// A host actor with no body here (it arrived after the join, or only the
+    /// host's scene creates it): the same authored body is built for it.
+    /// </summary>
+    private Body Spawn(GymNetWorld.Kind kind, Vector3 position, int identity)
+    {
+        bool car = kind == GymNetWorld.Kind.Vehicle;
+        if ((!car && kind != GymNetWorld.Kind.Fighter && kind != GymNetWorld.Kind.Police) ||
+            !System.Enum.IsDefined(typeof(BodybuilderIdentity), identity) || bodies.Count >= GymNetWorld.MaxActors)
+        {
+            return null;
+        }
+        BodybuilderIdentity who = (BodybuilderIdentity)identity;
+        GameObject root;
+        Component actor;
+        if (car)
+        {
+            GymVisitorVehicle vehicle = GymVisitorVehicle.CreateRaceVisual(who, position, Quaternion.identity);
+            actor = vehicle;
+            root = vehicle.gameObject;
+        }
+        else
+        {
+            root = new GameObject("Net Body - " + who);
+            root.transform.position = position;
+            BodybuilderEnemyVisual.Build(root, who);
+            if (root.GetComponentInChildren<Renderer>(true) == null)
+            {
+                Object.Destroy(root);
+                return null;
+            }
+            actor = root.transform;
+        }
+        // The host resolves every touch: a body here is only a picture.
+        Collider[] colliders = root.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < colliders.Length; i++) colliders[i].enabled = false;
+        Body body = new Body
+        {
+            Kind = kind, Actor = actor, Root = root.transform, Identity = identity, Spawned = true,
+            Animator = root.GetComponentInChildren<MixamoScanRetargetAnimator>(true),
+            LastPosition = position
+        };
+        bodies.Add(body);
+        Debug.Log("GYMCHAOS_NET_BODY_SPAWNED kind=" + kind + " identity=" + who);
+        return body;
+    }
+
+    private static void Show(Body body)
+    {
+        body.Hidden = false;
+        if (body.Root != null) body.Root.gameObject.SetActive(true);
     }
 
     private void Release(Body body)
@@ -371,9 +481,12 @@ public sealed class GymNetActorBodies
         }
         for (int i = 0; i < bodies.Count; i++)
         {
+            if (bodies[i].WasAway) { if (bodies[i].Root != null) bodies[i].Root.gameObject.SetActive(false); }
+            else if (bodies[i].Hidden) Show(bodies[i]);
             if (bodies[i].Animator != null) bodies[i].Animator.SetMoving(false, 0f, false);
         }
         frozenActors.Clear();
+        snapshotSeen = false;
     }
 
     /// <summary>Guest: place every bound body at the host's pose and animate it.</summary>
@@ -383,11 +496,27 @@ public sealed class GymNetActorBodies
         {
             Body body = bodies[i];
             if (body.Root == null) continue;
-            if (body.HostId == 0 || !body.Interpolator.TrySample(now, out GymNetPose pose)) continue;
-            // The host stopped listing this actor (it died, left or despawned):
-            // its body stays where it last stood and is free for a new id.
+            if (body.HostId == 0)
+            {
+                // After the first snapshot the host's list is the population: an actor
+                // it does not list is not in the room and is not drawn here either.
+                if (snapshotSeen && !body.Hidden)
+                {
+                    body.Hidden = true;
+                    body.Root.gameObject.SetActive(false);
+                }
+                continue;
+            }
+            if (!body.Interpolator.TrySample(now, out GymNetPose pose)) continue;
+            // The host stopped listing this actor (it died, left or despawned).
             if (now - body.LastSeen > ExpireSeconds)
             {
+                if (body.Spawned)
+                {
+                    Object.Destroy(body.Root.gameObject);
+                    bodies.RemoveAt(i--);
+                    continue;
+                }
                 Release(body);
                 continue;
             }
@@ -423,7 +552,11 @@ public sealed class GymNetActorBodies
             bool running = body.Speed > RunClipSpeed;
             if (body.Animator != null)
             {
-                if (moving != body.Moving || running != body.Running)
+                // The host's swing, replayed on this body's own punch clip.
+                bool swingDone = body.Animator.IsPunchComplete;
+                if (body.Attacking && !body.Swinging) body.Animator.TriggerAttack();
+                body.Swinging = body.Attacking;
+                if (moving != body.Moving || running != body.Running || swingDone)
                 {
                     body.Moving = moving;
                     body.Running = running;
@@ -443,6 +576,10 @@ public sealed class GymNetActorBodies
     public void Clear()
     {
         ReleaseAll();
+        for (int i = 0; i < bodies.Count; i++)
+        {
+            if (bodies[i].Spawned && bodies[i].Root != null) Object.Destroy(bodies[i].Root.gameObject);
+        }
         bodies.Clear();
         frozenActors.Clear();
         AdoptedCount = 0;

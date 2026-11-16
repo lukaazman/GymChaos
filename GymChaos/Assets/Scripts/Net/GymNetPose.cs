@@ -1,6 +1,13 @@
 using System;
 using UnityEngine;
 
+/// <summary>Body actions carried by <see cref="GymNetPose.a"/>.</summary>
+public static class GymNetAction
+{
+    public const int None = 0, PunchLeft = 1, PunchRight = 2, ThrowLight = 3, ThrowHard = 4,
+        Jump = 5, Crouch = 6, Driving = 7;
+}
+
 /// <summary>One player's pose on the wire (about 12 per second).</summary>
 [Serializable]
 public struct GymNetPose
@@ -23,6 +30,12 @@ public struct GymNetPose
     public int bottom;
     public int bottomColor;
     public int headwear;
+    // Body action (GymNetAction) and its clip phase 0..1, so a punch, throw,
+    // jump, crouch or drive plays on the other screens.
+    public int a;
+    public float p;
+    // Metres from the sender's root down to its feet: the root is the controller centre.
+    public float f;
     public Vector3 Position => new Vector3(x, y, z);
 }
 
@@ -71,7 +84,11 @@ public sealed class GymNetInterpolator
             {
                 x = Mathf.Lerp(a.x, b.x, t), y = Mathf.Lerp(a.y, b.y, t), z = Mathf.Lerp(a.z, b.z, t),
                 r = Mathf.LerpAngle(a.r, b.r, t), s = Mathf.Lerp(a.s, b.s, t), h = Mathf.Lerp(a.h, b.h, t),
-                d = t < 0.5f ? a.d : b.d
+                d = t < 0.5f ? a.d : b.d,
+                // Actions hop between clips: the later pose wins, its phase is not blended.
+                a = b.a, p = b.p, f = Mathf.Lerp(a.f, b.f, t),
+                classIndex = b.classIndex, shirt = b.shirt, top = b.top, bottom = b.bottom,
+                bottomColor = b.bottomColor, headwear = b.headwear
             };
             return true;
         }

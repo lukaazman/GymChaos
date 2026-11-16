@@ -419,6 +419,7 @@ public partial class EnemyFighter : MonoBehaviour
         gokuFlightState == GokuFlightState.Grounded;
     public bool IsGokuFlightActive => identity == BodybuilderIdentity.Goku &&
         gokuFlightState != GokuFlightState.Grounded;
+    public bool IsPunching => externalBodyAnimator != null && externalBodyAnimator.IsPunching;
     public MixamoScanRetargetAnimator.MotionState AnimationState => externalBodyAnimator != null
         ? externalBodyAnimator.CurrentState
         : MixamoScanRetargetAnimator.MotionState.Idle;

@@ -168,6 +168,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         modelRoot != null && modelRoot.IsChildOf(transform);
     public string CurrentAnimationClipName => GetClipNameForMarker(lastAnimationMarker);
     public bool IsPunchComplete => attackTime >= PunchDuration;
+    public bool IsPunching => attackTime >= 0f && attackTime < PunchDuration;
     public MotionState CurrentState => lastMotionState;
     public bool IsWorkoutPoseLocked => workoutPoseLocked;
     public bool IsUsingRunningClip => useRunningClip;
@@ -1352,12 +1353,31 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         using (LateUpdateMarker.Auto()) LateUpdateBody();
     }
 
+    // The browser runs scripts on one thread: a walking or idle body that is a
+    // speck on screen is posed every third frame instead of every frame.
+    private const float WebGlFarPoseMetres = 45f;
+
+    private bool SkipFarPoseOnWebGl()
+    {
+        if (Application.platform != RuntimePlatform.WebGLPlayer || attackTime >= 0f || workoutPoseLocked ||
+            vehiclePose != VehiclePose.None || IsNimbusStanceActive || flying || downed || celebrating)
+        {
+            return false;
+        }
+        Camera view = Camera.main;
+        if (view == null) return false;
+        float far = WebGlFarPoseMetres;
+        if ((transform.position - view.transform.position).sqrMagnitude < far * far) return false;
+        return (Time.frameCount + name.Length) % 3 != 0;
+    }
+
     private void LateUpdateBody()
     {
         if (!configured || modelRoot == null)
         {
             return;
         }
+        if (SkipFarPoseOnWebGl()) return;
 
         if (modelRoot.gameObject.activeInHierarchy && !groundOffsetsLogged)
         {

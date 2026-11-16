@@ -13,6 +13,8 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     private const float WalkBobMetres = 0.05f;
     private const float WalkCycleHz = 2.2f;
     private const float RunClipSpeed = 5.4f;
+    // A body lying on its side rests its thickness above the floor.
+    private const float CorpseLiftMetres = 0.25f;
     private const float WalkClipSpeed = 3.4f;
 
     private readonly GymNetInterpolator interpolator = new GymNetInterpolator();
@@ -44,7 +46,20 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     private static AnimationClip walkClip;
     private static AnimationClip runClip;
     private static AnimationClip idleClip;
+    private static AnimationClip punchLeftClip;
+    private static AnimationClip punchRightClip;
+    private static AnimationClip throwLightClip;
+    private static AnimationClip throwHardClip;
+    private static AnimationClip jumpClip;
+    private static AnimationClip crouchClip;
+    private static AnimationClip drivingClip;
     private static bool clipsLoaded;
+    private const float PunchSeconds = 0.46f;
+    private const float ThrowSeconds = 0.68f;
+    private int actionShown;
+    private float actionClock;
+    /// <summary>The action clip the body is playing right now (a <see cref="GymNetAction"/> id).</summary>
+    public int ActionPlaying => actionShown;
 
     public int PlayerId { get; private set; }
     public int PoseCount => interpolator.Count;
@@ -52,6 +67,8 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     public bool IsCorpse { get; private set; }
     /// <summary>True once the real player model is under this avatar.</summary>
     public bool HasRealBody => model != null;
+    /// <summary>The lowest point of the drawn body: where its feet stand.</summary>
+    public float FeetY => modelBody != null ? modelBody.bounds.min.y : transform.position.y;
     public string ClassIdShown { get; private set; }
     /// <summary>The outfit texture this body wears; empty while a capsule stands in.</summary>
     public string OutfitTextureShown { get; private set; }
@@ -389,6 +406,13 @@ public sealed class GymRemoteAvatar : MonoBehaviour
             if (walkClip == null && Matches(clip, "walking")) walkClip = clip;
             else if (runClip == null && Matches(clip, "running")) runClip = clip;
             else if (idleClip == null && Matches(clip, "idle1")) idleClip = clip;
+            else if (punchLeftClip == null && Matches(clip, "punch_left")) punchLeftClip = clip;
+            else if (punchRightClip == null && Matches(clip, "punch_right")) punchRightClip = clip;
+            else if (throwLightClip == null && Matches(clip, "throw_frisbee")) throwLightClip = clip;
+            else if (throwHardClip == null && Matches(clip, "throw_object_hard")) throwHardClip = clip;
+            else if (jumpClip == null && Matches(clip, "jumping")) jumpClip = clip;
+            else if (crouchClip == null && Matches(clip, "crouched_walking")) crouchClip = clip;
+            else if (drivingClip == null && Matches(clip, "vehicle_driving")) drivingClip = clip;
         }
     }
 
@@ -435,12 +459,16 @@ public sealed class GymRemoteAvatar : MonoBehaviour
                 target.localRotation = dead
                     ? modelBaseRotation * Quaternion.Euler(0f, 0f, 90f)
                     : modelBaseRotation;
-                target.localPosition = dead
-                    ? modelBasePosition + Vector3.down * (model != null ? 0.9f : 0.55f)
-                    : modelBasePosition;
+                if (model == null) target.localPosition = dead ? modelBasePosition + Vector3.down * 0.55f : modelBasePosition;
             }
             label.ConfigureStandalone(modelBody != null ? (Renderer)modelBody : FallbackRenderer(),
                 DisplayName(dead), 0.25f);
+        }
+        // The wire's root is the controller centre: the body's feet go down to the floor.
+        if (model != null)
+        {
+            model.transform.localPosition = modelBasePosition + Vector3.down * pose.f +
+                (dead ? Vector3.up * CorpseLiftMetres : Vector3.zero);
         }
         if (dead)
         {
@@ -451,6 +479,13 @@ public sealed class GymRemoteAvatar : MonoBehaviour
         if (model != null && (bottomPending || (headwearShown != GymHeadwear.None && headwearRoot == null)))
         {
             RetryLookParts();
+        }
+        // The browser runs scripts on one thread: a body nobody sees is posed every fourth frame.
+        // A remote body never decides a hit (the host does), so a stale pose costs nothing.
+        if (modelBody != null && !modelBody.isVisible && Application.platform == RuntimePlatform.WebGLPlayer &&
+            Time.frameCount % 4 != 0)
+        {
+            return;
         }
         Animate(pose);
     }
@@ -471,8 +506,10 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     private void Animate(GymNetPose pose)
     {
         bool moving = pose.s > 0.3f;
+        if (model != null && walkClip != null && PlayAction(pose, moving)) return;
         if (model != null && walkClip != null)
         {
+            actionShown = GymNetAction.None;
             AnimationClip clip = !moving
                 ? (idleClip != null ? idleClip : walkClip)
                 : pose.s > RunClipSpeed && runClip != null ? runClip : walkClip;
@@ -487,6 +524,52 @@ public sealed class GymRemoteAvatar : MonoBehaviour
         if (moving) cycle += Time.deltaTime * WalkCycleHz;
         body.localPosition = new Vector3(0f,
             moving ? Mathf.Abs(Mathf.Sin(cycle * Mathf.PI)) * WalkBobMetres : 0f, 0f);
+    }
+
+    /// <summary>The owner's punch, throw, jump, crouch or drive, played from its own clip.</summary>
+    private bool PlayAction(GymNetPose pose, bool moving)
+    {
+        int action = pose.a;
+        AnimationClip clip = ActionClip(action);
+        if (clip == null)
+        {
+            actionShown = GymNetAction.None;
+            return false;
+        }
+        bool oneShot = action == GymNetAction.PunchLeft || action == GymNetAction.PunchRight ||
+            action == GymNetAction.ThrowLight || action == GymNetAction.ThrowHard || action == GymNetAction.Jump;
+        float length = Mathf.Max(0.05f, clip.length - 0.001f);
+        if (oneShot)
+        {
+            float seconds = action == GymNetAction.Jump ? length
+                : action == GymNetAction.ThrowLight || action == GymNetAction.ThrowHard ? ThrowSeconds : PunchSeconds;
+            // The wire carries about twelve phases a second: in between, the clip runs on its own clock.
+            if (action != actionShown || Mathf.Abs(actionClock - pose.p) > 0.2f) actionClock = pose.p;
+            else actionClock = Mathf.Min(1f, actionClock + Time.deltaTime / seconds);
+            actionShown = action;
+            GymClipSampler.Sample(clip, model, Mathf.Clamp01(actionClock) * length);
+            return true;
+        }
+        actionShown = action;
+        // Driving and crouching loop; a still crouch holds its first frame.
+        if (action == GymNetAction.Driving || moving) walkPhase += Time.deltaTime;
+        GymClipSampler.Sample(clip, model, Mathf.Repeat(walkPhase, length));
+        return true;
+    }
+
+    private static AnimationClip ActionClip(int action)
+    {
+        switch (action)
+        {
+            case GymNetAction.PunchLeft: return punchLeftClip;
+            case GymNetAction.PunchRight: return punchRightClip;
+            case GymNetAction.ThrowLight: return throwLightClip;
+            case GymNetAction.ThrowHard: return throwHardClip;
+            case GymNetAction.Jump: return jumpClip;
+            case GymNetAction.Crouch: return crouchClip;
+            case GymNetAction.Driving: return drivingClip;
+            default: return null;
+        }
     }
 
     private void OnDestroy()

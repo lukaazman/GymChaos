@@ -11,7 +11,7 @@ using UnityEngine.Rendering;
 /// kind, position and yaw, and every automatic door's openness. Guests turn
 /// their own actors off and show a <see cref="GymNetPuppets"/> body per id,
 /// blended 0.12 s in the past; guest doors follow the host.
-/// Wire format: "n" + actors ';'-separated "id,kind,x,y,z,yaw" + '|' + doors ';'-separated "name=blend".
+/// Wire format: "n" + actors ';'-separated "id,kind,x,y,z,yaw,identity,attacking" + '|' + doors ';'-separated "name=blend".
 /// </summary>
 public static class GymNetWorld
 {
@@ -43,7 +43,11 @@ public static class GymNetWorld
         return id;
     }
 
-    private static void Add(StringBuilder text, Component actor, Kind kind, ref int count)
+
+    // Mid-punch right now: guests replay the swing on their copy of the body.
+    private static bool IsAttacking(Component actor) => actor is EnemyFighter fighter && fighter.IsPunching;
+
+    private static void Add(StringBuilder text, Component actor, Kind kind, int identity, ref int count)
     {
         if (count >= MaxActors) return;
         Vector3 position = actor.transform.position;
@@ -55,6 +59,7 @@ public static class GymNetWorld
         text.Append(',');
         AppendFixed(text, position.z);
         text.Append(',').Append(Mathf.RoundToInt(actor.transform.eulerAngles.y));
+        text.Append(',').Append(identity).Append(',').Append(IsAttacking(actor) ? 1 : 0);
         count++;
     }
 
@@ -81,16 +86,16 @@ public static class GymNetWorld
             EnemyFighter fighter = fighters[i];
             if (fighter == null || !fighter.isActiveAndEnabled || GymRaceDirector.IsRaceDriver(fighter)) continue;
             // A dead fighter stays in the list as a body lying on the floor, so guests see it too.
-            Add(builder, fighter, fighter.IsDead ? Kind.Corpse : fighter.IsPolice ? Kind.Police : Kind.Fighter, ref count);
+            Add(builder, fighter, fighter.IsDead ? Kind.Corpse : fighter.IsPolice ? Kind.Police : Kind.Fighter, (int)fighter.Identity, ref count);
         }
         GymHomelessAgent homeless = GymHomelessAgent.Instance;
-        if (homeless != null && homeless.isActiveAndEnabled) Add(builder, homeless, Kind.Homeless, ref count);
+        if (homeless != null && homeless.isActiveAndEnabled) Add(builder, homeless, Kind.Homeless, -1, ref count);
         GymFixerAgent fixer = GymFixerDirector.Instance != null ? GymFixerDirector.Instance.Agent : null;
-        if (fixer != null && fixer.isActiveAndEnabled) Add(builder, fixer, Kind.Fixer, ref count);
+        if (fixer != null && fixer.isActiveAndEnabled) Add(builder, fixer, Kind.Fixer, -1, ref count);
         IReadOnlyList<GymVisitorVehicle> cars = GymVisitorVehicle.ActiveGroundTraffic;
         for (int i = 0; i < cars.Count; i++)
         {
-            if (cars[i] != null && cars[i].isActiveAndEnabled) Add(builder, cars[i], Kind.Vehicle, ref count);
+            if (cars[i] != null && cars[i].isActiveAndEnabled) Add(builder, cars[i], Kind.Vehicle, (int)cars[i].Identity, ref count);
         }
         builder.Append('|');
         IReadOnlyList<GymAutoDoor> doors = GymAutoDoor.AllDoors;
@@ -125,6 +130,9 @@ public static class GymNetWorld
         public int Id;
         public Kind Kind;
         public GymNetPose Pose;
+        // The actor's BodybuilderIdentity (-1 when the host did not say), so a guest can build the same body.
+        public int Identity;
+        public bool Attacking;
     }
 
     /// <summary>Guest: reads a snapshot from an untrusted host. False when it is not one; bad entries are skipped.</summary>
@@ -152,7 +160,18 @@ public static class GymNetWorld
                 Number(body, ref p, entryEnd, out float x) && Number(body, ref p, entryEnd, out float y) &&
                 Number(body, ref p, entryEnd, out float z) && Number(body, ref p, entryEnd, out float r))
             {
-                actors.Add(new ActorState { Id = (int)id, Kind = (Kind)(int)kind, Pose = new GymNetPose { x = x, y = y, z = z, r = r } });
+                int identity = -1;
+                bool attacking = false;
+                if (p < entryEnd && Number(body, ref p, entryEnd, out float who))
+                {
+                    identity = (int)who;
+                    if (p < entryEnd && Number(body, ref p, entryEnd, out float swing)) attacking = swing > 0.5f;
+                }
+                actors.Add(new ActorState
+                {
+                    Id = (int)id, Kind = (Kind)(int)kind, Pose = new GymNetPose { x = x, y = y, z = z, r = r },
+                    Identity = identity, Attacking = attacking
+                });
             }
             i = entryEnd + 1;
         }
@@ -292,7 +311,7 @@ public sealed class GymNetPuppets
             GymNetWorld.ActorState actor = actors[i];
             // The real body here is the better picture: it keeps the mesh, the
             // textures and the authored animation of the actor that stood there.
-            if (Bodies != null && Bodies.TryDrive(actor.Id, actor.Kind, actor.Pose))
+            if (Bodies != null && Bodies.TryDrive(actor.Id, actor.Kind, actor.Pose, actor.Identity, actor.Attacking))
             {
                 if (puppets.ContainsKey(actor.Id)) Remove(actor.Id);
                 continue;

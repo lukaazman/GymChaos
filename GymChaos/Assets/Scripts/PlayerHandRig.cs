@@ -157,6 +157,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         $"throw_object_hard={throwHardClip?.name ?? "missing"}";
 
     public const string DefaultModelResource = PlayerModelResource;
+    public const string AnimationBundle = PlayerAnimationBundleResource;
     // Class body variants share the baseline rig and clips; only the mesh differs.
     private string modelResource = PlayerModelResource;
 
@@ -998,6 +999,30 @@ public sealed class PlayerHandRig : MonoBehaviour
 
         selectedIdleVariantIndex = -1;
         idleClip = null;
+    }
+
+    /// <summary>
+    /// What the body is doing, for the other players' copy of it: a
+    /// <see cref="GymNetAction"/> id and the clip's normalized time.
+    /// </summary>
+    public int NetAction(out float phase)
+    {
+        phase = 0f;
+        if (vehiclePose == MixamoScanRetargetAnimator.VehiclePose.Driving) return GymNetAction.Driving;
+        if (activeAttackClip != null && activeAttackDuration > 0f)
+        {
+            phase = Mathf.Clamp01(activeAttackElapsed / activeAttackDuration);
+            if (activeAttackClip == punchLeftClip) return GymNetAction.PunchLeft;
+            if (activeAttackClip == punchRightClip) return GymNetAction.PunchRight;
+            if (activeAttackClip == throwFrisbeeClip) return GymNetAction.ThrowLight;
+            if (activeAttackClip == throwHardClip) return GymNetAction.ThrowHard;
+        }
+        if (jumping && jumpClip != null)
+        {
+            phase = Mathf.Clamp01(locomotionElapsed / Mathf.Max(0.01f, jumpClip.length));
+            return GymNetAction.Jump;
+        }
+        return crouchAmount > 0.01f ? GymNetAction.Crouch : GymNetAction.None;
     }
 
     private void StartAttack(AnimationClip clip, float duration, float heldGripReach = 0f, bool useRightHand = true)

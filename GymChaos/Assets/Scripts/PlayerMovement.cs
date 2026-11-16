@@ -196,6 +196,16 @@ public partial class PlayerMovement : MonoBehaviour
     public float MissingHealth01 => 1f - Mathf.Clamp01(currentHealth / Mathf.Max(1f, maxHealth));
     public float SprintEnergy => sprintEnergy;
     public bool IsDead { get; private set; }
+
+    /// <summary>The floor under the player: the root sits at the controller's centre, not at the feet.</summary>
+    public float FeetY => characterController != null ? characterController.bounds.min.y : transform.position.y;
+
+    /// <summary>The body action other players should see (a <see cref="GymNetAction"/> id) and its clip phase.</summary>
+    public int NetAction(out float phase)
+    {
+        phase = 0f;
+        return handRig != null ? handRig.NetAction(out phase) : GymNetAction.None;
+    }
     // Seconds the YOU DIED screen holds before the Load Game list opens.
     public const float DeathToLoadListSeconds = 3f;
     private float diedAtUnscaled;

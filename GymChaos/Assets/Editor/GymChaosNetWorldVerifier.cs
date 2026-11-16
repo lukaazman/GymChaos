@@ -68,7 +68,7 @@ public static class GymChaosNetWorldVerifier
         if (Application.isBatchMode) GymChaosVerifierExit.Exit(resultCode);
     }
 
-    private enum Stage { WaitScene, HostRoom, GuestJoin, Snapshot, FarRequests, NearRequest, Repair, Suppress, Done }
+    private enum Stage { WaitScene, HostRoom, GuestJoin, Snapshot, FarRequests, NearRequest, Repair, Avatar, Suppress, Done }
 
     private static Stage stage;
     private static double stageAt;
@@ -82,6 +82,7 @@ public static class GymChaosNetWorldVerifier
     private static string farId;
     private static Vector3 spot;
     private static int exceptionsBefore;
+    private static GymRemoteAvatar avatar;
 
     private static void Enter(Stage next, double now)
     {
@@ -156,15 +157,32 @@ public static class GymChaosNetWorldVerifier
                     // The guest hands its cast to the host: the actors stop
                     // simulating but keep their meshes, so the room is not empty.
                     var adopted = new GymNetActorBodies();
+                    var inRoom = new HashSet<EnemyFighter>();
+                    foreach (EnemyFighter fighter in EnemyFighter.RegisteredFighters)
+                        if (fighter != null && fighter.gameObject.activeInHierarchy) inRoom.Add(fighter);
                     Require(adopted.Adopt() > 0, "no actor was adopted");
                     foreach (EnemyFighter fighter in EnemyFighter.RegisteredFighters)
                     {
                         if (fighter == null) continue;
-                        Require(!fighter.enabled, "a fighter still simulates on the guest");
-                        Require(fighter.gameObject.activeInHierarchy, "an adopted fighter lost its body");
+                        Require(!fighter.enabled, "a fighter still simulates on the guest: " + fighter.name + " active=" + fighter.gameObject.activeInHierarchy + " parent=" + (fighter.transform.parent != null ? fighter.transform.parent.name : "-"));
+                        Require(fighter.gameObject.activeInHierarchy == inRoom.Contains(fighter), "an adopted fighter lost its body or came back from outside");
                     }
                     Require(GymVisitorDirector.Instance == null || !GymVisitorDirector.Instance.enabled, "the visitor director still runs on the guest");
+                    CheckGuestBodies(adopted);
                     adopted.Clear();
+                    avatar = GymRemoteAvatar.Create(77);
+                    avatar.AddPose(Time.unscaledTimeAsDouble, new GymNetPose
+                    {
+                        x = spot.x, y = spot.y + 1.15f, z = spot.z, f = 1.15f, a = GymNetAction.PunchLeft, p = 0.4f
+                    });
+                    Enter(Stage.Avatar, now);
+                    break;
+                case Stage.Avatar:
+                    if (now - stageAt < 1.5d) return;
+                    Require(avatar.HasRealBody && avatar.HasAnimatedBody, "the remote player has no animated body");
+                    Require(Mathf.Abs(avatar.FeetY - spot.y) < 0.3f, $"the remote player floats: feet {avatar.FeetY} floor {spot.y}");
+                    Require(avatar.ActionPlaying == GymNetAction.PunchLeft, "the remote player does not play the punch");
+                    UnityEngine.Object.Destroy(avatar.gameObject);
                     Enter(Stage.Suppress, now);
                     break;
                 case Stage.Suppress:
@@ -245,6 +263,40 @@ public static class GymChaosNetWorldVerifier
         // Bad data from a host is skipped, never thrown on.
         Require(!GymNetWorld.TryDecode("garbage", actors, doors) && GymNetWorld.TryDecode("n1,0,NaN,0,0,0|", actors, doors) && actors.Count == 0,
             "bad snapshot data accepted");
+    }
+
+    // A guest draws every host actor as a real animated body, never a capsule, and replays its punches.
+    private static void CheckGuestBodies(GymNetActorBodies adopted)
+    {
+        var actors = new List<GymNetWorld.ActorState>();
+        Require(GymNetWorld.TryDecode(snapshots[snapshots.Count - 1], actors, new Dictionary<string, float>()), "snapshot did not decode");
+        bool identified = false;
+        foreach (GymNetWorld.ActorState actor in actors)
+            if (actor.Kind == GymNetWorld.Kind.Fighter && actor.Identity >= 0) identified = true;
+        Require(identified, "the snapshot names no fighter identity");
+        EnemyFighter sample = null;
+        foreach (EnemyFighter fighter in EnemyFighter.RegisteredFighters) if (fighter != null && !fighter.IsPolice && fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true) != null) { sample = fighter; break; }
+        Require(sample != null, "no fighter to copy");
+        var puppets = new GymNetPuppets { Bodies = adopted };
+        int who = (int)sample.Identity;
+        Vector3 at = sample.transform.position;
+        string c(float v) => v.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+        // One host actor more than this client has bodies of that identity: the extra one needs a body of its own.
+        int same = 0;
+        foreach (EnemyFighter fighter in EnemyFighter.RegisteredFighters) if (fighter != null && (int)fighter.Identity == who) same++;
+        var snapshot = new System.Text.StringBuilder("n");
+        for (int n = 0; n <= same; n++)
+            snapshot.Append(n > 0 ? ";" : "").Append(9001 + n).Append(",0,").Append(c(at.x + 3f * n)).Append(',').Append(c(at.y)).Append(',')
+                .Append(c(at.z)).Append(",0,").Append(who).Append(',').Append(n == same ? 1 : 0);
+        puppets.Apply(snapshot.Append('|').ToString(), Time.unscaledTimeAsDouble);
+        puppets.Update(Time.unscaledTimeAsDouble + 0.2d, 0.02f);
+        Require(puppets.Count == 0, "a host actor got a capsule stand-in: " + puppets.KindSummaryForVerification);
+        Require(adopted.SpawnedCount == 1, "the second actor got no body of its own: " + adopted.SpawnedCount);
+        Require(adopted.SpawnedDrawnCount == 1, "the new body is not drawn with its texture");
+        Require(adopted.BoundCount == same + 1, "a host actor has no body: " + adopted.BoundCount + " of " + (same + 1));
+        Require(adopted.PunchingBodyCount == 1, "the host's punch was not replayed: " + adopted.PunchingBodyCount);
+        puppets.Update(Time.unscaledTimeAsDouble + 4d, 0.02f);
+        Require(adopted.SpawnedCount == 0, "a body of an actor the host dropped was kept");
     }
 
     [Serializable]

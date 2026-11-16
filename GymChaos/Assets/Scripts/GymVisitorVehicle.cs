@@ -166,6 +166,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     }
 
     public bool HasCompletedDeparture { get; private set; }
+    public BodybuilderIdentity Identity => identity;
     public bool IsCloud => identity == BodybuilderIdentity.Goku;
     public bool IsBus => identity == BodybuilderIdentity.Davie;
     public bool IsArnold => identity == BodybuilderIdentity.Arnold;

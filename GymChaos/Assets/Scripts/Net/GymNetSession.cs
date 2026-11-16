@@ -574,9 +574,10 @@ public sealed class GymNetSession : MonoBehaviour
         lastPosition = position;
         hadPosition = true;
         RefreshLook();
+        int action = player.NetAction(out float actionPhase);
         GymNetPose pose = new GymNetPose { x = position.x, y = position.y, z = position.z, r = player.transform.eulerAngles.y, s = speed,
             h = Mathf.Clamp01(player.CurrentHealth / Mathf.Max(1f, player.MaxHealth)),
-            d = player.IsDead ? 1f : 0f,
+            d = player.IsDead ? 1f : 0f, f = Mathf.Max(0f, position.y - player.FeetY), a = action, p = actionPhase,
             classIndex = lookClass, shirt = lookShirt, top = lookTop, bottom = lookBottom,
             bottomColor = lookBottomColor, headwear = lookHeadwear };
         Client.Send(-1, PoseTag + JsonUtility.ToJson(pose));
