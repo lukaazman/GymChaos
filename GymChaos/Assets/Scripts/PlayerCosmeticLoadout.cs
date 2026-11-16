@@ -413,48 +413,71 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     private void FitHeadwearToPlayerHead(
         GameObject loaded, Transform head, GymHeadwear headwear)
     {
+        FitHeadwear(loaded, head, player.transform, GetSkullBounds(head), headwear);
+    }
+
+    /// <summary>
+    /// Fits a loaded wearable onto a head bone of any body that plays the
+    /// player's own skeleton: the local rig and a remote player's avatar alike.
+    /// </summary>
+    public static void FitHeadwear(
+        GameObject loaded, Transform head, Transform bodyRoot, Bounds skull, GymHeadwear headwear)
+    {
         // Mesh bounds must be measured in an upright frame, not in the
         // imported head bone's axes (the FBX head axis is not world up).
         HeadwearFit fit = GetHeadwearFit(headwear);
         Quaternion correction = headwear == GymHeadwear.Headband
             ? Quaternion.FromToRotation(new Vector3(-0.403753f, 0.914509f, 0.025610f), Vector3.up)
             : Quaternion.Euler(fit.EulerAngles);
-        loaded.transform.rotation = player.transform.rotation * correction;
+        loaded.transform.rotation = bodyRoot.rotation * correction;
         Renderer[] renderers = loaded.GetComponentsInChildren<Renderer>(true);
-        if (!TryGetWearableBounds(renderers, out Bounds sourceBounds))
+        if (!TryGetWearableBounds(renderers, bodyRoot, out Bounds sourceBounds))
         {
             return;
         }
 
-        Bounds skull = GetSkullBounds(head);
         float sourceWidth = Mathf.Max(0.001f, sourceBounds.size.x);
         float targetWidth = Mathf.Max(0.15f, skull.size.x) * fit.Width;
         loaded.transform.localScale *= targetWidth / sourceWidth;
 
-        if (!TryGetWearableBounds(renderers, out Bounds fittedBounds))
+        if (!TryGetWearableBounds(renderers, bodyRoot, out Bounds fittedBounds))
         {
             return;
         }
 
         float inset = skull.size.y * fit.BottomOffset;
-        Vector3 desiredBottomCenter = player.transform.TransformPoint(new Vector3(
+        Vector3 desiredBottomCenter = bodyRoot.TransformPoint(new Vector3(
             skull.center.x, skull.max.y - inset,
             skull.center.z + skull.size.z * fit.ForwardOffset));
         Vector3 currentBottomCenter = new Vector3(
             fittedBounds.center.x, fittedBounds.min.y, fittedBounds.center.z);
         loaded.transform.position += desiredBottomCenter -
-            player.transform.TransformPoint(currentBottomCenter);
+            bodyRoot.TransformPoint(currentBottomCenter);
     }
 
     private Bounds GetSkullBounds(Transform head)
     {
-        Bounds result = new Bounds(player.transform.InverseTransformPoint(head.position) + Vector3.up * 0.12f,
-            new Vector3(0.25f, 0.28f, 0.25f));
-        bool found = false;
+        System.Collections.Generic.List<SkinnedMeshRenderer> bodyRenderers =
+            new System.Collections.Generic.List<SkinnedMeshRenderer>();
         foreach (var renderer in player.GetComponentsInChildren<SkinnedMeshRenderer>(true))
         {
             if (renderer.gameObject.layer != PlanarGymMirror.MirrorPlayerLayer ||
                 renderer.sharedMesh == null) continue;
+            bodyRenderers.Add(renderer);
+        }
+        return SkullBounds(player.transform, head, bodyRenderers);
+    }
+
+    /// <summary>The head-weighted part of a player body's mesh, in the body root's space.</summary>
+    public static Bounds SkullBounds(
+        Transform bodyRoot, Transform head, System.Collections.Generic.IList<SkinnedMeshRenderer> bodyRenderers)
+    {
+        Bounds result = new Bounds(bodyRoot.InverseTransformPoint(head.position) + Vector3.up * 0.12f,
+            new Vector3(0.25f, 0.28f, 0.25f));
+        bool found = false;
+        foreach (var renderer in bodyRenderers)
+        {
+            if (renderer == null || renderer.sharedMesh == null) continue;
             var weights = renderer.sharedMesh.boneWeights;
             var bones = renderer.bones;
             Mesh baked = new Mesh();
@@ -468,7 +491,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                     HeadWeight(bones, head, w.boneIndex2, w.weight2) +
                     HeadWeight(bones, head, w.boneIndex3, w.weight3);
                 if (influence < 0.5f) continue;
-                Vector3 point = player.transform.InverseTransformPoint(
+                Vector3 point = bodyRoot.InverseTransformPoint(
                     renderer.transform.TransformPoint(vertices[i]));
                 if (!found) { result = new Bounds(point, Vector3.zero); found = true; }
                 else result.Encapsulate(point);
@@ -478,7 +501,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         return result;
     }
 
-    private bool TryGetWearableBounds(Renderer[] renderers, out Bounds bounds)
+    private static bool TryGetWearableBounds(Renderer[] renderers, Transform bodyRoot, out Bounds bounds)
     {
         bounds = default;
         bool found = false;
@@ -491,7 +514,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             // Fit the actual vertices after the per-item rotation instead.
             foreach (Vector3 vertex in filter.sharedMesh.vertices)
             {
-                Vector3 point = player.transform.InverseTransformPoint(
+                Vector3 point = bodyRoot.InverseTransformPoint(
                     renderer.transform.TransformPoint(vertex));
                 if (!found) { bounds = new Bounds(point, Vector3.zero); found = true; }
                 else bounds.Encapsulate(point);
@@ -529,7 +552,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         }
     }
 
-    private static string GetHeadwearAssetPath(GymHeadwear headwear)
+    public static string GetHeadwearAssetPath(GymHeadwear headwear)
     {
         switch (headwear)
         {
@@ -634,7 +657,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     public static Color GetSwatchColor(GymShirtColor shirt) =>
         shirt == GymShirtColor.Black ? new Color(0.08f, 0.085f, 0.1f) : GetShirtColor(shirt);
 
-    private static Color GetShirtColor(GymShirtColor shirt)
+    public static Color GetShirtColor(GymShirtColor shirt)
     {
         return shirt == GymShirtColor.Black
             ? new Color(0.025f, 0.03f, 0.04f)

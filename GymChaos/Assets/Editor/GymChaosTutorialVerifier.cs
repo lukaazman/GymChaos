@@ -276,18 +276,23 @@ public static class GymChaosTutorialVerifier
         Require(marker.PillarActive && marker.RingActive, "the marker needs its column and ring");
         Require(marker.VisibleChevrons == GymTutorialMarker.ChevronTotal,
             "a far target needs every chevron, showed " + marker.VisibleChevrons);
-
-        Require(marker.ArrowActive, "a far target needs its floating arrow");
         marker.UpdateChevrons(position, position + rotation * Vector3.forward * 2f);
         Require(marker.VisibleChevrons == 0,
             "a close target must hide the chevrons, showed " + marker.VisibleChevrons);
-        Require(!marker.ArrowActive,
-            "inside the interaction radius the floating arrow must go away");
+
+        // Standing on the spot: the column and the ring must step aside instead
+        // of filling the camera.
+        marker.Show(position + rotation * Vector3.forward * 1.5f, position);
+        Require(!marker.IsVisible && !marker.PillarActive && !marker.RingActive,
+            "standing on the spot must put the floor mark away");
 
         marker.Hide();
         Require(!marker.IsVisible && !marker.PillarActive,
             "hiding must take the column with it");
         marker.Show(target, position);
+        Require(Mathf.Abs(marker.TargetPosition.y - position.y) < 0.3f,
+            "the floor mark must stay on the floor, it sat at " +
+            marker.TargetPosition.y.ToString("F2") + " against " + position.y.ToString("F2"));
         return root;
     }
 

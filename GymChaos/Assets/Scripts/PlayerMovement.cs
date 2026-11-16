@@ -203,18 +203,23 @@ public partial class PlayerMovement : MonoBehaviour
     public bool IsCinematicLocked => cinematicLock;
     public bool CursorCaptured => IsCursorCaptured;
     public Vector3 StandingCameraLocalPosition => cameraBaseLocalPosition;
+    /// <summary>
+    /// True while a menu owns the mouse. The pointer must stay free so its buttons
+    /// work, and a click there must not pull the player back into mouse look.
+    /// </summary>
+    private static bool PointerOwnedByInterface =>
+        GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible || GymProgressionJournal.IsOpen ||
+        GymLevelUpMenuUI.IsMenuVisible || GymRadioSoundCloudPopup.IsAnyVisible ||
+        (GymExperienceService.Active != null && GymExperienceService.Active.IsBlockingPlayerInput);
+
     public bool CanShowCursorRecapturePrompt
     {
         get
         {
-            GymExperienceService progression = GymExperienceService.Active;
             return GymArenaBootstrap.IsGameplayStarted &&
                 !IsDead && !cinematicLock && !IsExercising &&
-                !GymStartScreen.IsMenuVisible && !GymPauseMenu.IsVisible &&
-                !GymRadioSoundCloudPopup.IsAnyVisible &&
                 !GymDialogueDirector.IsDialogueActive &&
-                (progression == null || !progression.IsBlockingPlayerInput) &&
-                !IsCursorCaptured;
+                !PointerOwnedByInterface && !IsCursorCaptured;
         }
     }
 
@@ -2246,6 +2251,17 @@ public partial class PlayerMovement : MonoBehaviour
 
     private bool TryCaptureCursor()
     {
+        if (PointerOwnedByInterface)
+        {
+            // An open menu wants a free pointer: never snap the cursor back, and
+            // release it if a menu opened while it was still locked.
+            if (IsCursorCaptured)
+            {
+                LockCursor(false);
+            }
+            showCursor = true;
+            return false;
+        }
         if (IsCursorCaptured)
         {
             suppressGameplayInputThisFrame = showCursor;
@@ -2335,7 +2351,7 @@ public partial class PlayerMovement : MonoBehaviour
     {
         // The fullscreen start screen owns the frame until Play is selected.
         // Keep the legacy IMGUI HUD from leaking through the cinematic menu.
-        if (GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible)
+        if (GymStartScreen.IsMenuVisible || GymPauseMenu.IsVisible || GymProgressionJournal.IsOpen)
         {
             return;
         }

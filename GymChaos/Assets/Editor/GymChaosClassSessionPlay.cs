@@ -83,7 +83,9 @@ public static class GymChaosClassSessionPlay
                 : scenario == "death" ? DeathScenario()
                 : scenario == "netDeath" ? NetDeathScenario()
                 : scenario == "netHost" ? NetHostScenario()
-                : scenario == "netGuest" ? NetGuestScenario() : RuntimeScenario();
+                : scenario == "netGuest" ? NetGuestScenario()
+                : scenario == "journal" ? JournalScenario()
+                : scenario == "delete" ? DeleteScenario() : RuntimeScenario();
         }
         if (change != PlayModeStateChange.EnteredEditMode) return;
         EditorApplication.update -= Tick;
@@ -1467,12 +1469,252 @@ public static class GymChaosClassSessionPlay
         return new View { position = position, rotation = Quaternion.LookRotation(point - position), valid = true };
     }
 
+    // The looks the two clients take turns wearing while the other screen has
+    // to draw it: every hat the locker sells, and the long pants.
+    private static readonly (string name, GymHeadwear headwear, GymBottomStyle bottom, GymShirtColor colour)[] LookCycle =
+    {
+        ("cap", GymHeadwear.Cap, GymBottomStyle.Shorts, GymShirtColor.Blue),
+        ("beanie", GymHeadwear.Beanie, GymBottomStyle.Shorts, GymShirtColor.Blue),
+        ("headband", GymHeadwear.Headband, GymBottomStyle.Shorts, GymShirtColor.Blue),
+        ("jollycap", GymHeadwear.JollyCap, GymBottomStyle.Shorts, GymShirtColor.Blue),
+        ("pants", GymHeadwear.BucketHat, GymBottomStyle.Pants, GymShirtColor.Blue)
+    };
+
+    /// <summary>
+    /// Dresses the local player for the co-op look check. The locker gates items
+    /// by level; the save is the source of truth, so the test writes the state
+    /// and reapplies the visuals the same way the locker does.
+    /// </summary>
+    private static void EquipLookForTheTest(
+        GymHeadwear headwear, GymShirtColor bottomColor, GymBottomStyle bottom = GymBottomStyle.Shorts)
+    {
+        GymProgressionState state = GymExperienceService.Active != null
+            ? GymExperienceService.Active.State : null;
+        Require(state != null, "no progression state to wear the test look with");
+        state.headwear = headwear.ToString();
+        state.bottom = bottom.ToString();
+        state.bottomColor = bottomColor.ToString();
+        PlayerCosmeticLoadout cosmetics = Player.GetComponentInChildren<PlayerCosmeticLoadout>(true);
+        Require(cosmetics != null, "the player has no cosmetic loadout");
+        cosmetics.ApplyFromState(state);
+        Debug.Log("GYMCHAOS_NET_TEST_LOOK headwear=" + state.headwear + " bottom=" + state.bottom +
+            " colour=" + state.bottomColor);
+    }
+
+    private static GlassShatterPanel NearestIntactGlass(out float distance)
+    {
+        GlassShatterPanel nearest = null;
+        distance = float.MaxValue;
+        foreach (GlassShatterPanel candidate in UnityEngine.Object.FindObjectsByType<GlassShatterPanel>(FindObjectsSortMode.None))
+        {
+            float d = Vector3.Distance(candidate.transform.position, Player.transform.position);
+            if (!candidate.IsShattered && d < distance) { nearest = candidate; distance = d; }
+        }
+        return nearest;
+    }
+
     private static int CountNamed(string name)
     {
         int count = 0;
         foreach (GameObject candidate in UnityEngine.Object.FindObjectsByType<GameObject>(FindObjectsSortMode.None))
             if (candidate.name == name) count++;
         return count;
+    }
+
+    /// <summary>Single player: the journal window, its numbers and its player model view.</summary>
+    public static void RunJournal() => Begin("journal");
+
+    // Single player: the journal window opens, every stat is one plain number and
+    // the player model beside them turns and zooms.
+    private static IEnumerator<float> JournalScenario()
+    {
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        foreach (float wait in StartNewCharacter("bodybuilding")) yield return wait;
+        foreach (float wait in Until(() => GymProgressionJournal.Instance != null &&
+            Player != null && GymExperienceService.Active != null, 60d, "the journal")) yield return wait;
+        GymProgressionJournal journal = GymProgressionJournal.Instance;
+        journal.OpenForVerification();
+        yield return 0.6f;
+        Require(GymProgressionJournal.IsOpen && journal.PanelShown, "the journal window did not open");
+        Require(Mathf.Approximately(Time.timeScale, 0f),
+            "the journal must pause the gym, timeScale was " + Time.timeScale);
+        Require(Cursor.visible && Cursor.lockState == CursorLockMode.None,
+            "the journal needs a free, visible pointer");
+        Require(!Player.CanShowCursorRecapturePrompt,
+            "the journal must not ask the player to recapture the cursor");
+        for (int stat = 0; stat < 4; stat++)
+        {
+            string value = journal.StatValueText(stat);
+            Require(value.Length > 0 && value.IndexOf('/') < 0,
+                "stat " + stat + " is not one plain number: " + value);
+            Require(int.TryParse(value, out int parsed), "stat " + stat + " is not a number: " + value);
+        }
+        yield return 0.4f;
+        Shot("journal-open");
+        GymJournalPreview preview = journal.Preview;
+        Require(preview != null && preview.PreviewVisible, "the journal has no player model");
+        Require(preview.CornerAlpha() < 0.05f,
+            "the preview must let the sheet show through, corner alpha " + preview.CornerAlpha());
+        Debug.Log("GYMCHAOS_JOURNAL_PREVIEW_FIT " + preview.EdgeReport());
+        Require(!preview.BodyTouchesEdge(), "the player model is cut off by the preview edge: " +
+            preview.EdgeReport());
+        // A full idle cycle of arm and shoulder swing must stay inside too.
+        yield return 1.8f;
+        Require(!preview.BodyTouchesEdge(), "the idle clip swings the player model out of the view");
+        float angle = preview.Angle;
+        float zoom = preview.Zoom;
+        preview.RotateForVerification(40f);
+        preview.ZoomForVerification(-0.8f);
+        yield return 0.4f;
+        Require(Mathf.Abs(Mathf.DeltaAngle(angle, preview.Angle)) > 20f,
+            "the player model does not turn");
+        Require(preview.Zoom < zoom - 0.2f, "the player model does not zoom");
+        Vector2 luminance = preview.LuminanceRange();
+        Debug.Log("GYMCHAOS_JOURNAL_PREVIEW_PIXELS min=" + luminance.x.ToString("F3") +
+            " max=" + luminance.y.ToString("F3"));
+        Require(luminance.y > 0.12f, "the player model does not render, brightest " +
+            luminance.y.ToString("F3"));
+        Shot("journal-turned");
+        yield return 0.2f;
+        Debug.Log("GYMCHAOS_JOURNAL_PANEL_OK stat0=" + journal.StatValueText(0) +
+            " angle=" + preview.Angle.ToString("F0") + " zoom=" + preview.Zoom.ToString("F2") +
+            " body=" + preview.BodyShown + " light=" + luminance.y.ToString("F2"));
+        // SKIP is the page's only pointer target: nothing may sit over it, the
+        // plate must pop under the pointer, and a click must end the tutorial.
+        Button skip = journal.SkipButtonForVerification;
+        Require(skip != null && skip.gameObject.activeInHierarchy,
+            "the running tutorial must offer its SKIP button");
+        RectTransform skipRect = (RectTransform)skip.transform;
+        Vector2 skipPoint = RectTransformUtility.WorldToScreenPoint(
+            null, skipRect.TransformPoint(skipRect.rect.center));
+        PointerEventData pointer = new PointerEventData(EventSystem.current) { position = skipPoint };
+        List<RaycastResult> hits = new List<RaycastResult>();
+        EventSystem.current.RaycastAll(pointer, hits);
+        string skipHit = hits.Count > 0 ? hits[0].gameObject.name : "nothing";
+        Debug.Log("GYMCHAOS_JOURNAL_SKIP_POINTER hit=" + skipHit + " count=" + hits.Count);
+        Require(hits.Count > 0 && hits[0].gameObject.transform.IsChildOf(skip.transform),
+            "something covers the SKIP button: " + skipHit);
+        ExecuteEvents.ExecuteHierarchy(skip.gameObject, pointer, ExecuteEvents.pointerEnterHandler);
+        yield return 0.3f;
+        PersonaMenuButton skipMotion = skip.GetComponent<PersonaMenuButton>();
+        Require(skipMotion != null && skipMotion.IsFocusedForVerification,
+            "the SKIP button does not take the pointer");
+        Require(skipMotion.CurrentScaleForVerification > 1.02f,
+            "the SKIP button does not pop, scale " + skipMotion.CurrentScaleForVerification);
+        ExecuteEvents.ExecuteHierarchy(skip.gameObject, pointer, ExecuteEvents.pointerClickHandler);
+        yield return 0.5f;
+        Require(!GymProgressionJournal.IsOpen && !journal.PanelShown, "the journal did not close");
+        Require(GymExperienceService.Active == null ||
+            !GymTutorialDirector.IsActive(GymExperienceService.Active.State),
+            "SKIP did not end the tutorial");
+        Require(Time.timeScale > 0.5f,
+            "closing the journal must resume the gym, timeScale was " + Time.timeScale);
+
+        // Spending a stat point also needs the pointer: the level-up screen frees
+        // it and the guard keeps a click from dragging the player back in.
+        GymLevelUpMenuUI level = GymLevelUpMenuUI.Ensure(GymExperienceService.Active);
+        level.ShowForVerification();
+        Require(Cursor.visible && Cursor.lockState == CursorLockMode.None,
+            "the level-up screen needs a free, visible pointer");
+        Require(!Player.CanShowCursorRecapturePrompt,
+            "the level-up screen must not ask the player to recapture the cursor");
+        Debug.Log("GYMCHAOS_LEVELUP_POINTER cursor=" + Cursor.visible +
+            " prompt=" + Player.CanShowCursorRecapturePrompt);
+    }
+
+    /// <summary>Single player: deleting a save from the load list, and the prompt in front of it.</summary>
+    public static void RunDelete() => Begin("delete");
+
+    private static IEnumerator<float> DeleteScenario()
+    {
+        foreach (float wait in WaitForBootMenu()) yield return wait;
+        GymCharacterSave save = GymCharacterSave.New("bodybuilding");
+        string slot = save.slotId;
+        GymSessionService.Repository.Write(slot, GymSessionService.Repository.Serialize(save));
+        string path = Path.Combine(SaveDirectory, slot + ".json");
+        Require(File.Exists(path), "the test save was not written");
+
+        Menu.OpenLoadList();
+        yield return Step;
+        Require(Menu.Current == GymSessionMenu.State.SaveList, "the load list did not open");
+        Require(Menu.transform.Find("Save List/Delete Save 0") != null,
+            "a save row has no trash button");
+        SaveListPicture("save-list-trash");
+
+        // The trash button asks first, and asking removes nothing.
+        Menu.RequestDelete(slot);
+        yield return Step;
+        SaveListPicture("save-delete-confirm");
+        Require(Menu.DeletePromptShown && Menu.DeleteSlotId == slot,
+            "deleting a save must ask for confirmation first");
+        Require(File.Exists(path), "the save was removed before the player confirmed");
+
+        // Three clear bands: the caption never runs under a plate, the plates keep
+        // their gap and stay on the sheet even while hovered (each grows 8%).
+        Menu.DeleteLayoutForVerification(out RectTransform sheet, out RectTransform caption,
+            out RectTransform confirm, out RectTransform cancel);
+        Rect sheetBounds = ScreenBounds(sheet);
+        Rect captionBounds = ScreenBounds(caption);
+        Rect confirmHover = Grow(ScreenBounds(confirm), PersonaHoverScale);
+        Rect cancelHover = Grow(ScreenBounds(cancel), PersonaHoverScale);
+        Debug.Log("GYMCHAOS_SAVE_DELETE_LAYOUT sheet=" + Describe(sheetBounds) +
+            " caption=" + Describe(captionBounds) + " confirm=" + Describe(confirmHover) +
+            " cancel=" + Describe(cancelHover));
+        Require(Contains(sheetBounds, confirmHover) && Contains(sheetBounds, cancelHover),
+            "a hovered delete plate leaves its sheet");
+        Require(!Overlaps(confirmHover, cancelHover),
+            "the delete plates overlap while hovered");
+        Require(!Overlaps(captionBounds, confirmHover) && !Overlaps(captionBounds, cancelHover),
+            "the delete caption runs under a plate");
+
+        Menu.CancelDelete();
+        yield return Step;
+        Require(Menu.Current == GymSessionMenu.State.SaveList && File.Exists(path),
+            "cancelling must keep the save");
+
+        Menu.RequestDelete(slot);
+        yield return Step;
+        Menu.ConfirmDelete();
+        yield return Step;
+        Require(!File.Exists(path), "confirming did not delete the save");
+        Require(!File.Exists(path + ".bak"), "the previous backup was left behind");
+        Require(Menu.Current == GymSessionMenu.State.SessionChoice,
+            "with no saves left the menu must return to the session choice");
+        Require(!Menu.LoadGameOffered, "Load Game must disappear once the last save is gone");
+        Debug.Log("GYMCHAOS_SAVE_DELETE_OK slot=" + slot);
+    }
+
+    private const float PersonaHoverScale = 1.08f;
+
+    private static Rect ScreenBounds(RectTransform rect)
+    {
+        Vector3[] corners = new Vector3[4];
+        rect.GetWorldCorners(corners);
+        return Rect.MinMaxRect(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+    }
+
+    private static Rect Grow(Rect bounds, float scale) =>
+        new Rect(bounds.center - bounds.size * scale * 0.5f, bounds.size * scale);
+
+    private static bool Contains(Rect outer, Rect inner) =>
+        inner.xMin >= outer.xMin - 0.5f && inner.xMax <= outer.xMax + 0.5f &&
+        inner.yMin >= outer.yMin - 0.5f && inner.yMax <= outer.yMax + 0.5f;
+
+    private static string Describe(Rect rect) =>
+        rect.xMin.ToString("F1") + "," + rect.yMin.ToString("F1") + "-" +
+        rect.xMax.ToString("F1") + "," + rect.yMax.ToString("F1");
+
+    /// <summary>A picture of the screen, for judging menu layout from a log run.</summary>
+    private static void SaveListPicture(string label)
+    {
+        if (!capture) return;
+        Texture2D picture = ScreenCapture.CaptureScreenshotAsTexture();
+        if (picture == null) return;
+        string directory = Path.Combine(
+            Path.GetDirectoryName(Path.GetDirectoryName(Application.dataPath)), "Logs", "agent");
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(Path.Combine(directory, label + ".png"), picture.EncodeToPNG());
+        UnityEngine.Object.Destroy(picture);
     }
 
     // Host: a real new character in a real room, the guest walks in, they fight, the guest dies and
@@ -1487,12 +1729,46 @@ public static class GymChaosClassSessionPlay
         string code = NetSession.Client.RoomCode;
         SyncWrite("code", code);
         Debug.Log("GYMCHAOS_NET_HOST_ROOM code=" + code);
+        // A hat and coloured shorts, so the other screen has to draw them.
+        EquipLookForTheTest(GymHeadwear.BucketHat, GymShirtColor.Red);
         foreach (float wait in Until(() => NetSession.RemoteAvatarCount == 1 && NetSession.TryGetAvatar(1, out GymRemoteAvatar a) && a.PoseCount > 0, 240d, "the guest")) yield return wait;
+        // Every hat and the long pants, one at a time: the guest checks each on its screen.
+        for (int look = 0; look < LookCycle.Length; look++)
+        {
+            string lookName = LookCycle[look].name;
+            EquipLookForTheTest(LookCycle[look].headwear, LookCycle[look].colour, LookCycle[look].bottom);
+            SyncWrite("look-" + lookName);
+            foreach (float wait in SyncWait("look-seen-" + lookName, 120d)) yield return wait;
+        }
+        // Back to the look the rest of the run expects on both screens.
+        EquipLookForTheTest(GymHeadwear.BucketHat, GymShirtColor.Red);
         foreach (float wait in SyncWait("guest-ready", 240d)) yield return wait;
         yield return 1f;
         NetSession.TryGetAvatar(1, out GymRemoteAvatar guestAvatar);
         Shot("net-host-1-guest-avatar", LookAt(guestAvatar.transform.position));
         Debug.Log("GYMCHAOS_NET_HOST_SEES_GUEST position=" + guestAvatar.transform.position);
+        // The guest must be a real player body in its own clothes, and this side
+        // (the host) must still be running its own actors, not adopting them.
+        Require(NetSession.Puppets.Bodies == null, "the host adopted its own actors");
+        Require(guestAvatar.HasRealBody, "the guest is still a capsule on the host's screen");
+        Require(guestAvatar.HasAnimatedBody, "the guest's body has no authored animation clips");
+        Require(guestAvatar.ClassIdShown == "cardio",
+            "the guest's class body on the host is " + guestAvatar.ClassIdShown);
+        Require(!string.IsNullOrEmpty(guestAvatar.OutfitTextureShown),
+            "the guest's outfit never reached the host's screen");
+        Debug.Log("GYMCHAOS_NET_HOST_AVATAR_OK body=" + guestAvatar.ClassIdShown +
+            " outfit=" + guestAvatar.OutfitTextureShown +
+            " animated=" + guestAvatar.HasAnimatedBody);
+
+        // The guest's hat and its coloured shorts must be on this screen too.
+        foreach (float wait in Until(() => guestAvatar.HeadwearWorn == GymHeadwear.BucketHat &&
+            guestAvatar.HasHeadwearRenderer && guestAvatar.BottomColorWorn == GymShirtColor.Red &&
+            guestAvatar.HasBottomShell, 30d, "the guest's hat and red shorts")) yield return wait;
+        Shot("net-host-1b-guest-cosmetics", LookAt(guestAvatar.transform.position));
+        Debug.Log("GYMCHAOS_NET_HOST_GUEST_COSMETICS_OK headwear=" + guestAvatar.HeadwearShown +
+            " worn=" + guestAvatar.HasHeadwearRenderer +
+            " bottom=" + guestAvatar.BottomShown + "/" + guestAvatar.BottomColorShown +
+            " shell=" + guestAvatar.HasBottomShell);
 
         // World actions that depend on both: glass breaking and being repaired by the host's fixer, and the day clock.
         GlassShatterPanel glass = null;
@@ -1594,12 +1870,82 @@ public static class GymChaosClassSessionPlay
         foreach (float wait in StartNewCharacter("cardio")) yield return wait;
         Require(GymSessionService.Context == GymSaveContext.Join, "a joining game is not in the Join context");
         foreach (float wait in Until(() => NetSession != null && NetSession.Client.CurrentPhase == GymNetClient.Phase.Lobby &&
-            NetSession.Join.Guest == GymNetJoin.GuestState.Joined && NetSession.ActorsSuppressed && NetSession.Puppets.Count > 0, 240d,
+            NetSession.Join.Guest == GymNetJoin.GuestState.Joined && NetSession.ActorsSuppressed &&
+            (NetSession.Puppets.Count > 0 || (NetSession.Puppets.Bodies != null && NetSession.Puppets.Bodies.AdoptedCount > 0)), 240d,
             "the host's world")) yield return wait;
         Require(NetSession.Client.LocalId == 1, "guest id " + NetSession.Client.LocalId);
-        Debug.Log("GYMCHAOS_NET_GUEST_IN_WORLD puppets=" + NetSession.Puppets.Count);
+        Debug.Log("GYMCHAOS_NET_GUEST_IN_WORLD puppets=" + NetSession.Puppets.Count +
+            " adopted=" + (NetSession.Puppets.Bodies != null ? NetSession.Puppets.Bodies.AdoptedCount : 0));
+        // Same here: a hat and coloured shorts of this player, drawn on the host's screen.
+        EquipLookForTheTest(GymHeadwear.BucketHat, GymShirtColor.Red);
         yield return 1f;
         Shot("net-guest-1-world-with-puppets");
+        // The joined room must look like the host's room: the actors keep their
+        // own meshes, textures and animations here, and the host is a real body.
+        GymNetActorBodies guestBodies = NetSession.Puppets.Bodies;
+        Require(guestBodies != null, "the guest has no actor bodies");
+        Require(guestBodies.AdoptedCount > 0 && guestBodies.BoundCount > 0,
+            "the host's actors got no real body here: adopted=" + guestBodies.AdoptedCount +
+            " bound=" + guestBodies.BoundCount);
+        Require(guestBodies.MovingBodyCount == guestBodies.AdoptedCount,
+            "adopted actors that do not move: " + guestBodies.MovingBodyCount + "/" + guestBodies.AdoptedCount);
+        Require(guestBodies.AnimatedBodyCount > 0,
+            "no adopted actor kept its authored animator");
+        Require(guestBodies.VisibleBodyCount == guestBodies.AdoptedCount,
+            "adopted bodies not drawn: " + guestBodies.VisibleBodyCount + "/" + guestBodies.AdoptedCount);
+        Require(guestBodies.TexturedBodyCount > 0, "the adopted bodies lost their textures");
+        foreach (float wait in Until(() => NetSession.TryGetAvatar(0, out GymRemoteAvatar seenHost) &&
+            seenHost.PoseCount > 0 && seenHost.HasRealBody, 60d, "the host's real body")) yield return wait;
+        NetSession.TryGetAvatar(0, out GymRemoteAvatar hostBody);
+        Require(hostBody.ClassIdShown == "bodybuilding",
+            "the host's class body here is " + hostBody.ClassIdShown);
+        Require(!string.IsNullOrEmpty(hostBody.OutfitTextureShown),
+            "the host's outfit never reached this screen");
+        Debug.Log("GYMCHAOS_NET_GUEST_ACTORS_OK adopted=" + guestBodies.AdoptedCount +
+            " bound=" + guestBodies.BoundCount + " animated=" + guestBodies.AnimatedBodyCount +
+            " moving=" + guestBodies.MovingBodyCount + " standins=" + NetSession.Puppets.KindSummaryForVerification +
+            " visible=" + guestBodies.VisibleBodyCount + " textured=" + guestBodies.TexturedBodyCount +
+            " hostBody=" + hostBody.ClassIdShown + " hostOutfit=" + hostBody.OutfitTextureShown);
+        Shot("net-guest-1b-host-body", LookAt(hostBody.transform.position));
+        // Every hat and the long pants, one at a time, as the host changes them.
+        for (int look = 0; look < LookCycle.Length; look++)
+        {
+            string lookName = LookCycle[look].name;
+            GymHeadwear hat = LookCycle[look].headwear;
+            GymBottomStyle bottom = LookCycle[look].bottom;
+            GymShirtColor colour = LookCycle[look].colour;
+            foreach (float wait in SyncWait("look-" + lookName, 180d)) yield return wait;
+            foreach (float wait in Until(() => hostBody.HeadwearWorn == hat && hostBody.HasHeadwearRenderer &&
+                hostBody.BottomStyleWorn == bottom && hostBody.BottomColorWorn == colour &&
+                hostBody.HasBottomShell, 90d, "the host's " + lookName)) yield return wait;
+            // A new hat replaces the old one instead of stacking on the head.
+            int hats = 0;
+            Transform[] worn = hostBody.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < worn.Length; i++)
+            {
+                if (worn[i].name.StartsWith("Remote Headwear ", StringComparison.Ordinal)) hats++;
+            }
+            Require(hats == 1, "the host's body wears " + hats + " hats for " + lookName);
+            // Aim at the chest so the head and its hat stay in the frame.
+            Shot("net-guest-look-" + lookName,
+                LookAt(hostBody.transform.position + Vector3.up * 1.35f, 3.2f, 0.9f));
+            Debug.Log("GYMCHAOS_NET_GUEST_LOOK_OK look=" + lookName + " headwear=" +
+                hostBody.HeadwearShown + " bottom=" + hostBody.BottomShown + "/" +
+                hostBody.BottomColorShown + " hats=" + hats + " shell=" + hostBody.HasBottomShell);
+            SyncWrite("look-seen-" + lookName);
+        }
+        foreach (float wait in Until(() => hostBody.HeadwearWorn == GymHeadwear.BucketHat &&
+            hostBody.HasHeadwearRenderer && hostBody.BottomColorWorn == GymShirtColor.Red &&
+            hostBody.HasBottomShell, 30d, "the host's hat and red shorts")) yield return wait;
+        Shot("net-guest-1d-host-cosmetics", LookAt(hostBody.transform.position));
+        Debug.Log("GYMCHAOS_NET_GUEST_HOST_COSMETICS_OK headwear=" + hostBody.HeadwearShown +
+            " worn=" + hostBody.HasHeadwearRenderer +
+            " bottom=" + hostBody.BottomShown + "/" + hostBody.BottomColorShown +
+            " shell=" + hostBody.HasBottomShell);
+        if (guestBodies.TryGetFirstBoundPosition(out Vector3 actorPoint))
+        {
+            Shot("net-guest-1c-room-actor", LookAt(actorPoint, 4.5f));
+        }
         SyncWrite("guest-ready");
 
         // The host breaks and repairs glass and sets the clock: this world follows.
@@ -1615,12 +1961,17 @@ public static class GymChaosClassSessionPlay
             "the host's day clock")) yield return wait;
         SyncWrite("guest-saw-clock");
         // The guest breaks glass near itself: its own copy stays whole until the host decides.
-        GlassShatterPanel nearest = null;
-        float nearestDistance = float.MaxValue;
-        foreach (GlassShatterPanel candidate in UnityEngine.Object.FindObjectsByType<GlassShatterPanel>(FindObjectsSortMode.None))
+        // A joined character wakes up outside the glass front, so walk it to the
+        // nearest intact panel first; the request itself must still be within reach.
+        GlassShatterPanel nearest = NearestIntactGlass(out float nearestDistance);
+        if (nearest != null && nearestDistance > GymNetInteractions.MaxReach - 2f)
         {
-            float d = Vector3.Distance(candidate.transform.position, Player.transform.position);
-            if (!candidate.IsShattered && d < nearestDistance) { nearest = candidate; nearestDistance = d; }
+            CharacterController controller = Player.GetComponent<CharacterController>();
+            if (controller != null) controller.enabled = false;
+            Player.transform.position = nearest.transform.position + nearest.transform.forward * 1.5f;
+            if (controller != null) controller.enabled = true;
+            yield return 0.6f;
+            nearest = NearestIntactGlass(out nearestDistance);
         }
         Require(nearest != null && nearestDistance < GymNetInteractions.MaxReach - 2f, "no glass within the host's reach of the guest (" + nearestDistance + ")");
         string guestGlassId = nearest.StableId;

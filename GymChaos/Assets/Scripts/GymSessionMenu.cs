@@ -13,7 +13,7 @@ using UnityEngine.UI;
 /// </summary>
 public sealed class GymSessionMenu : MonoBehaviour
 {
-    public enum State { Closed, SessionChoice, ClassSelect, SaveList, SavePreview, Error, Starting }
+    public enum State { Closed, SessionChoice, ClassSelect, SaveList, SavePreview, DeleteConfirm, Error, Starting }
 
     private const int SavesPerPage = 5;
     private static readonly string[] StatLabels =
@@ -31,6 +31,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     private GameObject classPage;
     private GameObject listPage;
     private GameObject previewPage;
+    private GameObject deletePage;
     private GameObject errorPage;
 
     private Button loadGameButton;
@@ -66,6 +67,12 @@ public sealed class GymSessionMenu : MonoBehaviour
     private Button previewLoadButton;
     private GymSaveListEntry previewEntry;
 
+    private Text deleteText;
+    private Button deleteCancelButton;
+    private RectTransform deleteSheetRect;
+    private RectTransform deleteConfirmRect;
+    private string deleteSlotId;
+
     private Text errorText;
     private Button errorBackButton;
     private State errorReturnState = State.SessionChoice;
@@ -79,6 +86,9 @@ public sealed class GymSessionMenu : MonoBehaviour
     public int ValidSaveCount => saves.Count;
     public string ChoiceNoteText => choiceNote != null ? choiceNote.text : string.Empty;
     public bool LoadGameOffered => loadGameButton != null && loadGameButton.gameObject.activeSelf;
+    /// <summary>Verifier access: the delete prompt is open and names this save.</summary>
+    public bool DeletePromptShown => state == State.DeleteConfirm;
+    public string DeleteSlotId => deleteSlotId;
     public GameObject FocusedObject =>
         EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
 
@@ -204,6 +214,10 @@ public sealed class GymSessionMenu : MonoBehaviour
             case State.SavePreview:
                 Show(State.SaveList);
                 break;
+            case State.DeleteConfirm:
+                deleteSlotId = null;
+                Show(State.SaveList);
+                break;
             case State.Error:
                 RefreshSaves();
                 Show(errorReturnState == State.SaveList && saves.Count == 0
@@ -242,6 +256,44 @@ public sealed class GymSessionMenu : MonoBehaviour
         Show(State.Error);
     }
 
+    /// <summary>Trash button on a save row: asks before anything is removed.</summary>
+    public void RequestDelete(string slotId)
+    {
+        if (!Accepts(State.SaveList)) return;
+        GymSaveListEntry entry = saves.Find(item => item.SlotId == slotId);
+        if (entry == null) return;
+        deleteSlotId = slotId;
+        deleteText.text = DescribeEntry(entry.Result.Data) +
+            "\n\nThis character and its backup are removed.\nThis cannot be undone.";
+        Show(State.DeleteConfirm);
+    }
+
+    public void CancelDelete()
+    {
+        if (state != State.DeleteConfirm) return;
+        deleteSlotId = null;
+        Show(State.SaveList);
+    }
+
+    /// <summary>The only path that removes a save.</summary>
+    public void ConfirmDelete()
+    {
+        if (!Accepts(State.DeleteConfirm) || string.IsNullOrEmpty(deleteSlotId)) return;
+        string slot = deleteSlotId;
+        if (!GymSessionService.DeleteSave(slot, out string error))
+        {
+            deleteSlotId = null;
+            ShowError(error, State.SaveList);
+            return;
+        }
+        Debug.Log("GYMCHAOS_SAVE_DELETED slot=" + slot);
+        deleteSlotId = null;
+        RefreshSaves();
+        int pages = Mathf.Max(1, Mathf.CeilToInt(saves.Count / (float)SavesPerPage));
+        listPageIndex = Mathf.Clamp(listPageIndex, 0, pages - 1);
+        Show(saves.Count == 0 ? State.SessionChoice : State.SaveList);
+    }
+
     private void RefreshSaves()
     {
         try
@@ -266,6 +318,7 @@ public sealed class GymSessionMenu : MonoBehaviour
             next == State.ClassSelect ? classPage :
             next == State.SaveList ? listPage :
             next == State.SavePreview ? previewPage :
+            next == State.DeleteConfirm ? deletePage :
             next == State.Error ? errorPage : null;
         SetPagesActive(page);
         setMainMenuInteractable?.Invoke(next == State.Closed);
@@ -297,6 +350,10 @@ public sealed class GymSessionMenu : MonoBehaviour
                 RefreshPreview();
                 GymShared.Select(previewLoadButton);
                 break;
+            case State.DeleteConfirm:
+                // Cancel is focused: a stray Enter must not erase a character.
+                GymShared.Select(deleteCancelButton);
+                break;
             case State.Error:
                 GymShared.Select(errorBackButton);
                 break;
@@ -310,6 +367,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         classPage.SetActive(visible == classPage);
         listPage.SetActive(visible == listPage);
         previewPage.SetActive(visible == previewPage);
+        deletePage.SetActive(visible == deletePage);
         errorPage.SetActive(visible == errorPage);
     }
 
@@ -338,6 +396,7 @@ public sealed class GymSessionMenu : MonoBehaviour
                 case State.ClassSelect: GymShared.Select(classCardButtons[highlightedClass]); break;
                 case State.SaveList: GymShared.Select(listBackButton); break;
                 case State.SavePreview: GymShared.Select(previewLoadButton); break;
+                case State.DeleteConfirm: GymShared.Select(deleteCancelButton); break;
                 case State.Error: GymShared.Select(errorBackButton); break;
             }
         }
@@ -380,6 +439,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         BuildClassPage();
         BuildListPage();
         BuildPreviewPage();
+        BuildDeletePage();
         BuildErrorPage();
     }
 
@@ -595,7 +655,8 @@ public sealed class GymSessionMenu : MonoBehaviour
     private void BuildListPage()
     {
         listPage = CreatePage("Save List", false);
-        PersonaMenuStyle.CreatePanel(listPage.transform, "Panel", 1356f, 376f, 560f, 620f, -1.5f,
+        // Wide enough for a trash button beside every row.
+        PersonaMenuStyle.CreatePanel(listPage.transform, "Panel", 1368f, 376f, 640f, 620f, -1.5f,
             new Color(0.035f, 0.05f, 0.1f, 1f), PersonaMenuStyle.Accent);
         Text title = PersonaMenuStyle.CreateLabel(listPage.transform, "Title", titleFont, "LOAD GAME",
             1352f, 112f, 500f, 70f, 56, PersonaMenuStyle.Ink, TextAnchor.MiddleLeft);
@@ -606,6 +667,37 @@ public sealed class GymSessionMenu : MonoBehaviour
             "MORE", 1500f, 636f, 190f, 54f, 40, -1.5f, NextListPage);
         listBackButton = PersonaMenuStyle.CreateButton(listPage.transform, "Save List Back Button", bodyFont,
             "BACK", 1228f, 640f, 210f, 54f, 40, -1.5f, Back);
+    }
+
+    private void BuildDeletePage()
+    {
+        deletePage = CreatePage("Delete Confirm", false);
+        Transform parent = deletePage.transform;
+        // One sheet, three stacked bands: caption, the save, then the buttons.
+        // The buttons also grow by 8% while hovered, so the gap between them and
+        // the distance to the sheet edge are sized for the focused state too.
+        deleteSheetRect = PersonaMenuStyle.CreatePanel(parent, "Panel", 1368f, 336f, 700f, 430f, -2f,
+            new Color(0.035f, 0.05f, 0.1f, 1f), PersonaMenuStyle.Accent);
+        Text title = PersonaMenuStyle.CreateLabel(parent, "Title", titleFont, "DELETE SAVE?",
+            1368f, 184f, 600f, 64f, 46, PersonaMenuStyle.Accent, TextAnchor.MiddleLeft);
+        title.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -2f);
+        deleteText = PersonaMenuStyle.CreateLabel(parent, "Delete Text", bodyFont, string.Empty,
+            1368f, 316f, 560f, 170f, 26, PersonaMenuStyle.Ink, TextAnchor.UpperLeft);
+        deleteText.lineSpacing = 1.15f;
+        deleteConfirmRect = (RectTransform)PersonaMenuStyle.CreateButton(parent, "Delete Confirm Button",
+            bodyFont, "DELETE",             1194f, 480f, 240f, 64f, 44, -2f, ConfirmDelete).transform;
+        deleteCancelButton = PersonaMenuStyle.CreateButton(parent, "Delete Cancel Button", bodyFont,
+            "CANCEL", 1542f, 480f, 240f, 64f, 44, -2f, CancelDelete);
+    }
+
+    /// <summary>Verifier: the delete sheet, its caption box and the two plates, as built.</summary>
+    public void DeleteLayoutForVerification(out RectTransform sheet, out RectTransform caption,
+        out RectTransform confirm, out RectTransform cancel)
+    {
+        sheet = deleteSheetRect;
+        caption = deleteText != null ? deleteText.rectTransform : null;
+        confirm = deleteConfirmRect;
+        cancel = deleteCancelButton != null ? (RectTransform)deleteCancelButton.transform : null;
     }
 
     private void BuildPreviewPage()
@@ -701,6 +793,8 @@ public sealed class GymSessionMenu : MonoBehaviour
             if (entry != null) Destroy(entry);
         }
         listEntries.Clear();
+        int pageCount = Mathf.Max(1, Mathf.CeilToInt(saves.Count / (float)SavesPerPage));
+        listPageIndex = Mathf.Clamp(listPageIndex, 0, pageCount - 1);
         listEmpty.gameObject.SetActive(saves.Count == 0);
         listNextButton.gameObject.SetActive(saves.Count > SavesPerPage);
 
@@ -710,14 +804,44 @@ public sealed class GymSessionMenu : MonoBehaviour
         {
             GymSaveListEntry entry = saves[i];
             string slot = entry.SlotId;
+            float y = 196f + (i - start) * 84f;
             Button button = PersonaMenuStyle.CreateButton(listPage.transform, "Save Entry " + (i - start),
-                bodyFont, DescribeEntry(entry.Result.Data), 1352f, 196f + (i - start) * 84f, 500f, 64f, 32, -1.5f,
+                bodyFont, DescribeEntry(entry.Result.Data), 1324f, y, 500f, 64f, 32, -1.5f,
                 () => SelectSave(slot));
             button.GetComponent<PersonaMenuButton>().SetFocusMotion(1.04f, 1f);
             listEntries.Add(button.gameObject);
+            Button delete = PersonaMenuStyle.CreateButton(listPage.transform, "Delete Save " + (i - start),
+                bodyFont, string.Empty, 1630f, y, 54f, 54f, 20, -1.5f, () => RequestDelete(slot));
+            delete.GetComponent<PersonaMenuButton>().SetFocusMotion(1.08f, 1f);
+            BuildTrashIcon(delete.transform);
+            listEntries.Add(delete.gameObject);
             if (first == null) first = button;
         }
         GymShared.Select(first != null ? first : listBackButton);
+    }
+
+    /// <summary>Handle, lid and a tapered body, drawn from Persona plates: no icon atlas.</summary>
+    private static void BuildTrashIcon(Transform parent)
+    {
+        PersonaShape handle = PersonaMenuStyle.CreateShape("Trash Handle", parent, PersonaMenuStyle.Ink);
+        RectTransform handleRect = handle.rectTransform;
+        handleRect.anchorMin = new Vector2(0.40f, 0.83f);
+        handleRect.anchorMax = new Vector2(0.60f, 0.92f);
+        handleRect.offsetMin = Vector2.zero;
+        handleRect.offsetMax = Vector2.zero;
+        PersonaShape lid = PersonaMenuStyle.CreateShape("Trash Lid", parent, PersonaMenuStyle.Ink);
+        RectTransform lidRect = lid.rectTransform;
+        lidRect.anchorMin = new Vector2(0.20f, 0.72f);
+        lidRect.anchorMax = new Vector2(0.80f, 0.82f);
+        lidRect.offsetMin = Vector2.zero;
+        lidRect.offsetMax = Vector2.zero;
+        PersonaShape body = PersonaMenuStyle.CreateShape("Trash Body", parent, PersonaMenuStyle.Ink);
+        RectTransform bodyRect = body.rectTransform;
+        bodyRect.anchorMin = new Vector2(0.28f, 0.14f);
+        bodyRect.anchorMax = new Vector2(0.72f, 0.70f);
+        bodyRect.offsetMin = Vector2.zero;
+        bodyRect.offsetMax = Vector2.zero;
+        body.SetCorners(new Vector2(0.12f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.12f, 0f));
     }
 
     private static string DescribeEntry(GymCharacterSave save)

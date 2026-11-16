@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -203,7 +204,6 @@ public sealed class GymTutorialDirector : MonoBehaviour
         yawSeen = 0f;
         lastYaw = player.transform.eulerAngles.y;
         walkStart = player.transform.position;
-        GymHud.Active?.PushNotice(step.Title + "  —  " + step.Key, 3.2f, 1);
         GymProgressionJournal.TeaserPending = string.Empty;
         Debug.Log($"GYMCHAOS_TUTORIAL_STEP step={Step} title={step.Title} key={step.Key}", this);
     }
@@ -246,6 +246,14 @@ public sealed class GymTutorialDirector : MonoBehaviour
             }
             case GymTutorialSignal.WentInside:
             {
+                // Being inside is the lesson. A player who is already on the gym
+                // floor (a resumed save, the back room, the far door) must never be
+                // told to walk back out and through the entrance again.
+                if (IsInsideGym(player.transform.position))
+                {
+                    Complete(GymTutorialSignal.WentInside);
+                    break;
+                }
                 GymDoorway door = GymDoorway.Instance;
                 if (door != null &&
                     Vector3.Distance(player.transform.position, door.InteriorPoint) < InsideDistance)
@@ -297,8 +305,8 @@ public sealed class GymTutorialDirector : MonoBehaviour
             case GymTutorialSignal.ReachedRaceSign:
             {
                 GymRaceSign sign = GymRaceSign.Instance;
-                bool atSign = sign != null &&
-                    Vector3.Distance(player.transform.position, sign.transform.position) < SignDistance;
+                Vector3 signPoint = sign != null ? sign.StandPoint : Vector3.zero;
+                bool atSign = sign != null && FlatDistance(player.transform.position, signPoint) < SignDistance;
                 bool racing = GymRaceDirector.Instance != null && GymRaceDirector.Instance.RaceActive;
                 if (atSign || racing)
                 {
@@ -340,8 +348,6 @@ public sealed class GymTutorialDirector : MonoBehaviour
         {
             GymTutorialStep next = GymTutorialSteps.Get(State.tutorialStep);
             GymProgressionJournal.TeaserPending = next.Title + "  —  " + next.Key;
-            // The teaser is the reward that pulls the player to the next lesson.
-            GymHud.Active?.PushNotice("NEXT:  " + GymProgressionJournal.TeaserPending, 3.2f, 1);
         }
         if (GymSessionService.SessionMode)
         {
@@ -422,24 +428,33 @@ public sealed class GymTutorialDirector : MonoBehaviour
             {
                 GymBackRoomInteractable[] rooms =
                     Object.FindObjectsByType<GymBackRoomInteractable>(FindObjectsSortMode.None);
-                GymBackRoomInteractable best = null;
-                float bestDistance = float.MaxValue;
+                GymBackRoomInteractable locker = null;
+                GymBackRoomInteractable nearest = null;
+                float lockerDistance = float.MaxValue;
+                float nearestDistance = float.MaxValue;
                 for (int i = 0; i < rooms.Length; i++)
                 {
                     GymBackRoomInteractable room = rooms[i];
                     if (room == null) continue;
                     string name = room.DisplayName != null ? room.DisplayName.ToLowerInvariant() : string.Empty;
-                    float distance = Vector3.Distance(player.transform.position, room.transform.position);
-                    if (name.Contains("locker") || name.Contains("changing") || name.Contains("outfit"))
+                    float distance = FlatDistance(player.transform.position, room.transform.position);
+                    if (distance < nearestDistance)
                     {
-                        distance -= 40f;
+                        nearestDistance = distance;
+                        nearest = room;
                     }
-                    if (distance < bestDistance)
+                    bool isLocker = name.Contains("locker") || name.Contains("changing") ||
+                        name.Contains("outfit");
+                    if (isLocker && distance < lockerDistance)
                     {
-                        bestDistance = distance;
-                        best = room;
+                        lockerDistance = distance;
+                        locker = room;
                     }
                 }
+                // The locker itself when the room has one; otherwise the nearest
+                // changing spot. No distance fudge: the marker must point at the
+                // real counter, not at whatever the curve happened to favour.
+                GymBackRoomInteractable best = locker != null ? locker : nearest;
                 if (best == null)
                 {
                     return false;
@@ -460,6 +475,15 @@ public sealed class GymTutorialDirector : MonoBehaviour
             }
             case GymTutorialTarget.Counter:
             {
+                // The shop overlay is a screen canvas with no world transform; its
+                // own position used to put the marker at the world origin, far
+                // outside the scene. The counter the player must reach is the
+                // store's front, which the builder owns.
+                if (GymProteinStoreEnvironment.IsBuilt)
+                {
+                    point = GymProteinStoreEnvironment.StoreFrontClearPoint;
+                    return true;
+                }
                 GymProteinShopUI shop = Object.FindFirstObjectByType<GymProteinShopUI>();
                 if (shop == null)
                 {
@@ -470,22 +494,53 @@ public sealed class GymTutorialDirector : MonoBehaviour
             }
             case GymTutorialTarget.Bodybuilder:
             {
+                // A member already in the room beats a visitor still in the car
+                // park; only when nobody faces the player indoors does the nearest
+                // visitor anywhere win.
                 GymVisitorAgent[] visitors = Object.FindObjectsByType<GymVisitorAgent>(FindObjectsSortMode.None);
-                GymVisitorAgent best = null;
-                float bestDistance = float.MaxValue;
+                GymVisitorAgent indoor = null;
+                GymVisitorAgent nearest = null;
+                float indoorDistance = float.MaxValue;
+                float nearestDistance = float.MaxValue;
                 for (int i = 0; i < visitors.Length; i++)
                 {
                     if (visitors[i] == null) continue;
-                    float distance = Vector3.Distance(player.transform.position, visitors[i].transform.position);
-                    if (distance < bestDistance)
+                    float distance = FlatDistance(player.transform.position, visitors[i].transform.position);
+                    if (distance < nearestDistance)
                     {
-                        bestDistance = distance;
-                        best = visitors[i];
+                        nearestDistance = distance;
+                        nearest = visitors[i];
+                    }
+                    if (distance < indoorDistance && IsInsideGym(visitors[i].transform.position))
+                    {
+                        indoorDistance = distance;
+                        indoor = visitors[i];
                     }
                 }
+                GymVisitorAgent best = indoor != null ? indoor : nearest;
                 if (best == null)
                 {
-                    return false;
+                    // No visitor spawned yet: any waking member of staff will do.
+                    IReadOnlyList<EnemyFighter> fighters = EnemyFighter.RegisteredFighters;
+                    EnemyFighter member = null;
+                    float memberDistance = float.MaxValue;
+                    for (int i = 0; i < fighters.Count; i++)
+                    {
+                        EnemyFighter fighter = fighters[i];
+                        if (fighter == null || fighter.IsDead || fighter.IsPolice) continue;
+                        float distance = FlatDistance(player.transform.position, fighter.transform.position);
+                        if (distance < memberDistance)
+                        {
+                            memberDistance = distance;
+                            member = fighter;
+                        }
+                    }
+                    if (member == null)
+                    {
+                        return false;
+                    }
+                    point = member.transform.position;
+                    return true;
                 }
                 point = best.transform.position;
                 return true;
@@ -497,12 +552,29 @@ public sealed class GymTutorialDirector : MonoBehaviour
                 {
                     return false;
                 }
+                // The stand point is the spot in front of the board, not the
+                // board's own pivot (which sits on the sign post's foot).
                 point = sign.StandPoint;
                 return true;
             }
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// True when the player stands under the gym's roof. The door, the back room
+    /// and every entrance count: the lesson is "get inside", not "use one door".
+    /// </summary>
+    public static bool IsInsideGym(Vector3 position) =>
+        !GymOutdoorBuilder.IsPlayerOutsideGym(position);
+
+    /// <summary>Walking distance on the floor; height above the target never inflates it.</summary>
+    public static float FlatDistance(Vector3 from, Vector3 to)
+    {
+        float x = to.x - from.x;
+        float z = to.z - from.z;
+        return Mathf.Sqrt(x * x + z * z);
     }
 
     /// <summary>Story beats the journal reads to tease the next lesson.</summary>

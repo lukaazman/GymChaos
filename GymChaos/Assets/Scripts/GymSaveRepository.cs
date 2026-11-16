@@ -105,6 +105,28 @@ public sealed class GymSaveRepository
         }
     }
 
+    /// <summary>
+    /// Removes a character's current file, its previous-valid backup and any
+    /// leftover temporary file. A save this build cannot read (newer version,
+    /// unknown class) is preserved: the player must never lose a character to a
+    /// version mismatch.
+    /// </summary>
+    public void Delete(string slotId)
+    {
+        lock (writeLock)
+        {
+            string path = PathFor(slotId);
+            GymSaveReadResult current = ReadFile(path, slotId);
+            GymSaveReadResult backup = ReadFile(path + ".bak", slotId);
+            if (Protected(current.Failure) || Protected(backup.Failure))
+                throw new InvalidDataException(
+                    "This character requires a different game version; its files were preserved.");
+            if (File.Exists(path)) File.Delete(path);
+            if (File.Exists(path + ".bak")) File.Delete(path + ".bak");
+            if (File.Exists(path + ".tmp")) File.Delete(path + ".tmp");
+        }
+    }
+
     public GymSaveReadResult Decode(string serialized, string expectedId)
     {
         try

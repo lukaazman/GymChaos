@@ -1207,6 +1207,9 @@ public sealed class GymExperienceService : MonoBehaviour
         state.shirt = shirt.ToString();
         EnsureCosmetics();
         cosmetics?.ApplyFromState(state);
+        // Picking a look is what the locker lesson is about, and the mirror
+        // opens the same menu: either way this is the locker-room prep done.
+        CompleteLockerPrep();
         SaveNow();
     }
 
@@ -1221,6 +1224,9 @@ public sealed class GymExperienceService : MonoBehaviour
         state.top = top.ToString();
         EnsureCosmetics();
         cosmetics?.ApplyFromState(state);
+        // Picking a look is what the locker lesson is about, and the mirror
+        // opens the same menu: either way this is the locker-room prep done.
+        CompleteLockerPrep();
         SaveNow();
     }
 
@@ -1230,6 +1236,9 @@ public sealed class GymExperienceService : MonoBehaviour
         state.bottom = bottom.ToString();
         EnsureCosmetics();
         cosmetics?.ApplyFromState(state);
+        // Picking a look is what the locker lesson is about, and the mirror
+        // opens the same menu: either way this is the locker-room prep done.
+        CompleteLockerPrep();
         SaveNow();
     }
 
@@ -1243,6 +1252,9 @@ public sealed class GymExperienceService : MonoBehaviour
         state.bottomColor = color.ToString();
         EnsureCosmetics();
         cosmetics?.ApplyFromState(state);
+        // Picking a look is what the locker lesson is about, and the mirror
+        // opens the same menu: either way this is the locker-room prep done.
+        CompleteLockerPrep();
         SaveNow();
     }
 
@@ -1256,6 +1268,9 @@ public sealed class GymExperienceService : MonoBehaviour
 
         state.headwear = headwear.ToString();
         cosmetics?.ApplyFromState(state);
+        // Picking a look is what the locker lesson is about, and the mirror
+        // opens the same menu: either way this is the locker-room prep done.
+        CompleteLockerPrep();
         SaveNow();
     }
 

@@ -39,6 +39,15 @@ public sealed class GymNetSession : MonoBehaviour
     private bool hadPosition;
     private float speed;
     private float nextPlayerSearch;
+    // The local look, read from this character's save a few times a second and
+    // sent with the pose so both screens draw the same body in the same clothes.
+    private float nextLookRefresh;
+    private int lookShirt = -1;
+    private int lookTop;
+    private int lookBottom;
+    private int lookBottomColor;
+    private int lookHeadwear;
+    private int lookClass;
     private GymNetClient.Phase reportedPhase;
 
     public GymNetSession()
@@ -299,6 +308,7 @@ public sealed class GymNetSession : MonoBehaviour
         GymNetRace.Reset();
         Join.Reset();
         Puppets.Clear();
+        RestoreLocalActors();
         actorsSuppressed = false;
         pendingWorld = null;
         reportedGuest = GymNetJoin.GuestState.Idle;
@@ -309,6 +319,27 @@ public sealed class GymNetSession : MonoBehaviour
     private static void Discard(GameObject target)
     {
         if (Application.isPlaying) Destroy(target); else DestroyImmediate(target);
+    }
+
+    /// <summary>
+    /// Hands the local cast to the host without hiding it: the same actors stay
+    /// in the room with their meshes and animations, driven by the snapshot.
+    /// </summary>
+    private int AdoptLocalActors()
+    {
+        if (Puppets.Bodies == null)
+        {
+            Puppets.Bodies = new GymNetActorBodies();
+        }
+        return Puppets.Bodies.Adopt();
+    }
+
+    private void RestoreLocalActors()
+    {
+        if (Puppets.Bodies == null) return;
+        Puppets.Bodies.Restore();
+        Puppets.Bodies.Clear();
+        Puppets.Bodies = null;
     }
 
     private void ClearAvatars()
@@ -372,7 +403,10 @@ public sealed class GymNetSession : MonoBehaviour
     {
         if (!Application.isPlaying) return;
         bool reconnecting = reconnect != null && reconnect.Active;
-        bool show = (reconnecting || (Client.CurrentPhase == GymNetClient.Phase.Lobby && !string.IsNullOrEmpty(Client.RoomCode))) &&
+        // The invitation belongs to the host. A guest plays in the room without
+        // the code over the screen: it is the host's to hand out.
+        bool show = Client.IsHost &&
+            (reconnecting || (Client.CurrentPhase == GymNetClient.Phase.Lobby && !string.IsNullOrEmpty(Client.RoomCode))) &&
             !GymStartScreen.IsMenuVisible;
         if (roomLabel == null)
         {
@@ -481,8 +515,10 @@ public sealed class GymNetSession : MonoBehaviour
             if (avatars.Count > 0) ClearAvatars();
             if (actorsSuppressed)
             {
-                // The host is gone: its puppets and door control go with it.
+                // The host is gone: its puppets and door control go with it, and
+                // the local cast starts simulating its own world again.
                 Puppets.Clear();
+                RestoreLocalActors();
                 GymNetWorld.ReleaseDoors();
             }
             return;
@@ -491,11 +527,13 @@ public sealed class GymNetSession : MonoBehaviour
         if (pendingWorld != null && GymArenaBootstrap.IsGameplayStarted && GymSessionService.ApplyWorldSnapshot(pendingWorld))
         {
             pendingWorld = null;
-            // The host runs everyone from here on: this scene stops simulating them.
+            // The host runs everyone from here on: this scene stops simulating them
+            // but keeps the actors themselves, so the room is not a field of capsules.
             if (!actorsSuppressed)
             {
                 actorsSuppressed = true;
-                Debug.Log("GYMCHAOS_NET_ACTORS_SUPPRESSED count=" + GymNetWorld.SuppressLocalActors());
+                int adopted = AdoptLocalActors();
+                Debug.Log($"GYMCHAOS_NET_ACTORS_ADOPTED count={adopted} puppets={Puppets.Count}");
             }
         }
         if (latestSnapshot != null)
@@ -535,10 +573,49 @@ public sealed class GymNetSession : MonoBehaviour
         if (hadPosition) speed = Vector3.ProjectOnPlane(position - lastPosition, Vector3.up).magnitude / SendIntervalSeconds;
         lastPosition = position;
         hadPosition = true;
+        RefreshLook();
         GymNetPose pose = new GymNetPose { x = position.x, y = position.y, z = position.z, r = player.transform.eulerAngles.y, s = speed,
             h = Mathf.Clamp01(player.CurrentHealth / Mathf.Max(1f, player.MaxHealth)),
-            d = player.IsDead ? 1f : 0f };
+            d = player.IsDead ? 1f : 0f,
+            classIndex = lookClass, shirt = lookShirt, top = lookTop, bottom = lookBottom,
+            bottomColor = lookBottomColor, headwear = lookHeadwear };
         Client.Send(-1, PoseTag + JsonUtility.ToJson(pose));
+    }
+
+    private void RefreshLook()
+    {
+        if (Time.unscaledTime < nextLookRefresh) return;
+        nextLookRefresh = Time.unscaledTime + 0.5f;
+        GymProgressionState state = GymExperienceService.Active != null
+            ? GymExperienceService.Active.State : null;
+        if (state == null) return;
+        lookShirt = LookIndex(state.shirt, GymShirtColor.Black);
+        lookTop = LookIndex(state.top, GymTopStyle.TankTop);
+        lookBottom = LookIndex(state.bottom, GymBottomStyle.Shorts);
+        lookBottomColor = LookIndex(state.bottomColor, GymShirtColor.Black);
+        lookHeadwear = LookIndex(state.headwear, GymHeadwear.None);
+        string classId = GymSessionService.ActiveClass.id;
+        lookClass = 0;
+        System.Collections.Generic.IReadOnlyList<GymClassDefinition> classes = GymClassCatalog.All;
+        for (int i = 0; i < classes.Count; i++)
+        {
+            if (classes[i].id == classId)
+            {
+                lookClass = i;
+                break;
+            }
+        }
+    }
+
+    // Enum names only: an unknown name falls back to the baseline outfit.
+    private static int LookIndex<T>(string text, T fallback) where T : struct, Enum
+    {
+        if (!string.IsNullOrEmpty(text) && Enum.TryParse(text, true, out T value) &&
+            Enum.IsDefined(typeof(T), value))
+        {
+            return Convert.ToInt32(value);
+        }
+        return Convert.ToInt32(fallback);
     }
 
     private void OnDestroy()

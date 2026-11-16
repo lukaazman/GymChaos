@@ -50,6 +50,8 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
     private float shownAt;
 
     public static GymLevelUpMenuUI Active => instance;
+    /// <summary>True while the point-spending screen owns the pointer.</summary>
+    public static bool IsMenuVisible => instance != null && instance.shown;
     public bool IsShowingForVerification => shown;
     public Button[] StatButtonsForVerification => statButtons;
     public string InfoTitleForVerification => infoTitle != null ? infoTitle.text : string.Empty;
@@ -176,6 +178,13 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
         {
             return;
         }
+        // Spending a point is a pointer screen: keep the cursor free and visible
+        // so the stat plates can be hovered and clicked.
+        if (Cursor.lockState != CursorLockMode.None || !Cursor.visible)
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
 
         float reveal = Mathf.Clamp01((Time.unscaledTime - shownAt) / PersonaMenuStyle.TransitionSeconds);
         group.alpha = reveal;
@@ -206,6 +215,10 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
         canvas.enabled = value;
         if (value)
         {
+            // The level-up appears mid-run with the pointer still locked away;
+            // free it here so the first frame is already clickable.
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
             shownAt = Time.unscaledTime;
             Refresh();
             SetFocused(focusedIndex);

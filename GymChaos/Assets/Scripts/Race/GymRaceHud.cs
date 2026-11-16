@@ -45,6 +45,8 @@ public sealed class GymRaceHud : MonoBehaviour
     private bool minimapObjectiveWanted;
     private readonly List<RectTransform> minimapDots = new List<RectTransform>();
     private readonly List<Image> minimapDotImages = new List<Image>();
+    private readonly List<Image> minimapDotBacks = new List<Image>();
+    private readonly List<RawImage> minimapDotHeads = new List<RawImage>();
     private readonly List<GymRaceRacer> shownOrder = new List<GymRaceRacer>();
     private float nextTextRefresh;
     private int shownLapCount = -1;
@@ -54,7 +56,7 @@ public sealed class GymRaceHud : MonoBehaviour
     private readonly List<RawImage> standingHeads = new List<RawImage>();
     private Text centerText;
     private Text bannerText;
-    private Text hintText;
+    private GymTutorialCard hintCard;
     private Text itemText;
     private GymRaceSpeedLines speedLines;
     private RectTransform resultsRoot;
@@ -141,6 +143,7 @@ public sealed class GymRaceHud : MonoBehaviour
         Image mapBack = minimapRect.gameObject.AddComponent<Image>();
         mapBack.color = new Color(0.01f, 0.03f, 0.08f, 0.55f);
         mapBack.raycastTarget = false;
+        minimapRect.gameObject.AddComponent<RectMask2D>();
         minimap = Stretch(new GameObject("Track", typeof(RectTransform), typeof(CanvasRenderer)), minimapRect).gameObject.AddComponent<GymRaceMinimapGraphic>();
         minimap.raycastTarget = false;
 
@@ -195,8 +198,13 @@ public sealed class GymRaceHud : MonoBehaviour
         bannerText = Label(banner, "Banner", title, string.Empty, new Vector2(-450f, 0f), new Vector2(900f, 110f), 78, PersonaMenuStyle.Gold, TextAnchor.MiddleCenter);
         RectTransform item = Corner("Item", new Vector2(0.5f, 1f), new Vector2(0f, -30f), new Vector2(700f, 70f));
         itemText = Label(item, "Item", title, string.Empty, new Vector2(-350f, 0f), new Vector2(700f, 64f), 48, PersonaMenuStyle.Gold, TextAnchor.MiddleCenter);
-        RectTransform hint = Corner("Hint", new Vector2(0.5f, 0f), new Vector2(0f, 40f), new Vector2(1400f, 50f));
-        hintText = Label(hint, "Controls", body, string.Empty, new Vector2(-700f, 0f), new Vector2(1400f, 44f), 28, PersonaMenuStyle.Muted, TextAnchor.MiddleCenter);
+        // The coach speaks in the tutorial's own card: title, line and key chip,
+        // not a small line of text in the bottom corner.
+        hintCard = GymTutorialCard.Create(transform, "Coach Card");
+        hintCard.Rect.anchorMin = hintCard.Rect.anchorMax = new Vector2(0.5f, 0f);
+        hintCard.Rect.pivot = new Vector2(0.5f, 0f);
+        hintCard.Rect.anchoredPosition = new Vector2(0f, 44f);
+        hintCard.SetVisible(false);
 
         resultsRoot = PersonaMenuStyle.CreatePanel(transform, "Results", 960f, 520f, 1020f, 640f, -1.5f, new Color(0.02f, 0.05f, 0.12f, 0.92f), PersonaMenuStyle.Accent);
         resultsTitle = PersonaMenuStyle.CreateLabel(resultsRoot, "Results Title", title, "RESULTS", 510f, 70f, 900f, 90f, 72, PersonaMenuStyle.Ink, TextAnchor.MiddleLeft);
@@ -418,6 +426,7 @@ public sealed class GymRaceHud : MonoBehaviour
         standingRows[0].transform.parent.parent.gameObject.SetActive(visible);
         minimapRect.gameObject.SetActive(visible);
         speedText.transform.parent.gameObject.SetActive(visible);
+        if (!visible && hintCard != null) hintCard.SetVisible(false);
     }
 
     public void ShowCenter(string text, Color color, float seconds)
@@ -438,8 +447,38 @@ public sealed class GymRaceHud : MonoBehaviour
 
     public void SetHint(string text)
     {
-        hintText.text = text;
+        if (hintCard == null)
+        {
+            return;
+        }
+        if (string.IsNullOrEmpty(text))
+        {
+            hintCard.SetVisible(false);
+            return;
+        }
+        SplitHint(text, out string key, out string body);
+        hintCard.SetContent("COACH", body, key);
+        hintCard.SetVisible(true);
     }
+
+    /// <summary>A coach line is "KEY   INSTRUCTION"; a plain notice has no key.</summary>
+    private static void SplitHint(string text, out string key, out string body)
+    {
+        int split = text.IndexOf("   ");
+        if (split > 0 && split <= 20)
+        {
+            key = text.Substring(0, split);
+            body = text.Substring(split + 3);
+            return;
+        }
+        key = string.Empty;
+        body = text;
+    }
+
+    public string HintTitleForVerification => hintCard != null ? hintCard.TitleText : string.Empty;
+    public string HintKeyForVerification => hintCard != null ? hintCard.KeyText : string.Empty;
+    public string HintLineForVerification => hintCard != null ? hintCard.LineText : string.Empty;
+    public bool HintCardShown => hintCard != null && hintCard.IsShown;
 
     public string ItemLabelForVerification => itemText.text;
 
@@ -571,14 +610,18 @@ public sealed class GymRaceHud : MonoBehaviour
     {
         while (minimapDots.Count < racers.Count)
         {
-            RectTransform dot = new GameObject("Dot", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
-            dot.SetParent(minimapRect, false);
-            dot.anchorMin = dot.anchorMax = Vector2.zero;
-            dot.localRotation = Quaternion.Euler(0f, 0f, 45f);
-            Image image = dot.GetComponent<Image>();
-            image.raycastTarget = false;
-            minimapDots.Add(dot);
-            minimapDotImages.Add(image);
+            minimapDots.Add(CreateHeadBadge(minimapRect, out Image ring, out Image back, out RawImage head));
+            minimapDotImages.Add(ring);
+            minimapDotBacks.Add(back);
+            minimapDotHeads.Add(head);
+        }
+        for (int i = 0; i < racers.Count; i++)
+        {
+            if (racers[i] != null && racers[i].IsPlayer)
+            {
+                minimap.Follow(racers[i].transform.position);
+                break;
+            }
         }
         Vector2 size = minimapRect.rect.size;
         for (int i = 0; i < minimapDots.Count; i++)
@@ -592,22 +635,83 @@ public sealed class GymRaceHud : MonoBehaviour
             GymRaceRacer racer = racers[i];
             Vector2 normalized = minimap.Project(racer.transform.position);
             minimapDots[i].anchoredPosition = new Vector2(normalized.x * size.x, normalized.y * size.y);
-            float dotSize = racer.IsPlayer ? 18f : 12f;
+            float dotSize = racer.IsPlayer ? 44f : 36f;
             minimapDots[i].sizeDelta = new Vector2(dotSize, dotSize);
-            minimapDotImages[i].color = racer.IsPlayer ? Color.white : racer.Color;
+            minimapDotImages[i].color = racer.IsPlayer ? PersonaMenuStyle.Gold : Color.white;
+            minimapDotHeads[i].texture = racer.Headshot;
+            minimapDotHeads[i].enabled = racer.Headshot != null;
+            // No portrait (no GPU): the racer's colour fills the badge instead.
+            minimapDotBacks[i].color = racer.Headshot != null ? MapBack : racer.Color;
             if (racer.IsPlayer)
             {
                 minimapDots[i].SetAsLastSibling();
             }
         }
-        // The objective stays above every kart dot, including the player's.
+        // The objective stays above every badge and sticks to the map edge when out of view.
         if (minimapObjective != null && minimapObjectiveWanted)
         {
             Vector2 goal = minimap.Project(minimapObjectiveWorld);
+            goal = new Vector2(Mathf.Clamp(goal.x, 0.06f, 0.94f), Mathf.Clamp(goal.y, 0.06f, 0.94f));
             minimapObjective.anchoredPosition = new Vector2(goal.x * size.x, goal.y * size.y);
             minimapObjective.SetAsLastSibling();
             minimapObjective.gameObject.SetActive(true);
         }
+    }
+
+    private static readonly Color MapBack = new Color(0.01f, 0.03f, 0.08f, 1f);
+    private static Sprite circleSprite;
+
+    private static Sprite Circle()
+    {
+        if (circleSprite != null)
+        {
+            return circleSprite;
+        }
+        const int n = 64;
+        Texture2D t = new Texture2D(n, n, TextureFormat.RGBA32, false) { name = "Minimap Circle", hideFlags = HideFlags.HideAndDontSave };
+        Color32[] px = new Color32[n * n];
+        for (int y = 0; y < n; y++)
+        {
+            for (int x = 0; x < n; x++)
+            {
+                float d = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), Vector2.one * (n * 0.5f));
+                px[y * n + x] = new Color32(255, 255, 255, (byte)(Mathf.Clamp01(n * 0.5f - d) * 255f));
+            }
+        }
+        t.SetPixels32(px);
+        t.Apply(false, true);
+        circleSprite = Sprite.Create(t, new Rect(0, 0, n, n), Vector2.one * 0.5f, n);
+        return circleSprite;
+    }
+
+    /// <summary>Round head badge: stroke ring plus a masked portrait cropped to the head (the baked portrait already has its black eye bar).</summary>
+    private static RectTransform CreateHeadBadge(RectTransform parent, out Image ring, out Image back, out RawImage head)
+    {
+        ring = new GameObject("Racer", typeof(RectTransform), typeof(Image)).GetComponent<Image>();
+        RectTransform rect = ring.rectTransform;
+        rect.SetParent(parent, false);
+        rect.anchorMin = rect.anchorMax = Vector2.zero;
+        ring.sprite = Circle();
+        ring.raycastTarget = false;
+        back = new GameObject("Face", typeof(RectTransform), typeof(Image), typeof(Mask)).GetComponent<Image>();
+        RectTransform faceRect = back.rectTransform;
+        faceRect.SetParent(rect, false);
+        faceRect.anchorMin = Vector2.zero;
+        faceRect.anchorMax = Vector2.one;
+        faceRect.offsetMin = new Vector2(3f, 3f);
+        faceRect.offsetMax = new Vector2(-3f, -3f);
+        back.sprite = ring.sprite;
+        back.raycastTarget = false;
+        head = new GameObject("Head", typeof(RectTransform), typeof(RawImage)).GetComponent<RawImage>();
+        RectTransform headRect = head.rectTransform;
+        headRect.SetParent(faceRect, false);
+        headRect.anchorMin = Vector2.zero;
+        headRect.anchorMax = Vector2.one;
+        headRect.offsetMin = headRect.offsetMax = Vector2.zero;
+        // Head only: drop the shoulders and chest below the chin.
+        head.uvRect = new Rect(0.14f, 0.3f, 0.72f, 0.72f);
+        head.raycastTarget = false;
+        return rect;
     }
 
     public void ShowResults(IList<ResultRow> rows, string xpLine)
@@ -714,50 +818,40 @@ public sealed class GymRaceHud : MonoBehaviour
 /// <summary>Track outline for the minimap (both branches) drawn as thick lines.</summary>
 public sealed class GymRaceMinimapGraphic : MaskableGraphic
 {
-    private const float Padding = 0.07f;
-    private Vector2 min;
-    private Vector2 max;
-    private bool measured;
+    /// <summary>World metres across the map: a close view that follows the player, not the whole track.</summary>
+    public const float Span = 110f;
+    private Vector2 center;
+    private bool centered;
 
-    private void Measure()
+    /// <summary>Centres the window on a world position (x, z); rebuilds the track only when it moved.</summary>
+    public void Follow(Vector3 world)
     {
-        if (measured)
+        Vector2 next = new Vector2(world.x, world.z);
+        if (centered && (next - center).sqrMagnitude < 0.04f)
         {
             return;
         }
-        min = new Vector2(float.MaxValue, float.MaxValue);
-        max = new Vector2(float.MinValue, float.MinValue);
-        foreach (GymRaceTrackPath path in new[] { GymRaceTrackLayout.Main, GymRaceTrackLayout.Shortcut })
-        {
-            for (int i = 0; i < path.Count; i++)
-            {
-                Vector3 p = path.Points[i];
-                min = Vector2.Min(min, new Vector2(p.x, p.z));
-                max = Vector2.Max(max, new Vector2(p.x, p.z));
-            }
-        }
-        // Square map: keep the aspect of the world.
-        float span = Mathf.Max(max.x - min.x, max.y - min.y);
-        Vector2 center = (min + max) * 0.5f;
-        min = center - Vector2.one * span * 0.5f;
-        max = center + Vector2.one * span * 0.5f;
-        measured = true;
+        centered = true;
+        center = next;
+        SetVerticesDirty();
     }
 
-    /// <summary>World position to 0..1 map coordinates (north up).</summary>
+    /// <summary>World position to 0..1 map coordinates (north up, may fall outside the map).</summary>
     public Vector2 Project(Vector3 world)
     {
-        Measure();
-        Vector2 t = new Vector2(
-            Mathf.InverseLerp(min.x, max.x, world.x),
-            Mathf.InverseLerp(min.y, max.y, world.z));
-        return Vector2.one * Padding + t * (1f - Padding * 2f);
+        if (!centered)
+        {
+            // Before the player is known, frame the start line.
+            GymRaceTrackLayout.Main.Sample(GymRaceTrackLayout.StartLineDistance, out Vector3 start, out _, out _, out _);
+            center = new Vector2(start.x, start.z);
+            centered = true;
+        }
+        return new Vector2(0.5f + (world.x - center.x) / Span, 0.5f + (world.z - center.y) / Span);
     }
 
     protected override void OnPopulateMesh(VertexHelper vh)
     {
         vh.Clear();
-        Measure();
         Rect rect = rectTransform.rect;
         AddPath(vh, GymRaceTrackLayout.Main, rect, 7f, new Color(0.85f, 0.88f, 0.95f, 0.9f));
         AddPath(vh, GymRaceTrackLayout.Shortcut, rect, 5f, new Color(0.55f, 0.8f, 1f, 0.85f));

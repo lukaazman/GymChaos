@@ -192,6 +192,16 @@ public static class GymChaosVehicleTrafficVerifier
         stoppedObserved = false;
         resumedObserved = false;
         audioMutedInsideObserved = false;
+        // The neutral save runs the tutorial, which wakes the player outside the
+        // doors; this contract is about a player who is inside the gym.
+        PlayerMovement player = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
+        if (player != null && GymDoorway.Instance != null)
+        {
+            CharacterController controller = player.GetComponent<CharacterController>();
+            if (controller != null) controller.enabled = false;
+            player.transform.position = GymDoorway.Instance.InteriorPoint;
+            if (controller != null) controller.enabled = true;
+        }
         DisableSceneVehicles();
         first = GymVisitorVehicle.Create(BodybuilderIdentity.Cbum, 4, null, false);
         second = GymVisitorVehicle.Create(BodybuilderIdentity.Arnold, 2, null, true);

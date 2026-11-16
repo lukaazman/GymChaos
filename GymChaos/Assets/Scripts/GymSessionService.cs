@@ -141,6 +141,28 @@ public sealed class GymSessionService : MonoBehaviour
     }
 
     /// <summary>
+    /// Deletes one character's files. The caller has already asked the player to
+    /// confirm; a save from a different game version is refused, not removed.
+    /// </summary>
+    public static bool DeleteSave(string slotId, out string error)
+    {
+        error = string.Empty;
+        try
+        {
+            Repository.Delete(slotId);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException ||
+            exception is UnauthorizedAccessException || exception is InvalidDataException ||
+            exception is ArgumentException)
+        {
+            error = string.IsNullOrEmpty(exception.Message)
+                ? "The character could not be deleted." : exception.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
     /// One-time import of the pre-slot PlayerPrefs progression as a Bodybuilding
     /// character. The PlayerPrefs value is left in place.
     /// </summary>

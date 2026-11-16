@@ -153,10 +153,18 @@ public static class GymChaosNetWorldVerifier
                     if (results.Count < 2) { if (now - stageAt > 3d) throw new TimeoutException("the guest was not told about the repair"); return; }
                     Require(results[1].Contains(GymNetInteractions.ResultTag + "repair|" + nearId), "repair message names another panel: " + results[1]);
                     exceptionsBefore = exceptions;
-                    Require(GymNetWorld.SuppressLocalActors() > 0, "nothing was suppressed");
+                    // The guest hands its cast to the host: the actors stop
+                    // simulating but keep their meshes, so the room is not empty.
+                    var adopted = new GymNetActorBodies();
+                    Require(adopted.Adopt() > 0, "no actor was adopted");
                     foreach (EnemyFighter fighter in EnemyFighter.RegisteredFighters)
-                        Require(fighter == null || !fighter.isActiveAndEnabled, "a fighter still runs on the guest");
+                    {
+                        if (fighter == null) continue;
+                        Require(!fighter.enabled, "a fighter still simulates on the guest");
+                        Require(fighter.gameObject.activeInHierarchy, "an adopted fighter lost its body");
+                    }
                     Require(GymVisitorDirector.Instance == null || !GymVisitorDirector.Instance.enabled, "the visitor director still runs on the guest");
+                    adopted.Clear();
                     Enter(Stage.Suppress, now);
                     break;
                 case Stage.Suppress:

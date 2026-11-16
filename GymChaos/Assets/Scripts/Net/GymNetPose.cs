@@ -14,6 +14,15 @@ public struct GymNetPose
     public float h;
     // 1 while the player is dead: the others see a corpse where it fell.
     public float d;
+    // Appearance: the sender's class and outfit, so the other screens draw the
+    // same body in the same clothes. Indices into the game's own enums and
+    // class catalogue; a value out of range falls back to the baseline look.
+    public int classIndex;
+    public int shirt;
+    public int top;
+    public int bottom;
+    public int bottomColor;
+    public int headwear;
     public Vector3 Position => new Vector3(x, y, z);
 }
 

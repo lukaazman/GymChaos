@@ -149,8 +149,8 @@ public static class GymTutorialSteps
         new GymTutorialStep
         {
             Title = "EASY RACE",
-            Line = "Your first race is Easy. The coach shows one key at a time.",
-            Key = "W",
+            Line = "At the race sign, press F to start your first race.",
+            Key = "F",
             Target = GymTutorialTarget.RaceSign,
             Signal = GymTutorialSignal.RaceFinished,
             Reward = 40

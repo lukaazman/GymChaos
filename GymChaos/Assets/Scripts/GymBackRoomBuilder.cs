@@ -13,6 +13,9 @@ public static class GymBackRoomBuilder
     private const float BackDepth = 13f;
     private const float BackHeight = 4.4f;
     private const float DoorWidth = 2.8f;
+    /// <summary>The room sits this far behind the gym's south wall line so its own
+    /// north wall clears the gym's; the floor runs that far north to meet it.</summary>
+    private const float RoomRecess = 0.18f;
     private const string WoodenBenchAsset = "BodyBuilders/items/wooden_bench_lod.glb";
     // Built by Tools/build_toilet_v2.py: open bowl with water, hinged seat and lid.
     private const string ToiletAsset = "BodyBuilders/items/toilet_v2.glb";
@@ -138,7 +141,7 @@ public static class GymBackRoomBuilder
 
         float floorY = mainCenter.y;
         float mainSouth = mainCenter.z - mainDepth * 0.5f;
-        roomCenter = new Vector3(mainCenter.x, floorY, mainSouth - BackDepth * 0.5f - 0.18f);
+        roomCenter = new Vector3(mainCenter.x, floorY, mainSouth - BackDepth * 0.5f - RoomRecess);
         roomFloorY = floorY;
         roomBounds = new Bounds(
             roomCenter + Vector3.up * (BackHeight * 0.5f),
@@ -149,7 +152,7 @@ public static class GymBackRoomBuilder
         GameObject rootObject = new GameObject(RootName);
         rootObject.transform.SetParent(parent, true);
 
-        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", GymPalette.LockerRubber, new Vector2(BackWidth, BackDepth));
+        Material floorMaterial = GymSurfaceMaterialFactory.CreateLockerFloor("Locker room rubber floor", GymPalette.LockerRubber, new Vector2(BackWidth, BackDepth + RoomRecess));
         Material wallMaterial = GymMaterialLibrary.Lit("Locker room wall", GymPalette.PaintedWall, 0f, 0.28f);
         Material trimMaterial = GymMaterialLibrary.Lit("Locker room trim", GymPalette.DarkMetal, 0.35f, 0.6f);
         Material accentMaterial = GymMaterialLibrary.NewLit("Locker room accent", new Color(0.82f, 0.13f, 0.08f), 0.05f, 0.42f);
@@ -157,8 +160,12 @@ public static class GymBackRoomBuilder
         Material mirrorMaterial = GymMaterialLibrary.Lit("Locker room mirror", new Color(0.64f, 0.67f, 0.68f), 0.9f, 0.95f);
         Material metalMaterial = GymMaterialLibrary.Lit("Locker metal", GymPalette.LockerMetal, 0.72f, 0.48f);
 
+        // The floor reaches the gym's south edge exactly: the two slabs share the
+        // doorway line, so no strip of outside ground shows through the opening
+        // and neither slab is laid over the other.
         CreateBox("Locker Room Floor", rootObject.transform,
-            roomCenter + Vector3.down * 0.12f, new Vector3(BackWidth, 0.24f, BackDepth), floorMaterial, true);
+            new Vector3(roomCenter.x, roomCenter.y - 0.12f, roomCenter.z + RoomRecess * 0.5f),
+            new Vector3(BackWidth, 0.24f, BackDepth + RoomRecess), floorMaterial, true);
         CreateBox("Locker Room Ceiling", rootObject.transform,
             roomCenter + Vector3.up * BackHeight, new Vector3(BackWidth, 0.18f, BackDepth), trimMaterial, true);
 

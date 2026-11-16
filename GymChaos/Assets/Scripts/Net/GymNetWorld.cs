@@ -213,31 +213,6 @@ public static class GymNetWorld
         for (int i = 0; i < doors.Count; i++) if (doors[i] != null) doors[i].StopNetworkDrive();
     }
 
-    /// <summary>Guest: turns off everything the host simulates. Run once, after the world is built.</summary>
-    public static int SuppressLocalActors()
-    {
-        int suppressed = 0;
-        if (GymVisitorDirector.Instance != null) { GymVisitorDirector.Instance.enabled = false; suppressed++; }
-        if (GymPoliceDirector.ActiveInstance != null) { GymPoliceDirector.ActiveInstance.enabled = false; suppressed++; }
-        if (GymFixerDirector.Instance != null) { GymFixerDirector.Instance.enabled = false; suppressed++; }
-        if (GymHomelessAgent.Instance != null) { GymHomelessAgent.Instance.gameObject.SetActive(false); suppressed++; }
-        // Copies: deactivating removes the entries from the live lists.
-        var fighters = new List<EnemyFighter>(EnemyFighter.RegisteredFighters);
-        foreach (EnemyFighter fighter in fighters)
-        {
-            if (fighter == null) continue;
-            fighter.gameObject.SetActive(false);
-            suppressed++;
-        }
-        var cars = new List<GymVisitorVehicle>(GymVisitorVehicle.ActiveGroundTraffic);
-        foreach (GymVisitorVehicle car in cars)
-        {
-            if (car == null) continue;
-            car.gameObject.SetActive(false);
-            suppressed++;
-        }
-        return suppressed;
-    }
 }
 
 /// <summary>A guest's stand-in bodies for the host's actors: one per id, interpolated, removed when the host stops listing them.</summary>
@@ -261,6 +236,12 @@ public sealed class GymNetPuppets
         public float BaseY;
     }
 
+    /// <summary>
+    /// Guest: the real local actors the host is driving. When a host id has a
+    /// body here, the body takes the pose and no stand-in is created.
+    /// </summary>
+    public GymNetActorBodies Bodies;
+
     private readonly Dictionary<int, Puppet> puppets = new Dictionary<int, Puppet>(64);
     private readonly List<GymNetWorld.ActorState> actors = new List<GymNetWorld.ActorState>(64);
     private readonly Dictionary<string, float> doors = new Dictionary<string, float>(GymNetWorld.MaxDoors);
@@ -268,6 +249,23 @@ public sealed class GymNetPuppets
     private Material[] materials;
 
     public int Count => puppets.Count;
+
+    /// <summary>What the stand-ins are, for the join diagnostics: people, cars, the rest.</summary>
+    public string KindSummaryForVerification
+    {
+        get
+        {
+            int people = 0, cars = 0, other = 0;
+            foreach (Puppet puppet in puppets.Values)
+            {
+                if (puppet.Kind == GymNetWorld.Kind.Vehicle) cars++;
+                else if (puppet.Kind == GymNetWorld.Kind.Fighter || puppet.Kind == GymNetWorld.Kind.Police ||
+                         puppet.Kind == GymNetWorld.Kind.Corpse) people++;
+                else other++;
+            }
+            return "people=" + people + " cars=" + cars + " other=" + other;
+        }
+    }
     public bool TryGetPosition(int id, out Vector3 position)
     {
         position = default;
@@ -292,6 +290,13 @@ public sealed class GymNetPuppets
         for (int i = 0; i < actors.Count; i++)
         {
             GymNetWorld.ActorState actor = actors[i];
+            // The real body here is the better picture: it keeps the mesh, the
+            // textures and the authored animation of the actor that stood there.
+            if (Bodies != null && Bodies.TryDrive(actor.Id, actor.Kind, actor.Pose))
+            {
+                if (puppets.ContainsKey(actor.Id)) Remove(actor.Id);
+                continue;
+            }
             // Dead or revived: the same actor now looks different, so it gets a new puppet.
             if (puppets.TryGetValue(actor.Id, out Puppet existing) && existing.Kind != actor.Kind) Remove(actor.Id);
             if (!puppets.TryGetValue(actor.Id, out Puppet puppet))
@@ -312,6 +317,7 @@ public sealed class GymNetPuppets
 
     public void Update(double now, float deltaTime)
     {
+        if (Bodies != null) Bodies.Update(now, deltaTime);
         expired.Clear();
         foreach (KeyValuePair<int, Puppet> pair in puppets)
         {
