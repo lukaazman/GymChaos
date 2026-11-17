@@ -61,6 +61,8 @@ public sealed class GymSessionService : MonoBehaviour
     public static GymSaveSections AllowedSections => GymSaveRules.Allowed(Context);
     public static GymCharacterSave Active => active;
     public static bool HasActive => active != null;
+    /// <summary>A save is queued (debounced) and has not started writing yet.</summary>
+    public static bool HasPendingSave => instance != null && instance.requestPending;
     public static bool IsWriting => instance != null && instance.writeTask != null;
     public static float AutosaveElapsedSeconds => instance != null ? instance.autosaveElapsed : 0f;
 

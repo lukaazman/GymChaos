@@ -402,9 +402,11 @@ public static class GymChaosClassSessionPlay
         AssertPromptShadowFont(Player);
 
         // Durable progress, a once-only reward, resources and position.
+        // The coach may finish a lesson (+10) while the scene settles: judge the verifier's own grant.
+        int experienceBefore = progression.State.experience;
         progression.AwardExperience(30, "verifier", "once:verifier-reward");
         progression.AwardExperience(30, "verifier", "once:verifier-reward");
-        Require(progression.State.experience == 30, "Once-only reward was granted twice");
+        Require(progression.State.experience - experienceBefore == 30, "Once-only reward was granted twice: xp=" + progression.State.experience + " before=" + experienceBefore);
         foreach (float wait in Until(() => Player.IsGroundedForSession, 15d, "the player to land")) yield return wait;
         Vector3 savedPosition = Player.transform.position + Player.transform.forward * 1.5f;
         Player.RestoreSessionState(true, savedPosition, 135f, 120f, 50f);
@@ -1322,7 +1324,7 @@ public static class GymChaosClassSessionPlay
             NetSession.ActorsSuppressed && scriptedJoin.LastKnown.ContainsKey(1) && observed.Count >= 3, 90d, "the join")) yield return wait;
         PlayerMovement guest = Player;
         // Progress after the last save: LOAD GAME must take it away again.
-        foreach (float wait in NetUntil(() => GymSessionService.CompletedWriteCount >= 1 && !GymSessionService.IsWriting, 30d, "the first save")) yield return wait;
+        foreach (float wait in NetUntil(() => GymSessionService.CompletedWriteCount >= 1 && !GymSessionService.IsWriting && !GymSessionService.HasPendingSave, 30d, "the first save")) yield return wait;
         GymExperienceService.Active.State.level = 5;
         SetPlayerHealth(guest, 10f);
         observed.Clear();
