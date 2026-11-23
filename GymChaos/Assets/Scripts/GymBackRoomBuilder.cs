@@ -920,12 +920,31 @@ public static class GymBackRoomBuilder
         // collider so the stop is a reachable standing place.
         Vector3 chest = Vector3.up * 0.9f;
         for (int step = 0; step < 5 &&
-            Physics.CheckSphere(point + chest, 0.3f, ~0, QueryTriggerInteraction.Ignore); step++)
+            IsStaticGeometryAt(point + chest, 0.3f); step++)
         {
             point += new Vector3(0f, 0f, towardAisle * 0.3f);
         }
         point.y = roomFloorY;
         return true;
+    }
+
+    private static readonly Collider[] handoffOverlaps = new Collider[8];
+
+    // Walls, benches and lockers only: a member or the player standing on the
+    // spot must not push it out of the drop radius.
+    private static bool IsStaticGeometryAt(Vector3 point, float radius)
+    {
+        int count = Physics.OverlapSphereNonAlloc(
+            point, radius, handoffOverlaps, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            Collider hit = handoffOverlaps[i];
+            if (hit.attachedRigidbody == null && hit.GetComponentInParent<CharacterController>() == null)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static bool IsBagHandoffSpot(Vector3 point, out Vector3 aisleEntry)

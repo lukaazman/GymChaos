@@ -2793,7 +2793,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         if (rider != null) MountRider(rider);
         Debug.Log($"GYMCHAOS_VEHICLE_VERSION_REBUILD identity={identity} " +
-            $"path={VisualAssetForVerification} built={built}", this);
+            $"remake={remakeAsset != null} built={built}", this);
         return built;
     }
 

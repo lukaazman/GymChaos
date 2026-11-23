@@ -52,7 +52,7 @@ jobs:
         id: classify
         if: steps.build.outcome == 'failure'
         shell: bash
-        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log >> "$GITHUB_OUTPUT"
+        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log
 
       - name: Retry WebGL build after infrastructure failure
         id: retry

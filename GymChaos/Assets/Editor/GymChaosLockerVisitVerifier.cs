@@ -295,10 +295,9 @@ public static class GymChaosLockerVisitVerifier
                 return;
             }
 
-            if (GymBackRoomBuilder.MemberBagCount >= GymBackRoomBuilder.MaxMemberBags)
-            {
-                GymBackRoomBuilder.HideBenchBags();
-            }
+            // Members' own bags on the benches cap the visible count: the contract
+            // is measured on empty benches whatever natural traffic left there.
+            GymBackRoomBuilder.HideBenchBags();
             if (!VerifyBagHandoffContract(out string handoffDetails))
             {
                 Fail("bag_handoff_contract_failed " + handoffDetails);

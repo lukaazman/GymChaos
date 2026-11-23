@@ -372,7 +372,11 @@ public static class GymChaosEnemyHittableVerifier
                 {
                     continue;   // boxed in by equipment on every side
                 }
-                EnemyFighter punched = player.ResolvePunchEnemyForVerification(origin, aim - origin);
+                // Equipment or a loose weight in the line takes the punch before any
+                // fighter: the probe says nothing about the hitboxes then.
+                Vector3 line = aim - origin;
+                if (PropInTheWay(origin, line)) continue;
+                EnemyFighter punched = player.ResolvePunchEnemyForVerification(origin, line);
                 // Another member standing in the line takes the punch instead;
                 // only a punch that hits nobody is a miss.
                 if (punched == null)
@@ -496,6 +500,8 @@ public static class GymChaosEnemyHittableVerifier
             {
                 continue;
             }
+            // Equipment in the line stops the weight before the hitboxes: nothing to judge.
+            if (PropInTheWay(start, aim - start)) continue;
             PickupItem item = items[i];
             Rigidbody itemBody = item.GetComponent<Rigidbody>();
             itemBody.isKinematic = false;
@@ -505,6 +511,21 @@ public static class GymChaosEnemyHittableVerifier
             item.Throw((aim - start).normalized * 14f, null, 0f, false);
             throws.Add((target, target.CurrentHealth, StateKey(target), now));
         }
+    }
+
+    // The player's punch is a 0.3 m sphere cast: the first non-fighter solid it meets
+    // (equipment, a loose weight) takes the hit before the hitboxes behind it.
+    private static bool PropInTheWay(Vector3 origin, Vector3 line)
+    {
+        RaycastHit[] hits = Physics.SphereCastAll(origin, 0.3f, line.normalized, line.magnitude, ~0,
+            QueryTriggerInteraction.Ignore);
+        Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+        foreach (RaycastHit hit in hits)
+        {
+            if (hit.distance <= 0f) continue;   // overlapping at the start (the player's own body)
+            return hit.collider.GetComponentInParent<EnemyFighter>() == null;
+        }
+        return false;
     }
 
     private static void Report()

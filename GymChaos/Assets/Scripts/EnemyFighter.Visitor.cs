@@ -949,6 +949,11 @@ public partial class EnemyFighter
                 continue;
             }
             EnemyFighter blockedFighter = owners.Fighter;
+            if (isPolice && blockedFighter != null && blockedFighter.isDead)
+            {
+                StepOverCorpse(blockedFighter);
+                continue;
+            }
             if (ignoreDynamicBlockers &&
                 (blockedFighter != null || owners.Player != null || owners.Vehicle))
             {
