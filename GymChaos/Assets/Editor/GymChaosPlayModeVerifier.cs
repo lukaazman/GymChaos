@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -372,13 +372,13 @@ public static class GymChaosPlayModeVerifier
                     {
                         runBandDirection = Vector3.forward;
                     }
-                    // Airborne Goku lands only under 3 m (flight hysteresis);
-                    // 2.7 m still keeps a metre over attack range for one
-                    // bounded frame (GokuSampleMaximumDeltaTime).
+                    // Airborne Goku lands only under 3 m (flight hysteresis).
+                    // Once grounded he stays down until 8 m, so hold the player
+                    // at 5 m: the run lasts many frames instead of one under load.
                     MovePlayerForVerification(
                         player,
                         gokuForVerification.transform.position +
-                        runBandDirection.normalized * 2.7f);
+                        runBandDirection.normalized * (gokuForVerification.IsFlying ? 2.7f : 5f));
                 }
                 float gokuDistance = gokuForVerification != null
                     ? Vector3.ProjectOnPlane(
@@ -2014,7 +2014,7 @@ public static class GymChaosPlayModeVerifier
                     : FindVisibleSkinnedRenderer(fighter);
                 MixamoScanRetargetAnimator markAnimator =
                     fighter.GetComponentInChildren<MixamoScanRetargetAnimator>(true);
-                string markResource = "Characters/Enemies/mark_authored";
+                string markResource = ExpectedAuthoredPath(BodybuilderIdentity.Mark);
                 if (markBody == null || markAnimator == null ||
                     !markAnimator.HasIdleClip ||
                     markAnimator.AuthoredIdleClipCount != 3 ||
@@ -2071,8 +2071,7 @@ public static class GymChaosPlayModeVerifier
                     (fighter.Identity == BodybuilderIdentity.Goku ? "/Fly." : "."));
             }
 
-            string expectedResourcePath =
-                "Characters/Enemies/" + fighter.Identity.ToString().ToLowerInvariant() + "_authored";
+            string expectedResourcePath = ExpectedAuthoredPath(fighter.Identity);
             if (importedVisual == null || importedVisual.RuntimeModelRoot == null ||
                 importedVisual.RuntimeRig == null ||
                 !string.Equals(importedVisual.RuntimeResourcePath, expectedResourcePath,
@@ -2333,9 +2332,13 @@ public static class GymChaosPlayModeVerifier
         }
 
         float headDelta = Mathf.Abs(faceCensor.transform.position.y - head.position.y);
-        bool calibratedTarget = fighter.Identity == BodybuilderIdentity.Ronnie ||
+        // The per-scan calibration is for the DEFAULT scans; a remade model carries
+        // an EyeAnchor and its bar is checked against it (GymChaosVisualStyleVerifier).
+        bool anchored = importedVisual != null &&
+            GymShared.FindDescendant(importedVisual.RuntimeModelRoot, "EyeAnchor") != null;
+        bool calibratedTarget = !anchored && (fighter.Identity == BodybuilderIdentity.Ronnie ||
             fighter.Identity == BodybuilderIdentity.JayCutler ||
-            fighter.Identity == BodybuilderIdentity.Goku;
+            fighter.Identity == BodybuilderIdentity.Goku);
         if (calibratedTarget)
         {
             Transform visualRoot = importedVisual != null
@@ -2423,6 +2426,11 @@ public static class GymChaosPlayModeVerifier
             $"headDelta={headDelta:F3} faceDepth={faceCensor.ConfiguredFaceDepth:F5} " +
             $"size={faceCensor.ConfiguredSize}", faceCensor);
     }
+
+    // Spelled out, not read from the loader's table, so a wrong mapping fails.
+    private static string ExpectedAuthoredPath(BodybuilderIdentity identity) =>
+        (GymVersionedLooks.AllSlop ? "Characters/Remake/" : "Characters/Enemies/") +
+        identity.ToString().ToLowerInvariant() + "_authored";
 
     private static bool TryGetBakedVerticesInRoot(
         SkinnedMeshRenderer body, Transform visualRoot, out Vector3[] vertices)

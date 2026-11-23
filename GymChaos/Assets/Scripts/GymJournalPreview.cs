@@ -1,10 +1,13 @@
-using UnityEngine;
+﻿using UnityEngine;
+using UnityEngine.Rendering;
 
 /// <summary>
 /// The player model beside the journal's numbers: a body in the clothes the
 /// player wears right now, playing the authored idle clip on a loop, in front
 /// of its own camera and render texture. Dragging turns it, the wheel zooms it.
 /// It lives far below the gym so the world never shows behind it.
+/// The customize screen uses it as the turntable: with a look it shows the
+/// remade body (Remake style) and keeps a fixed frame, so height reads.
 /// </summary>
 public sealed class GymJournalPreview : MonoBehaviour
 {
@@ -40,6 +43,9 @@ public sealed class GymJournalPreview : MonoBehaviour
     private float distance = 3.2f;
     private float yaw = 180f;
     private string lookKey = string.Empty;
+    private GymCharacterSave look;
+    private bool fixedFrame;
+    private string idleResource;
     private string headwearKey = string.Empty;
     private int headwearVersion;
 
@@ -134,6 +140,45 @@ public sealed class GymJournalPreview : MonoBehaviour
     /// <summary>Verifier gate: no body pixel may reach the outer ring of the view.</summary>
     public bool BodyTouchesEdge() => SampleView().touches;
 
+    /// <summary>
+    /// Top of the head mapped into the view rect, in that rect's local pixels.
+    /// The create screen pins the name tag there, so the tag rides the idle
+    /// bob exactly like the in-game enemy tag rides a walking head.
+    /// </summary>
+    private GameObject tagModel;
+    private float tagTopOffset;
+
+    public bool TryGetHeadLocal(RectTransform rect, out Vector2 local)
+    {
+        local = default;
+        if (rect == null || previewCamera == null || model == null || !model.activeInHierarchy)
+        {
+            return false;
+        }
+        Transform headBone = HeadBone();
+        if (headBone == null)
+        {
+            return false;
+        }
+        // The skull bounds of some bodies are far off (a prop head), so the tag rides
+        // the head bone plus the body's own top-of-head offset, taken once per body.
+        if (tagModel != model)
+        {
+            tagModel = model;
+            // Head top sits about a fifth of the body's height above the head bone.
+            float height = modelBody != null ? modelBody.bounds.size.y : bodyHeight;
+            tagTopOffset = Mathf.Max(0.05f, height * 0.2f);
+        }
+        Vector3 viewport = previewCamera.WorldToViewportPoint(headBone.position + Vector3.up * tagTopOffset);
+        if (viewport.z <= 0f)
+        {
+            return false;
+        }
+        Rect area = rect.rect;
+        local = new Vector2((viewport.x - 0.5f) * area.width, (viewport.y - 0.5f) * area.height);
+        return true;
+    }
+
     /// <summary>The on-screen rectangle the pointer has to be over to turn the body.</summary>
     public void SetViewRect(RectTransform rect)
     {
@@ -207,15 +252,22 @@ public sealed class GymJournalPreview : MonoBehaviour
         PositionCamera();
     }
 
-    /// <summary>Rebuilds the body when the player's look changes.</summary>
-    public void Show(string classId, GymProgressionState state)
+    /// <summary>
+    /// Rebuilds the body when the player's look changes. Without a look it
+    /// shows the active character; with one (customize screen) it frames a
+    /// fixed 200 cm box so a shorter or taller body reads as such.
+    /// </summary>
+    public void Show(string classId, GymProgressionState state, GymCharacterSave customLook = null)
     {
         if (state == null || studio == null)
         {
             return;
         }
+        fixedFrame = customLook != null;
+        look = customLook ?? GymSessionService.Active;
         string key = (classId ?? string.Empty) + "|" + state.shirt + "|" + state.top + "|" +
-            state.bottom + "|" + state.bottomColor;
+            state.bottom + "|" + state.bottomColor + "|" + state.headwear + "|" + fixedFrame +
+            (look == null ? "" : "|" + look.heightCm);
         if (key != lookKey)
         {
             lookKey = key;
@@ -244,11 +296,13 @@ public sealed class GymJournalPreview : MonoBehaviour
     private void RebuildBody(string classId, GymProgressionState state)
     {
         ClearHeadwear();
+        PlayerAppearance.ReleaseMaterials(model);
         if (model != null) Destroy(model);
         model = null;
         modelBody = null;
         head = null;
 
+        // One player body: the DEFAULT class scan. There is no POTATO player.
         GameObject prefab = null;
         if (!string.IsNullOrEmpty(classId))
         {
@@ -282,7 +336,7 @@ public sealed class GymJournalPreview : MonoBehaviour
         FitModel();
         BodyShown = classId;
         head = HeadBone();
-        LoadIdleClip();
+        LoadIdleClip(PlayerHandRig.DefaultModelResource);
         PositionCamera();
         Renderer[] built = model.GetComponentsInChildren<Renderer>(true);
         Renderer first = built.Length > 0 ? built[0] : null;
@@ -311,11 +365,19 @@ public sealed class GymJournalPreview : MonoBehaviour
             bounds = Measure(fallback);
         }
         if (bounds.size.y < 0.05f) return;
-        float scale = ExternalRiggedCharacterVisual.StandardGameplayHeight / bounds.size.y;
+        float scale = ExternalRiggedCharacterVisual.StandardGameplayHeight *
+            PlayerAppearance.HeightScale(look) / bounds.size.y;
         model.transform.localScale *= scale;
         Vector3 pivot = model.transform.position;
         bodyHeight = Mathf.Max(0.8f, bounds.size.y * scale);
         focusY = pivot.y + (bounds.center.y - pivot.y) * scale;
+        if (fixedFrame)
+        {
+            // Feet stay put and the frame fits the tallest body.
+            bodyHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight * PlayerAppearance.MaxHeight /
+                PlayerAppearance.DefaultMaleHeight;
+            focusY = pivot.y + (bounds.min.y - pivot.y) * scale + bodyHeight * 0.5f;
+        }
         float tangent = Mathf.Tan(previewCamera.fieldOfView * 0.5f * Mathf.Deg2Rad);
         float fit = bodyHeight * 0.5f * FitMargin / tangent;
         minDistance = Mathf.Max(1.2f, fit * 0.55f);
@@ -328,7 +390,7 @@ public sealed class GymJournalPreview : MonoBehaviour
     {
         bounds = default;
         bool any = false;
-        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(false);
         for (int i = 0; i < renderers.Length; i++)
         {
             Mesh mesh = null;
@@ -342,7 +404,7 @@ public sealed class GymJournalPreview : MonoBehaviour
                 MeshFilter filter = renderers[i].GetComponent<MeshFilter>();
                 if (filter != null) mesh = filter.sharedMesh;
             }
-            if (mesh == null) continue;
+            if (mesh == null || PlayerAppearance.IsPartName(renderers[i].name)) continue;  // body height only
             Matrix4x4 matrix = renderers[i].transform.localToWorldMatrix;
             Vector3[] vertices = mesh.vertices;
             for (int v = 0; v < vertices.Length; v++)
@@ -369,30 +431,85 @@ public sealed class GymJournalPreview : MonoBehaviour
         return bounds;
     }
 
+    private static Transform FindPart(Transform root, string name)
+    {
+        foreach (Transform child in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (child.name == name) return child;
+        }
+        return null;
+    }
+
+    // Same dressing as the player in game: the tank top is painted on the scan,
+    // Oversized and Onyx are cloth shells over a body that keeps its own skin
+    // texture. Shells build on a worker thread, so LateUpdate retries them.
+    private GymProgressionState dressed;
+    private Texture outfitTexture;
+    private bool topPending;
+    private bool bottomPending;
+
     private void ApplyOutfit(GymProgressionState state)
     {
+        dressed = state;
+        topPending = false;
+        bottomPending = false;
         GymShirtColor shirt = Parse(state.shirt, GymShirtColor.Black);
         GymTopStyle top = Parse(state.top, GymTopStyle.TankTop);
-        Texture2D texture = Resources.Load<Texture2D>(PlayerCosmeticLoadout.GetOutfitTexturePath(top, shirt));
-        if (texture == null) texture = Resources.Load<Texture2D>("Characters/Textures/player_authored");
-        if (texture == null) return;
+        outfitTexture = ScanTextureMips.Limit(Resources.Load<Texture2D>(PlayerCosmeticLoadout.GetOutfitTexturePath(top, shirt)));
+        if (outfitTexture == null) outfitTexture = ScanTextureMips.Limit(Resources.Load<Texture2D>("Characters/Textures/player_authored"));
+        if (outfitTexture == null) return;
+        Texture bodyTexture = top == GymTopStyle.TankTop
+            ? outfitTexture
+            : ScanTextureMips.Limit(Resources.Load<Texture2D>(PlayerCosmeticLoadout.UnderShellBodyTexture));
+        if (bodyTexture == null) bodyTexture = outfitTexture;
         SkinnedMeshRenderer[] renderers = model.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        SkinnedMeshRenderer body = null;
         for (int i = 0; i < renderers.Length; i++)
         {
+            if (PlayerTopShell.IsShellObject(renderers[i].name)) continue;
+            renderers[i].sharedMesh = ScanUvInset.Apply(renderers[i].sharedMesh, outfitTexture);
+            if (body == null || renderers[i].sharedMesh.vertexCount > body.sharedMesh.vertexCount) body = renderers[i];
             Material instance = renderers[i].material;
             if (instance == null) continue;
-            if (instance.HasProperty("_BaseMap")) instance.SetTexture("_BaseMap", texture);
-            if (instance.HasProperty("_MainTex")) instance.SetTexture("_MainTex", texture);
-            instance.mainTexture = texture;
+            if (instance.HasProperty("_BaseMap")) instance.SetTexture("_BaseMap", bodyTexture);
+            if (instance.HasProperty("_MainTex")) instance.SetTexture("_MainTex", bodyTexture);
+            instance.mainTexture = bodyTexture;
             renderers[i].sharedMaterial = instance;
         }
+        if (body != null) modelBody = body;
+        AttachTop();
+    }
+
+    private void AttachTop()
+    {
+        topPending = false;
+        if (modelBody == null || modelBody.sharedMesh == null || dressed == null) return;
+        GymTopStyle top = Parse(dressed.top, GymTopStyle.TankTop);
+        if (top == GymTopStyle.TankTop)
+        {
+            PlayerTopShell.Detach(modelBody);
+            return;
+        }
+        PlayerTopShell.Style style = top == GymTopStyle.Oversized ? PlayerTopShell.Oversized : PlayerTopShell.Onyx;
+        Color band = top == GymTopStyle.Oversized
+            ? PlayerCosmeticLoadout.GetShirtColor(Parse(dressed.shirt, GymShirtColor.Black))
+            : new Color(0.03f, 0.03f, 0.034f);
+        SkinnedMeshRenderer shell = PlayerTopShell.Attach(modelBody, style, outfitTexture, band);
+        topPending = shell == null && !PlayerTopShell.IsSettled(modelBody.sharedMesh, style);
     }
 
     private void ApplyBottoms(GymProgressionState state)
     {
-        if (modelBody == null || modelBody.sharedMesh == null) return;
-        GymBottomStyle bottom = Parse(state.bottom, GymBottomStyle.Shorts);
-        GymShirtColor colour = Parse(state.bottomColor, GymShirtColor.Black);
+        dressed = state;
+        AttachBottoms();
+    }
+
+    private void AttachBottoms()
+    {
+        bottomPending = false;
+        if (modelBody == null || modelBody.sharedMesh == null || dressed == null) return;
+        GymBottomStyle bottom = Parse(dressed.bottom, GymBottomStyle.Shorts);
+        GymShirtColor colour = Parse(dressed.bottomColor, GymShirtColor.Black);
         PlayerTopShell.Style style = bottom == GymBottomStyle.Pants
             ? PlayerTopShell.Pants : PlayerTopShell.Shorts;
         Texture2D fabric = Resources.Load<Texture2D>(bottom == GymBottomStyle.Pants
@@ -401,8 +518,9 @@ public sealed class GymJournalPreview : MonoBehaviour
         Color color = PlayerCosmeticLoadout.GetShirtColor(colour);
         Color tint = color / PlayerTopShell.BottomsFabricLevel;
         tint.a = 1f;
-        PlayerTopShell.Attach(modelBody, style,
+        SkinnedMeshRenderer shell = PlayerTopShell.Attach(modelBody, style,
             fabric != null ? ScanTextureMips.Limit(fabric) : null, color * 0.85f, tint);
+        bottomPending = shell == null && !PlayerTopShell.IsSettled(modelBody.sharedMesh, style);
     }
 
     private void RequestHeadwear(string name)
@@ -478,10 +596,12 @@ public sealed class GymJournalPreview : MonoBehaviour
         return PlayerCosmeticLoadout.SkullBounds(model.transform, headBone, renderers);
     }
 
-    private void LoadIdleClip()
+    private void LoadIdleClip(string resource)
     {
-        if (idleClip != null) return;
-        Object[] assets = Resources.LoadAll<Object>(PlayerHandRig.DefaultModelResource);
+        if (idleClip != null && idleResource == resource) return;
+        idleResource = resource;
+        idleClip = null;
+        Object[] assets = Resources.LoadAll<Object>(resource);
         for (int i = 0; i < assets.Length; i++)
         {
             AnimationClip clip = assets[i] as AnimationClip;
@@ -539,13 +659,16 @@ public sealed class GymJournalPreview : MonoBehaviour
     private void LateUpdate()
     {
         if (model == null) return;
+        if (topPending) AttachTop();
+        if (bottomPending) AttachBottoms();
 
         // Drag with the left button over the preview, wheel to zoom.
         bool overPreview = view == null ||
             RectTransformUtility.RectangleContainsScreenPoint(view, Input.mousePosition);
         if (overPreview && Input.GetMouseButton(0))
         {
-            yaw += Input.GetAxis("Mouse X") * 4.5f;
+            // Drag turns the body with the cursor, not against it.
+            yaw -= Input.GetAxis("Mouse X") * 4.5f;
         }
         float wheel = Input.GetAxis("Mouse ScrollWheel");
         if (Mathf.Abs(wheel) > 0.0001f)
@@ -581,6 +704,53 @@ public sealed class GymJournalPreview : MonoBehaviour
             return value;
         }
         return fallback;
+    }
+
+    // The studio never follows the gym's clock: while its camera renders, the
+    // sun, moon, haze and night ambient are swapped for one fixed daylight look.
+    private bool studioLit;
+    private AmbientMode savedAmbientMode;
+    private Color savedAmbient;
+    private float savedIntensity;
+    private bool savedFog;
+
+    private void OnEnable()
+    {
+        RenderPipelineManager.beginCameraRendering += BeginStudio;
+        RenderPipelineManager.endCameraRendering += EndStudio;
+    }
+
+    private void OnDisable()
+    {
+        RenderPipelineManager.beginCameraRendering -= BeginStudio;
+        RenderPipelineManager.endCameraRendering -= EndStudio;
+        EndStudio(default, previewCamera);
+    }
+
+    private void BeginStudio(ScriptableRenderContext context, Camera camera)
+    {
+        if (camera != previewCamera || studioLit) return;
+        studioLit = true;
+        savedAmbientMode = RenderSettings.ambientMode;
+        savedAmbient = RenderSettings.ambientLight;
+        savedIntensity = RenderSettings.ambientIntensity;
+        savedFog = RenderSettings.fog;
+        RenderSettings.ambientMode = AmbientMode.Flat;
+        RenderSettings.ambientLight = new Color(0.58f, 0.6f, 0.64f);
+        RenderSettings.ambientIntensity = 1f;
+        RenderSettings.fog = false;
+        if (GymTimeOfDay.Instance != null) GymTimeOfDay.Instance.SuspendWorldLights(true);
+    }
+
+    private void EndStudio(ScriptableRenderContext context, Camera camera)
+    {
+        if (!studioLit || camera != previewCamera) return;
+        studioLit = false;
+        RenderSettings.ambientMode = savedAmbientMode;
+        RenderSettings.ambientLight = savedAmbient;
+        RenderSettings.ambientIntensity = savedIntensity;
+        RenderSettings.fog = savedFog;
+        if (GymTimeOfDay.Instance != null) GymTimeOfDay.Instance.SuspendWorldLights(false);
     }
 
     private void OnDestroy()

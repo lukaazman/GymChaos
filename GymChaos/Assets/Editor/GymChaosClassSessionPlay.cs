@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
@@ -228,12 +228,77 @@ public static class GymChaosClassSessionPlay
         Menu.ConfirmClass();
         // A second activation in the same frame must not create a second character.
         Menu.ConfirmClass();
+        foreach (float wait in CustomizeNewCharacter(classId)) yield return wait;
         foreach (float wait in Until(() => GymArenaBootstrap.IsGameplayStarted &&
             GymSessionService.CompletedWriteCount > before && !GymSessionService.IsWriting, 30d,
             "the new character's initial save")) yield return wait;
         Require(GymSessionService.Active != null && GymSessionService.Active.classId == classId,
             "Confirmed class is not the active class");
         yield return 0.5f;
+        Shot("player-body-" + classId, BodyView(Player));
+    }
+
+    // Phase 6: name and look before the world starts; nothing is saved until Confirm.
+    private static IEnumerable<float> CustomizeNewCharacter(string classId)
+    {
+        foreach (float wait in Until(() => Menu.Current == GymSessionMenu.State.Customize, 10d, "the customize page"))
+            yield return wait;
+        Require(!GymArenaBootstrap.IsGameplayStarted && !GymSessionService.HasActive,
+            "Customize started a character before Confirm");
+        Require(!Menu.CustomizeLocked && Menu.CustomizeLook.classId == classId, "Customize lost the chosen class");
+        foreach (float wait in Until(() => Menu.TurntableShowing, 10d, "the turntable body")) yield return wait;
+        yield return 0.5f;
+        Shot("customize-body-" + classId);
+        Menu.ConfirmCustomize();
+        yield return Step;
+        Require(Menu.Current == GymSessionMenu.State.Customize,
+            "Confirm without a name left customize");
+        Menu.SetHeight(195);
+        Require(Menu.CustomizeLook.heightCm == 195, "The height slider did not take 195 cm");
+        Menu.SetUsername("  Iron <b>Tester!!  ");
+        Require(Menu.CustomizeLook.username == "Iron bTester", "Name was not sanitized: " + Menu.CustomizeLook.username);
+        Menu.SetUsername("ab");
+        Require(!Menu.CustomizeLook.IsCustomized, "A two-letter name was accepted");
+        Menu.SetUsername("Iron Tester");
+        Require(Menu.TurntableShowing, "The turntable hid while editing");
+        yield return 0.5f;
+        yield return Step;
+        Shot("customize-name-" + classId);
+        Menu.ConfirmCustomize();
+        Menu.ConfirmCustomize();
+        foreach (float wait in Until(() => GymSessionService.HasActive, 10d, "the customized character")) yield return wait;
+        GymCharacterSave active = GymSessionService.Active;
+        Require(active.username == "Iron Tester" && active.heightCm == 195 && active.classId == classId,
+            "The character does not carry its name, height and class");
+        Require(active.gender == 0 && active.skinTone == 2 && active.hair == 2,
+            "The retired look fields must stay at their defaults");
+        Debug.Log("GYMCHAOS_CUSTOMIZE_FLOW_OK class=" + classId + " height=" + active.heightCm);
+    }
+
+    // A save from before the DEFAULT / POTATO split loads straight in with the one
+    // standard character: default look, default name, no create screen.
+    private static IEnumerable<float> LoadLegacyWithCustomize(string slotId)
+    {
+        foreach (float wait in OpenSessionChoice()) yield return wait;
+        Menu.ChooseLoadGame();
+        yield return Step;
+        Menu.SelectSave(slotId);
+        yield return Step;
+        Menu.ConfirmLoad();
+        foreach (float wait in Until(() => GymArenaBootstrap.IsGameplayStarted, 30d, "the legacy session"))
+            yield return wait;
+        Require(Menu.Current != GymSessionMenu.State.Customize, "an old save opened the create screen");
+        GymCharacterSave active = GymSessionService.Active;
+        Require(active != null && active.username == GymCharacterSave.LegacyName &&
+            active.gender == 0 && active.heightCm == PlayerAppearance.DefaultMaleHeight &&
+            active.skinTone == 2,
+            "the old save did not get the standard character: " + active?.username);
+        foreach (float wait in SaveNow()) yield return wait;
+        GymSaveReadResult read = GymSessionService.Repository.Read(slotId);
+        Require(read.Success && read.Data.username == GymCharacterSave.LegacyName &&
+            read.Data.classId == "bodybuilding" && read.Data.version == GymCharacterSave.CurrentVersion,
+            "The migrated save did not keep its class and defaults");
+        Debug.Log("GYMCHAOS_CUSTOMIZE_MIGRATION_OK slot=" + slotId);
     }
 
     private static void FocusCard(string classId)
@@ -374,6 +439,9 @@ public static class GymChaosClassSessionPlay
         Require(repository.List().Count == 1, "Confirm created " + repository.List().Count + " slots");
         Require(!GymStartScreen.IsMenuVisible && Player.enabled, "Gameplay input is not enabled after Confirm");
         AssertSingletons("after the first new game");
+        // The per-character POTATO picks live in the save; nothing reloads the room.
+        Require(GymSessionService.Active.slopMembers != null && GymSessionService.Active.slopVehicles != null,
+            "the save has no version tables");
         GymExperienceService progression = GymExperienceService.Active;
         Require(Mathf.Abs(progression.GetSprintCapacity() - 100f) < 0.01f, "Calisthenics stamina capacity is wrong");
         Require(GymHud.Active != null, "HUD is not bound after starting a session");
@@ -452,11 +520,14 @@ public static class GymChaosClassSessionPlay
         Player.RestoreSessionState(false, Vector3.zero, 0f, 120f, 50f);
         foreach (float wait in SaveNow()) yield return wait;
         onDisk = repository.Read(firstSlot).Data;
-        Require(onDisk.progression.experience == progression.State.experience && onDisk.progression.experience >= 30 &&
+        // Total, not the level bar: other XP (a broken mirror, the daily goal) can level up in between.
+        Require(onDisk.progression.experience == progression.State.experience && onDisk.progression.totalExperience >= 30 &&
             onDisk.classId == "calisthenics" && onDisk.hasSpawn &&
             Array.IndexOf(onDisk.oneShotRewards, "once:verifier-reward") >= 0 &&
             onDisk.health >= 120f && onDisk.health < 130f && onDisk.stamina >= 50f && onDisk.stamina < 80f,
-            "Manual save did not capture progression, rewards and resources");
+            "Manual save did not capture progression, rewards and resources: xp=" + onDisk.progression.experience +
+            "/" + progression.State.experience + " class=" + onDisk.classId + " spawn=" + onDisk.hasSpawn +
+            " health=" + onDisk.health + " stamina=" + onDisk.stamina);
         Require((onDisk.spawn - savedPosition).magnitude < 0.6f, "Saved spawn is not the player's position");
 
         // Notices: bounded queue, critical first, repeats merged.
@@ -754,7 +825,7 @@ public static class GymChaosClassSessionPlay
             legacy.Result.Data.progression.strengthRank == 2, "Legacy progression was not migrated intact");
         Require(PlayerPrefs.GetString(LegacyProgressionKey, string.Empty).Length > 0,
             "Legacy PlayerPrefs save was removed by the migration");
-        foreach (float wait in LoadCharacter(legacy.SlotId, false)) yield return wait;
+        foreach (float wait in LoadLegacyWithCustomize(legacy.SlotId)) yield return wait;
         Require(GymSessionService.ActiveClass.id == "bodybuilding" &&
             GymExperienceService.Active.State.level == 6 &&
             Mathf.Abs(GymExperienceService.Active.GetSprintCapacity() - 100f) < 0.01f,
@@ -1639,7 +1710,7 @@ public static class GymChaosClassSessionPlay
         Menu.OpenLoadList();
         yield return Step;
         Require(Menu.Current == GymSessionMenu.State.SaveList, "the load list did not open");
-        Require(Menu.transform.Find("Save List/Delete Save 0") != null,
+        Require(Menu.transform.Find("Save List/Save Entry 0/Delete Save 0") != null,
             "a save row has no trash button");
         SaveListPicture("save-list-trash");
 

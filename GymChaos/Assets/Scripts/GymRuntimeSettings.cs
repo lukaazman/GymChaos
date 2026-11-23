@@ -1049,10 +1049,12 @@ public static class GymRuntimeSettings
         // Ranges sized like a television's: a full sweep either way is a
         // noticeable lift or crush, not the over-exposed picture the old
         // 1.6 stops of exposure and 40 points of contrast gave at the ends.
-        grade.postExposure.Override(BaseExposure + Mathf.Lerp(-0.9f, 0.9f, brightness));
+        GymVisualStyle.Look look = GymVisualStyle.OgLook;
+        grade.postExposure.Override(BaseExposure + look.Exposure + Mathf.Lerp(-0.9f, 0.9f, brightness));
         grade.contrast.Override(BaseContrast + Mathf.Lerp(-22f, 22f, contrast));
-        // Only an off-centre grade needs the camera's post pass: at neutral
-        // the POST FX toggle alone decides whether it runs.
+        grade.saturation.Override(look.Saturation);
+        // Only an off-centre grade needs the camera's post pass: at neutral the
+        // POST FX toggle alone decides whether it runs.
         bool active = Mathf.Abs(brightness - 0.5f) > 0.002f || Mathf.Abs(contrast - 0.5f) > 0.002f;
         bool changed = active != gradeActive;
         gradeActive = active;

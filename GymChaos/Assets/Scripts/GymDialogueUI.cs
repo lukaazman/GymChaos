@@ -205,7 +205,7 @@ public sealed class GymDialogueUI : MonoBehaviour
         float cursor = float.PositiveInfinity;
         for (int i = 0; i < count; i++)
         {
-            choiceLabels[i].text = (i + 1) + "   " + node.choices[i].text;
+            choiceLabels[i].text = (i + 1) + "   " + PlayerAppearance.FillName(node.choices[i].text);
             widths[i] = Mathf.Min(rowLimit, PersonaMenuStyle.FitLayoutButtonWidth(choiceButtons[i], 180f));
             if (cursor + widths[i] > rowLimit)
             {
@@ -220,7 +220,7 @@ public sealed class GymDialogueUI : MonoBehaviour
 
         speakerLabel.text = string.IsNullOrEmpty(node.speaker) ? string.Empty : node.speaker.ToUpperInvariant();
         speakerTag.sizeDelta = new Vector2(Mathf.Max(200f, speakerLabel.preferredWidth + 44f), 56f);
-        bodyLabel.text = node.text;
+        bodyLabel.text = PlayerAppearance.FillName(node.text);
         bodyLabel.rectTransform.sizeDelta = new Vector2(width - PanelPadding * 2f, 0f);
         float bodyHeight = Mathf.Max(46f, bodyLabel.preferredHeight);
         bodyLabel.rectTransform.sizeDelta = new Vector2(width - PanelPadding * 2f, bodyHeight);

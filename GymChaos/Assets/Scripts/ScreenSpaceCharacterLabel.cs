@@ -21,6 +21,7 @@ public sealed class ScreenSpaceCharacterLabel : MonoBehaviour
     private Renderer bodyRenderer;
     private Camera playerCamera;
     private string displayName;
+    public string DisplayName => displayName;
     private float heightOffset;
     private EnemyFighter fighter;
     // Name-only label for a character that is not an EnemyFighter.

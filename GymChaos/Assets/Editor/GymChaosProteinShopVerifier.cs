@@ -132,8 +132,8 @@ public static class GymChaosProteinShopVerifier
                          " unscaled=" + Time.unscaledTime.ToString("F2") + ")")) yield return step;
             foreach (object step in Until(() =>
                      {
-                         menu.ConfirmClass();
-                         return menu.Current != GymSessionMenu.State.ClassSelect;
+                         menu.ConfirmNewCharacterForVerification("Tester");
+                         return !menu.InNewCharacterPages;
                      }, 20d, "the class confirmation")) yield return step;
             foreach (object step in Until(() => GymArenaBootstrap.IsGameplayStarted, 60d, "gameplay after the menu"))
                 yield return step;

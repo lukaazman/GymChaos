@@ -187,4 +187,17 @@ internal static class GymShared
 
         return "file:///" + path.Replace('\\', '/').TrimStart('/');
     }
+
+    /// <summary>A descendant by exact name (depth first), or null.</summary>
+    internal static Transform FindDescendant(Transform root, string name)
+    {
+        if (root == null) return null;
+        if (root.name == name) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindDescendant(root.GetChild(i), name);
+            if (found != null) return found;
+        }
+        return null;
+    }
 }

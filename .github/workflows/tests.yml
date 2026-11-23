@@ -35,7 +35,34 @@ jobs:
       # unity-builder activates the personal license reliably (the test runner
       # action hit "machine bindings don't match"), so the tests run through
       # a batch method that exits non-zero on any failure.
+      # Only a failure with no test verdict or compile error in the Unity log
+      # (license activation, Unity crash, lost runner) is retried, once.
       - name: Run EditMode tests
+        id: run
+        continue-on-error: true
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: GymChaos
+          targetPlatform: StandaloneLinux64
+          buildMethod: GymChaosEditModeTestRunner.Run
+          manualExit: true
+          versioning: None
+          customParameters: -nographics -logFile /github/workspace/unity-ci.log
+
+      - name: Classify failure
+        id: classify
+        if: steps.run.outcome == 'failure'
+        shell: bash
+        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log >> "$GITHUB_OUTPUT"
+
+      - name: Retry EditMode tests after infrastructure failure
+        id: retry
+        if: steps.classify.outputs.infra == 'true'
+        continue-on-error: true
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -48,3 +75,8 @@ jobs:
           manualExit: true
           versioning: None
           customParameters: -nographics
+
+      - name: Fail the job
+        if: steps.run.outcome == 'failure' && steps.retry.outcome != 'success'
+        shell: bash
+        run: exit 1

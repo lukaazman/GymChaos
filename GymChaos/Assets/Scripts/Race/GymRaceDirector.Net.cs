@@ -258,7 +258,7 @@ public sealed partial class GymRaceDirector
             bool me = netRole == NetRoleKind.Guest && netRosterIds[i] == myId;
             list.Add(new RacerSpec
             {
-                Name = me ? "You" : "Player " + (netRosterIds[i] + 1),
+                Name = me ? "You" : GymNetSession.NameOf(netRosterIds[i]),
                 Player = me,
                 Remote = !me,
                 NetId = netRosterIds[i],

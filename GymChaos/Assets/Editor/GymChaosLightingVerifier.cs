@@ -20,7 +20,8 @@ public static class GymChaosLightingVerifier
 {
     private const string RequestedKey = "GymChaos.LightingVerifierRequested";
     private const float MinLuma = 0.2f;
-    private const float MaxLuma = 0.6f;
+    // Bright floor albedo (white checker tile at gym21, light rubber in the locker) reads 0.62 under correct light; blown-out starts above 0.65.
+    private const float MaxLuma = 0.65f;
     private const float MinUniformity = 0.7f;
     // Mostly floor and lower walls: local pools and dark patches show up per spot.
     private const float Pitch = 62f;

@@ -456,7 +456,8 @@ public sealed class GymHud : MonoBehaviour
             shownLevel = state.level;
             shownExperience = state.experience;
             int toNext = Mathf.Max(1, GymExperienceService.GetExperienceToNextLevel(state.level));
-            levelLabel.text = "LEVEL " + state.level + "    XP " + state.experience + " / " + toNext;
+            levelLabel.text = PlayerAppearance.NamePrefix("    ") + "LEVEL " + state.level + "    XP " +
+                state.experience + " / " + toNext;
             levelBadge.text = state.level.ToString(CultureInfo.InvariantCulture);
             SetFraction(experienceFill, state.experience / (float)toNext);
         }

@@ -38,14 +38,16 @@ public sealed class GymHomelessAgent : MonoBehaviour
     }
 
     public const string ObjectName = "Homeless Guy";
-    public const string FirstName = "Hank";
-    public const string DisplayName = "homeless " + FirstName;
+    public static string FirstName => GymVisualStyle.HomelessName("Hank");
+    public static string DisplayName => "homeless " + FirstName;
     // A slight older man, shorter than the gym's bodybuilders; at this
     // height he lies on the bag and crawls in and out of the 1.3x tent
     // without touching the canvas.
     public const float GameplayHeight = 1.9f;
-    private const string ResourcePath = "Characters/Homeless/homeless_guy_authored";
-    private const string TexturePath = "Characters/Textures/homeless_guy";
+    private static string ResourcePath => GymVersionedLooks.IsSlop("hank")
+        ? GymVisualStyle.ModelPath(GymVisualStyle.HomelessFile) : "Characters/Homeless/homeless_guy_authored";
+    private static string TexturePath => GymVersionedLooks.IsSlop("hank")
+        ? GymVisualStyle.TexturePath(GymVisualStyle.HomelessFile) : "Characters/Textures/homeless_guy";
     // Day plan on GymTimeOfDay.Time01 (sunrise 0.12-0.27, dusk 0.68-0.84).
     public const float WakeTime01 = 0.14f;
     // He should be lying in the tent by the time it is properly dark.
@@ -629,9 +631,17 @@ public sealed class GymHomelessAgent : MonoBehaviour
             front - centreZ + 0.012f,
             70f,
             Color.black);
+        Transform anchor = GymShared.FindDescendant(transform, BodybuilderEnemyVisual.EyeAnchorName);
+        if (anchor != null)
+        {
+            Vector3[] world = new Vector3[vertices.Length];
+            for (int i = 0; i < vertices.Length; i++) world[i] = toWorld.MultiplyPoint3x4(vertices[i]);
+            profile = BodybuilderEnemyVisual.FitShellToFace(
+                BodybuilderEnemyVisual.OnEyeAnchor(profile, head, anchor), head, anchor, world);
+        }
         GameObject bar = new GameObject(ObjectName + " Black Eye Bar");
         EyeBar = bar.AddComponent<FaceCensorSettings>();
-        EyeBar.Configure(profile, head, 9137, true);
+        EyeBar.Configure(profile, head, 9137, !GymVersionedLooks.IsSlop("hank"));
         if (GetComponent<ScreenSpaceCharacterLabel>() == null)
         {
             gameObject.AddComponent<ScreenSpaceCharacterLabel>().ConfigureStandalone(

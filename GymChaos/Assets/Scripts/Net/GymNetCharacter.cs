@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UnityEngine;
 
 /// <summary>A guest's character as sent to the host (the character section of its save).</summary>
@@ -11,6 +11,20 @@ public sealed class GymNetCharacterBlob
     public string[] oneShotRewards;
     public float health;
     public float stamina;
+    public GymNetLook look;
+}
+
+/// <summary>A player's name and look: in the character blob and broadcast once in a while to every peer.</summary>
+[Serializable]
+public sealed class GymNetLook
+{
+    public string name;
+    public int gender;
+    public int heightCm;
+    public int skinTone;
+    public int hair;
+    public int hairColor;
+    public int facialHair;
 }
 
 /// <summary>The host's world state a joining guest applies (the world section, minus the spawn).</summary>
@@ -22,6 +36,9 @@ public sealed class GymNetWorldSnapshot
     public string[] brokenPanels;
     public string[] fixerIssueIds;
     public float[] fixerIssueSince;
+    // The host's DEFAULT/POTATO picks; every guest renders these instead of its own.
+    public string[] slopMembers;
+    public string[] slopVehicles;
 }
 
 /// <summary>
@@ -46,8 +63,38 @@ public static class GymNetCharacter
         {
             slotId = save.slotId, classId = save.classId,
             progressionJson = JsonUtility.ToJson(save.progression),
-            oneShotRewards = save.oneShotRewards, health = save.health, stamina = save.stamina
+            oneShotRewards = save.oneShotRewards, health = save.health, stamina = save.stamina,
+            look = Look(save)
         });
+    }
+
+    public static GymNetLook Look(GymCharacterSave save) => new GymNetLook
+    {
+        name = save.username, gender = save.gender, heightCm = save.heightCm, skinTone = save.skinTone,
+        hair = save.hair, hairColor = save.hairColor, facialHair = save.facialHair
+    };
+
+    /// <summary>
+    /// An untrusted look as a clamped character (name 3-16 safe characters,
+    /// else empty); null when it cannot be read.
+    /// </summary>
+    public static GymCharacterSave CleanLook(GymNetLook look)
+    {
+        if (look == null) return null;
+        var clean = new GymCharacterSave
+        {
+            username = look.name, gender = look.gender, heightCm = look.heightCm, skinTone = look.skinTone,
+            hair = look.hair, hairColor = look.hairColor, facialHair = look.facialHair
+        };
+        PlayerAppearance.Normalize(clean);
+        return clean;
+    }
+
+    public static GymCharacterSave CleanLook(string json)
+    {
+        if (string.IsNullOrEmpty(json) || json.Length > 512) return null;
+        try { return CleanLook(JsonUtility.FromJson<GymNetLook>(json)); }
+        catch (Exception) { return null; }
     }
 
     /// <summary>Builds a clean character from untrusted text; false with the reason when it cannot be accepted.</summary>
@@ -99,6 +146,8 @@ public static class GymNetCharacter
         clean.oneShotRewards = CapList(blob.oneShotRewards, MaxRewards);
         clean.health = Mathf.Clamp(blob.health, 0f, MaxResource);
         clean.stamina = Mathf.Clamp(blob.stamina, 0f, MaxResource);
+        GymCharacterSave look = CleanLook(blob.look);
+        if (look != null) clean.CopyLook(look);
         return true;
     }
 

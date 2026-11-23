@@ -291,7 +291,7 @@ public sealed class GymNetRaceUi : MonoBehaviour
             if (id != shownRequester)
             {
                 shownRequester = id;
-                popupTitle.text = "PLAYER " + (id + 1) + " WANTS TO RACE";
+                popupTitle.text = GymNetSession.NameOf(id).ToUpperInvariant() + " WANTS TO RACE";
                 GymRuntimeSettings.EnsureEventSystem();
             }
             ReadKeys();

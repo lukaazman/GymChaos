@@ -178,7 +178,8 @@ public sealed class GymTutorialDirector : MonoBehaviour
         {
             BeginStep(step);
         }
-        if (!spawnApplied && Step <= 4)
+        // A loaded character with a saved spawn stays there; only a fresh start goes to the tutorial spot.
+        if (!spawnApplied && Step <= 4 && !(GymSessionService.Active != null && GymSessionService.Active.hasSpawn))
         {
             spawnApplied = true;
             ApplySpawn();
@@ -404,6 +405,8 @@ public sealed class GymTutorialDirector : MonoBehaviour
             player.transform.SetPositionAndRotation(position, rotation);
         }
         Debug.Log($"GYMCHAOS_TUTORIAL_SPAWN position={position} facing={rotation.eulerAngles.y:F0}", this);
+        // The spawn turn is not the player looking around.
+        lastYaw = player.transform.eulerAngles.y;
     }
 
     /// <summary>Anchor for the current step's target; false when the step has none in the scene.</summary>

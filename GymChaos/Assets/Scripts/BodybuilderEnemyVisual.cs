@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
@@ -146,6 +146,12 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
 
     public static BodybuilderEnemyVisual BuildNeutralNpc(GameObject npc, BodybuilderIdentity identity)
     {
+        // The remade receptionist is an authored FBX like the fighters; the
+        // DEFAULT one stays on the runtime GLB scan below.
+        if (GymVisualStyle.TryRemake(identity, out _, out _) && ExternalRiggedCharacterVisual.TryBuild(npc, identity))
+        {
+            return null;
+        }
         BodybuilderEnemyVisual visual = npc.AddComponent<BodybuilderEnemyVisual>();
         visual.StartCoroutine(visual.BuildVisual(identity, true));
         return visual;
@@ -189,6 +195,14 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         FaceCensorProfile importedProfile = GetImportedFaceCensorProfile(
             identity, vertices, bounds, profile, visualRoot, rig.Head,
             bodyRenderer, bodyRenderer.bounds.size.y);
+        Transform eyeAnchor = GymShared.FindDescendant(visualRoot, EyeAnchorName);
+        if (eyeAnchor != null)
+        {
+            Vector3[] world = new Vector3[vertices.Length];
+            for (int i = 0; i < vertices.Length; i++) world[i] = visualRoot.TransformPoint(vertices[i]);
+            importedProfile = FitShellToFace(
+                OnEyeAnchor(importedProfile, rig.Head, eyeAnchor), rig.Head, eyeAnchor, world);
+        }
         if (neutralNpc)
         {
             CreateDeathMarkersAndName(
@@ -201,6 +215,69 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
                 visualRoot, vertices, bounds, profile, rig.Head, bodyRenderer, identity,
                 importedProfile);
         }
+    }
+
+    public const string EyeAnchorName = "EyeAnchor";
+    // Off the skin, so the curved bar never cuts into the nose bridge.
+    private const float EyeAnchorPush = 0.006f;
+
+    /// <summary>
+    /// Remade characters carry an authored EyeAnchor on the head bone (centre
+    /// between the eyes, on the face surface). The bar's curved shell is put
+    /// through that point: its centre sits FaceDepth behind it, along the
+    /// bar's own forward. Size, curve and angle still come from the measured face.
+    /// </summary>
+    public static FaceCensorProfile OnEyeAnchor(FaceCensorProfile profile, Transform head, Transform anchor)
+    {
+        Vector3 forward = head.rotation * Quaternion.Euler(profile.LocalEulerAngles) * Vector3.forward;
+        profile.LocalPosition = head.InverseTransformPoint(
+            anchor.position - forward * (profile.FaceDepth - EyeAnchorPush));
+        return profile;
+    }
+
+    /// <summary>
+    /// The measured shell comes from the old scans; a remade face (brow, nose
+    /// bridge, hair over the forehead) can poke through it. With the face's
+    /// world vertices: the front moves just ahead of anything in the bar's
+    /// band near the middle, then the shell widens until every band vertex
+    /// within 69 degrees of straight ahead lies inside its curve (the same
+    /// test GymChaosEyeBarVerifier applies).
+    /// </summary>
+    public static FaceCensorProfile FitShellToFace(
+        FaceCensorProfile profile, Transform head, Transform anchor, Vector3[] worldVertices)
+    {
+        Quaternion rotation = head.rotation * Quaternion.Euler(profile.LocalEulerAngles);
+        Quaternion inverse = Quaternion.Inverse(rotation);
+        Vector3 forward = rotation * Vector3.forward;
+        float halfHeight = profile.Size.y * 0.5f;
+        float baseHalfWidth = Mathf.Max(0.01f, profile.Size.x * 0.5f);
+        float depth = profile.FaceDepth;
+        Vector3 centre = anchor.position - forward * (depth - EyeAnchorPush);
+        // Front: nothing near the middle of the band may stand ahead of it.
+        for (int i = 0; i < worldVertices.Length; i++)
+        {
+            Vector3 local = inverse * (worldVertices[i] - centre);
+            if (Mathf.Abs(local.y) <= halfHeight && Mathf.Abs(local.x) < baseHalfWidth * 0.5f)
+            {
+                depth = Mathf.Max(depth, local.z + 0.002f);
+            }
+        }
+        depth = Mathf.Min(depth, profile.FaceDepth + 0.03f);
+        // Width: every band point in the front arc inside (x/a)^2 + (z/b)^2 <= 1.
+        float halfWidth = baseHalfWidth;
+        float maxArc = Mathf.Tan(69f * Mathf.Deg2Rad);
+        for (int i = 0; i < worldVertices.Length; i++)
+        {
+            Vector3 local = inverse * (worldVertices[i] - centre);
+            if (Mathf.Abs(local.y) > halfHeight || local.z <= 0f || Mathf.Abs(local.x) > local.z * maxArc) continue;
+            float nz = Mathf.Min(local.z / depth, 0.999f);
+            halfWidth = Mathf.Max(halfWidth, Mathf.Abs(local.x) / Mathf.Sqrt(1f - nz * nz) + 0.002f);
+        }
+        halfWidth = Mathf.Min(halfWidth, baseHalfWidth * 1.8f);
+        profile.FaceDepth = depth;
+        profile.Size = new Vector2(halfWidth * 2f, profile.Size.y);
+        profile.LocalPosition = head.InverseTransformPoint(centre);
+        return profile;
     }
 
     public static bool RequiresImportedFaceRefresh(BodybuilderIdentity identity)
@@ -1744,7 +1821,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         FaceCensorSettings censor = censorObject.AddComponent<FaceCensorSettings>();
         censor.Configure(
             importedProfile ?? GetFaceCensorProfile(identity, vertices, bounds, rigProfile, visualRoot, head),
-            head, identity.GetHashCode() + 31, true);
+            head, identity.GetHashCode() + 31, !GymVersionedLooks.IsSlop(identity));
 
         EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
         if (fighter != null && fighter.IsDead)
@@ -1767,7 +1844,7 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         GameObject markerAnchor = new GameObject(identity + " Black Eye Bar");
         FaceCensorSettings censor = markerAnchor.AddComponent<FaceCensorSettings>();
         censor.Configure(
-            markerProfile, head, identity.GetHashCode() + 31, true);
+            markerProfile, head, identity.GetHashCode() + 31, !GymVersionedLooks.IsSlop(identity));
 
         EnemyFighter fighter = visualRoot.GetComponentInParent<EnemyFighter>();
         if (fighter != null && fighter.IsDead)
@@ -2290,13 +2367,13 @@ public sealed class BodybuilderEnemyVisual : MonoBehaviour
         Transform visualRoot, SkinnedMeshRenderer bodyRenderer,
         BodybuilderIdentity identity, float heightOffset)
     {
-        string displayName = identity == BodybuilderIdentity.Cbum
+        string displayName = GymVisualStyle.DisplayName(identity, identity == BodybuilderIdentity.Cbum
             ? "CBum"
             : identity == BodybuilderIdentity.Manwithsuit1
                 ? "manwithsuit1"
                 : identity == BodybuilderIdentity.JayCutler
                     ? "Jay Cutler"
-                : identity.ToString();
+                : identity.ToString());
         ScreenSpaceCharacterLabel label = visualRoot.gameObject.AddComponent<ScreenSpaceCharacterLabel>();
         label.Configure(bodyRenderer, displayName, heightOffset);
     }

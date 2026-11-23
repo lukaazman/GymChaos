@@ -16,6 +16,10 @@ public sealed class GymNetSession : MonoBehaviour
     public const string DefaultRelayUrl = "peer://";
     public const float SendIntervalSeconds = 1f / 12f;
     private const char PoseTag = 'p';
+    public const char LookTag = 'l';
+    // shortcut: the look is re-broadcast every few seconds so late joiners get it; a join hook would send it once.
+    private const float LookIntervalSeconds = 3f;
+    private float nextLookSend;
 
     public static GymNetSession Instance { get; private set; }
 
@@ -67,6 +71,11 @@ public sealed class GymNetSession : MonoBehaviour
     public PlayerMovement LocalPlayer => player;
     public bool ActorsSuppressed => actorsSuppressed;
     public bool TryGetAvatar(int id, out GymRemoteAvatar avatar) => avatars.TryGetValue(id, out avatar);
+
+    /// <summary>A peer's chosen name once its look arrived, else "PLAYER n".</summary>
+    public static string NameOf(int id) =>
+        Instance != null && Instance.TryGetAvatar(id, out GymRemoteAvatar avatar) && avatar != null
+            ? avatar.NameShown : "PLAYER " + (id + 1);
 
     // The room chosen in the session menu; command line and page query still apply when this is unset.
     private static string pendingMode, pendingUrl, pendingCode;
@@ -386,6 +395,12 @@ public sealed class GymNetSession : MonoBehaviour
             if (!Client.IsHost && from == 0 && actorsSuppressed) latestSnapshot = body;
             return;
         }
+        if (!string.IsNullOrEmpty(body) && body[0] == LookTag)
+        {
+            GymCharacterSave look = GymNetCharacter.CleanLook(body.Substring(1));
+            if (look != null) EnsureAvatar(from).ApplyLook(look);
+            return;
+        }
         if (string.IsNullOrEmpty(body) || body[0] != PoseTag) return;
         GymNetPose pose;
         try { pose = JsonUtility.FromJson<GymNetPose>(body.Substring(1)); }
@@ -581,6 +596,11 @@ public sealed class GymNetSession : MonoBehaviour
             classIndex = lookClass, shirt = lookShirt, top = lookTop, bottom = lookBottom,
             bottomColor = lookBottomColor, headwear = lookHeadwear };
         Client.Send(-1, PoseTag + JsonUtility.ToJson(pose));
+        if (Time.unscaledTime >= nextLookSend && GymSessionService.Active != null)
+        {
+            nextLookSend = Time.unscaledTime + LookIntervalSeconds;
+            Client.Send(-1, LookTag + JsonUtility.ToJson(GymNetCharacter.Look(GymSessionService.Active)));
+        }
     }
 
     private void RefreshLook()

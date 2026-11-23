@@ -40,6 +40,8 @@ public sealed class GymVehicleCabin : MonoBehaviour
     // Lowest point of the driver door skin: the top of the sill under it.
     public float DoorSillLocalY { get; private set; }
     public Transform WheelPivot => wheelPivot;
+    /// <summary>Verification: how far the driver door swings from closed.</summary>
+    public float DoorAngleDegrees => doorPivot != null ? Quaternion.Angle(doorClosedLocal, doorPivot.localRotation) : 0f;
     public int GlassRendererCount { get; private set; }
     public int InteriorRendererCount { get; private set; }
     public int DoorRendererCount { get; private set; }

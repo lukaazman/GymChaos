@@ -8,7 +8,7 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
 
     public override uint GetVersion()
     {
-        return 5;
+        return 6;
     }
 
     private void OnPreprocessModel()
@@ -38,16 +38,21 @@ public sealed class ExternalCharacterFbxImporter : AssetPostprocessor
 
         importer.importNormals = ModelImporterNormals.Import;
         importer.importTangents = ModelImporterTangents.None;
-        importer.importBlendShapes = false;
+        // The remade player resolves its Female/Upper/Lower/Soft keys at runtime (PlayerAppearance).
+        bool remakePlayer = assetPath.EndsWith("Remake/player_authored.fbx", StringComparison.OrdinalIgnoreCase);
+        importer.importBlendShapes = remakePlayer;
+        if (remakePlayer) importer.importBlendShapeNormals = ModelImporterNormals.Calculate;
         importer.importCameras = false;
         importer.importLights = false;
         importer.importAnimation = true;
         importer.animationType = ModelImporterAnimationType.Generic;
         importer.avatarSetup = ModelImporterAvatarSetup.NoAvatar;
-        importer.animationCompression = ModelImporterAnimationCompression.Off;
-        importer.animationRotationError = 0.001f;
-        importer.animationPositionError = 0.001f;
-        importer.animationScaleError = 0.001f;
+        // Drops constant and near-linear keys (most of 72 bones x 3 curves per
+        // clip); the tolerances stay far below what the foot/grip checks see.
+        importer.animationCompression = ModelImporterAnimationCompression.KeyframeReduction;
+        importer.animationRotationError = 0.1f;
+        importer.animationPositionError = 0.1f;
+        importer.animationScaleError = 0.1f;
         importer.optimizeGameObjects = false;
         importer.preserveHierarchy = true;
         importer.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;

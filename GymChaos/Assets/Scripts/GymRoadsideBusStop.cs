@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 /// <summary>
 /// Builds a single temporary curbside stop on the visitor road and loads the
@@ -8,8 +8,9 @@ using UnityEngine;
 public static class GymRoadsideBusStop
 {
     private const string RootName = "Davie Roadside Bus Stop (Runtime)";
-    private const string DavieBusAsset =
+    private const string OgBusAsset =
         "BodyBuilders/vehicles/Davie_Bus_lod.glb";
+    private static string DavieBusAsset => GymVisualStyle.VehicleAsset(BodybuilderIdentity.Davie, OgBusAsset);
     // Vehicle-relative distances follow the shared 1.25x vehicle scale.
     private const float S = GymOutdoorBuilder.VehicleScale;
     private const float DavieBusTargetLength = 10.4f * S;
@@ -281,7 +282,8 @@ public static class GymRoadsideBusStop
             root.transform,
             DavieBusCenterPoint,
             DavieBusRotation,
-            Vector3.one * DavieBusTargetLength,
+            GymVisualStyle.RemakeVehicleAsset(BodybuilderIdentity.Davie) != null
+                ? Vector3.one : Vector3.one * DavieBusTargetLength,
             "Davie Bus - Temporary Roadside Stop",
             root.layer,
             true,
@@ -326,6 +328,10 @@ public static class GymRoadsideBusStop
             return;
         }
 
+        if (GymVisualStyle.RemakeVehicleAsset(BodybuilderIdentity.Davie) != null)
+        {
+            FitRemakeBus(loaded, DavieBusTargetLength);
+        }
         Renderer[] renderers = loaded.GetComponentsInChildren<Renderer>(true);
         if (renderers.Length == 0)
         {
@@ -378,6 +384,26 @@ public static class GymRoadsideBusStop
             loaded);
     }
 
+
+    /// <summary>
+    /// The remade bus GLB is modelled in metres (the DEFAULT one is one unit long
+    /// and scaled by the target length): scale it uniformly to the target
+    /// length, keeping its lowest point where the loader settled it.
+    /// </summary>
+    internal static void FitRemakeBus(GameObject visual, float targetLength)
+    {
+        Renderer[] renderers = visual.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0) return;
+        Bounds bounds = GymShared.CombinedBounds(renderers);
+        float length = Mathf.Max(bounds.size.x, bounds.size.z);
+        if (length < 0.001f) return;
+        float floor = bounds.min.y;
+        visual.transform.localScale *= targetLength / length;
+        Physics.SyncTransforms();
+        bounds = GymShared.CombinedBounds(renderers);
+        visual.transform.position += Vector3.up * (floor - bounds.min.y);
+        Physics.SyncTransforms();
+    }
 
     private static bool TryGetOrientedLocalBounds(
         GameObject visual, Transform root, out Bounds bounds)

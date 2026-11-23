@@ -40,10 +40,13 @@ public sealed class GymChaosCabinPenetrationProbe
     public int WorstSampleCrossings { get; private set; }
     public int SampledVertices { get; private set; }
     public string WorstCrossing { get; private set; } = "";
+    public string DeepestSeated { get; private set; } = "";
     // Phase and hit-point box (vehicle-local) of the step with the most crossings.
     public string WorstStep { get; private set; } = "";
     private readonly SortedDictionary<string, int> crossingBuckets = new SortedDictionary<string, int>();
     private readonly SortedDictionary<string, int> outsideBuckets = new SortedDictionary<string, int>();
+    private readonly Dictionary<string, Vector3> outsideSum = new Dictionary<string, Vector3>();
+    private readonly Dictionary<string, float> outsideDeepest = new Dictionary<string, float>();
 
     public string Histogram()
     {
@@ -51,7 +54,13 @@ public sealed class GymChaosCabinPenetrationProbe
         foreach (var pair in crossingBuckets) parts.Add($"{pair.Key}:{pair.Value}");
         var outside = new List<string>();
         foreach (var pair in outsideBuckets) outside.Add($"{pair.Key}:{pair.Value}");
-        return $"crossings[{string.Join(",", parts)}] outside[{string.Join(",", outside)}]";
+        var where = new List<string>();
+        foreach (var pair in outsideBuckets)
+        {
+            Vector3 mean = outsideSum[pair.Key] / pair.Value;
+            where.Add($"{pair.Key}=({mean.x:F2},{mean.y:F2},{mean.z:F2}) deepest {outsideDeepest[pair.Key]:F2}");
+        }
+        return $"crossings[{string.Join(",", parts)}] outside[{string.Join(",", outside)}] outsideAt[{string.Join("; ", where)}]";
     }
 
     public GymChaosCabinPenetrationProbe(Transform vehicleRoot, Component driver)
@@ -118,11 +127,22 @@ public sealed class GymChaosCabinPenetrationProbe
                 QueryTriggerInteraction.Collide))
             {
                 SeatedOutside++;
-                SeatedDepth = Mathf.Max(SeatedDepth, Vector3.Distance(hit.point, vertices[i]));
+                float depthNow = Vector3.Distance(hit.point, vertices[i]);
+                if (depthNow > SeatedDepth)
+                {
+                    SeatedDepth = depthNow;
+                    Vector3 v = vehicle.InverseTransformPoint(vertices[i]);
+                    Vector3 h = vehicle.InverseTransformPoint(hit.point);
+                    Vector3 c = vehicle.InverseTransformPoint(cabinInside);
+                    DeepestSeated = $"vertex=({v.x:F2},{v.y:F2},{v.z:F2}) hit=({h.x:F2},{h.y:F2},{h.z:F2}) from=({c.x:F2},{c.y:F2},{c.z:F2}) normal={hit.normal}";
+                }
                 Vector3 local = vehicle.InverseTransformPoint(vertices[i]);
                 string key = $"{GymVehicleCabin.PartName(hit.collider.name).Replace("Cabin Probe ", "")}" +
                     $"@y{Mathf.Round(local.y * 5f) / 5f:F1}";
                 outsideBuckets[key] = outsideBuckets.TryGetValue(key, out int n) ? n + 1 : 1;
+                outsideSum[key] = outsideSum.TryGetValue(key, out Vector3 sum) ? sum + local : local;
+                outsideDeepest[key] = Mathf.Max(outsideDeepest.TryGetValue(key, out float deep) ? deep : 0f,
+                    Vector3.Distance(hit.point, vertices[i]));
             }
         }
         Enable(false);
@@ -151,6 +171,13 @@ public sealed class GymChaosCabinPenetrationProbe
         for (int i = 0; i < vertices.Length; i += VertexStride)
         {
             Vector3 from = vehicle.TransformPoint(previousLocal[i]);
+            // Feet that start or end in the footwell tub (hidden in the seated
+            // check too) cross the floor plane on the way out and in: by design.
+            if (IsHidden(from) || IsHidden(vertices[i]))
+            {
+                previousLocal[i] = vehicle.InverseTransformPoint(vertices[i]);
+                continue;
+            }
             if (Physics.Linecast(from, vertices[i], out RaycastHit hit, mask,
                 QueryTriggerInteraction.Collide))
             {

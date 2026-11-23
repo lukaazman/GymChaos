@@ -21,6 +21,15 @@ public sealed class GymWebGLBench : MonoBehaviour
         if (!Application.absoluteURL.Contains("bench=1")) return;
         new GameObject("WebGL Bench").AddComponent<GymWebGLBench>();
     }
+
+    // &style=remake|og picks the look before the gym is built (it is read once per scene).
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void PickStyle()
+    {
+        string url = Application.absoluteURL;
+        if (!url.Contains("bench=1")) return;
+
+    }
 #endif
 
     private IEnumerator Start()

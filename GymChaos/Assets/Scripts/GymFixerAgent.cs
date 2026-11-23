@@ -28,10 +28,12 @@ public sealed class GymFixerAgent : MonoBehaviour
         Flying
     }
 
-    public const string DisplayName = "Lollipop Larry";
+    public static string DisplayName => GymVisualStyle.FixerName("Lollipop Larry");
     public const float GameplayHeight = 1.4f;
-    private const string ResourcePath = "Characters/Fixer/jolly_dog_authored";
-    private const string TexturePath = "Characters/Textures/jolly_dog";
+    private static string ResourcePath => GymVersionedLooks.IsSlop("larry")
+        ? GymVisualStyle.ModelPath(GymVisualStyle.FixerFile) : "Characters/Fixer/jolly_dog_authored";
+    private static string TexturePath => GymVersionedLooks.IsSlop("larry")
+        ? GymVisualStyle.TexturePath(GymVisualStyle.FixerFile) : "Characters/Textures/jolly_dog";
     private const float SpawnHeight = 70f;
     private const float FallAcceleration = 45f;
     private const float MaxFallSpeed = 34f;
@@ -253,15 +255,20 @@ public sealed class GymFixerAgent : MonoBehaviour
         Material material = new Material(shader) { name = "Jolly Dog Body" };
         material.SetColor("_BaseColor", Color.white);
         material.SetColor("_Color", Color.white);
-        // The scan's colour is its atlas multiplied by its vertex colours.
-        material.SetFloat("_UseVertexColor", 1f);
+        // The scan's colour is its atlas multiplied by its vertex colours;
+        // the remake's colour is all in its texture (clean UV islands).
+        bool remake = GymVersionedLooks.IsSlop("larry");
+        material.SetFloat("_UseVertexColor", remake ? 0f : 1f);
         if (texture != null)
         {
             Texture limited = ScanTextureMips.Limit(texture);
             material.SetTexture("_BaseMap", limited);
             material.SetTexture("_MainTex", limited);
-            bodyRenderer.sharedMesh = ScanUvInset.Apply(
-                bodyRenderer.sharedMesh, ScanUvInset.TextureSize(texture));
+            if (!remake)
+            {
+                bodyRenderer.sharedMesh = ScanUvInset.Apply(
+                    bodyRenderer.sharedMesh, ScanUvInset.TextureSize(texture));
+            }
         }
         Material[] materials = new Material[Mathf.Max(1, bodyRenderer.sharedMaterials.Length)];
         for (int i = 0; i < materials.Length; i++)

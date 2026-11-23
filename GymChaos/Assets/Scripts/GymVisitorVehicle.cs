@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -76,6 +76,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     private Vector3 busDepartureApproachPoint;
     private Coroutine driveRoutine;
     private Transform riderAnchor;
+    private EnemyFighter pendingRider;
     private EnemyFighter mountedRider;
     // Driven cars (not Goku's cloud, not Davie's bus) have a see-through
     // cabin; their visitor sits in it while the car moves.
@@ -170,7 +171,10 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public bool IsCloud => identity == BodybuilderIdentity.Goku;
     public bool IsBus => identity == BodybuilderIdentity.Davie;
     public bool IsArnold => identity == BodybuilderIdentity.Arnold;
-    private bool NeedsRuntimeVisual => IsBus || IsArnold;
+    // Remake style: every visitor vehicle is a GLB (GymVisualStyle.Vehicles).
+    private string remakeAsset;
+    private bool NeedsRuntimeVisual => IsBus || IsArnold || remakeAsset != null;
+    private string BusAsset => remakeAsset ?? DavieBusAsset;
     private bool UsesRoadsideBusRoute =>
         IsBus && GymRoadsideBusStop.IsBuilt;
     public bool HasMountedRider => mountedRider != null;
@@ -182,6 +186,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         get
         {
+            // The remade bodies are flat-coloured: their own loaded model is the look.
+            if (remakeAsset != null) return runtimeVisualReady;
             Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
             for (int r = 0; r < renderers.Length; r++)
             {
@@ -268,6 +274,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public Vector3 DepartureJunctionPointForVerification => departureJunctionPoint;
     public Vector3 DepartureRoadPointForVerification => departureRoadPoint;
     public bool RuntimeVisualReadyForVerification => !NeedsRuntimeVisual || runtimeVisualReady;
+    /// <summary>The model this vehicle loads: remake GLB, DEFAULT GLB or DEFAULT Resources path.</summary>
+    public string VisualAssetForVerification =>
+        remakeAsset ?? (IsBus ? DavieBusAsset : IsArnold ? ArnoldHummerAsset : GetResource(identity));
     public Bounds RuntimeVisualBoundsForVerification
     {
         get
@@ -301,6 +310,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         GameObject root = new GameObject(identity + " Visitor Vehicle");
         GymVisitorVehicle vehicle = root.AddComponent<GymVisitorVehicle>();
         vehicle.identity = identity;
+        vehicle.remakeAsset = GymVisualStyle.RemakeVehicleAsset(identity);
         vehicle.player = player;
         vehicle.ConfigureRoute(slot);
         // Davie's bus never starts parked at the stop: it waits hidden at the
@@ -308,21 +318,35 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         if (vehicle.UsesRoadsideBusRoute) initiallyParked = false;
         root.transform.position = initiallyParked ? vehicle.parkingPoint : vehicle.roadPoint;
         root.transform.rotation = vehicle.ParkedRotation;
-        GameObject prefab = vehicle.IsBus ? null : Resources.Load<GameObject>(resource);
+        GameObject prefab = vehicle.IsBus || vehicle.remakeAsset != null ? null : Resources.Load<GameObject>(resource);
         if (vehicle.IsBus)
         {
             GymRoadsideBusStop.SetDavieDynamicBusActive(true);
             RuntimeGlbSceneLoader.Request(
-                DavieBusAsset,
+                vehicle.BusAsset,
                 root.transform,
                 root.transform.position,
                 root.transform.rotation,
-                Vector3.one * DavieBusTargetLength,
+                vehicle.remakeAsset != null ? Vector3.one : Vector3.one * DavieBusTargetLength,
                 "Davie Bus Visitor Vehicle",
                 root.layer,
                 settleOnSupport: true,
                 supportY: vehicle.VisualSupportY,
                 onLoaded: vehicle.FinalizeRuntimeBus);
+        }
+        else if (vehicle.remakeAsset != null)
+        {
+            RuntimeGlbSceneLoader.Request(
+                vehicle.remakeAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one,
+                identity + " Remake Visitor Vehicle",
+                root.layer,
+                settleOnSupport: true,
+                supportY: vehicle.VisualSupportY,
+                onLoaded: vehicle.FinalizeRuntimeRemake);
         }
         else if (vehicle.IsArnold)
         {
@@ -359,7 +383,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             Debug.LogError($"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} path={resource}");
         }
         vehicle.CreateEngineAudio();
-        if (!vehicle.IsCloud && !vehicle.IsBus)
+        if (!vehicle.IsCloud && (!vehicle.IsBus || vehicle.remakeAsset != null))
         {
             // The root faces the way the car drives and parks.
             // Lamps only while driving: a parked car stays dark.
@@ -386,6 +410,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         GameObject root = new GameObject(identity + " Race Car");
         GymVisitorVehicle vehicle = root.AddComponent<GymVisitorVehicle>();
         vehicle.identity = identity;
+        vehicle.remakeAsset = GymVisualStyle.RemakeVehicleAsset(identity);
         vehicle.raceVisual = true;
         vehicle.ConfigureRoute(0);
         root.transform.SetPositionAndRotation(position, rotation);
@@ -393,16 +418,30 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         {
             // Chaos race: Davie's bus races with the cars.
             RuntimeGlbSceneLoader.Request(
-                DavieBusAsset,
+                vehicle.BusAsset,
                 root.transform,
                 root.transform.position,
                 root.transform.rotation,
-                Vector3.one * DavieBusTargetLength,
+                vehicle.remakeAsset != null ? Vector3.one : Vector3.one * DavieBusTargetLength,
                 "Davie Bus Race Car",
                 root.layer,
                 settleOnSupport: true,
                 supportY: position.y - RaceGroundOffset,
                 onLoaded: vehicle.FinalizeRuntimeBus);
+        }
+        else if (vehicle.remakeAsset != null)
+        {
+            RuntimeGlbSceneLoader.Request(
+                vehicle.remakeAsset,
+                root.transform,
+                root.transform.position,
+                root.transform.rotation,
+                Vector3.one,
+                identity + " Remake Race Car",
+                root.layer,
+                settleOnSupport: true,
+                supportY: position.y - RaceGroundOffset,
+                onLoaded: vehicle.FinalizeRuntimeRemake);
         }
         else if (vehicle.IsArnold)
         {
@@ -946,7 +985,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         {
             Debug.LogError(
                 IsBus
-                    ? $"GYMCHAOS_DAVIE_BUS_ROUTE_WITHOUT_VISUAL path={DavieBusAsset}"
+                    ? $"GYMCHAOS_DAVIE_BUS_ROUTE_WITHOUT_VISUAL path={BusAsset}"
                     : $"GYMCHAOS_ARNOLD_HUMMER_ROUTE_WITHOUT_VISUAL path={ArnoldHummerAsset}",
                 this);
             if (IsBus)
@@ -1038,19 +1077,51 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             GymRoadsideBusStop.SetDavieDynamicBusActive(false);
             Debug.LogError(
                 $"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} " +
-                $"path={DavieBusAsset}", this);
+                $"path={BusAsset}", this);
             return;
         }
 
         visual.name = identity + " Vehicle Model";
-        ApplyLiveryMaterial(visual);
+        if (remakeAsset == null) ApplyLiveryMaterial(visual);
+        else
+        {
+            // The DEFAULT bus GLB is one unit long and scaled by the target length;
+            // the remade bus is modelled in metres and is fitted instead.
+            GymRoadsideBusStop.FitRemakeBus(visual, DavieBusTargetLength);
+            GymVehicleBodyRoll.Attach(visual.transform, transform);
+        }
         AddPhysicalBody(visual);
         runtimeVisualReady = true;
         Debug.Log(
-            $"GYMCHAOS_DAVIE_VISITOR_BUS_READY path={DavieBusAsset} " +
+            $"GYMCHAOS_DAVIE_VISITOR_BUS_READY path={BusAsset} " +
             $"length={DavieBusTargetLength:F2} roadside=1 " +
             $"passengerPoint={PassengerPoint}",
             this);
+    }
+
+    private void FinalizeRuntimeRemake(GameObject visual)
+    {
+        if (visual == null)
+        {
+            runtimeVisualLoadFailed = true;
+            Debug.LogError($"GYMCHAOS_VEHICLE_MODEL_MISSING identity={identity} path={remakeAsset}", this);
+            return;
+        }
+        visual.name = identity + " Remake Vehicle Model";
+        // The remade GLBs already face root +Z. Goku's cloud keeps its own
+        // visitor length; the race fits every body to the bay length as before.
+        FitVisual(visual, IsCloud && !raceVisual ? CloudTargetLength : GymOutdoorBuilder.ParkingVehicleTargetLength,
+            centerHorizontally: true);
+        AddPhysicalBody(visual);
+        if (IsCloud && !raceVisual)
+        {
+            CreateRiderAnchor(visual);
+            if (pendingRider != null) MountRider(pendingRider);
+        }
+        else AttachCabin(visual);
+        if (!IsCloud) GymVehicleBodyRoll.Attach(visual.transform, transform);
+        runtimeVisualReady = true;
+        Debug.Log($"GYMCHAOS_REMAKE_VEHICLE_READY identity={identity} path={remakeAsset}", this);
     }
 
     private void FinalizeRuntimeArnold(GameObject visual)
@@ -1100,8 +1171,8 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     public bool ExpectsSeatedDriver => !IsCloud && !IsBus;
     /// <summary>
     /// The driver behind the car's glass at <paramref name="worldPoint"/>, if a
-    /// throw or punch landing there reaches it: the point is on the upper
-    /// (window) half of the car body and close to the seated driver.
+    /// throw or punch landing there reaches it: the point is
+    /// above the seated driver's window line and close to the driver.
     /// </summary>
     private BoxCollider cabinBodyCollider;
 
@@ -1119,7 +1190,9 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         }
         Vector3 local = transform.InverseTransformPoint(worldPoint);
         float top = bodyCollider.center.y + bodyCollider.size.y * 0.5f;
-        if (local.y < bodyCollider.center.y || local.y > top - bodyCollider.size.y * 0.06f)
+        // Window line from the seated body, not the box: remade bodies are taller.
+        float sill = transform.InverseTransformPoint(occupant.transform.position).y + 0.65f;
+        if (local.y < sill || local.y > top - bodyCollider.size.y * 0.06f)
         {
             return null;
         }
@@ -1155,6 +1228,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     {
         if (!ExpectsSeatedDriver) return;
         cabin = GymVehicleCabin.Attach(transform, visual);
+
         if (cabin == null || !cabin.IsReady)
         {
             Debug.LogWarning($"GYMCHAOS_VEHICLE_CABIN_MISSING identity={identity}", this);
@@ -1234,7 +1308,14 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     public void MountRider(EnemyFighter fighter)
     {
-        if (!IsCloud || fighter == null || riderAnchor == null) return;
+        if (!IsCloud || fighter == null) return;
+        // The remade cloud loads asynchronously: mount once its anchor exists.
+        if (riderAnchor == null)
+        {
+            pendingRider = fighter;
+            return;
+        }
+        pendingRider = null;
         mountedRider = fighter;
         mountedRider.BeginVisitorVehicleRide(riderAnchor);
     }
@@ -1242,6 +1323,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
     /// <summary>The rider jumped off on its own (attacked mid-ride).</summary>
     public void ForgetRider(EnemyFighter fighter)
     {
+        if (pendingRider == fighter) pendingRider = null;
         if (mountedRider == fighter)
         {
             mountedRider = null;
@@ -1250,6 +1332,7 @@ public sealed class GymVisitorVehicle : MonoBehaviour
 
     public void DismountRider(Vector3 groundPoint, Quaternion rotation)
     {
+        pendingRider = null;
         if (mountedRider == null) return;
         EnemyFighter rider = mountedRider;
         mountedRider = null;
@@ -2384,10 +2467,14 @@ public sealed class GymVisitorVehicle : MonoBehaviour
             return;
         }
 
-        BoxCollider box = gameObject.AddComponent<BoxCollider>();
+        // Reuse what the spawn already put here: AddComponent would fail (and
+        // hand back null) on the rigidbody a rebuilt car still carries.
+        BoxCollider box = GetComponent<BoxCollider>();
+        if (box == null) box = gameObject.AddComponent<BoxCollider>();
         box.center = localBounds.center;
         box.size = localBounds.size;
-        Rigidbody rigidbody = gameObject.AddComponent<Rigidbody>();
+        Rigidbody rigidbody = GetComponent<Rigidbody>();
+        if (rigidbody == null) rigidbody = gameObject.AddComponent<Rigidbody>();
         rigidbody.isKinematic = true;
         rigidbody.useGravity = false;
         rigidbody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
@@ -2611,4 +2698,167 @@ public sealed class GymVisitorVehicle : MonoBehaviour
         string stem = resource.Substring(resource.LastIndexOf('/') + 1);
         return "Vehicles/Textures/" + stem;
     }
+    /// <summary>
+    /// Appearance menu: swaps this car's model in place. The old body, its
+    /// colliders, cabin, seat and lamp/spinner helpers go; the new asset loads
+    /// through the same path the spawn uses; the car keeps its transform.
+    /// </summary>
+    public bool RebuildVersionForAppearance()
+    {
+        string wanted = GymVisualStyle.RemakeVehicleAsset(identity);
+        if (wanted == remakeAsset) return true;
+        remakeAsset = wanted;
+        Vector3 position = transform.position;
+        Quaternion rotation = transform.rotation;
+        // Goku's rider stands on the anchor the cloud carries: take him off it
+        // for the rebuild and put him back on the new one.
+        EnemyFighter rider = IsCloud ? mountedRider : null;
+        if (rider != null) mountedRider = null;
+        ClearModelForVersion();
+        bool built = true;
+        runtimeVisualReady = false;
+        runtimeVisualLoadFailed = false;
+        if (IsBus)
+        {
+            // The bus keeps its own visitor length: the DEFAULT GLB is one unit
+            // long and scaled by it, the remade bus is fitted in metres.
+            GymRoadsideBusStop.SetDavieDynamicBusActive(true);
+            RuntimeGlbSceneLoader.Request(
+                BusAsset,
+                transform,
+                position,
+                rotation,
+                remakeAsset != null ? Vector3.one : Vector3.one * DavieBusTargetLength,
+                "Davie Bus Visitor Vehicle",
+                gameObject.layer,
+                settleOnSupport: true,
+                supportY: VisualSupportY,
+                onLoaded: FinalizeRuntimeBus);
+        }
+        else if (remakeAsset != null)
+        {
+            RuntimeGlbSceneLoader.Request(
+                remakeAsset,
+                transform,
+                position,
+                rotation,
+                Vector3.one,
+                identity + " Remake Visitor Vehicle",
+                gameObject.layer,
+                settleOnSupport: true,
+                supportY: VisualSupportY,
+                onLoaded: FinalizeRuntimeRemake);
+        }
+        else if (IsCloud)
+        {
+            // The cloud's DEFAULT body is a prefab facing backwards; it keeps
+            // CloudTargetLength and its own rider anchor, as at spawn.
+            GameObject cloudPrefab = Resources.Load<GameObject>(GetResource(identity));
+            if (cloudPrefab == null)
+            {
+                runtimeVisualLoadFailed = true;
+                built = false;
+            }
+            else
+            {
+                GameObject visual = Instantiate(cloudPrefab, transform);
+                visual.name = identity + " Vehicle Model";
+                visual.transform.localRotation =
+                    Quaternion.Euler(0f, 180f, 0f) * visual.transform.localRotation;
+                FitVisual(visual, CloudTargetLength);
+                ApplyOriginalMaterial(visual);
+                AddPhysicalBody(visual);
+                CreateRiderAnchor(visual);
+                runtimeVisualReady = true;
+            }
+        }
+        else
+        {
+            GameObject prefab = Resources.Load<GameObject>(GetResource(identity));
+            if (prefab == null)
+            {
+                runtimeVisualLoadFailed = true;
+                built = false;
+            }
+            else
+            {
+                GameObject visual = Instantiate(prefab, transform);
+                visual.name = identity + " Vehicle Model";
+                FitVisual(visual, GymOutdoorBuilder.ParkingVehicleTargetLength);
+                ApplyOriginalMaterial(visual);
+                AddPhysicalBody(visual);
+                AttachCabin(visual);
+                runtimeVisualReady = true;
+            }
+        }
+        if (rider != null) MountRider(rider);
+        Debug.Log($"GYMCHAOS_VEHICLE_VERSION_REBUILD identity={identity} " +
+            $"path={VisualAssetForVerification} built={built}", this);
+        return built;
+    }
+
+    /// <summary>The model child the spawn built, or null while it loads.</summary>
+    public Transform VisualRootForVerification
+    {
+        get
+        {
+            for (int i = 0; i < transform.childCount; i++)
+            {
+                Transform child = transform.GetChild(i);
+                if (child.name.IndexOf("Vehicle Model", System.StringComparison.Ordinal) >= 0 ||
+                    child.name.IndexOf("Remake Vehicle", System.StringComparison.Ordinal) >= 0 ||
+                    child.name.IndexOf("Visitor Vehicle", System.StringComparison.Ordinal) >= 0)
+                {
+                    return child;
+                }
+            }
+            return null;
+        }
+    }
+
+    /// <summary>The body's longest horizontal side, in metres (bus and cloud keep their own).</summary>
+    public float BodyLengthForVerification
+    {
+        get
+        {
+            Renderer[] renderers = GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0) return 0f;
+            Bounds bounds = GymShared.CombinedBounds(renderers);
+            return Mathf.Max(bounds.size.x, bounds.size.z);
+        }
+    }
+
+    public bool RiderAnchorForVerification => riderAnchor != null;
+
+
+    // Everything the spawn added around the model, so a second load cannot
+    // double colliders, cabins, seats, lamps or wheel spinners.
+    private void ClearModelForVersion()
+    {
+        cabin = null;
+        driverSeat = null;
+        riderAnchor = null;
+        cloudTop = null;
+        for (int i = transform.childCount - 1; i >= 0; i--)
+        {
+            Transform child = transform.GetChild(i);
+            if (child.name.IndexOf("Goku Rider Anchor", System.StringComparison.Ordinal) >= 0 ||
+                child.name.IndexOf("Vehicle Model", System.StringComparison.Ordinal) >= 0 ||
+                child.name.IndexOf("Remake Vehicle", System.StringComparison.Ordinal) >= 0 ||
+                child.name.IndexOf("Visitor Vehicle", System.StringComparison.Ordinal) >= 0)
+            {
+                Destroy(child.gameObject);
+            }
+        }
+        // The collider and rigidbody stay: the next body reuses and resizes them.
+        GymVehicleCabin[] cabins = GetComponents<GymVehicleCabin>();
+        for (int i = 0; i < cabins.Length; i++) Destroy(cabins[i]);
+        GymVehicleDriverSeat[] seats = GetComponents<GymVehicleDriverSeat>();
+        for (int i = 0; i < seats.Length; i++) Destroy(seats[i]);
+        GymVehicleBodyRoll[] rolls = GetComponents<GymVehicleBodyRoll>();
+        for (int i = 0; i < rolls.Length; i++) Destroy(rolls[i]);
+        // Lamp and wheel helpers stay attached: they look the new renderers up
+        // themselves and destroying them here would race the deferred Destroy.
+    }
+
 }

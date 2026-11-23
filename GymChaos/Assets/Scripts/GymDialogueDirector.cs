@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -416,10 +416,10 @@ public sealed class GymDialogueDirector : MonoBehaviour
         // End of the friendly path: Hank trusts you enough to offer his stash.
         result.nodes.Add(dealer
             ? new DialogueNode(name,
-                "You're good people. Stash is where it always is. Press F when you want something, and keep it quiet.")
+                "You're good people, {name}. Stash is where it always is. Press F when you want something, and keep it quiet.")
                 .AddChoice("Will do.", -1, 0)
             : new DialogueNode(name,
-                "You're alright, kid. Listen... I don't just collect bottles. I've got the stuff the shop won't sell you. The real stuff. Makes you a monster in there. Costs you out here. Interested?")
+                "You're alright, {name}. Listen... I don't just collect bottles. I've got the stuff the shop won't sell you. The real stuff. Makes you a monster in there. Costs you out here. Interested?")
                 .AddChoice("Yeah. Show me what you've got.", HomelessDealNode, 0,
                     () => GymExperienceService.Active?.UnlockHankDealer())
                 .AddChoice("No thanks, I'm clean.", -1, 1));
@@ -466,6 +466,8 @@ public sealed class GymDialogueDirector : MonoBehaviour
         {
             homeless.EndConversation();
         }
+        // Talking to somebody opens their POTATO body in the appearance menu.
+        GymVersionedLooks.UnlockForSpeaker(SpeakerKey);
         Debug.Log($"GYMCHAOS_DIALOGUE_CLOSED speaker={SpeakerKey} reason={reason}", this);
         target = null;
         homeless = null;
@@ -580,7 +582,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
                     ? "You are becoming a problem people have to plan around. Locker room is through the back door. Cool off before you start another scene."
                     : positiveRep
                         ? "People have noticed you helping out. Locker room is through the back door. Get changed, then I will mark you down for today's briefing."
-                        : "You're new here. Locker room is through the back door. Get changed before you start your first workout.")
+                        : "You're new here, {name}. Locker room is through the back door. Get changed before you start your first workout.")
                 .AddChoice("I'll check it out.", 1, 3)
                 .AddChoice("I'm here to train.", 1, 0)
                 .AddChoice("I know what I'm doing.", 1, -2));
@@ -615,7 +617,7 @@ public sealed class GymDialogueDirector : MonoBehaviour
                         ? "You keep bringing bad energy into the room. Train with me, or leave the drama outside."
                         : positiveRep
                             ? "I heard you helped some people today. Nice! Now, are we training or talking?"
-                            : "Hey! You look strong! Want to train together? I was going to eat, but one more round sounds better.",
+                            : "Hey, {name}! You look strong! Want to train together? I was going to eat, but one more round sounds better.",
                     "Show me one clean technique.",
                     "Good choice. Clean first, power second. If the stance breaks, reset and try again.",
                     3,
@@ -779,6 +781,11 @@ public sealed class GymDialogueDirector : MonoBehaviour
         {
             return "Gym regular";
         }
+        return GymVisualStyle.DisplayName(fighter.Identity, GetOgName(fighter));
+    }
+
+    private static string GetOgName(EnemyFighter fighter)
+    {
         switch (fighter.Identity)
         {
             case BodybuilderIdentity.Manwithsuit1: return "Reception";

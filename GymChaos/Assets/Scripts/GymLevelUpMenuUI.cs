@@ -285,7 +285,7 @@ public sealed class GymLevelUpMenuUI : MonoBehaviour
             return;
         }
         int points = service.SkillPoints;
-        levelLabel.text = "LEVEL " + service.Level + "   " + points + (points == 1 ? " POINT" : " POINTS");
+        levelLabel.text = PlayerAppearance.NamePrefix("   ") + "LEVEL " + service.Level + "   " + points + (points == 1 ? " POINT" : " POINTS");
         for (int i = 0; i < Stats.Length; i++)
         {
             int rank = service.GetStatRank(Stats[i]);

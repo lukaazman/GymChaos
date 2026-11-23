@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -514,9 +514,10 @@ public sealed class GymFixerDirector : MonoBehaviour
         {
             return SummonResult.Unavailable;
         }
-        return StartVisit("Reception called " + GymFixerAgent.DisplayName + ". He is on his way", true)
-            ? SummonResult.Summoned
-            : SummonResult.Unavailable;
+        bool summoned = StartVisit("Reception called " + GymFixerAgent.DisplayName + ". He is on his way", true);
+        // Meeting Larry opens his POTATO body, like a finished conversation.
+        if (summoned) GymVersionedLooks.UnlockMember("larry");
+        return summoned ? SummonResult.Summoned : SummonResult.Unavailable;
     }
 
     private bool StartVisit(string notice, bool summoned)

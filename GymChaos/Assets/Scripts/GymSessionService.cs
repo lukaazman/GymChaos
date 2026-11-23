@@ -199,13 +199,22 @@ public sealed class GymSessionService : MonoBehaviour
     }
 
     /// <summary>Starts a separate character. Nothing is written until the world is ready.</summary>
-    public static GymCharacterSave BeginNew(string confirmedClassId)
+    public static GymCharacterSave BeginNew(string confirmedClassId, GymCharacterSave look = null)
     {
-        active = GymCharacterSave.New(confirmedClassId);
+        active = GymCharacterSave.New(confirmedClassId, look);
         activeIsNew = true;
         Context = GymNetSession.LaunchContext();
         EnsureRunner().ResetTimers();
         return active;
+    }
+
+    /// <summary>A loaded save from before names and looks gets them (customize screen); written on the next save.</summary>
+    public static void ApplyLook(GymCharacterSave look)
+    {
+        if (active == null || look == null) return;
+        active.CopyLook(look);
+        MarkDirty();
+        Debug.Log("GYMCHAOS_SAVE_LOOK_APPLIED slot=" + active.slotId + " name=" + active.username);
     }
 
     public static bool BeginLoad(string slotId, out string error)
@@ -609,7 +618,13 @@ public sealed class GymSessionService : MonoBehaviour
     /// <summary>The host's world as a guest needs it to join: clock, broken glass, fixer ages.</summary>
     public static GymNetWorldSnapshot CaptureWorldSnapshot()
     {
-        var world = new GymNetWorldSnapshot { brokenPanels = GlassShatterPanel.CaptureShatteredIds() };
+        var world = new GymNetWorldSnapshot
+        {
+            brokenPanels = GlassShatterPanel.CaptureShatteredIds(),
+            // The host's appearance table wins for everybody in the room.
+            slopMembers = active != null ? active.slopMembers : null,
+            slopVehicles = active != null ? active.slopVehicles : null
+        };
         if (GymTimeOfDay.Instance != null)
         {
             world.worldTime = GymTimeOfDay.Instance.Time01;
@@ -623,6 +638,7 @@ public sealed class GymSessionService : MonoBehaviour
     public static bool ApplyWorldSnapshot(GymNetWorldSnapshot world)
     {
         if (world == null || GymTimeOfDay.Instance == null) return false;
+        GymVersionedLooks.ApplyHostVersions(world.slopMembers, world.slopVehicles);
         GymTimeOfDay.Instance.RestoreSession(world.worldTime, world.worldDay);
         GlassShatterPanel.ResetShatteredRegistry();
         // Glass the host has repaired since (a repair message may have been missed): grow it back.

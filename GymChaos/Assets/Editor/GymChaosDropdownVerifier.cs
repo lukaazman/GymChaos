@@ -125,9 +125,9 @@ public sealed class GymChaosDropdownVerifierRunner : MonoBehaviour
             yield return null;
         }
         until = Time.realtimeSinceStartup + 20f;
-        while (menu.Current == GymSessionMenu.State.ClassSelect && Time.realtimeSinceStartup < until)
+        while (menu.InNewCharacterPages && Time.realtimeSinceStartup < until)
         {
-            menu.ConfirmClass();
+            menu.ConfirmNewCharacterForVerification("Tester");
             yield return null;
         }
         until = Time.realtimeSinceStartup + 60f;

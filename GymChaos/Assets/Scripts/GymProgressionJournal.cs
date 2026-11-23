@@ -36,6 +36,7 @@ public sealed class GymProgressionJournal : MonoBehaviour
     private GameObject completionPanel;
     private GymJournalPreview preview;
     private Text subtitle;
+    private Text headingText;
     private Text levelLabel;
     private Text xpText;
     private RectTransform xpFill;
@@ -257,7 +258,7 @@ public sealed class GymProgressionJournal : MonoBehaviour
 
         journalPanel = CreateSheet(canvasRect, "Journal Sheet", PanelWidth, PanelHeight);
         RectTransform panel = (RectTransform)journalPanel.transform;
-        CreateHeading(panel, titleFont, "PROGRESSION");
+        headingText = CreateHeading(panel, titleFont, "PROGRESSION");
         subtitle = Label("Subtitle", panel, labelFont, string.Empty, 30, PersonaMenuStyle.Ink,
             TextAnchor.MiddleLeft, Padding + 360f, 34f, 700f, 40f);
         BuildExperience(panel, labelFont);
@@ -293,7 +294,7 @@ public sealed class GymProgressionJournal : MonoBehaviour
         return sheet;
     }
 
-    private void CreateHeading(RectTransform panel, Font titleFont, string heading)
+    private Text CreateHeading(RectTransform panel, Font titleFont, string heading)
     {
         GameObject title = new GameObject("Heading Plate", typeof(RectTransform));
         title.transform.SetParent(panel, false);
@@ -319,6 +320,14 @@ public sealed class GymProgressionJournal : MonoBehaviour
         Shadow shadow = text.gameObject.AddComponent<Shadow>();
         shadow.effectColor = new Color(0f, 0f, 0f, 0.85f);
         shadow.effectDistance = new Vector2(3f, -3f);
+        // A long name shrinks to the plate instead of running into the subtitle.
+        text.resizeTextForBestFit = true;
+        text.resizeTextMinSize = 22;
+        text.resizeTextMaxSize = 52;
+        text.horizontalOverflow = HorizontalWrapMode.Wrap;
+        text.rectTransform.offsetMin = new Vector2(12f, 0f);
+        text.rectTransform.offsetMax = new Vector2(-12f, 0f);
+        return text;
     }
 
     private void BuildExperience(RectTransform panel, Font labelFont)
@@ -505,6 +514,8 @@ public sealed class GymProgressionJournal : MonoBehaviour
             return;
         }
 
+        headingText.text = PlayerAppearance.NamePrefix(string.Empty).Length > 0
+            ? PlayerAppearance.NamePrefix(string.Empty) : "PROGRESSION";
         subtitle.text = "DAY " + state.gymDay + "   ·   LEVEL " + state.level +
             "   ·   REPUTATION " + state.reputation + "   ·   STAMPS " + state.loyaltyStamps;
         int next = Mathf.Max(1, service.ExperienceToNextLevel);
