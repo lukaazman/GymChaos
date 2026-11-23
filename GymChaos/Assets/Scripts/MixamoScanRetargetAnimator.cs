@@ -100,6 +100,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private Vector3 modelBaseLocalScale;
     private EnemyFighter owningFighter;
     private int treadmillGroundingSamples;
+    private AnimationClip treadmillGroundingClip;
     private float treadmillMinimumRootLocalY;
     private float treadmillMaximumRootLocalY;
     private bool moving;
@@ -141,7 +142,8 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
     private string lastSampledBranch;
     private bool hasSampledPose;
     private int ExpectedAuthoredClipCount =>
-        configuredIdentity == BodybuilderIdentity.Mark ? 3 :
+        configuredIdentity == BodybuilderIdentity.Mark ||
+        configuredIdentity == BodybuilderIdentity.Manwithsuit1 ? 3 :
         configuredIdentity == BodybuilderIdentity.Policeman ? 7 : 11;
 
     public bool HasRunClip => runClip != null;
@@ -1525,7 +1527,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
             EmitAnimationMarker(MotionState.Running, locomotion,
                 useRunningClip ? "running" : "walking");
             SampleDirectLoop(locomotion, runTime);
-            RecordTreadmillWalkingGrounding();
+            RecordTreadmillWalkingGrounding(locomotion);
             return;
         }
 
@@ -1545,7 +1547,7 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         SampleDirectLoop(idleClip, idleTime);
     }
 
-    private void RecordTreadmillWalkingGrounding()
+    private void RecordTreadmillWalkingGrounding(AnimationClip locomotion)
     {
         if (owningFighter == null)
         {
@@ -1557,8 +1559,10 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         bool settledTreadmill = station != null &&
             rig != null && rig.Root != null &&
             Mathf.Abs(owningFighter.transform.position.y - station.EnemyPosition.y) <= 0.02f;
-        if (!settledTreadmill)
+        // Bounce is per gait: a run/walk switch changes the clip's ground offset.
+        if (!settledTreadmill || locomotion != treadmillGroundingClip)
         {
+            treadmillGroundingClip = locomotion;
             treadmillGroundingSamples = 0;
             treadmillMinimumRootLocalY = float.PositiveInfinity;
             treadmillMaximumRootLocalY = float.NegativeInfinity;
@@ -2080,20 +2084,6 @@ public sealed class MixamoScanRetargetAnimator : MonoBehaviour
         return separator >= 0 ? marker.Substring(separator + 1) : marker;
     }
 
-    private static string ResourcePath(BodybuilderIdentity identity)
-    {
-        switch (identity)
-        {
-            case BodybuilderIdentity.Arnold: return "Characters/Enemies/arnold_authored";
-            case BodybuilderIdentity.Cbum: return "Characters/Enemies/cbum_authored";
-            case BodybuilderIdentity.Zyzz: return "Characters/Enemies/zyzz_authored";
-            case BodybuilderIdentity.Ronnie: return "Characters/Enemies/ronnie_authored";
-            case BodybuilderIdentity.JayCutler: return "Characters/Enemies/jaycutler_authored";
-            case BodybuilderIdentity.Goku: return "Characters/Enemies/goku_authored";
-            case BodybuilderIdentity.Mark: return "Characters/Enemies/mark_authored";
-            case BodybuilderIdentity.Davie: return "Characters/Enemies/davie_authored";
-            case BodybuilderIdentity.Policeman: return "Characters/Enemies/policeman_authored";
-            default: return string.Empty;
-        }
-    }
+    private static string ResourcePath(BodybuilderIdentity identity) =>
+        ExternalRiggedCharacterVisual.ResourcePathFor(identity) ?? string.Empty;
 }

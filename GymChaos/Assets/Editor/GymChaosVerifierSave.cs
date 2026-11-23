@@ -1,4 +1,4 @@
-#if UNITY_EDITOR
+﻿#if UNITY_EDITOR
 using UnityEditor;
 using UnityEngine;
 
@@ -21,6 +21,8 @@ public static class GymChaosVerifierSave
     private const string BackupKey = "GymChaos.VerifierSave.Backup";
     private const string BackupPresentKey = "GymChaos.VerifierSave.BackupPresent";
     private const string ProcessNeutralizedKey = "GymChaos.VerifierSave.ProcessNeutralized";
+    // Verifiers also start in the DEFAULT visual style; the player's choice comes back on restore.
+    private const string StyleBackupKey = "GymChaos.VerifierSave.StyleBackup";
 
     static GymChaosVerifierSave()
     {
@@ -85,6 +87,7 @@ public static class GymChaosVerifierSave
         PlayerPrefs.Save();
         GymChaosVerifierPrefs.DeleteKey(BackupKey);
         GymChaosVerifierPrefs.DeleteKey(BackupPresentKey);
+        GymChaosVerifierPrefs.DeleteKey(StyleBackupKey);
     }
 
     private static void PlayModeChanged(PlayModeStateChange change)

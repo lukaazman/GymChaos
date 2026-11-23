@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -25,6 +25,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
     public SkinnedMeshRenderer RuntimeRenderer => runtimeRenderer;
     public BodybuilderEnemyVisual.Rig RuntimeRig => runtimeRig;
     public string RuntimeResourcePath => runtimeResourcePath;
+    public BodybuilderIdentity Identity => runtimeIdentity;
     public float RuntimeAuthoredHeight => runtimeAuthoredHeight;
 
     private Transform runtimeModelRoot;
@@ -69,9 +70,15 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             { BodybuilderIdentity.Manwithsuit1, "Characters/Reception/manwithsuit1_mixamo_rigged" }
         };
 
+    /// <summary>The model to load: the remake in the Remake visual style when it has one, else the DEFAULT asset.</summary>
+    public static string ResourcePathFor(BodybuilderIdentity identity) =>
+        GymVisualStyle.TryRemake(identity, out string remake, out _) ? remake
+        : ResourcePaths.TryGetValue(identity, out string og) ? og : null;
+
     public static bool TryBuild(GameObject owner, BodybuilderIdentity identity)
     {
-        if (!ResourcePaths.TryGetValue(identity, out string resourcePath))
+        string resourcePath = ResourcePathFor(identity);
+        if (resourcePath == null)
         {
             return false;
         }
@@ -84,6 +91,40 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
         ExternalRiggedCharacterVisual visual = owner.AddComponent<ExternalRiggedCharacterVisual>();
         return visual.Build(prefab, identity, resourcePath);
+    }
+
+    /// <summary>
+    /// Swaps the body to the version now chosen for this character (the
+    /// appearance menu) without reloading the scene: the old model, its
+    /// animator, aura and label go, and the same build path runs again on the
+    /// new asset. Combat state on the actor is untouched.
+    /// </summary>
+    public bool RebuildForVersion()
+    {
+        if (runtimeModelRoot == null) return false;
+        string path = ResourcePathFor(runtimeIdentity);
+        if (path == null) return false;
+        if (path == runtimeResourcePath) return true;
+        GameObject prefab = Resources.Load<GameObject>(path);
+        if (prefab == null) return false;
+
+        Destroy(runtimeModelRoot.gameObject);
+        MixamoScanRetargetAnimator[] retargeters = GetComponents<MixamoScanRetargetAnimator>();
+        for (int i = 0; i < retargeters.Length; i++) Destroy(retargeters[i]);
+        ManWithSuitIdleAnimator[] idles = GetComponents<ManWithSuitIdleAnimator>();
+        for (int i = 0; i < idles.Length; i++) Destroy(idles[i]);
+        GokuAura[] auras = GetComponents<GokuAura>();
+        for (int i = 0; i < auras.Length; i++) Destroy(auras[i]);
+        if (runtimeFaceCalibrationMesh != null) Destroy(runtimeFaceCalibrationMesh);
+
+        runtimeModelRoot = null;
+        runtimeRenderer = null;
+        runtimeRig = null;
+        runtimeFaceCensor = null;
+        runtimeFaceCalibrationMesh = null;
+        bool built = Build(prefab, runtimeIdentity, path);
+        Debug.Log($"GYMCHAOS_VISUAL_REBUILD identity={runtimeIdentity} path={path} built={built}", this);
+        return built;
     }
 
     private bool Build(GameObject prefab, BodybuilderIdentity identity, string resourcePath)
@@ -121,7 +162,9 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
         EnemyMeshHitboxRig.Configure(gameObject, rig, renderer);
         bool neutralNpc = identity == BodybuilderIdentity.Manwithsuit1;
-        if (neutralNpc)
+        // The DEFAULT reception scan rests holding its towel up and only waves it;
+        // the remake rests in a T-pose and plays its authored idles instead.
+        if (neutralNpc && !GymVisualStyle.TryRemake(identity, out _, out _))
         {
             ManWithSuitIdleAnimator idleAnimator = gameObject.AddComponent<ManWithSuitIdleAnimator>();
             idleAnimator.Configure(rig);
@@ -178,7 +221,10 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
         runtimeResourcePath = resourcePath;
         runtimeRig = rig;
         runtimeFaceCensor = modelRoot.GetComponentInChildren<FaceCensorSettings>(true);
-        if (BodybuilderEnemyVisual.RequiresImportedFaceRefresh(identity))
+        // A remake places its bar on the authored EyeAnchor once; only the
+        // DEFAULT scans need the runtime face re-measurement.
+        if (BodybuilderEnemyVisual.RequiresImportedFaceRefresh(identity) &&
+            GymShared.FindDescendant(modelRoot.transform, BodybuilderEnemyVisual.EyeAnchorName) == null)
         {
             runtimeFaceCalibrationMesh = new Mesh
             {
@@ -411,7 +457,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
 
     private static string resourcePathForLog(BodybuilderIdentity identity)
     {
-        return ResourcePaths.TryGetValue(identity, out string value) ? value : "missing";
+        return ResourcePathFor(identity) ?? "missing";
     }
 
     private static SkinnedMeshRenderer FindPrimaryRenderer(GameObject modelRoot)
@@ -520,9 +566,19 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             : StandardGameplayHeight;
     }
 
+    private static Shader toonShader;
+
     private static void PreserveImportedTextures(GameObject modelRoot, BodybuilderIdentity identity)
     {
-        Shader shader = Shader.Find("GymChaos/BodybuilderUnlit");
+        bool remake = GymVisualStyle.TryRemake(identity, out _, out string remakeTexture);
+        // The remade Goku is anime-drawn: the toon shader adds his ink outline.
+        if (remake && identity == BodybuilderIdentity.Goku && toonShader == null)
+        {
+            toonShader = Shader.Find("GymChaos/BodybuilderToon");
+        }
+        Shader shader = remake && identity == BodybuilderIdentity.Goku && toonShader != null
+            ? toonShader
+            : Shader.Find("GymChaos/BodybuilderUnlit");
         if (shader == null)
         {
             shader = GymMaterialLibrary.UnlitShader;
@@ -537,7 +593,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
             return;
         }
         Texture2D originalTexture = Resources.Load<Texture2D>(
-            "Characters/Textures/" + GetTextureResourceName(identity));
+            remake ? remakeTexture : "Characters/Textures/" + GetTextureResourceName(identity));
 
         SkinnedMeshRenderer[] renderers = modelRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true);
         for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
@@ -577,7 +633,7 @@ public sealed class ExternalRiggedCharacterVisual : MonoBehaviour
                 materials[materialIndex] = material;
             }
             renderer.sharedMaterials = materials;
-            if (originalTexture != null)
+            if (originalTexture != null && !remake)  // scan atlases only: the remakes have clean UV islands
             {
                 renderer.sharedMesh = ScanUvInset.Apply(renderer.sharedMesh, originalTexture);
             }

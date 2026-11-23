@@ -11,6 +11,23 @@ public sealed class GymTimeOfDay : MonoBehaviour
 {
     public static GymTimeOfDay Instance { get; private set; }
 
+    /// <summary>Studio cameras (journal, character preview) render with the sun and moon off.</summary>
+    public void SuspendWorldLights(bool suspend)
+    {
+        if (suspend)
+        {
+            lightsOn[0] = sunLight != null && sunLight.enabled;
+            lightsOn[1] = moonLight != null && moonLight.enabled;
+            if (sunLight != null) sunLight.enabled = false;
+            if (moonLight != null) moonLight.enabled = false;
+            return;
+        }
+        if (sunLight != null) sunLight.enabled = lightsOn[0];
+        if (moonLight != null) moonLight.enabled = lightsOn[1];
+    }
+
+    private readonly bool[] lightsOn = new bool[2];
+
     [SerializeField, Min(30f)] private float simulatedDayLengthSeconds = 90f;
     [SerializeField, Range(0f, 1f)] private float startTime01 = 0.24f;
 
@@ -398,9 +415,12 @@ public sealed class GymTimeOfDay : MonoBehaviour
         SetMaterialColor(moonMaterial, Color.Lerp(NightHorizon, moonColor, night));
         SetMaterialEmission(moonMaterial, moonColor * (2.2f * night));
 
+        // One look for the whole gym: the DEFAULT day/night values.
+        GymVisualStyle.Look look = GymVisualStyle.OgLook;
         if (sunLight != null)
         {
-            sunLight.intensity = 1.7f * daylight;
+            sunLight.intensity = 1.7f * daylight * look.Sun;
+            sunLight.shadowStrength = look.ShadowStrength;
             sunLight.color = sunColor;
             sunLight.transform.rotation = Quaternion.LookRotation(
                 (sunPosition - roomCenter).normalized, Vector3.up);
@@ -440,11 +460,11 @@ public sealed class GymTimeOfDay : MonoBehaviour
         RenderSettings.ambientSkyColor = Color.Lerp(DayAmbientSky, NightAmbientSky, night);
         RenderSettings.ambientEquatorColor = Color.Lerp(DayAmbientEquator, NightAmbientEquator, night);
         RenderSettings.ambientGroundColor = Color.Lerp(DayAmbientGround, NightAmbientGround, night);
-        RenderSettings.ambientIntensity = Mathf.Lerp(0.85f, 0.55f, night);
+        RenderSettings.ambientIntensity = Mathf.Lerp(0.85f, 0.55f, night) * look.Ambient;
         // Light distance haze in the horizon colour: towers recede, the lot stays crisp.
         RenderSettings.fog = true;
         RenderSettings.fogMode = FogMode.ExponentialSquared;
-        RenderSettings.fogDensity = Mathf.Lerp(DayFogDensity, NightFogDensity, night);
+        RenderSettings.fogDensity = Mathf.Lerp(DayFogDensity, NightFogDensity, night) * look.Fog;
         RenderSettings.fogColor = Color.Lerp(DayHorizon * 0.92f, NightFog, night);
         RenderSettings.sun = useSun ? sunLight : moonLight;
         UpdateProceduralSkybox(night);

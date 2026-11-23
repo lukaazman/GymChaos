@@ -32,9 +32,14 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / 'GymChaos/Assets/Resources/Characters/Textures/player_authored.png'
-OUT = ROOT / 'GymChaos/Assets/Resources/Player/Outfits'
-DEBUG = ROOT / '.tools/tops'
+# --remake: the remade player's atlas (export_player_uv_positions.py --remake);
+# it has no painted tank, so the whole atlas reads as skin.
+REMAKE = '--remake' in sys.argv
+SRC = ROOT / ('GymChaos/Assets/Resources/Characters/Remake/Textures/player.png' if REMAKE
+              else 'GymChaos/Assets/Resources/Characters/Textures/player_authored.png')
+OUT = ROOT / 'GymChaos/Assets/Resources/Player/Outfits' / ('Remake' if REMAKE else '')
+UVPOS = ROOT / ('.tools/player-uvpos-remake.npz' if REMAKE else '.tools/player-uvpos.npz')
+DEBUG = ROOT / ('.tools/tops-remake' if REMAKE else '.tools/tops')
 INFLATE_RANGE = 0.04
 
 COLORS = {
@@ -226,8 +231,96 @@ def sample_canvas(canvas, x0, ztop, scale, x, z):
     return cv2.remap(canvas, px, pz, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
 
+# The remade Oversized part's planar layout (Tools/build_remake_player.py planar_uv):
+# 2048x512, front half then back half, x in body heights -0.5..0.5, z 0.85 (top) to 0.35.
+PLANAR_Z0, PLANAR_Z1 = 0.35, 0.85
+# The remade body's neck sits this much higher (in body heights) than the scan's.
+REMAKE_NECK_SHIFT = 0.049
+CROWN = [(0.04, 0.10), (0.96, 0.10), (0.90, 0.86), (0.71, 0.50), (0.50, 0.94), (0.29, 0.50), (0.11, 0.86)]
+
+
+def remade_oversized(name, color):
+    """OG Oversized design on the remade tee: plain heather jersey, the crown print on the
+    wearer's left chest and KING arched across the upper back."""
+    w, h = 2048, 512
+    rng = np.random.default_rng(11)
+    heather = cv2.GaussianBlur(rng.normal(0, 1, (h, w)).astype(np.float32), (0, 0), 1.4)
+    heather = 1 + 0.04 * heather / max(heather.std(), 1e-6)
+    out = np.array(color, np.float32)[None, None, :] * 0.92 * heather[..., None]
+    cols = np.arange(w, dtype=np.float32)[None, :].repeat(h, 0)
+    rows = np.arange(h, dtype=np.float32)[:, None].repeat(w, 1)
+    zn = PLANAR_Z1 - rows / h * (PLANAR_Z1 - PLANAR_Z0)
+    back = cols >= w / 2
+    xn = np.where(back, (0.75 - cols / w) / 0.5, (cols / w - 0.25) / 0.5)
+    king, kx0, kz1, kscale = king_canvas()
+    letters = sample_canvas(king, kx0, kz1, kscale, -xn, zn - REMAKE_NECK_SHIFT) * back
+    out = out * (1 - letters[..., None]) + KING_GREY[None, None, :] * heather[..., None] * letters[..., None]
+    # Crown: 5 cm wide on the left pec (wearer's left is +x, front half).
+    crown = Image.new('L', (w, h), 0)
+    cx, cz, size = 0.06, 0.745, 0.036
+    to_px = lambda x, z: ((0.25 + x * 0.5) * w, (PLANAR_Z1 - z) / (PLANAR_Z1 - PLANAR_Z0) * h)  # noqa: E731
+    ImageDraw.Draw(crown).polygon([to_px(cx + (u - 0.5) * size, cz + (v - 0.5) * size * 0.8) for u, v in CROWN],
+                                  fill=255)
+    crown = np.array(crown, np.float32)[..., None] / 255.0
+    ink = np.array((0.06, 0.06, 0.07) if name == 'white' else (0.92, 0.92, 0.88), np.float32)
+    out = out * (1 - crown) + ink[None, None, :] * crown
+    Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / f'oversized_{name}.png')
+
+
+def planar_grid():
+    """Per pixel of the planar layout: scan-space x, z (the design's coordinates) and front/back."""
+    data = np.load(UVPOS)
+    w, h = 2048, 512
+    cols = np.arange(w, dtype=np.float32)[None, :].repeat(h, 0)
+    rows = np.arange(h, dtype=np.float32)[:, None].repeat(w, 1)
+    zn = PLANAR_Z1 - rows / h * (PLANAR_Z1 - PLANAR_Z0)
+    back = cols >= w / 2
+    xn = np.where(back, (0.75 - cols / w) / 0.5, (cols / w - 0.25) / 0.5)
+    top = float(data['own_top'])
+    z = np.interp(zn * top, data['own_z'], data['scan_z'])
+    ax = np.interp(np.abs(xn) * top, data['own_x'], data['scan_x'])
+    return np.sign(xn) * ax, z, back
+
+
+def remade_onyx(name, accent):
+    """OG Onyx design on the remade part: honeycomb V panel in front, inverted triangle behind,
+    raglan seams and sleeve cuffs in the accent colour on black knit."""
+    x, z, back = planar_grid()
+    ax = np.abs(x)
+    front, backside = ~back, back
+    torso, sleeve = ax <= TORSO_HALF_WIDTH, ax > TORSO_HALF_WIDTH
+    v_left = [(-0.118, 0.775), (-0.085, 0.69), (-0.04, 0.6), (0.0, 0.575)]
+    d_v = np.minimum(polyline_distance(x, z, v_left), polyline_distance(x, z, [(-px, pz) for px, pz in v_left]))
+    edge_x = np.interp(z, [0.575, 0.6, 0.69, 0.775], [0.0, 0.04, 0.085, 0.118])
+    inside_v = (ax < edge_x) & (z > 0.575) & (z < 0.785)
+    d_tri = np.minimum(polyline_distance(x, z, [(-0.112, 0.786), (0.0, 0.62)]),
+                       polyline_distance(x, z, [(0.112, 0.786), (0.0, 0.62)]))
+    inside_tri = (ax < (z - 0.62) / (0.786 - 0.62) * 0.112) & (z > 0.62)
+    d_rag = polyline_distance(ax, z, [(NECK_HALF_WIDTH - 0.004, 0.792), (0.1, 0.765), (0.128, 0.712)])
+    d_obl = polyline_distance(ax, z, [(0.06, 0.6), (0.085, 0.53)])
+    line_w = 0.0022
+    line = lambda d, where: np.where(where, smoothstep(line_w, line_w * 0.4, d), 0)  # noqa: E731
+    accent_line = np.maximum.reduce([line(d_v, front & torso), line(d_obl, front & torso),
+                                     line(d_tri, backside & torso), line(d_rag, ~sleeve | (ax < 0.14))])
+    # Cuff band just inside the sleeve end (by position on the level T-posed arm).
+    data = np.load(UVPOS)  # the part's sleeve ends 0.15 m past the shoulder joint (build_remake_player ONYX)
+    end = np.interp(data['own_x'][1] + 0.15, data['own_x'], data['scan_x'])
+    cuff = sleeve & (ax > end - 0.017) & (ax < end - 0.010)
+    accent_line = np.maximum(accent_line, cuff.astype(np.float32))
+    panel = cv2.GaussianBlur(((front & torso & inside_v) | (backside & torso & inside_tri)).astype(np.float32),
+                             (0, 0), 0.6)
+    knit = panel * (0.25 + 0.75 * honeycomb(x, z, 0.0055)) * 0.55
+    rng = np.random.default_rng(7)
+    noise = cv2.GaussianBlur(rng.normal(0, 1, x.shape).astype(np.float32), (0, 0), 1.2)
+    tight = 1 + 0.035 * noise / max(noise.std(), 1e-6)
+    acc = np.array(accent, np.float32)[None, None, :]
+    mix = np.clip(np.maximum(knit, accent_line * 0.9), 0, 1)[..., None]
+    out = (ONYX_BASE[None, None, :] * (1 - mix) + acc * mix) * tight[..., None]
+    Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / f'onyx_{name}.png')
+
+
 def main():
-    data = np.load(ROOT / '.tools/player-uvpos.npz')
+    data = np.load(UVPOS)
     uv, co, nrm = data['uv'], data['co'], data['nrm']
     src = np.array(Image.open(SRC).convert('RGB'), np.float32) / 255.0
     size = src.shape[0]
@@ -239,7 +332,8 @@ def main():
     ax = np.abs(x)
 
     lum = src.mean(2)
-    tank = np.array(Image.open(ROOT / '.tools/shirt-mask.png').convert('L')) > 127
+    tank = (np.zeros(lum.shape, bool) if REMAKE else
+            np.array(Image.open(ROOT / '.tools/shirt-mask.png').convert('L')) > 127)
     cloth = tank & (lum < 0.14)
     skin = valid & ~cloth
     detail = np.ones_like(lum)
@@ -310,7 +404,8 @@ def main():
     under = src.copy()
     tank_cloth = cloth & valid & (z > TANK_HEM - 0.004)
     under[tank_cloth] = skin_tone[None, :] * np.clip(0.85 + 0.3 * (detail - 1), 0.75, 1.1)[tank_cloth][:, None]
-    Image.fromarray(np.uint8(np.clip(under, 0, 1) * 255)).save(OUT / 'under_shell_body.png')
+    if not REMAKE:  # the remade body keeps its own skin texture under every top
+        Image.fromarray(np.uint8(np.clip(under, 0, 1) * 255)).save(OUT / 'under_shell_body.png')
 
     # ---------------------------------------------------------- oversized
     king, kx0, kz1, kscale = king_canvas()
@@ -390,6 +485,9 @@ def main():
         shirt = fabric * (1 - king_mask[..., None]) + text * king_mask[..., None]
         mark = np.array((0.93, 0.93, 0.90), np.float32)[None, None, :]
         shirt = shirt * (1 - logo[..., None]) + mark * logo[..., None]
+        if REMAKE:  # the authored tee has its own front/back layout (remade_oversized)
+            remade_oversized(name, color)
+            continue
         out[over] = shirt[over]
         Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / f'oversized_{name}.png')
 
@@ -433,12 +531,17 @@ def main():
     # geometry gives the muscle definition under the lights.
     tight = weave
     for name, accent in ONYX_ACCENT.items():
+        if REMAKE:  # the authored Onyx part has the planar front/back layout too
+            remade_onyx(name, accent)
+            continue
         out = onyx_src.copy()
         out[onyx_gutter] = ONYX_BASE
         acc = np.array(accent, np.float32)[None, None, :]
         base = ONYX_BASE[None, None, :] * np.ones_like(src)
         mix = np.clip(np.maximum(knit, accent_line * 0.9), 0, 1)[..., None]
         shirt = (base * (1 - mix) + acc * mix) * tight[..., None]
+        if REMAKE:  # same for the authored Onyx part: plain black knit outside the design
+            out = base * tight[..., None]
         out[onyx] = shirt[onyx]
         Image.fromarray(np.uint8(np.clip(out, 0, 1) * 255)).save(OUT / f'onyx_{name}.png')
 
@@ -454,6 +557,8 @@ def main():
     # Keep the collar close to the neck.
     inflate *= 1 - 0.7 * smoothstep(0.765, 0.792, z) * (ax < 0.1)
     def write_mask(name, cover, amount, painted, edge):
+        if REMAKE:  # the remade player wears authored garments: textures only, no shell masks
+            return
         shell = np.zeros((size, size, 4), np.uint8)
         shell[..., 0] = np.where(cover, 255, 0)
         shell[..., 1] = np.uint8(np.clip(amount / INFLATE_RANGE, 0, 1) * 255) * cover

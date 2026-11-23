@@ -133,6 +133,11 @@ public static class GymChaosFixerVerifier
             "Jolly Dog must not carry a damageable fighter or hitboxes");
         Require(Mathf.Abs(dog.MeasuredHeight - GymFixerAgent.GameplayHeight) < 0.08f,
             $"Jolly Dog height {dog.MeasuredHeight:F2} is not ~{GymFixerAgent.GameplayHeight}");
+        // The dog never wears the black eye bar, in either style.
+        bool eyeBar = dog.GetComponentInChildren<FaceCensorSettings>(true) != null;
+        Require(!eyeBar, "Jolly Dog wears an eye bar");
+        Debug.Log($"GYMCHAOS_FIXER_STYLE remake={GymVersionedLooks.IsSlop("larry")} eyeBar={eyeBar} " +
+            $"name={GymFixerAgent.DisplayName}");
         fixers.SetSpawnSuspendedForVerification(true);
         GymVisitorDirector visitors = GymVisitorDirector.Instance;
         PlayerMovement player = UnityEngine.Object.FindAnyObjectByType<PlayerMovement>();
@@ -446,19 +451,32 @@ public static class GymChaosFixerVerifier
         return null;
     }
 
+    // Props that stay where they are put, best first. A ball, foam roller or
+    // paper towel rolls away after the restore, so the fixer's repair could
+    // not be judged; the scene order (FindObjectsByType) picked those at random.
+    private static readonly WeightType[] StableProps =
+        { WeightType.StepPlatform, WeightType.YogaMat, WeightType.Plate20, WeightType.Plate10, WeightType.Plate5,
+          WeightType.Plate, WeightType.EzBar };
+
     private static PickupItem FindLooseItem()
     {
         if (!GymInteriorBuilder.TryGetMainGymBounds(out Bounds gym)) return null;
+        PickupItem best = null;
+        int bestRank = int.MaxValue;
         foreach (PickupItem item in UnityEngine.Object.FindObjectsByType<PickupItem>(FindObjectsSortMode.None))
         {
             Rigidbody body = item.GetComponent<Rigidbody>();
-            if (body == null || body.isKinematic || item.IsHeld || item.ItemType == WeightType.None ||
-                item.ItemType == WeightType.Radio || item.ItemType == WeightType.Barbell) continue;
+            int rank = Array.IndexOf(StableProps, item.ItemType);
+            if (body == null || body.isKinematic || item.IsHeld || rank < 0) continue;
             Vector3 position = item.transform.position;
-            if (position.x > gym.min.x && position.x < gym.max.x && position.z > gym.min.z && position.z < gym.max.z)
-                return item;
+            if (position.x <= gym.min.x || position.x >= gym.max.x || position.z <= gym.min.z || position.z >= gym.max.z) continue;
+            if (rank < bestRank || (rank == bestRank && string.CompareOrdinal(item.name, best.name) < 0))
+            {
+                best = item;
+                bestRank = rank;
+            }
         }
-        return null;
+        return best;
     }
 
     private static string DescribeIssues(GymFixerDirector fixers)

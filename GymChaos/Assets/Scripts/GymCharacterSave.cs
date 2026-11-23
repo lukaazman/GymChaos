@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UnityEngine;
 
 /// <summary>Which part of a character file a save may touch.</summary>
@@ -18,10 +18,31 @@ public enum GymSaveContext { Solo, Host, Join }
 [Serializable]
 public sealed class GymCharacterSave
 {
-    public const int CurrentVersion = 2;
+    // 3: the player's look and name.
+    // 4: the DEFAULT / POTATO split (the global style; retired).
+    // 5: per-character and per-vehicle POTATO versions plus their unlocks.
+    // Files from before 4 are reset to one standard character (default look
+    // and name); the create screen only asks for a missing name now.
+    public const int CurrentVersion = 5;
+    /// <summary>The one name every save from before the split loads with.</summary>
+    public const string LegacyName = "PLAYER";
     public int version = CurrentVersion;
     public string slotId;
     public string classId;
+    public string username = string.Empty;
+    public int gender;
+    public int heightCm = PlayerAppearance.DefaultMaleHeight;
+    public int skinTone = 2;
+    public int hair = 2;
+    public int hairColor;
+    public int facialHair;
+    // Appearance menu: which characters and vehicles wear their POTATO remake.
+    // The unlocked lists are the permission; a POTATO entry is never written
+    // without one. A guest replaces all four with the host's table.
+    public string[] slopMembers = Array.Empty<string>();
+    public string[] slopVehicles = Array.Empty<string>();
+    public string[] unlockedMembers = Array.Empty<string>();
+    public string[] unlockedVehicles = Array.Empty<string>();
     public string createdUtc;
     public string savedUtc;
     public double playSeconds;
@@ -66,16 +87,34 @@ public sealed class GymCharacterSave
         public float[] fixerIssueSince;
     }
 
-    public static GymCharacterSave New(string confirmedClass)
+    /// <summary>Has a name and look; false for files from before version 3.</summary>
+    public bool IsCustomized => !string.IsNullOrEmpty(username);
+
+    /// <summary>Copies the look and name (customize screen and migration).</summary>
+    public void CopyLook(GymCharacterSave look)
+    {
+        username = look.username;
+        gender = look.gender;
+        heightCm = look.heightCm;
+        skinTone = look.skinTone;
+        hair = look.hair;
+        hairColor = look.hairColor;
+        facialHair = look.facialHair;
+        PlayerAppearance.Normalize(this);
+    }
+
+    public static GymCharacterSave New(string confirmedClass, GymCharacterSave look = null)
     {
         GymClassCatalog.Get(confirmedClass);
         string now = DateTime.UtcNow.ToString("O");
-        return new GymCharacterSave
+        var save = new GymCharacterSave
         {
             slotId = Guid.NewGuid().ToString("N"), classId = confirmedClass,
             createdUtc = now, savedUtc = now, progression = new GymProgressionState(),
             stamina = 100f * GymClassCatalog.Get(confirmedClass).staminaCapacity
         };
+        if (look != null) save.CopyLook(look);
+        return save;
     }
 }
 

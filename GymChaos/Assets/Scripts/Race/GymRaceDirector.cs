@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -1584,6 +1584,9 @@ public sealed partial class GymRaceDirector : MonoBehaviour
                 }
             }
             state.raceDifficultyUnlocked = UnlockAfterRace(state.raceDifficultyUnlocked, difficulty, place);
+            // One POTATO vehicle per difficulty and race type, plus the record car.
+            GymVersionedLooks.AwardRace(difficulty, mode == RaceMode.Chaos, place == 1,
+                !tutorialRace && bestLap > 0f && Mathf.Approximately(state.raceBestLapMs, Mathf.RoundToInt(bestLap * 1000f)));
             if (place == 1)
             {
                 state.raceWins++;

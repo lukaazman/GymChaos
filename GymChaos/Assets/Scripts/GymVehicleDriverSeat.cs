@@ -115,6 +115,21 @@ public sealed class GymVehicleDriverSeat : MonoBehaviour
     public float ExitPhase => exitPhase;
     public float SeatSink => fit.Sink;
     public float HeadClearance => fit.HeadClearance;
+    // Verifier hooks: what the fit decided for this occupant.
+    public bool FitValidForVerification => fit.Valid;
+    public float InCarScaleForVerification => fit.InCarScale;
+    public float CushionLocalYForVerification => fit.CushionLocalY;
+    public float CrownAboveCushionForVerification => fit.CrownAboveCushion;
+    public float MaxSinkForVerification => MaxSinkUnscaled;
+
+    /// <summary>A cabin marker in world space, for verifier bounds checks.</summary>
+    public bool TryGetCabinMarkerForVerification(string marker, out Vector3 world)
+    {
+        world = Vector3.zero;
+        if (cabin == null || !cabin.TryGetMarker(marker, out Vector3 local)) return false;
+        world = transform.TransformPoint(local);
+        return true;
+    }
     public Vector3 LanePointWorld => fit.Valid ? transform.TransformPoint(fit.LanePointLocal) : transform.position;
     public Vector3 DoorPointWorld => fit.Valid ? transform.TransformPoint(fit.DoorPointLocal) : transform.position;
     private const float SoleBelowFootBone = 0.05f;

@@ -32,7 +32,32 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-unity-library-
 
+      # Only a failure with no compile error in the Unity log (license
+      # activation, Unity crash, lost runner) is retried, once.
       - name: Build WebGL player
+        id: build
+        continue-on-error: true
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: GymChaos
+          targetPlatform: WebGL
+          buildMethod: BuildScript.BuildWebGL
+          customParameters: -buildTarget WebGL -logFile /github/workspace/unity-ci.log
+
+      - name: Classify failure
+        id: classify
+        if: steps.build.outcome == 'failure'
+        shell: bash
+        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log >> "$GITHUB_OUTPUT"
+
+      - name: Retry WebGL build after infrastructure failure
+        id: retry
+        if: steps.classify.outputs.infra == 'true'
+        continue-on-error: true
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -43,6 +68,11 @@ jobs:
           targetPlatform: WebGL
           buildMethod: BuildScript.BuildWebGL
           customParameters: -buildTarget WebGL
+
+      - name: Fail the job
+        if: steps.build.outcome == 'failure' && steps.retry.outcome != 'success'
+        shell: bash
+        run: exit 1
 
       - name: Verify complete runtime artifact
         shell: bash

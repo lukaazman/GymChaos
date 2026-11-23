@@ -134,6 +134,22 @@ public sealed class EnemyMeshHitboxRig : MonoBehaviour
             radii.Append(segment.hitbox.name.Replace(" hitbox", "")).Append('=').Append(segment.baseRadius.ToString("F2")).Append(' ');
         }
         Debug.Log($"GYMCHAOS_HITBOX_FIT owner={name} skinFit={skinPoints != null} height={height:F2} {radii}", this);
+        // Arms, hands, shins and feet swing ahead of the body: as solid
+        // contacts they struck walls every stride and knocked the body back
+        // and sideways (walking in place, sliding along the wall). They stay
+        // colliders for hit queries; the torso, pelvis, thighs and head still
+        // take contacts (walls, the player, thrown items: one aimed at a
+        // forearm or shin passes on to the body behind it).
+        foreach (Collider part in GetComponentsInChildren<Collider>(true))
+        {
+            string partName = part.gameObject.name;
+            if (partName.EndsWith(" hitbox") && !partName.Contains("shoulder") &&
+                (partName.Contains("arm") || partName.Contains("hand") ||
+                 partName.Contains("shin") || partName.Contains("foot")))
+            {
+                part.excludeLayers = ~0;
+            }
+        }
         skinPoints = null;
         skinBones = null;
         skinOwner = null;

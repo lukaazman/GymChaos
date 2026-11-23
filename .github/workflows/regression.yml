@@ -50,7 +50,35 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-unity-library-
 
+      # A verifier failure fails the job at once. Only a failure with no verifier
+      # verdict in the Unity log (license activation, Unity crash, lost runner)
+      # is retried, once: see Tools/ci-classify-unity-failure.sh.
       - name: Run ${{ matrix.verifier }} verifier
+        id: run
+        continue-on-error: true
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: GymChaos
+          targetPlatform: StandaloneLinux64
+          buildMethod: GymChaos${{ matrix.verifier }}Verifier.Run
+          manualExit: true
+          versioning: None
+          customParameters: -nographics -logFile /github/workspace/unity-ci.log
+
+      - name: Classify failure
+        id: classify
+        if: steps.run.outcome == 'failure'
+        shell: bash
+        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log >> "$GITHUB_OUTPUT"
+
+      - name: Retry ${{ matrix.verifier }} verifier after infrastructure failure
+        id: retry
+        if: steps.classify.outputs.infra == 'true'
+        continue-on-error: true
         uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -63,3 +91,8 @@ jobs:
           manualExit: true
           versioning: None
           customParameters: -nographics
+
+      - name: Fail the job
+        if: steps.run.outcome == 'failure' && steps.retry.outcome != 'success'
+        shell: bash
+        run: exit 1

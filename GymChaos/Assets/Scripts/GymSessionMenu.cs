@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using UnityEngine;
@@ -11,9 +11,9 @@ using UnityEngine.UI;
 /// only be started once. Highlighting a class never commits it; only Confirm
 /// creates a character.
 /// </summary>
-public sealed class GymSessionMenu : MonoBehaviour
+public sealed partial class GymSessionMenu : MonoBehaviour
 {
-    public enum State { Closed, SessionChoice, ClassSelect, SaveList, SavePreview, DeleteConfirm, Error, Starting }
+    public enum State { Closed, SessionChoice, ClassSelect, Customize, SaveList, SavePreview, DeleteConfirm, Error, Starting }
 
     private const int SavesPerPage = 5;
     private static readonly string[] StatLabels =
@@ -68,6 +68,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     private GymSaveListEntry previewEntry;
 
     private Text deleteText;
+    private Text deleteEntry;
     private Button deleteCancelButton;
     private RectTransform deleteSheetRect;
     private RectTransform deleteConfirmRect;
@@ -121,6 +122,28 @@ public sealed class GymSessionMenu : MonoBehaviour
         Show(State.SessionChoice);
     }
 
+    /// <summary>Straight back into a character after the visual-style reload; no menu page shows.</summary>
+    public void LoadDirect(string slotId)
+    {
+        if (state != State.Closed) return;
+        if (!GymSessionService.BeginLoad(slotId, out string error))
+        {
+            ShowError(error, State.SessionChoice);
+            return;
+        }
+        // A save made in DEFAULT is only half dressed for POTATO: finish it first.
+        if (NeedsCreateScreen(GymSessionService.Active))
+        {
+            BeginCustomize(true);
+            return;
+        }
+        StartSession();
+    }
+
+    /// <summary>A save needs the create screen when it has no name yet.</summary>
+    public static bool NeedsCreateScreen(GymCharacterSave save) =>
+        save != null && !save.IsCustomized;
+
     /// <summary>Opens directly on the save list (after a player death); the
     /// session choice when no valid save exists.</summary>
     public void OpenLoadList()
@@ -139,6 +162,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     public void ChooseNewGame()
     {
         if (!Accepts(State.SessionChoice)) return;
+        look = null;
         highlightedClass = IndexOfClass(GymClassCatalog.BaselineId);
         selectedClass = highlightedClass;
         Show(State.ClassSelect);
@@ -174,8 +198,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     public void ConfirmClass()
     {
         if (!Accepts(State.ClassSelect)) return;
-        GymSessionService.BeginNew(SelectedClassId);
-        StartSession();
+        BeginCustomize(false);
     }
 
     public void SelectSave(string slotId)
@@ -193,6 +216,11 @@ public sealed class GymSessionMenu : MonoBehaviour
         if (!GymSessionService.BeginLoad(previewEntry.SlotId, out string error))
         {
             ShowError(error, State.SaveList);
+            return;
+        }
+        if (NeedsCreateScreen(GymSessionService.Active))
+        {
+            BeginCustomize(true);
             return;
         }
         StartSession();
@@ -213,6 +241,9 @@ public sealed class GymSessionMenu : MonoBehaviour
                 break;
             case State.SavePreview:
                 Show(State.SaveList);
+                break;
+            case State.Customize:
+                BackFromCustomize();
                 break;
             case State.DeleteConfirm:
                 deleteSlotId = null;
@@ -263,8 +294,8 @@ public sealed class GymSessionMenu : MonoBehaviour
         GymSaveListEntry entry = saves.Find(item => item.SlotId == slotId);
         if (entry == null) return;
         deleteSlotId = slotId;
-        deleteText.text = DescribeEntry(entry.Result.Data) +
-            "\n\nThis character and its backup are removed.\nThis cannot be undone.";
+        deleteEntry.text = DescribeEntry(entry.Result.Data);
+        deleteText.text = "This character and its backup are removed.\nThis cannot be undone.";
         Show(State.DeleteConfirm);
     }
 
@@ -316,6 +347,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         GameObject page =
             next == State.SessionChoice ? choicePage :
             next == State.ClassSelect ? classPage :
+            next == State.Customize ? customizePage :
             next == State.SaveList ? listPage :
             next == State.SavePreview ? previewPage :
             next == State.DeleteConfirm ? deletePage :
@@ -343,6 +375,10 @@ public sealed class GymSessionMenu : MonoBehaviour
                 RefreshClassDetails();
                 GymShared.Select(classCardButtons[highlightedClass]);
                 break;
+            case State.Customize:
+                RefreshCustomize();
+                GymShared.Select(heightSlider);
+                break;
             case State.SaveList:
                 RebuildSaveList();
                 break;
@@ -365,6 +401,8 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         choicePage.SetActive(visible == choicePage);
         classPage.SetActive(visible == classPage);
+        customizePage.SetActive(visible == customizePage);
+        if (visible != customizePage) turntable?.Hide();
         listPage.SetActive(visible == listPage);
         previewPage.SetActive(visible == previewPage);
         deletePage.SetActive(visible == deletePage);
@@ -383,6 +421,15 @@ public sealed class GymSessionMenu : MonoBehaviour
             Back();
             return;
         }
+        if (state == State.SaveList && ReadDeletePressed() && EventSystem.current != null &&
+            EventSystem.current.currentSelectedGameObject != null)
+        {
+            string selected = EventSystem.current.currentSelectedGameObject.name;
+            const string prefix = "Save Entry ";
+            if (selected.StartsWith(prefix) && int.TryParse(selected.Substring(prefix.Length), out int row) &&
+                listPageIndex * SavesPerPage + row < saves.Count)
+                RequestDelete(saves[listPageIndex * SavesPerPage + row].SlotId);
+        }
         // A mouse click on empty space clears uGUI focus; restore it so
         // keyboard and controller navigation never dead-ends.
         if (EventSystem.current != null && EventSystem.current.currentSelectedGameObject == null &&
@@ -394,12 +441,23 @@ public sealed class GymSessionMenu : MonoBehaviour
                     GymShared.Select(loadGameButton.gameObject.activeSelf ? loadGameButton : newGameButton);
                     break;
                 case State.ClassSelect: GymShared.Select(classCardButtons[highlightedClass]); break;
+                case State.Customize: GymShared.Select(heightSlider); break;
                 case State.SaveList: GymShared.Select(listBackButton); break;
                 case State.SavePreview: GymShared.Select(previewLoadButton); break;
                 case State.DeleteConfirm: GymShared.Select(deleteCancelButton); break;
                 case State.Error: GymShared.Select(errorBackButton); break;
             }
         }
+    }
+
+    private static bool ReadDeletePressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        return keyboard != null && keyboard.deleteKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Delete);
+#endif
     }
 
     private static bool ReadCancelPressed()
@@ -437,6 +495,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         BuildChoicePage();
         BuildClassPage();
+        BuildCustomizePage();
         BuildListPage();
         BuildPreviewPage();
         BuildDeletePage();
@@ -507,7 +566,8 @@ public sealed class GymSessionMenu : MonoBehaviour
         Button mode = PersonaMenuStyle.CreateButton(choicePage.transform, "Room Mode Button", bodyFont,
             string.Empty, 1316f, 584f, 336f, 64f, 50, -2f, () => { roomMode = (roomMode + 1) % 3; ApplyRoom(); });
         roomModeLabel = mode.transform.Find("Label").GetComponent<Text>();
-        codeInput = CreateRoomInput("Room Code Input", "Room code", 1318f, 690f, 380f, 52f, 8);
+        codeInput = CreateInput(choicePage.transform, "Room Code Input", "Room code", 1318f, 690f, 380f, 52f, 8,
+            _ => ApplyRoom());
         codeInput.onValidateInput = (_, __, c) => char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '\0';
         roomHint = PersonaMenuStyle.CreateLabel(choicePage.transform, "Room Hint", bodyFont, string.Empty,
             1322f, 800f, 420f, 40f, 22, PersonaMenuStyle.Gold, TextAnchor.MiddleLeft);
@@ -518,10 +578,11 @@ public sealed class GymSessionMenu : MonoBehaviour
         if (!string.IsNullOrEmpty(leftover)) roomNotice = leftover;
     }
 
-    private InputField CreateRoomInput(string name, string placeholder, float x, float y, float width, float height, int limit)
+    private InputField CreateInput(Transform parent, string name, string placeholder, float x, float y, float width,
+        float height, int limit, UnityEngine.Events.UnityAction<string> changed)
     {
         GameObject field = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(InputField));
-        field.transform.SetParent(choicePage.transform, false);
+        field.transform.SetParent(parent, false);
         PersonaMenuStyle.PlaceInArt(field.GetComponent<RectTransform>(), x, y, width, height);
         field.transform.localRotation = Quaternion.Euler(0f, 0f, -2f);
         Image face = field.GetComponent<Image>();
@@ -536,7 +597,7 @@ public sealed class GymSessionMenu : MonoBehaviour
         text.supportRichText = false;
         input.placeholder = hint;
         input.textComponent = text;
-        input.onValueChanged.AddListener(_ => ApplyRoom());
+        input.onValueChanged.AddListener(changed);
         return input;
     }
 
@@ -673,21 +734,29 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         deletePage = CreatePage("Delete Confirm", false);
         Transform parent = deletePage.transform;
-        // One sheet, three stacked bands: caption, the save, then the buttons.
-        // The buttons also grow by 8% while hovered, so the gap between them and
-        // the distance to the sheet edge are sized for the focused state too.
+        // One sheet: title, rule, the save on its own plate, the warning, then two
+        // equal plates. Plates grow 8% while hovered, so the gap and the sheet
+        // margin are sized for the focused state too.
         deleteSheetRect = PersonaMenuStyle.CreatePanel(parent, "Panel", 1368f, 336f, 700f, 430f, -2f,
             new Color(0.035f, 0.05f, 0.1f, 1f), PersonaMenuStyle.Accent);
         Text title = PersonaMenuStyle.CreateLabel(parent, "Title", titleFont, "DELETE SAVE?",
-            1368f, 184f, 600f, 64f, 46, PersonaMenuStyle.Accent, TextAnchor.MiddleLeft);
+            1368f, 176f, 600f, 64f, 46, PersonaMenuStyle.Accent, TextAnchor.MiddleLeft);
         title.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -2f);
+        PersonaMenuStyle.CreatePanel(parent, "Rule", 1368f, 218f, 600f, 5f, -2f,
+            PersonaMenuStyle.Accent, PersonaMenuStyle.Accent);
+        PersonaMenuStyle.CreatePanel(parent, "Save Plate", 1368f, 276f, 600f, 70f, -2f,
+            PersonaMenuStyle.ButtonIdle, PersonaMenuStyle.Navy);
+        deleteEntry = PersonaMenuStyle.CreateLabel(parent, "Delete Entry", bodyFont, string.Empty,
+            1368f, 276f, 570f, 60f, 28, PersonaMenuStyle.Ink, TextAnchor.MiddleCenter);
+        deleteEntry.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -2f);
         deleteText = PersonaMenuStyle.CreateLabel(parent, "Delete Text", bodyFont, string.Empty,
-            1368f, 316f, 560f, 170f, 26, PersonaMenuStyle.Ink, TextAnchor.UpperLeft);
+            1368f, 364f, 600f, 90f, 26, PersonaMenuStyle.Muted, TextAnchor.MiddleCenter);
         deleteText.lineSpacing = 1.15f;
+        deleteText.rectTransform.localRotation = Quaternion.Euler(0f, 0f, -2f);
         deleteConfirmRect = (RectTransform)PersonaMenuStyle.CreateButton(parent, "Delete Confirm Button",
-            bodyFont, "DELETE",             1194f, 480f, 240f, 64f, 44, -2f, ConfirmDelete).transform;
+            bodyFont, "DELETE", 1213f, 480f, 230f, 64f, 44, -2f, ConfirmDelete).transform;
         deleteCancelButton = PersonaMenuStyle.CreateButton(parent, "Delete Cancel Button", bodyFont,
-            "CANCEL", 1542f, 480f, 240f, 64f, 44, -2f, CancelDelete);
+            "CANCEL", 1523f, 480f, 230f, 64f, 44, -2f, CancelDelete);
     }
 
     /// <summary>Verifier: the delete sheet, its caption box and the two plates, as built.</summary>
@@ -806,47 +875,70 @@ public sealed class GymSessionMenu : MonoBehaviour
             string slot = entry.SlotId;
             float y = 196f + (i - start) * 84f;
             Button button = PersonaMenuStyle.CreateButton(listPage.transform, "Save Entry " + (i - start),
-                bodyFont, DescribeEntry(entry.Result.Data), 1324f, y, 500f, 64f, 32, -1.5f,
+                bodyFont, DescribeEntry(entry.Result.Data), 1368f, y, 560f, 64f, 28, -1.5f,
                 () => SelectSave(slot));
             button.GetComponent<PersonaMenuButton>().SetFocusMotion(1.04f, 1f);
+            // Room on the right for the trash mark.
+            button.transform.Find("Label").GetComponent<Text>().rectTransform.offsetMax = new Vector2(-62f, 0f);
+            BuildTrashButton(button.transform, "Delete Save " + (i - start), () => RequestDelete(slot));
             listEntries.Add(button.gameObject);
-            Button delete = PersonaMenuStyle.CreateButton(listPage.transform, "Delete Save " + (i - start),
-                bodyFont, string.Empty, 1630f, y, 54f, 54f, 20, -1.5f, () => RequestDelete(slot));
-            delete.GetComponent<PersonaMenuButton>().SetFocusMotion(1.08f, 1f);
-            BuildTrashIcon(delete.transform);
-            listEntries.Add(delete.gameObject);
             if (first == null) first = button;
         }
         GymShared.Select(first != null ? first : listBackButton);
     }
 
-    /// <summary>Handle, lid and a tapered body, drawn from Persona plates: no icon atlas.</summary>
-    private static void BuildTrashIcon(Transform parent)
+    /// <summary>Plate-less trash mark at the right end of a save row; lights up on hover.</summary>
+    private static void BuildTrashButton(Transform row, string name, UnityEngine.Events.UnityAction onClick)
     {
-        PersonaShape handle = PersonaMenuStyle.CreateShape("Trash Handle", parent, PersonaMenuStyle.Ink);
-        RectTransform handleRect = handle.rectTransform;
-        handleRect.anchorMin = new Vector2(0.40f, 0.83f);
-        handleRect.anchorMax = new Vector2(0.60f, 0.92f);
-        handleRect.offsetMin = Vector2.zero;
-        handleRect.offsetMax = Vector2.zero;
-        PersonaShape lid = PersonaMenuStyle.CreateShape("Trash Lid", parent, PersonaMenuStyle.Ink);
-        RectTransform lidRect = lid.rectTransform;
-        lidRect.anchorMin = new Vector2(0.20f, 0.72f);
-        lidRect.anchorMax = new Vector2(0.80f, 0.82f);
-        lidRect.offsetMin = Vector2.zero;
-        lidRect.offsetMax = Vector2.zero;
-        PersonaShape body = PersonaMenuStyle.CreateShape("Trash Body", parent, PersonaMenuStyle.Ink);
-        RectTransform bodyRect = body.rectTransform;
-        bodyRect.anchorMin = new Vector2(0.28f, 0.14f);
-        bodyRect.anchorMax = new Vector2(0.72f, 0.70f);
-        bodyRect.offsetMin = Vector2.zero;
-        bodyRect.offsetMax = Vector2.zero;
+        GameObject root = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button), typeof(TrashMark));
+        root.transform.SetParent(row, false);
+        RectTransform rect = (RectTransform)root.transform;
+        rect.anchorMin = new Vector2(0.9f, 0.14f);
+        rect.anchorMax = new Vector2(0.98f, 0.86f);
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        Image hit = root.GetComponent<Image>();
+        hit.color = Color.clear;
+        Button button = root.GetComponent<Button>();
+        button.targetGraphic = hit;
+        button.transition = Selectable.Transition.None;
+        button.navigation = new Navigation { mode = Navigation.Mode.None };
+        button.onClick.AddListener(onClick);
+        PersonaShape handle = NewTrashPart(root.transform, "Trash Handle", 0.40f, 0.83f, 0.60f, 0.95f);
+        PersonaShape lid = NewTrashPart(root.transform, "Trash Lid", 0.18f, 0.70f, 0.82f, 0.81f);
+        PersonaShape body = NewTrashPart(root.transform, "Trash Body", 0.27f, 0.05f, 0.73f, 0.67f);
         body.SetCorners(new Vector2(0.12f, 0f), Vector2.zero, Vector2.zero, new Vector2(-0.12f, 0f));
+        root.GetComponent<TrashMark>().parts = new[] { handle, lid, body };
+    }
+
+    private static PersonaShape NewTrashPart(Transform parent, string name, float x0, float y0, float x1, float y1)
+    {
+        PersonaShape part = PersonaMenuStyle.CreateShape(name, parent, PersonaMenuStyle.Ink);
+        RectTransform rect = part.rectTransform;
+        rect.anchorMin = new Vector2(x0, y0);
+        rect.anchorMax = new Vector2(x1, y1);
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        return part;
+    }
+
+    private sealed class TrashMark : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        public PersonaShape[] parts;
+        public void OnPointerEnter(PointerEventData e) => Tint(PersonaMenuStyle.Gold, 1.15f);
+        public void OnPointerExit(PointerEventData e) => Tint(PersonaMenuStyle.Ink, 1f);
+        private void OnDisable() => Tint(PersonaMenuStyle.Ink, 1f);
+        private void Tint(Color color, float scale)
+        {
+            foreach (PersonaShape part in parts) part.color = color;
+            transform.localScale = new Vector3(scale, scale, 1f);
+        }
     }
 
     private static string DescribeEntry(GymCharacterSave save)
     {
-        return ClassName(save.classId).ToUpperInvariant() + "   LV " + save.progression.level +
+        return (save.IsCustomized ? save.username.ToUpperInvariant() + "   " : string.Empty) +
+            ClassName(save.classId).ToUpperInvariant() + "   LV " + save.progression.level +
             "   " + FormatPlaytime(save.playSeconds);
     }
 
@@ -854,7 +946,7 @@ public sealed class GymSessionMenu : MonoBehaviour
     {
         GymCharacterSave save = previewEntry.Result.Data;
         GymClassCatalog.TryGet(save.classId, out GymClassDefinition definition);
-        previewTitle.text = ClassName(save.classId).ToUpperInvariant();
+        previewTitle.text = PlayerAppearance.DisplayName(save, ClassName(save.classId)).ToUpperInvariant();
         previewArt.texture = definition != null ? Resources.Load<Texture2D>(definition.artwork) : null;
         previewArt.enabled = previewArt.texture != null;
         FitArt(previewArt);

@@ -236,6 +236,8 @@ public static class GymChaosEnemyHittableVerifier
         if (director.BeginIdentityDepartureForVerification(BodybuilderIdentity.Zyzz, out EnemyFighter zyzz, out _))
         {
             forced.Add("departure=" + zyzz.Identity);
+            // The departure takes the squatter off the bench and into its car.
+            if (zyzz == squatter) squatter = null;
         }
         Debug.Log("GYMCHAOS_ENEMY_HITTABLE_FORCED " + string.Join(" ", forced));
     }

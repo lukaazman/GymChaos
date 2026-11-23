@@ -28,4 +28,16 @@ public static class GymPalette
     public static readonly Color GrassRoot = new Color(0.15f, 0.2f, 0.115f);
     public static readonly Color GrassTipShort = new Color(0.31f, 0.37f, 0.21f);
     public static readonly Color GrassTipLong = new Color(0.38f, 0.43f, 0.24f);
+
+    // Player look (customize screen): skin tones light to deep, natural hair colours.
+    public static readonly Color[] SkinTones =
+    {
+        new Color(0.95f, 0.81f, 0.70f), new Color(0.87f, 0.67f, 0.53f), new Color(0.77f, 0.55f, 0.41f),
+        new Color(0.63f, 0.42f, 0.30f), new Color(0.46f, 0.30f, 0.20f), new Color(0.31f, 0.20f, 0.14f)
+    };
+    public static readonly Color[] HairColors =
+    {
+        new Color(0.10f, 0.07f, 0.06f), new Color(0.33f, 0.20f, 0.12f), new Color(0.59f, 0.38f, 0.20f),
+        new Color(0.84f, 0.70f, 0.44f), new Color(0.61f, 0.20f, 0.13f), new Color(0.67f, 0.67f, 0.66f)
+    };
 }

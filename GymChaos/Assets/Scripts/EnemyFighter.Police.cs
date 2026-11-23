@@ -338,6 +338,15 @@ public partial class EnemyFighter
         }
         if (safeDirection.sqrMagnitude < 0.001f)
         {
+            // Pinned by a corpse: step over it (see TryStepOverCorpses).
+            if (TryStepOverCorpses())
+            {
+                safeDirection = FindVisitorMovementDirection(
+                    direction, Mathf.Min(distance, 1.1f), true, null);
+            }
+        }
+        if (safeDirection.sqrMagnitude < 0.001f)
+        {
             // Pushed against a door jamb (for example around a character
             // standing in the opening): rejoin the doorway centre line in
             // the direction of travel instead of stopping at the wall.
@@ -378,6 +387,36 @@ public partial class EnemyFighter
     // clear step near the door, pass through them and restore the collision
     // pairs once the officer is clear of the doorway.
     private const float DoorwayCrowdRadius = 4.5f;
+    private readonly HashSet<Collider> corpseIgnoredColliders = new HashSet<Collider>();
+
+    // A killed fighter lies solid on the floor; an officer pinned against one
+    // steps over it instead of standing still for the rest of the chase.
+    private bool TryStepOverCorpses()
+    {
+        if (body == null) return false;
+        officerOwnColliders ??= GetComponentsInChildren<Collider>(true);
+        bool added = false;
+        IReadOnlyList<EnemyFighter> fighters = RegisteredFighters;
+        for (int i = 0; i < fighters.Count; i++)
+        {
+            EnemyFighter other = fighters[i];
+            if (other == null || other == this || !other.isDead || other.body == null ||
+                Vector3.Distance(other.body.position, body.position) > 3f)
+            {
+                continue;
+            }
+            foreach (Collider theirs in other.GetComponentsInChildren<Collider>(true))
+            {
+                if (theirs == null || !corpseIgnoredColliders.Add(theirs)) continue;
+                foreach (Collider mine in officerOwnColliders)
+                {
+                    if (mine != null) Physics.IgnoreCollision(mine, theirs, true);
+                }
+                added = true;
+            }
+        }
+        return added;
+    }
     private const float DoorwayCrowdReleaseRadius = 6f;
     private readonly List<Collider> doorwayIgnoredColliders = new List<Collider>();
     private Collider[] officerOwnColliders;

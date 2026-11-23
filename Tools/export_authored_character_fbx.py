@@ -111,6 +111,11 @@ CHARACTERS = {
         "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Enemies/goku_authored.fbx",
         "clip_names": GOKU_CLIPS,
+        # The remake's broad anime shoulders carry the chambered left fist of
+        # the nimbus stance half a metre out; turn the upper arm in to the hip.
+        "remake_clip_world_rotations": {
+            "nimbus_stance": {"DEF-upper_arm.L": ((0.0, 1.0, 0.0), 50.0)},
+        },
     },
     "mark": {
         "blend": PROJECT_ROOT / "Assets/BodyBuilders/enemies/mark_rig.blend",
@@ -184,6 +189,19 @@ CHARACTERS = {
                 "DEF-upper_arm.R": ((0.0, 1.0, 0.0), 24.0),
             },
         },
+        # The remade dog holds a modelled lollipop rigidly in the right paw:
+        # the glow shell is cut from the hand-weighted candy disc.
+        "remake": {"lollipop_glow": True, "lollipop_source_bone": "DEF-hand.R",
+                   "lollipop_min_vertices": 60, "lollipop_candy_height": 0.25},
+    },
+    "manwithsuit1": {
+        # The receptionist. Remake only (--remake): the OG reception NPC is
+        # still the runtime GLB scan. He stands at the counter, so only the
+        # shared idles.
+        "blend": PROJECT_ROOT / "Assets/BodyBuilders/remake/manwithsuit1.blend",
+        "clips": PROJECT_ROOT / "Assets/BodyBuilders/enemies/anims",
+        "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Reception/manwithsuit1_authored.fbx",
+        "clip_names": ("idle1", "idle2", "idle3"),
     },
     "homeless_guy": {
         # The park resident. Walking is shared; sleeping, stand_up,
@@ -243,6 +261,7 @@ CHARACTERS = {
         "output": PROJECT_ROOT / "GymChaos/Assets/Resources/Player/player_authored.fbx",
         "texture_output": PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Textures/player_authored.png",
         "clip_names": PLAYER_CLIPS,
+        "remake": {"all_meshes": True},
     },
 }
 
@@ -257,6 +276,11 @@ def parse_args() -> argparse.Namespace:
         argv = []
     parser = argparse.ArgumentParser()
     parser.add_argument("character", choices=[*sorted(CHARACTERS), "all"])
+    # Preview a remade source without touching the game's Resources copy.
+    parser.add_argument("--blend", type=Path)
+    parser.add_argument("--output", type=Path)
+    # Export the approved remake into the game's parallel Remake folder.
+    parser.add_argument("--remake", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -307,7 +331,8 @@ LOLLIPOP_HAND_BONE = "DEF-hand.R"
 LOLLIPOP_SOURCE_BONE = "DEF-thumb.03.R"
 
 
-def build_lollipop_glow(target: bpy.types.Object, mesh: bpy.types.Object) -> bpy.types.Object:
+def build_lollipop_glow(target: bpy.types.Object, mesh: bpy.types.Object, source_bone=LOLLIPOP_SOURCE_BONE,
+                        min_vertices=1000, candy_height=0.145) -> bpy.types.Object:
     """Bind the hand-held lollipop rigidly to the palm and cut a glow shell.
 
     The scan auto-weights the whole lollipop to the thumb tip, so every thumb
@@ -325,16 +350,16 @@ def build_lollipop_glow(target: bpy.types.Object, mesh: bpy.types.Object) -> bpy
 
     # The stick and candy are fused with the fist in the scan, so select them
     # geometrically: thumb-tip-weighted vertices above the thumb tip itself.
-    thumb = target.data.bones[LOLLIPOP_SOURCE_BONE]
+    thumb = target.data.bones[source_bone]
     thumb_top = max(
         (target.matrix_world @ thumb.head_local).z,
         (target.matrix_world @ thumb.tail_local).z)
     lollipop = [
         vertex.index for vertex in data.vertices
-        if dominant(vertex) == LOLLIPOP_SOURCE_BONE and
+        if dominant(vertex) == source_bone and
         (world @ vertex.co).z > thumb_top + 0.015
     ]
-    if len(lollipop) < 1000:
+    if len(lollipop) < min_vertices:
         raise RuntimeError(f"jolly_dog: lollipop island not found ({len(lollipop)} vertices)")
 
     hand_group = mesh.vertex_groups.get(LOLLIPOP_HAND_BONE)
@@ -348,7 +373,7 @@ def build_lollipop_glow(target: bpy.types.Object, mesh: bpy.types.Object) -> bpy
     points = [world @ data.vertices[index].co for index in lollipop]
     top = max(point.z for point in points)
     # The candy disc is ~0.14 m across; everything below it is the stick.
-    head = [point for point in points if point.z > top - 0.145]
+    head = [point for point in points if point.z > top - candy_height]
     minimum = Vector((min(p.x for p in head), min(p.y for p in head), min(p.z for p in head)))
     maximum = Vector((max(p.x for p in head), max(p.y for p in head), max(p.z for p in head)))
     center = (minimum + maximum) * 0.5
@@ -542,9 +567,9 @@ def find_mesh(target: bpy.types.Object, mesh_name: str | None = None) -> bpy.typ
     return max(originals or candidates, key=lambda obj: len(obj.data.vertices))
 
 
-def keep_only_target_objects(target: bpy.types.Object, mesh: bpy.types.Object) -> None:
+def keep_only_target_objects(target: bpy.types.Object, mesh: bpy.types.Object, extras=()) -> None:
     for obj in list(bpy.data.objects):
-        if obj not in (target, mesh):
+        if obj not in (target, mesh, *extras):
             bpy.data.objects.remove(obj, do_unlink=True)
     target.hide_render = False
     target.hide_viewport = False
@@ -908,6 +933,26 @@ def build_clean_export_rig(
     return export_target, export_mesh
 
 
+def clean_part(part: bpy.types.Object, export_target: bpy.types.Object) -> bpy.types.Object:
+    """One extra skinned mesh rebound to the clean DEF rig under its own name."""
+    export_part = part.copy()
+    export_part.data = part.data.copy()
+    bpy.context.scene.collection.objects.link(export_part)
+    export_part.matrix_world = part.matrix_world.copy()
+    normalize_export_weights(export_part, export_target,
+                             {bone.name for bone in export_target.data.bones})
+    for modifier in list(export_part.modifiers):
+        export_part.modifiers.remove(modifier)
+    export_part.modifiers.new("Armature", "ARMATURE").object = export_target
+    export_part.parent = export_target
+    export_part.matrix_parent_inverse = export_target.matrix_world.inverted()
+    part.hide_viewport = part.hide_render = True
+    name = part.name
+    part.name = name + "_authored"
+    export_part.name = export_part.data.name = name
+    return export_part
+
+
 def realign_arms_to_tpose(target, meshes) -> None:
     """Re-rest the arms in Mixamo's T-pose (arms along +/-X, straight).
 
@@ -1188,7 +1233,7 @@ def export_fbx(
     bpy.ops.export_scene.fbx(
         filepath=str(output),
         use_selection=True,
-        object_types={"ARMATURE", "MESH"},
+        object_types={"ARMATURE", "MESH", "EMPTY"},
         add_leaf_bones=False,
         use_armature_deform_only=True,
         # Each authored clip is a separate Action datablock. Export all of
@@ -1208,6 +1253,19 @@ def export_fbx(
         path_mode="STRIP",
         embed_textures=False,
     )
+
+
+def eye_anchor_on(target: bpy.types.Object, matrix) -> bpy.types.Object:
+    """Re-create the remake's EyeAnchor empty on the clean rig's head bone, so
+    the game places the eye bar there instead of measuring the face."""
+    anchor = bpy.data.objects.new("EyeAnchor", None)
+    bpy.context.scene.collection.objects.link(anchor)
+    anchor.parent = target
+    anchor.parent_type = "BONE"
+    anchor.parent_bone = "DEF-spine.005"
+    bpy.context.view_layer.update()
+    anchor.matrix_world = matrix
+    return anchor
 
 
 def export_authored_base_color(mesh: bpy.types.Object, output: Path) -> None:
@@ -1271,15 +1329,27 @@ def run(character_name: str) -> None:
     texture_output = config.get("texture_output")
     if texture_output is not None:
         export_authored_base_color(authored_mesh, texture_output)
+    source_anchor = bpy.data.objects.get("EyeAnchor")
+    anchor_matrix = source_anchor.matrix_world.copy() if source_anchor else None
     if config.get("weights_from"):
         transfer_weights(authored_mesh, config["weights_from"])
-    keep_only_target_objects(authored_target, authored_mesh)
+    # Swappable parts (the remade player's hair, beards, tank, shorts) ride
+    # along as their own skinned meshes, shape keys included.
+    parts = [obj for obj in bpy.data.objects
+             if config.get("all_meshes") and obj.type == "MESH" and obj is not authored_mesh
+             and not obj.name.endswith("_LOD1")
+             and any(m.type == "ARMATURE" and m.object == authored_target for m in obj.modifiers)]
+    keep_only_target_objects(authored_target, authored_mesh, parts)
     target, mesh = build_clean_export_rig(authored_target, authored_mesh)
-    extra_meshes = []
+    extra_meshes = [clean_part(part, target) for part in parts]
     if config.get("lollipop_glow"):
-        extra_meshes.append(build_lollipop_glow(target, mesh))
+        extra_meshes.append(build_lollipop_glow(
+            target, mesh, config.get("lollipop_source_bone", LOLLIPOP_SOURCE_BONE),
+            config.get("lollipop_min_vertices", 1000), config.get("lollipop_candy_height", 0.145)))
     if config.get("tpose_arms"):
         realign_arms_to_tpose(target, [mesh] + extra_meshes)
+    if anchor_matrix is not None:
+        extra_meshes.append(eye_anchor_on(target, anchor_matrix))
 
     rest_pose = {
         pose_bone.name: pose_bone.matrix.copy() for pose_bone in target.pose.bones
@@ -1343,4 +1413,30 @@ if __name__ == "__main__":
             run(character_name)
         print(f"GYMCHAOS_AUTHORED_BATCH_OK characters={len(CHARACTERS)}")
     else:
+        if args.remake:
+            remake = PROJECT_ROOT / "Assets/BodyBuilders/remake"
+            output = CHARACTERS[args.character]["output"]
+            args.blend = remake / f"{args.character}.blend"
+            remade = PROJECT_ROOT / "GymChaos/Assets/Resources/Characters/Remake"
+            args.output = remade / output.name
+            textures = remade / "Textures"
+            textures.mkdir(parents=True, exist_ok=True)
+            for suffix in ("",):  # the approved colour bake, copied as is (bodies are unlit: no normal map)
+                source = remake / "textures" / f"{args.character}{suffix}.png"
+                (textures / source.name).write_bytes(source.read_bytes())
+            print(f"GYMCHAOS_REMAKE_TEXTURES_OK character={args.character} folder={textures}")
+            remake_rotations = CHARACTERS[args.character].pop("remake_clip_world_rotations", None)
+            if remake_rotations:
+                CHARACTERS[args.character]["clip_world_rotations"] = remake_rotations
+        if args.blend or args.output:
+            CHARACTERS[args.character] = {
+                **CHARACTERS[args.character],
+                **({"blend": args.blend.resolve()} if args.blend else {}),
+                **({"output": args.output.resolve()} if args.output else {}),
+            }
+            CHARACTERS[args.character].pop("texture_output", None)
+            if args.blend:  # a remade source: drop the fixes for the old scan's mesh and rest pose
+                for key in ("mesh_name", "weights_from", "lollipop_glow", "tpose_arms", "clip_rest_bone_rolls"):
+                    CHARACTERS[args.character].pop(key, None)
+                CHARACTERS[args.character].update(CHARACTERS[args.character].pop("remake", {}))
         run(args.character)

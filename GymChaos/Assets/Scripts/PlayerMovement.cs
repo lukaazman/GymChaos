@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 #if UNITY_WEBGL && !UNITY_EDITOR
 using System.Runtime.InteropServices;
@@ -263,10 +263,20 @@ public partial class PlayerMovement : MonoBehaviour
             return;
         }
 
+        // One player body for every run: the DEFAULT class scan, scaled by height.
+        GymCharacterSave look = GymSessionService.Active;
         string resource = string.IsNullOrEmpty(definition.appearance)
             ? PlayerHandRig.DefaultModelResource
             : "Player/Classes/player_" + definition.id;
-        if (handRig != null && handRig.RuntimeModelResourcePath == resource)
+        string lookKey = LookKey(resource, definition.id, look);
+        // Eye line scales with the chosen height; the controller (collision) stays the same.
+        if (playerCamera != null && characterController != null)
+        {
+            cameraBaseLocalPosition.y = characterController.height *
+                (1.05f * PlayerAppearance.HeightScale(look) - 0.5f);
+            playerCamera.transform.localPosition = cameraBaseLocalPosition;
+        }
+        if (handRig != null && handRig.LookKey == lookKey)
         {
             return;
         }
@@ -277,11 +287,16 @@ public partial class PlayerMovement : MonoBehaviour
             // Create() looks the rig up by name; retire the old one first.
             handRig.gameObject.name = "PlayerAvatarRig (retired)";
             handRig.gameObject.SetActive(false);
+            PlayerAppearance.ReleaseMaterials(handRig.gameObject);
             Destroy(handRig.gameObject);
         }
         handRig = PlayerHandRig.Create(playerCamera.transform, resource);
         if (handRig != null)
         {
+            // Height is one uniform scale on the body itself (around its feet),
+            // so the outfit, the first-person arms and the seat fit all follow.
+            handRig.SetHeightScale(PlayerAppearance.HeightScale(look));
+            handRig.LookKey = lookKey;
             handRig.gameObject.SetActive(wasActive);
         }
         PlayerCosmeticLoadout cosmetics = GetComponent<PlayerCosmeticLoadout>();
@@ -291,6 +306,10 @@ public partial class PlayerMovement : MonoBehaviour
         }
         Debug.Log($"GYMCHAOS_CLASS_APPEARANCE class={definition.id} resource={resource}", this);
     }
+
+    // The DEFAULT body takes only the height; everything else is the class scan.
+    private static string LookKey(string resource, string classId, GymCharacterSave look) =>
+        resource + "|" + PlayerAppearance.HeightScale(look);
 
     /// <summary>Places a loaded character and restores resources clamped to the derived maxima.</summary>
     public void RestoreSessionState(
@@ -477,6 +496,8 @@ public partial class PlayerMovement : MonoBehaviour
         playerColliders = GetComponentsInChildren<Collider>(true);
         CreateCarryAnchor();
         handRig = PlayerHandRig.Create(playerCamera.transform);
+        if (handRig != null)
+            handRig.LookKey = LookKey(PlayerHandRig.DefaultModelResource, null, GymSessionService.Active);
         GymArenaBootstrap.EnsureExists(this);
 #if UNITY_WEBGL && !UNITY_EDITOR
         // Install the request handler before the first click. The browser

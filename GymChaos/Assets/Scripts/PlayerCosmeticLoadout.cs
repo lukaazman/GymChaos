@@ -140,6 +140,9 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     private PlayerTopShell.Style CurrentBottomStyle =>
         currentBottom == GymBottomStyle.Pants ? PlayerTopShell.Pants : PlayerTopShell.Shorts;
 
+    // The remade player wears authored outfit parts (PlayerAppearance.SetOutfit), never cloth shells.
+    private static bool UsesShells => !PlayerAppearance.UsesRemakeBody;
+
     // Bottoms share one grey fabric; the chosen colour tints it.
     private SkinnedMeshRenderer AttachBottom(SkinnedMeshRenderer body)
     {
@@ -153,7 +156,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (bottomPending && shellBody != null)
+        if (bottomPending && shellBody != null && UsesShells)
         {
             bottomRenderer = AttachBottom(shellBody);
             if (bottomRenderer != null || PlayerTopShell.IsSettled(shellBody.sharedMesh, CurrentBottomStyle))
@@ -162,7 +165,7 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                 RequestMirrorRefresh();
             }
         }
-        if (shellPending && shellBody != null && currentTop != GymTopStyle.TankTop)
+        if (shellPending && shellBody != null && currentTop != GymTopStyle.TankTop && UsesShells)
         {
             shellRenderer = AttachShell(shellBody);
             if (shellRenderer != null || PlayerTopShell.IsSettled(shellBody.sharedMesh, CurrentShellStyle))
@@ -186,7 +189,10 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             return;
         }
 
-        PlayerHandRig rig = player.GetComponentInChildren<PlayerHandRig>(true);
+        // By name: a rig retired by a class or look change lives until the end of the frame.
+        Transform rigRoot = player.transform.Find("PlayerAvatarRig");
+        PlayerHandRig rig = rigRoot != null ? rigRoot.GetComponent<PlayerHandRig>()
+            : player.GetComponentInChildren<PlayerHandRig>(true);
         if (rig == null)
         {
             return;
@@ -214,13 +220,19 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
             ? currentTexture
             : ScanTextureMips.Limit(Resources.Load<Texture2D>(UnderShellBodyTexture));
         if (bodyTexture == null) bodyTexture = currentTexture;
+        bool remake = PlayerAppearance.UsesRemakeBody;
+        if (remake)
+        {
+            PlayerAppearance.SetOutfit(rig.gameObject, currentTop, currentShirt, currentBottom, currentBottomColor,
+                GymSessionService.Active != null ? GymSessionService.Active.hair : 2, currentHeadwear);
+        }
         SkinnedMeshRenderer body = null;
         for (int i = 0; i < renderers.Length; i++)
         {
             SkinnedMeshRenderer renderer = renderers[i];
             if (renderer == null ||
                 renderer.gameObject.layer == PlanarGymMirror.FirstPersonPlayerLayer ||
-                PlayerTopShell.IsShellObject(renderer.name))
+                PlayerTopShell.IsShellObject(renderer.name) || PlayerAppearance.IsPartName(renderer.name))
             {
                 // Shirt cosmetics belong to the mirror body. The first-person
                 // arm clone owns a stable skin material and must never inherit
@@ -228,6 +240,12 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
                 continue;
             }
 
+            if (remake)
+            {
+                // The remade body keeps its skin-toned look materials (PlayerAppearance).
+                body = renderer;
+                continue;
+            }
             renderer.sharedMesh = ScanUvInset.Apply(renderer.sharedMesh, currentTexture);
             if (body == null || renderer.sharedMesh.vertexCount > body.sharedMesh.vertexCount)
             {
@@ -259,21 +277,22 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
         // "not ready" and LateUpdate attaches it once the mesh exists.
         shellBody = body;
         shellPending = false;
-        if (currentTop != GymTopStyle.TankTop && body != null)
+        bottomPending = false;
+        // Remake: the authored outfit parts are already set above.
+        if (UsesShells && currentTop != GymTopStyle.TankTop && body != null)
         {
             shellRenderer = AttachShell(body);
             shellPending = shellRenderer == null &&
                 !PlayerTopShell.IsSettled(body.sharedMesh, CurrentShellStyle);
         }
-        else if (body != null)
+        else if (UsesShells && body != null)
         {
             PlayerTopShell.Detach(body);
             shellRenderer = null;
             // Ready for the next locker change without a wait.
             PlayerTopShell.Prewarm(body.sharedMesh);
         }
-        bottomPending = false;
-        if (body != null)
+        if (body != null && UsesShells)
         {
             bottomRenderer = AttachBottom(body);
             bottomPending = bottomRenderer == null &&
@@ -586,12 +605,15 @@ public sealed class PlayerCosmeticLoadout : MonoBehaviour
     public static string GetOutfitTexturePath(GymTopStyle top, GymShirtColor color)
     {
         string colour = color.ToString().ToLowerInvariant();
+        string folder = PlayerAppearance.UsesRemakeBody ? "Player/Outfits/Remake/" : "Player/Outfits/";
         switch (top)
         {
             case GymTopStyle.Oversized:
-                return "Player/Outfits/oversized_" + colour;
+                return folder + "oversized_" + colour;
             case GymTopStyle.Onyx:
-                return "Player/Outfits/onyx_" + colour;
+                return folder + "onyx_" + colour;
+            case GymTopStyle.TankTop when PlayerAppearance.UsesRemakeBody:
+                return PlayerAppearance.RemakeTexture;
             default:
                 return color == GymShirtColor.Black
                     ? "Characters/Textures/player_authored"

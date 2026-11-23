@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -29,6 +29,8 @@ public sealed class FaceCensorSettings : MonoBehaviour
 {
     [SerializeField] private FaceCensorProfile profile;
     private GameObject deathMarkers;
+    // POTATO versions keep their faces; the bar belongs to the DEFAULT model.
+    private bool barEnabled = true;
 
     public float ConfiguredFaceDepth => profile.FaceDepth;
     public Vector2 ConfiguredSize => profile.Size;
@@ -41,8 +43,9 @@ public sealed class FaceCensorSettings : MonoBehaviour
         profile.ProfileCoverage = value.ProfileCoverage;
         profile.FaceDepth = value.FaceDepth;
 
+        // A character on its POTATO model has no bar to re-shape.
         MeshFilter filter = GetComponent<MeshFilter>();
-        if (filter != null)
+        if (filter != null && barEnabled)
         {
             Mesh previousMesh = filter.sharedMesh;
             filter.sharedMesh = CreateCurvedFaceShell(profile);
@@ -85,6 +88,7 @@ public sealed class FaceCensorSettings : MonoBehaviour
             $"barForward={transform.forward} local={profile.LocalPosition} " +
             $"euler={profile.LocalEulerAngles} size={profile.Size} depth={profile.FaceDepth}", this);
 
+        barEnabled = showBlackBar;
         if (!showBlackBar)
         {
             return;

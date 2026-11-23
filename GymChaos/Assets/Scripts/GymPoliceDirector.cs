@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -11,7 +11,7 @@ using UnityEngine.Networking;
 /// </summary>
 public sealed class GymPoliceDirector : MonoBehaviour
 {
-    private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar_lod.glb";
+    private static string PoliceCarAsset => GymVisualStyle.VehicleAsset(BodybuilderIdentity.Policeman, "BodyBuilders/vehicles/Policecar_lod.glb");
     private const float PoliceCarTargetLength = 4.0f * GymOutdoorBuilder.VehicleScale * GymOutdoorBuilder.CarSizeBoost;
     private const float PoliceCarSpeed =
         GymVisitorVehicle.NormalDriveSpeed * 3f;
@@ -39,6 +39,14 @@ public sealed class GymPoliceDirector : MonoBehaviour
     private bool dispatchActive;
 
     private GameObject policeCar;
+    // The asset the cruiser in the scene was built from, so a version change
+    // is a real swap and not a reload on every appearance-menu refresh.
+    private string loadedCarAsset;
+    // A rebuilt cruiser keeps the stall it was parked in: the fresh GLB is put
+    // back on the pose the old car had before anything else is fitted.
+    private bool pendingCarPose;
+    private Vector3 pendingCarPosition;
+    private Quaternion pendingCarRotation;
     // The officer rides in the car's see-through cabin, climbs out of the
     // driver door when it stops and gets back in to leave.
     private GymVehicleDriverSeat policeSeat;
@@ -479,9 +487,17 @@ public sealed class GymPoliceDirector : MonoBehaviour
         }
 
         policeCar = root;
+        if (pendingCarPose)
+        {
+            pendingCarPose = false;
+            root.transform.SetPositionAndRotation(pendingCarPosition, pendingCarRotation);
+        }
         FitCarVisual(root);
-        GymVehicleLights.Attach(root.transform, "police", () => policeCarMoving);
+        // Strobes flash for the whole call (only the remade car has strobe lenses).
+        GymVehicleLights.Attach(root.transform, "police", () => policeCarMoving).StrobeWhen = () => true;
         GymVehicleWheelSpinner.Attach(root, () => policeCarMoving);
+        if (GymVisualStyle.RemakeVehicleAsset(BodybuilderIdentity.Policeman) != null)
+            GymVehicleBodyRoll.Attach(root.transform.Find("City GLB Content"), root.transform);
         AddCarCollider(root);
         policeSeat = null;
         // The GLB root is scaled to the car length; seat and door work in
@@ -502,16 +518,97 @@ public sealed class GymPoliceDirector : MonoBehaviour
             policeSeat.PlaybackSpeed = 1.5f;
         }
         GymShadowProxy.Apply(root);
+        loadedCarAsset = PoliceCarAsset;
         policeCarRouteBoundsClear = true;
         policeCarStopWithinRoadEnvelope = false;
         policeCarRouteOverlapCount = 0;
         policeCarReady = true;
-        CreatePoliceEngineAudio(root);
+        if (policeEngine == null || !policeEngine) CreatePoliceEngineAudio(root);
         BeginPoliceSirenLoad();
         Debug.Log(
             $"GYMCHAOS_POLICE_CAR_READY asset={PoliceCarAsset} " +
             $"targetLength={PoliceCarTargetLength:F2}", root);
     }
+
+    /// <summary>
+    /// The version table's cruiser, swapped on the car already in the scene:
+    /// same route, same stall, new model. An officer riding keeps his car (the
+    /// new version waits for the next dispatch).
+    /// </summary>
+    public bool RebuildVersionForAppearance()
+    {
+        if (policeCar == null) return false;
+        string wanted = PoliceCarAsset;
+        if (wanted == loadedCarAsset) return true;
+        if (policeSeat != null && policeSeat.Driver != null) return false;
+        Transform parent = policeCar.transform.parent;
+        Vector3 position = policeCar.transform.position;
+        Quaternion rotation = policeCar.transform.rotation;
+        string name = policeCar.name;
+        policeSeat = null;
+        policeCarCollider = null;
+        policeCarReady = false;
+        policeCarFailed = false;
+        pendingCarPose = true;
+        pendingCarPosition = position;
+        pendingCarRotation = rotation;
+        Destroy(policeCar);
+        loadedCarAsset = wanted;
+        policeCar = RuntimeGlbSceneLoader.Request(
+            wanted,
+            parent,
+            position,
+            rotation,
+            Vector3.one,
+            name,
+            0,
+            settleOnSupport: false,
+            supportY: position.y,
+            onLoaded: HandlePoliceCarLoaded);
+        Debug.Log($"GYMCHAOS_POLICE_CAR_VERSION_REBUILD asset={wanted}", this);
+        return true;
+    }
+
+    /// <summary>Verifier gate: a parked cruiser built by the version table, no dispatch.</summary>
+    public bool PrepareCarForVerification(Vector3 position, Quaternion rotation)
+    {
+        if (policeCar != null)
+        {
+            loadedCarAsset = PoliceCarAsset;
+            return true;
+        }
+        floorY = position.y;
+        policeCarReady = false;
+        policeCarFailed = false;
+        loadedCarAsset = PoliceCarAsset;
+        policeCar = RuntimeGlbSceneLoader.Request(
+            PoliceCarAsset,
+            transform,
+            position,
+            rotation,
+            Vector3.one,
+            "Police Car Verification",
+            0,
+            settleOnSupport: false,
+            supportY: position.y,
+            onLoaded: HandlePoliceCarLoaded);
+        return true;
+    }
+
+    /// <summary>Verifier gate: a director to hold a cruiser before any dispatch.</summary>
+    public static GymPoliceDirector EnsureForVerification()
+    {
+        if (instance == null)
+        {
+            GameObject host = new GameObject("Police Director (verification)");
+            instance = host.AddComponent<GymPoliceDirector>();
+        }
+        return instance;
+    }
+
+    public GameObject PoliceCarRootForVerification => policeCar;
+    public bool PoliceCarReadyForVerification => policeCar != null && policeCarReady;
+    public string PoliceCarAssetForVerification => loadedCarAsset;
 
     private EnemyFighter SpawnOfficer(
         EnemyFighter ronnie, Transform target, PlayerMovement player)

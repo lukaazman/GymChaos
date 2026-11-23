@@ -21,7 +21,6 @@ public static class GymChaosEyeBarVerifier
     // Points closer than this to the shell count as touching, not piercing.
     private const float Tolerance = 0.002f;
     private static double started;
-
     [InitializeOnLoadMethod]
     private static void ResumeAfterReload()
     {

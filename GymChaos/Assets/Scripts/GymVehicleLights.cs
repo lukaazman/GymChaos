@@ -110,6 +110,35 @@ public sealed class GymVehicleLights : MonoBehaviour
     private Transform lampRoot;
     private readonly List<GameObject> lampObjects = new List<GameObject>();
 
+    // Signal lamps of models with named lenses (the remade cars): brake and
+    // reverse follow the car's own motion, day and night; strobes flash while
+    // StrobeWhen holds.
+    private const float BrakeDeceleration = 1.5f;
+    private const float BrakeHoldSeconds = 0.6f;
+    private const float ReverseSpeed = 0.3f;
+    private const float StrobeHz = 2.5f;
+    private const int RemakeBeamBudget = 4;
+    private static readonly Color ReverseColor = new Color(1f, 0.97f, 0.9f);
+    private static readonly Color StrobeRedColor = new Color(1f, 0.08f, 0.06f);
+    private static readonly Color StrobeBlueColor = new Color(0.12f, 0.3f, 1f);
+    private readonly List<GameObject> brakeLamps = new List<GameObject>();
+    private readonly List<GameObject> reverseLamps = new List<GameObject>();
+    private readonly List<GameObject> strobeRedLamps = new List<GameObject>();
+    private readonly List<GameObject> strobeBlueLamps = new List<GameObject>();
+    private readonly List<Light> beams = new List<Light>();
+    private Vector3 lastSignalPosition;
+    private bool signalPrimed;
+    private float signalSpeed;
+    private float signalWindow;
+    private const float SignalWindowSeconds = 0.1f;
+    private float brakeUntil;
+    private static Texture2D beamCookie;
+    private static float nextBeamRank;
+    private static Vector3 beamEye;
+    private static readonly List<GymVehicleLights> beamOrder = new List<GymVehicleLights>();
+    private static readonly System.Comparison<GymVehicleLights> ByEyeDistance = (a, b) =>
+        (a.transform.position - beamEye).sqrMagnitude.CompareTo((b.transform.position - beamEye).sqrMagnitude);
+
     private bool built;
     private bool lit;
     private float nextCheck;
@@ -122,6 +151,25 @@ public sealed class GymVehicleLights : MonoBehaviour
     public int LampPieceCount => lampObjects.Count;
     /// <summary>Lamps only while this is true (driving); null means always (race cars).</summary>
     public System.Func<bool> ActiveWhen { get; set; }
+    /// <summary>Strobe lenses flash while this is true (police call); null means never.</summary>
+    public System.Func<bool> StrobeWhen { get; set; }
+    public bool BrakeLit { get; private set; }
+    public bool ReverseLit { get; private set; }
+    public bool StrobeRedLit { get; private set; }
+    public bool StrobeBlueLit { get; private set; }
+    public int BrakeLampCount => brakeLamps.Count;
+    public int StrobeLampCount => strobeRedLamps.Count + strobeBlueLamps.Count;
+    /// <summary>Verification: road beams lit right now (the Remake style lights at most four cars).</summary>
+    public int BeamsOn
+    {
+        get
+        {
+            int on = 0;
+            for (int i = 0; i < beams.Count; i++) if (beams[i] != null && beams[i].enabled && beams[i].gameObject.activeInHierarchy) on++;
+            return on;
+        }
+    }
+    public Texture BeamCookie => beams.Count > 0 && beams[0] != null ? beams[0].cookie : null;
     private bool InUse => ActiveWhen == null || ActiveWhen();
 
     /// <param name="modelKey">Car model for its measured lamp regions ("cbum", "police", ...).</param>
@@ -168,6 +216,15 @@ public sealed class GymVehicleLights : MonoBehaviour
         all.Remove(this);
     }
 
+    // After every mover's Update and coroutine: one consistent step per frame.
+    private void LateUpdate()
+    {
+        if (built && (brakeLamps.Count > 0 || reverseLamps.Count > 0 || strobeRedLamps.Count > 0))
+        {
+            UpdateSignals();
+        }
+    }
+
     private void Update()
     {
         if (Time.unscaledTime < nextCheck)
@@ -199,6 +256,111 @@ public sealed class GymVehicleLights : MonoBehaviour
         {
             SetLit(IsDark(lit) && InUse);
         }
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetBeamRanking()
+    {
+        nextBeamRank = 0f;
+        beamCookie = null;
+        beamOrder.Clear();
+    }
+
+    /// <summary>Brake and reverse from the car's own motion along its forward axis; strobes by phase.</summary>
+    private void UpdateSignals()
+    {
+        float dt = Time.deltaTime;
+        if (dt <= 1e-5f) return;
+        Vector3 position = transform.position;
+        // Everything here (speed, strobe phase) updates at 10 Hz: speed over a
+        // window, since a fixed-step mover alternates zero and large per-frame deltas.
+        signalWindow += dt;
+        if (signalWindow < SignalWindowSeconds) return;
+        dt = signalWindow;
+        signalWindow = 0f;
+        float step = Vector3.Dot(position - lastSignalPosition, transform.forward);
+        lastSignalPosition = position;
+        if (!signalPrimed || Mathf.Abs(step) > 4f)
+        {
+            signalPrimed = true;
+            signalSpeed = 0f;
+            step = 0f;
+        }
+        float previous = signalSpeed;
+        signalSpeed = Mathf.Lerp(signalSpeed, step / dt, 1f - Mathf.Exp(-8f * dt));
+        if (previous > 0.5f && (previous - signalSpeed) / dt > BrakeDeceleration)
+        {
+            brakeUntil = Time.time + BrakeHoldSeconds;
+        }
+        BrakeLit = SetGroup(brakeLamps, BrakeLit, Time.time < brakeUntil);
+        ReverseLit = SetGroup(reverseLamps, ReverseLit, signalSpeed < -ReverseSpeed);
+        bool strobe = StrobeWhen != null && StrobeWhen();
+        bool redPhase = Mathf.Repeat(Time.time * StrobeHz, 1f) < 0.5f;
+        StrobeRedLit = SetGroup(strobeRedLamps, StrobeRedLit, strobe && redPhase);
+        StrobeBlueLit = SetGroup(strobeBlueLamps, StrobeBlueLit, strobe && !redPhase);
+    }
+
+    private static bool SetGroup(List<GameObject> lamps, bool current, bool value)
+    {
+        if (current == value) return value;
+        for (int i = 0; i < lamps.Count; i++)
+        {
+            if (lamps[i] != null) lamps[i].SetActive(value);
+        }
+        return value;
+    }
+
+    /// <summary>Remake style: only the few lit, driving cars nearest the camera cast road beams.</summary>
+    private static void RankBeams()
+    {
+        Camera eye = Camera.main;
+        if (eye == null) return;
+        beamEye = eye.transform.position;
+        beamOrder.Clear();
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (all[i].beams.Count > 0) beamOrder.Add(all[i]);
+        }
+        beamOrder.Sort(ByEyeDistance);
+        int budget = RemakeBeamBudget;
+        for (int i = 0; i < beamOrder.Count; i++)
+        {
+            GymVehicleLights lights = beamOrder[i];
+            bool on = lights.IsLit && lights.InUse && budget > 0;
+            if (on) budget--;
+            for (int b = 0; b < lights.beams.Count; b++)
+            {
+                if (lights.beams[b] != null) lights.beams[b].enabled = on;
+            }
+        }
+    }
+
+    /// <summary>Headlight pattern: wide, bright low half, soft edge, cut above the horizon.</summary>
+    private static Texture2D HeadBeamCookie()
+    {
+        if (beamCookie != null) return beamCookie;
+        const int size = 64;
+        beamCookie = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = "Vehicle Head Beam Cookie",
+            wrapMode = TextureWrapMode.Clamp
+        };
+        var pixels = new Color32[size * size];
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float u = (x + 0.5f) / size * 2f - 1f;
+                float v = (y + 0.5f) / size * 2f - 1f;
+                float r = Mathf.Sqrt(u * u * 0.6f + v * v * 1.6f);
+                float a = Mathf.Clamp01((1f - r) * 2.5f) * (v > 0.15f ? Mathf.Clamp01(1f - (v - 0.15f) * 6f) : 1f);
+                byte c = (byte)(a * 255f);
+                pixels[y * size + x] = new Color32(c, c, c, c);
+            }
+        }
+        beamCookie.SetPixels32(pixels);
+        beamCookie.Apply(false, true);
+        return beamCookie;
     }
 
     private void SetLit(bool value)
@@ -251,6 +413,8 @@ public sealed class GymVehicleLights : MonoBehaviour
             beamLight.innerSpotAngle = 30f;
             beamLight.intensity = 4f;
             beamLight.shadows = LightShadows.None;
+            beamLight.enabled = true;
+            beams.Add(beamLight);
         }
         lit = true;
         SetLit(false);
@@ -343,23 +507,44 @@ public sealed class GymVehicleLights : MonoBehaviour
                 bool tail = namedMaterials ? IsTailName(materialName) : IsTailName(renderer.name);
                 if (!head && !tail)
                 {
+                    // Remade cars' signal lenses (Tools/vehicle_kit.py material names).
+                    if (materialName.StartsWith("Lamp_Reverse", System.StringComparison.Ordinal))
+                        reverseLamps.Add(LampOverlay("Vehicle Lamp Reverse", renderer.transform, Lens(renderer, mesh, i),
+                            GlowMaterial(null, ReverseColor, 1.4f)));
+                    else if (materialName.StartsWith("Lamp_StrobeRed", System.StringComparison.Ordinal))
+                        strobeRedLamps.Add(LampOverlay("Vehicle Lamp Strobe Red", renderer.transform, Lens(renderer, mesh, i),
+                            GlowMaterial(null, StrobeRedColor, 3f)));
+                    else if (materialName.StartsWith("Lamp_StrobeBlue", System.StringComparison.Ordinal))
+                        strobeBlueLamps.Add(LampOverlay("Vehicle Lamp Strobe Blue", renderer.transform, Lens(renderer, mesh, i),
+                            GlowMaterial(null, StrobeBlueColor, 3f)));
                     continue;
                 }
-                Mesh lens = new Mesh { name = renderer.name + " Lens Glow", indexFormat = mesh.indexFormat };
-                lens.vertices = mesh.vertices;
-                lens.normals = mesh.normals;
-                lens.uv = mesh.uv;
-                lens.SetTriangles(mesh.GetTriangles(i), 0);
-                // Authored lenses: full glow everywhere (vertex alpha 1).
-                Color[] white = new Color[mesh.vertexCount];
-                for (int w = 0; w < white.Length; w++) white[w] = Color.white;
-                lens.colors = white;
-                lens.RecalculateBounds();
+                if (!head && !tail)
+                {
+                    continue;
+                }
+                Mesh lens = Lens(renderer, mesh, i);
                 lampObjects.Add(LampOverlay(head ? "Vehicle Lamp Head" : "Vehicle Lamp Tail", renderer.transform, lens,
                     head ? GlowMaterial(null, HeadColor, HeadIntensity) : GlowMaterial(null, TailColor, TailIntensity)));
             }
         }
         return lampObjects.Count > 0;
+    }
+
+    /// <summary>Submesh <paramref name="subMesh"/> of an authored lens as its own glowing mesh.</summary>
+    private static Mesh Lens(Renderer renderer, Mesh mesh, int subMesh)
+    {
+        Mesh lens = new Mesh { name = renderer.name + " Lens Glow", indexFormat = mesh.indexFormat };
+        lens.vertices = mesh.vertices;
+        lens.normals = mesh.normals;
+        lens.uv = mesh.uv;
+        lens.SetTriangles(mesh.GetTriangles(subMesh), 0);
+        // Authored lenses: full glow everywhere (vertex alpha 1).
+        Color[] white = new Color[mesh.vertexCount];
+        for (int w = 0; w < white.Length; w++) white[w] = Color.white;
+        lens.colors = white;
+        lens.RecalculateBounds();
+        return lens;
     }
 
     // ------------------------------------------------------- textured lamps

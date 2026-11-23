@@ -148,7 +148,7 @@ public sealed class GymPauseMenu : MonoBehaviour
             pausePage.transform, "Pause Save Button", buttonFont, "SAVE GAME",
             214f, 420f, 330f, 68f, 56, -1.5f, SaveGame);
         saveAndReturnButton = PersonaMenuStyle.CreateButton(
-            pausePage.transform, "Pause Save Return Button", buttonFont, "SAVE & RETURN TO MENU",
+            pausePage.transform, "Pause Save Return Button", buttonFont, "RETURN TO MENU",
             300f, 508f, 510f, 68f, 52, -1.5f, SaveAndReturn);
         skipTutorialButton = PersonaMenuStyle.CreateButton(
             pausePage.transform, "Pause Skip Tutorial Button", buttonFont, "SKIP TUTORIAL",

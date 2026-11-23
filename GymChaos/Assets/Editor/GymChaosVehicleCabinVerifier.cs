@@ -330,7 +330,7 @@ public static class GymChaosVehicleCabinVerifier
         GymChaosCabinPenetrationProbe p = Probe();
         float share = p.SeatedSamples > 0 ? p.SeatedOutside / (float)p.SeatedSamples : 0f;
         string line = $"{current} {phase} shellParts={p.ShellPartCount} seatedOutside={p.SeatedOutside}/" +
-            $"{p.SeatedSamples} depth={p.SeatedDepth:F3} crossings={p.Crossings} {p.WorstCrossing} {p.Histogram()}";
+            $"{p.SeatedSamples} depth={p.SeatedDepth:F3} deepest[{p.DeepestSeated}] crossings={p.Crossings} {p.WorstCrossing} {p.Histogram()}";
         Debug.Log("GYMCHAOS_VEHICLE_CABIN_PENETRATION " + line);
         results.Add("penetration " + line);
         if (p.ShellPartCount < 3) failures.Add($"{current}: shell probe found {p.ShellPartCount} parts");

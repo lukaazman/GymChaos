@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -98,6 +98,11 @@ public sealed class PlayerHandRig : MonoBehaviour
     private bool jumping;
     private Vector3 baseModelLocalPosition;
     private Vector3 baseModelLocalScale;
+    // The player's height as one uniform scale on the body, applied around the
+    // rig's own origin (the feet), so the model grows upward and the feet stay
+    // on the floor. The seat fit measures this scaled rig and multiplies its
+    // own in-car scale on top.
+    private float heightScale = 1f;
     private bool isHolding;
     private bool initialized;
     private bool sampledPunchLeftClip;
@@ -144,7 +149,11 @@ public sealed class PlayerHandRig : MonoBehaviour
     public Transform RuntimeFirstPersonLeftUpperArm => firstPersonLeftUpperArm;
     public Transform RuntimeFirstPersonRightUpperArm => firstPersonRightUpperArm;
     public string RuntimeModelResourcePath => modelResource;
-    public string RuntimeAnimationResourcePath => PlayerAnimationBundleResource;
+    public string RuntimeAnimationResourcePath => animationResource;
+    // The remade player carries its own retargeted clips; class FBX variants share the DEFAULT bundle.
+    private string animationResource = PlayerAnimationBundleResource;
+    /// <summary>Resource plus look the rig was built for (PlayerMovement rebuilds on change).</summary>
+    public string LookKey { get; set; }
     public string MixamoAttackClipSummary =>
         $"walk={walkClip?.name ?? "missing"},run={runClip?.name ?? "missing"}," +
         $"idle1={GetIdleVariant(0)?.name ?? "missing"}," +
@@ -373,7 +382,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         GymClipSampler.Sample(clip, modelRoot, Mathf.Max(0f, sampleTime));
         RestoreAnimatedScales();
         RestoreVerificationModelTransform();
-        modelRoot.transform.localScale = baseModelLocalScale * scale;
+        modelRoot.transform.localScale = baseModelLocalScale * heightScale * scale;
         modelRoot.transform.position += transform.up * vehicleGroundOffset;
         return true;
     }
@@ -661,7 +670,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         // verifier bounds or mirror checks run.
         modelRoot.transform.SetLocalPositionAndRotation(
             baseModelLocalPosition, AuthoredModelForwardCorrection);
-        modelRoot.transform.localScale = baseModelLocalScale;
+        modelRoot.transform.localScale = baseModelLocalScale * heightScale;
     }
 
 #if UNITY_EDITOR
@@ -890,38 +899,59 @@ public sealed class PlayerHandRig : MonoBehaviour
         lastSampledAttackMode = attackMode;
     }
 
+    // Menu and verifier boots run before a session exists.
+    private static readonly GymCharacterSave DefaultLook = new GymCharacterSave();
+
+    // The body is fitted at the standard height; the avatar root carries the
+    // player's height as a uniform scale (PlayerMovement.ApplyClassAppearance).
+    private float GameplayHeight => ExternalRiggedCharacterVisual.StandardGameplayHeight;
+
+    /// <summary>The height scale the body currently carries (1 = the standard 180 cm).</summary>
+    public float HeightScaleForVerification => heightScale;
+
+    /// <summary>The player's height as a uniform body scale; 1 is the standard 180 cm.</summary>
+    public void SetHeightScale(float value)
+    {
+        heightScale = Mathf.Clamp(value, 0.5f, 1.5f);
+        if (modelRoot != null) modelRoot.transform.localScale = baseModelLocalScale * heightScale;
+        if (firstPersonModelRoot != null)
+        {
+            firstPersonModelRoot.transform.localScale = baseModelLocalScale * heightScale * FirstPersonArmScale;
+        }
+    }
+
     private void LoadAttackClips()
     {
         walkClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "walking");
+            animationResource, "walking");
         runClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "running");
+            animationResource, "running");
         idleVariants = new AnimationClip[]
         {
             LoadAuthoredAnimationClip(
-                PlayerAnimationBundleResource, "idle1"),
+                animationResource, "idle1"),
             LoadAuthoredAnimationClip(
-                PlayerAnimationBundleResource, "idle2"),
+                animationResource, "idle2"),
             LoadAuthoredAnimationClip(
-                PlayerAnimationBundleResource, "idle3")
+                animationResource, "idle3")
         };
         SelectIdleVariant();
         crouchClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "crouched_walking");
+            animationResource, "crouched_walking");
         jumpClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "jumping");
+            animationResource, "jumping");
         punchLeftClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "punch_left");
+            animationResource, "punch_left");
         punchRightClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "punch_right");
+            animationResource, "punch_right");
         throwFrisbeeClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "throw_frisbee");
+            animationResource, "throw_frisbee");
         throwHardClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "throw_object_hard");
+            animationResource, "throw_object_hard");
         vehicleDrivingClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "vehicle_driving");
+            animationResource, "vehicle_driving");
         vehicleExitClip = LoadAuthoredAnimationClip(
-            PlayerAnimationBundleResource, "vehicle_exit");
+            animationResource, "vehicle_exit");
         Debug.Log(
             $"GYMCHAOS_PLAYER_AUTHORED_CLIP_INVENTORY loaded=" +
             $"{(HasRequiredMixamoAttackClips ? "11/11" : "0/11")} " +
@@ -1452,7 +1482,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             return;
         }
 
-        const float desiredHeight = ExternalRiggedCharacterVisual.StandardGameplayHeight;
+        float desiredHeight = GameplayHeight;
         float measuredHeight = GetFreshPlayerHeight();
         if (measuredHeight < 0.001f)
         {
@@ -1507,8 +1537,7 @@ public sealed class PlayerHandRig : MonoBehaviour
         {
             measuredHeight = bounds.size.y;
         }
-        float scaleCorrection =
-            ExternalRiggedCharacterVisual.StandardGameplayHeight / measuredHeight;
+        float scaleCorrection = GameplayHeight / measuredHeight;
         modelRoot.transform.localScale *= scaleCorrection;
         Physics.SyncTransforms();
 
@@ -1542,7 +1571,8 @@ public sealed class PlayerHandRig : MonoBehaviour
             // are not the body's height.
             if (renderer == null || renderer.sharedMesh == null || !renderer.enabled ||
                 renderer.gameObject.name.StartsWith("First Person Arms", StringComparison.Ordinal) ||
-                PlayerTopShell.IsShellObject(renderer.gameObject.name))
+                PlayerTopShell.IsShellObject(renderer.gameObject.name) ||
+                PlayerAppearance.IsPartName(renderer.gameObject.name))
             {
                 continue;
             }
@@ -1690,7 +1720,8 @@ public sealed class PlayerHandRig : MonoBehaviour
 
     private static Material[] CreateOpaqueMaterials(Material[] sourceMaterials)
     {
-        Texture2D fallbackBaseColor = LoadPlayerBaseColorTexture();
+        // Remade parts are flat colours: no scan atlas behind an empty slot.
+        Texture2D fallbackBaseColor = PlayerAppearance.UsesRemakeBody ? null : LoadPlayerBaseColorTexture();
         Material[] materials = new Material[sourceMaterials.Length];
         for (int i = 0; i < sourceMaterials.Length; i++)
         {
@@ -1757,6 +1788,13 @@ public sealed class PlayerHandRig : MonoBehaviour
             if (material.HasProperty("_Color"))
             {
                 material.SetColor("_Color", sourceColor);
+            }
+            // Remade parts carry their own matte finish (PlayerAppearance); the Lit default reads as chrome.
+            if (PlayerAppearance.UsesRemakeBody && source != null && source.HasProperty("_Smoothness") &&
+                material.HasProperty("_Smoothness"))
+            {
+                material.SetFloat("_Smoothness", source.GetFloat("_Smoothness"));
+                material.SetFloat("_Metallic", source.HasProperty("_Metallic") ? source.GetFloat("_Metallic") : 0f);
             }
             if (material.HasProperty("_AlphaClip")) material.SetFloat("_AlphaClip", 0f);
             if (material.HasProperty("_ZWrite")) material.SetFloat("_ZWrite", 1f);
@@ -1870,7 +1908,7 @@ public sealed class PlayerHandRig : MonoBehaviour
 
         firstPersonModelRoot = Instantiate(modelRoot, transform);
         firstPersonModelRoot.name = "Player First Person Arm Rig";
-        firstPersonModelRoot.transform.localScale = baseModelLocalScale;
+        firstPersonModelRoot.transform.localScale = baseModelLocalScale * heightScale;
         SetLayerRecursively(firstPersonModelRoot.transform, PlanarGymMirror.MirrorPlayerLayer);
 
         Animator[] animators = firstPersonModelRoot.GetComponentsInChildren<Animator>(true);
@@ -2263,7 +2301,7 @@ public sealed class PlayerHandRig : MonoBehaviour
             return;
         }
 
-        firstPersonModelRoot.transform.localScale = baseModelLocalScale * FirstPersonArmScale;
+        firstPersonModelRoot.transform.localScale = baseModelLocalScale * heightScale * FirstPersonArmScale;
         firstPersonModelRoot.transform.rotation =
             playerCamera.transform.rotation * Quaternion.Euler(-20f, 0f, 0f) *
             AuthoredModelForwardCorrection;

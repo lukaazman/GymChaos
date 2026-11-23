@@ -29,7 +29,7 @@ import build_player_tops as tops  # noqa: E402
 
 ROOT = tops.ROOT
 OUT = tops.OUT
-DEBUG = ROOT / '.tools/bottoms'
+DEBUG = ROOT / ('.tools/bottoms-remake' if tops.REMAKE else '.tools/bottoms')
 INFLATE_RANGE = tops.INFLATE_RANGE
 EDGE_RANGE = tops.EDGE_RANGE
 
@@ -81,7 +81,7 @@ def write_pants_fabric(size=512):
 
 
 def main():
-    data = np.load(ROOT / '.tools/player-uvpos.npz')
+    data = np.load(tops.UVPOS)
     uv, co, nrm = data['uv'], data['co'], data['nrm']
     src = np.array(Image.open(tops.SRC).convert('RGB'), np.float32) / 255.0
     size = src.shape[0]
@@ -140,7 +140,8 @@ def main():
         shell[..., 2] = np.where(paint & (eroded | (edge > 0.015)), 255, 0)
         shell[..., 3] = np.uint8(np.clip(128 + edge / EDGE_RANGE * 127, 0, 255))
         ok, png = cv2.imencode('.png', shell[..., [2, 1, 0, 3]])
-        (OUT / name).write_bytes(png.tobytes())
+        if not tops.REMAKE:  # remade player: authored pants, no shell mask
+            (OUT / name).write_bytes(png.tobytes())
 
     # Shorts: close at the waistband and hem, a little loose over the thigh. The
     # waistband keeps 8 mm: at 2 mm the body under it, painted with the top's

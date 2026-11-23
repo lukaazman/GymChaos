@@ -103,13 +103,33 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     {
         // Name and health bar like any fighter: the label follows the body and hides behind walls.
         label = gameObject.AddComponent<ScreenSpaceCharacterLabel>();
-        label.ConfigureStandalone(null, "PLAYER " + (PlayerId + 1), 0.25f);
+        label.ConfigureStandalone(null, DisplayName(false), 0.25f);
     }
 
     public void AddPose(double arrival, GymNetPose pose)
     {
         interpolator.Add(arrival, pose);
+        lastPose = pose;
+        hasPose = true;
         EnsureLook(pose);
+    }
+
+    private GymNetPose lastPose;
+    private bool hasPose;
+    /// <summary>The owner's name and look (cleaned); null until the first look message.</summary>
+    public GymCharacterSave LookShown { get; private set; }
+    public string NameShown => DisplayName(false);
+
+    /// <summary>A peer's name and look arrived: relabel, and rebuild a remade body when it changed.</summary>
+    public void ApplyLook(GymCharacterSave look)
+    {
+        if (look == null) return;
+        bool changed = LookShown == null || JsonUtility.ToJson(LookShown) != JsonUtility.ToJson(look);
+        LookShown = look;
+        if (!changed) return;
+        if (label != null) label.ConfigureStandalone(modelBody, DisplayName(IsCorpse), 0.25f);
+        if (hasPose && (PlayerAppearance.UsesRemakeBody || look.heightCm != PlayerAppearance.DefaultMaleHeight))
+            Rebuild(lastPose);
     }
 
     // ------------------------------------------------------------------ look
@@ -135,6 +155,7 @@ public sealed class GymRemoteAvatar : MonoBehaviour
         ClearHeadwear();
         bottomShell = null;
         bottomPending = false;
+        PlayerAppearance.ReleaseMaterials(model);
         if (model != null) Destroy(model);
         model = null;
         modelBody = null;
@@ -165,6 +186,14 @@ public sealed class GymRemoteAvatar : MonoBehaviour
         for (int i = 0; i < animators.Length; i++) animators[i].enabled = false;
 
         modelBody = model.GetComponentInChildren<SkinnedMeshRenderer>(true);
+        if (PlayerAppearance.UsesRemakeBody)
+        {
+            PlayerAppearance.ApplyBody(model, LookShown ?? DefaultLook,
+                GymClassCatalog.TryGet(ClassIdFor(pose.classIndex) ?? string.Empty, out GymClassDefinition definition)
+                    ? definition : null);
+            foreach (SkinnedMeshRenderer part in model.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                if (part.name == PlayerAppearance.BodyMeshName) modelBody = part;
+        }
         FitModel(prefab, pose);
         ApplyOutfit(pose);
         ApplyBottoms(pose);
@@ -177,8 +206,18 @@ public sealed class GymRemoteAvatar : MonoBehaviour
             " headwear=" + headwearShown + " bottom=" + bottomShown + "/" + bottomColorShown);
     }
 
+    private static readonly GymCharacterSave DefaultLook = new GymCharacterSave();
+
+    private static string ClipResource =>
+        PlayerAppearance.UsesRemakeBody ? PlayerAppearance.RemakeModel : PlayerHandRig.DefaultModelResource;
+
     private static GameObject LoadModel(int classIndex)
     {
+        if (PlayerAppearance.UsesRemakeBody)
+        {
+            GameObject remade = Resources.Load<GameObject>(PlayerAppearance.RemakeModel);
+            if (remade != null) return remade;
+        }
         string classId = ClassIdFor(classIndex);
         if (!string.IsNullOrEmpty(classId))
         {
@@ -199,21 +238,30 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     private void FitModel(GameObject prefab, GymNetPose pose)
     {
         ClassIdShown = ClassIdFor(pose.classIndex);
-        Renderer[] renderers = model.GetComponentsInChildren<Renderer>(true);
+        Renderer[] renderers = model.GetComponentsInChildren<Renderer>(false);
         if (renderers.Length == 0) return;
         Bounds bounds = Measure(renderers);
         if (bounds.size.y < 0.01f) return;
-        float scale = ExternalRiggedCharacterVisual.StandardGameplayHeight / bounds.size.y;
+        float scale = ExternalRiggedCharacterVisual.StandardGameplayHeight * PlayerAppearance.HeightScale(LookShown) /
+            bounds.size.y;
         model.transform.localScale *= scale;
         bounds = Measure(renderers);
         // Feet on the avatar's floor point, not floating above it.
         model.transform.position += Vector3.up * (transform.position.y - bounds.min.y);
     }
 
+    // The body alone: remade hair and outfit parts would add height and shrink the fit.
     private static Bounds Measure(Renderer[] renderers)
     {
         Bounds bounds = renderers[0].bounds;
-        for (int i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
+        bool any = false;
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (PlayerAppearance.IsPartName(renderers[i].name)) continue;
+            if (!any) bounds = renderers[i].bounds;
+            else bounds.Encapsulate(renderers[i].bounds);
+            any = true;
+        }
         return bounds;
     }
 
@@ -222,6 +270,14 @@ public sealed class GymRemoteAvatar : MonoBehaviour
         GymShirtColor shirt = Sane((GymShirtColor)pose.shirt, GymShirtColor.Black);
         GymTopStyle top = Sane((GymTopStyle)pose.top, GymTopStyle.TankTop);
         Texture2D texture = Resources.Load<Texture2D>(PlayerCosmeticLoadout.GetOutfitTexturePath(top, shirt));
+        if (PlayerAppearance.UsesRemakeBody)
+        {
+            PlayerAppearance.SetOutfit(model, top, shirt, Sane((GymBottomStyle)pose.bottom, GymBottomStyle.Shorts),
+                Sane((GymShirtColor)pose.bottomColor, GymShirtColor.Black), (LookShown ?? DefaultLook).hair,
+                Sane((GymHeadwear)pose.headwear, GymHeadwear.None));
+            OutfitTextureShown = texture != null ? texture.name : string.Empty;
+            return;
+        }
         if (texture == null) texture = Resources.Load<Texture2D>("Characters/Textures/player_authored");
         if (texture == null) return;
         SkinnedMeshRenderer[] renderers = model.GetComponentsInChildren<SkinnedMeshRenderer>(true);
@@ -256,6 +312,8 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     private void AttachBottomShell()
     {
         if (modelBody == null || modelBody.sharedMesh == null) return;
+        // The remade body wears authored outfit parts (PlayerAppearance.SetOutfit), no shells.
+        if (PlayerAppearance.UsesRemakeBody) return;
         PlayerTopShell.Style style = bottomShown == GymBottomStyle.Pants
             ? PlayerTopShell.Pants : PlayerTopShell.Shorts;
         Texture2D fabric = Resources.Load<Texture2D>(bottomShown == GymBottomStyle.Pants
@@ -395,7 +453,7 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     {
         if (clipsLoaded) return;
         clipsLoaded = true;
-        Object[] assets = Resources.LoadAll<Object>(PlayerHandRig.DefaultModelResource);
+        Object[] assets = Resources.LoadAll<Object>(ClipResource);
         for (int i = 0; i < assets.Length; i++)
         {
             AnimationClip clip = assets[i] as AnimationClip;
@@ -438,7 +496,8 @@ public sealed class GymRemoteAvatar : MonoBehaviour
     }
 
     private string DisplayName(bool dead) =>
-        "PLAYER " + (PlayerId + 1) + (dead ? " (DEAD)" : string.Empty);
+        (LookShown != null && LookShown.IsCustomized ? LookShown.username : "PLAYER " + (PlayerId + 1)) +
+        (dead ? " (DEAD)" : string.Empty);
 
     // ------------------------------------------------------------------ pose
 

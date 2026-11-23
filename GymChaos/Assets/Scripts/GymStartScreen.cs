@@ -472,6 +472,12 @@ public sealed class GymStartScreen : MonoBehaviour
         StartGameplay();
     }
 
+    private IEnumerator LoadNextFrame(string slotId)
+    {
+        yield return null;
+        sessionMenu.LoadDirect(slotId);
+    }
+
     private void StartGameplay()
     {
         if (closing)

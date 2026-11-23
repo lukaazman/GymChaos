@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -165,12 +165,30 @@ public sealed class GymSaveRepository
         if (data.version < 2) data.hasWorld = true;
         data.characterRevision = Math.Max(0, data.characterRevision);
         data.worldRevision = Math.Max(0, data.worldRevision);
+        // Before the DEFAULT/POTATO split every save carries one standard character:
+        // a default look and name, with no create screen waiting on load.
+        if (data.version < 4)
+        {
+            data.username = GymCharacterSave.LegacyName;
+            data.gender = 0;
+            data.heightCm = PlayerAppearance.DefaultMaleHeight;
+            data.skinTone = 2;
+            data.hair = 2;
+            data.hairColor = 0;
+            data.facialHair = 0;
+        }
+        // Before version 5 nothing was switched per character or per vehicle.
+        data.slopMembers = CleanKeys(data.slopMembers, GymVersionedLooks.MemberKeys);
+        data.slopVehicles = CleanKeys(data.slopVehicles, GymVersionedLooks.VehicleKeys);
+        data.unlockedMembers = CleanKeys(data.unlockedMembers, GymVersionedLooks.MemberKeys);
+        data.unlockedVehicles = CleanKeys(data.unlockedVehicles, GymVersionedLooks.VehicleKeys);
         data.version = GymCharacterSave.CurrentVersion;
         data.progression.Normalize();
         data.oneShotRewards = data.oneShotRewards ?? Array.Empty<string>();
         data.brokenPanels = data.brokenPanels ?? Array.Empty<string>();
         data.worldTime = Mathf.Clamp01(data.worldTime);
         data.worldDay = Math.Max(0, data.worldDay);
+        PlayerAppearance.Normalize(data);
         return new GymSaveReadResult { Data = data, Message = string.Empty };
     }
 
@@ -190,6 +208,20 @@ public sealed class GymSaveRepository
     {
         if (!ValidId(slotId)) throw new ArgumentException("Invalid character identity.", nameof(slotId));
         return Path.Combine(directory, slotId + ".json");
+    }
+
+    /// <summary>Only known identifiers, each at most once (an untrusted or edited file).</summary>
+    private static string[] CleanKeys(string[] source, string[] known)
+    {
+        if (source == null || source.Length == 0) return Array.Empty<string>();
+        var result = new System.Collections.Generic.List<string>();
+        for (int i = 0; i < source.Length; i++)
+        {
+            string key = source[i];
+            if (string.IsNullOrEmpty(key) || Array.IndexOf(known, key) < 0 || result.Contains(key)) continue;
+            result.Add(key);
+        }
+        return result.ToArray();
     }
 
     private static bool ValidId(string id) => id != null && id.Length == 32 && Guid.TryParseExact(id, "N", out _);

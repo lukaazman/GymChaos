@@ -9,7 +9,7 @@ using UnityEngine;
 public static class GymRaceVehicleFactory
 {
     public const string PlayerBuggyAsset = "BodyBuilders/vehicles/player_buggy.glb";
-    private const string PoliceCarAsset = "BodyBuilders/vehicles/Policecar_lod.glb";
+    private static string PoliceCarAsset => GymVisualStyle.VehicleAsset(BodybuilderIdentity.Policeman, "BodyBuilders/vehicles/Policecar_lod.glb");
     private const float PoliceCarLength = 4.0f * GymOutdoorBuilder.VehicleScale * GymOutdoorBuilder.CarSizeBoost;
 
     public sealed class Car
@@ -151,7 +151,7 @@ public static class GymRaceVehicleFactory
         Car car = new Car { Identity = BodybuilderIdentity.Policeman, IsPolice = true };
         car.Holder = new GameObject("Police Race Car Holder").transform;
         car.Holder.SetPositionAndRotation(pose.position, pose.rotation);
-        GymVehicleLights.Attach(car.Holder, "police");
+        GymVehicleLights.Attach(car.Holder, "police").StrobeWhen = () => true;
         RuntimeGlbSceneLoader.Request(
             PoliceCarAsset,
             car.Holder,
@@ -227,6 +227,8 @@ public static class GymRaceVehicleFactory
             root.transform.position += Vector3.up * (car.Holder.position.y - bounds.min.y);
         }
         car.Wheels = GymVehicleWheelSpinner.Attach(root, () => true);
+        if (car.IsPolice && GymVisualStyle.RemakeVehicleAsset(BodybuilderIdentity.Policeman) != null)
+            GymVehicleBodyRoll.Attach(root.transform.Find("City GLB Content"), car.Holder);
 
         // Seat and door work in metres: hang them off an unscaled frame.
         Transform frame = new GameObject("Race Cabin Frame").transform;
