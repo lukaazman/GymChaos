@@ -57,7 +57,7 @@ jobs:
         id: classify
         if: steps.run.outcome == 'failure'
         shell: bash
-        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log >> "$GITHUB_OUTPUT"
+        run: bash Tools/ci-classify-unity-failure.sh unity-ci.log
 
       - name: Retry EditMode tests after infrastructure failure
         id: retry
